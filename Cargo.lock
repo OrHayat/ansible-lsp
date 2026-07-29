@@ -14,6 +14,7 @@ name = "ansible-lsp"
 version = "0.1.0"
 dependencies = [
  "ansible-core",
+ "serde",
  "tokio",
  "tower-lsp",
 ]

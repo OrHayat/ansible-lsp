@@ -33,23 +33,28 @@ function isYaml(doc) {
 }
 
 // Ask the server which references resolve, and colour exactly those.
+//
+// Deliberately not documentLink: the server only emits links for single-target
+// references, because a link's target overrides the definition provider on
+// Cmd+click and would swallow the extra candidates of a templated path.
 async function paint(editor) {
   if (!editor || !isYaml(editor.document) || !client?.isRunning()) return;
   try {
-    const links = await client.sendRequest("textDocument/documentLink", {
-      textDocument: { uri: editor.document.uri.toString() },
+    const refs = await client.sendRequest("ansible/references", {
+      uri: editor.document.uri.toString(),
     });
     editor.setDecorations(
       linkDecoration,
-      (links || []).map(
-        (l) =>
-          new vscode.Range(
-            l.range.start.line,
-            l.range.start.character,
-            l.range.end.line,
-            l.range.end.character
-          )
-      )
+      (refs || []).map((r) => ({
+        range: new vscode.Range(
+          r.range.start.line,
+          r.range.start.character,
+          r.range.end.line,
+          r.range.end.character
+        ),
+        hoverMessage:
+          r.targets > 1 ? `${r.targets} possible targets` : undefined,
+      }))
     );
   } catch {
     // Server restarting or document closed; the next edit repaints.
