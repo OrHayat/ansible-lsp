@@ -96,6 +96,7 @@ function positionOf(text, needle) {
   await request("initialize", {
     processId: process.pid,
     rootUri: `file://${REPO}`,
+    workspaceFolders: [{ uri: `file://${REPO}`, name: "ansible" }],
     capabilities: {},
   });
   notify("initialized", {});
@@ -165,6 +166,19 @@ function positionOf(text, needle) {
     );
     console.log(`  line ${d.range.start.line + 1}  ${value}`);
     console.log(`      ${d.message.split("\n")[0]}`);
+  }
+
+  // Repo-wide scan: diagnostics for files we never opened.
+  process.stdout.write("\nwaiting for workspace scan");
+  for (let i = 0; i < 40 && !diagnostics.has(`file://${REPO}/site.yml`); i++) {
+    process.stdout.write(".");
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const scanned = [...diagnostics.entries()].filter(([u, d]) => d.length && !u.includes("/demo/"));
+  console.log(`\n\nrepo-wide scan flagged ${scanned.length} file(s) never opened:`);
+  for (const [uri, d] of scanned) {
+    console.log(`  ${uri.replace(`file://${REPO}/`, "")}:${d[0].range.start.line + 1}`);
+    console.log(`      ${d[0].message.split("\n")[0]}`);
   }
 
   await request("shutdown", null);

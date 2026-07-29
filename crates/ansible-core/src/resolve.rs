@@ -62,10 +62,24 @@ impl Resolution {
 }
 
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
-    // Navigable via glob later, but never diagnosed: an untrustworthy warning is
-    // worse than none.
+    // A templated target is only knowable at runtime. Offer every file the pattern
+    // could reach, but never warn — an untrustworthy warning is worse than none.
     if r.templated {
-        return Resolution::skipped(SkipReason::Templated);
+        let bases = match r.kind {
+            ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
+            _ => return Resolution::skipped(SkipReason::Templated),
+        };
+        let targets = crate::glob::candidates(&bases, &r.value);
+        return Resolution {
+            status: if targets.is_empty() {
+                Status::Skipped
+            } else {
+                Status::Resolved
+            },
+            targets,
+            candidates: Vec::new(),
+            skip_reason: Some(SkipReason::Templated),
+        };
     }
 
     match r.kind {
@@ -287,15 +301,34 @@ mod tests {
         assert!(!res.candidates.is_empty());
     }
 
+    /// Templated values may resolve to several files or none — either way they must
+    /// never produce a warning.
     #[test]
     fn templated_paths_never_warn() {
         let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("roles/sync-state/tasks/nfs_access_point/reconcile.yml"),
+        for value in [
             "\"{{ ap_protocol }}/validate.yml\"",
+            "\"{{ nothing_matches_this }}/xyzzy.yml\"",
+        ] {
+            let res = resolve_in(
+                &root.join("roles/sync-state/tasks/nfs_access_point/reconcile.yml"),
+                value,
+            );
+            assert_ne!(res.status, Status::Missing, "{value} must not warn");
+            assert_eq!(res.skip_reason, Some(SkipReason::Templated));
+        }
+    }
+
+    /// The legacy plugin globbed templated includes; dropping that was a regression.
+    #[test]
+    fn templated_include_offers_every_candidate() {
+        let Some(root) = repo() else { return };
+        let res = resolve_in(
+            &root.join("roles/sync-state/tasks/main.yml"),
+            "\"{{ proto }}_access_point/_converge_one_ap.yml\"",
         );
-        assert_eq!(res.status, Status::Skipped);
-        assert_eq!(res.skip_reason, Some(SkipReason::Templated));
+        assert_eq!(res.status, Status::Resolved);
+        assert!(res.targets.len() >= 2, "expected several, got {:?}", res.targets);
     }
 
     #[test]

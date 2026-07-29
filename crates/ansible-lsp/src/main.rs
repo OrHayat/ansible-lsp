@@ -1,13 +1,13 @@
 //! Thin LSP shim over `ansible-core`. All logic lives in the core crate.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference};
 use ansible_core::resolve::{self, Resolution, Status};
-use ansible_core::workspace::FileContext;
+use ansible_core::workspace::{yaml_files, FileContext};
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -16,6 +16,11 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 struct Backend {
     client: Client,
     docs: Mutex<HashMap<Url, String>>,
+    /// Workspace folders, for the repo-wide scan.
+    roots: Mutex<Vec<PathBuf>>,
+    /// URIs we've published non-empty diagnostics for, so a later scan can clear
+    /// the ones that got fixed.
+    flagged: Mutex<HashSet<Url>>,
 }
 
 struct Analysis {
@@ -33,10 +38,13 @@ impl Backend {
     /// isn't a real path, or doesn't parse.
     fn analyze(&self, uri: &Url) -> Option<Analysis> {
         let text = self.text_of(uri)?;
-        let path = uri.to_file_path().ok()?;
+        Self::analyze_text(text, &uri.to_file_path().ok()?)
+    }
+
+    fn analyze_text(text: String, path: &Path) -> Option<Analysis> {
         let doc = Document::new(text);
         let nodes = doc.parse()?;
-        let ctx = FileContext::discover(&path);
+        let ctx = FileContext::discover(path);
         let refs = references::extract(&nodes)
             .into_iter()
             .map(|r| {
@@ -54,8 +62,25 @@ impl Backend {
             self.client.publish_diagnostics(uri.clone(), vec![], None).await;
             return;
         };
-        let diagnostics = a
-            .refs
+        let diagnostics = Self::diagnostics_of(&a);
+        self.track(uri, &diagnostics);
+        self.client
+            .publish_diagnostics(uri.clone(), diagnostics, None)
+            .await;
+    }
+
+    fn track(&self, uri: &Url, diagnostics: &[Diagnostic]) {
+        if let Ok(mut f) = self.flagged.lock() {
+            if diagnostics.is_empty() {
+                f.remove(uri);
+            } else {
+                f.insert(uri.clone());
+            }
+        }
+    }
+
+    fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {
+        a.refs
             .iter()
             .filter(|(_, res)| res.status == Status::Missing)
             .map(|(r, res)| {
@@ -75,10 +100,43 @@ impl Backend {
                     ..Default::default()
                 }
             })
-            .collect();
-        self.client
-            .publish_diagnostics(uri.clone(), diagnostics, None)
-            .await;
+            .collect()
+    }
+
+    /// Resolve every YAML file in the workspace and publish what's broken.
+    ///
+    /// I/O bound (~3.5 s over 731 files) so it runs detached and publishes as it
+    /// goes — the Problems panel fills progressively instead of appearing at the end.
+    async fn scan_workspace(&self) {
+        let roots = self.roots.lock().map(|r| r.clone()).unwrap_or_default();
+        let stale: HashSet<Url> = self.flagged.lock().map(|f| f.clone()).unwrap_or_default();
+        let mut still_flagged = HashSet::new();
+
+        for root in roots {
+            for path in yaml_files(&root) {
+                // An open buffer is authoritative over what's on disk.
+                let Ok(uri) = Url::from_file_path(&path) else { continue };
+                if self.text_of(&uri).is_some() {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                let Some(a) = Self::analyze_text(text, &path) else { continue };
+                let diagnostics = Self::diagnostics_of(&a);
+                if diagnostics.is_empty() {
+                    continue;
+                }
+                still_flagged.insert(uri.clone());
+                self.client.publish_diagnostics(uri, diagnostics, None).await;
+            }
+        }
+
+        // Clear files that were flagged before but are clean now.
+        for uri in stale.difference(&still_flagged) {
+            self.client.publish_diagnostics(uri.clone(), vec![], None).await;
+        }
+        if let Ok(mut f) = self.flagged.lock() {
+            *f = still_flagged;
+        }
     }
 
     fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
@@ -101,7 +159,19 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, p: InitializeParams) -> Result<InitializeResult> {
+        if let Ok(mut roots) = self.roots.lock() {
+            if let Some(folders) = p.workspace_folders {
+                roots.extend(folders.iter().filter_map(|f| f.uri.to_file_path().ok()));
+            }
+            #[allow(deprecated)]
+            if roots.is_empty() {
+                if let Some(uri) = p.root_uri.and_then(|u| u.to_file_path().ok()) {
+                    roots.push(uri);
+                }
+            }
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "ansible-lsp".into(),
@@ -130,6 +200,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "ansible-lsp ready")
             .await;
+        self.scan_workspace().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -242,6 +313,8 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         docs: Mutex::new(HashMap::new()),
+        roots: Mutex::new(Vec::new()),
+        flagged: Mutex::new(HashSet::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
