@@ -141,16 +141,29 @@ function positionOf(text, needle) {
     notify("textDocument/didOpen", {
       textDocument: { uri, languageId: "ansible", version: 1, text },
     });
-    const res = await request("textDocument/documentLink", {
-      textDocument: { uri },
-    });
-    const links = res.result || [];
+    const res = await request("ansible/references", { uri });
+    const refs = res.result || [];
     const lines = text.split("\n");
-    console.log(`\ndemo/tasks/main.yml — ${links.length} references will be coloured:`);
-    for (const l of links) {
-      const line = lines[l.range.start.line];
-      const value = line.slice(l.range.start.character, l.range.end.character);
-      console.log(`  line ${String(l.range.start.line + 1).padStart(2)}  ${value}`);
+    console.log(`\ndemo/tasks/main.yml — ${refs.length} references coloured:`);
+    for (const l of refs) {
+      const value = lines[l.range.start.line].slice(
+        l.range.start.character,
+        l.range.end.character
+      );
+      const many = l.targets > 1 ? `  <- ${l.targets} targets` : "";
+      console.log(`  line ${String(l.range.start.line + 1).padStart(2)}  ${value}${many}`);
+    }
+
+    // The multi-target case must come back from goto-definition, not documentLink.
+    const multi = refs.find((r) => r.targets > 1);
+    if (multi) {
+      const def = await request("textDocument/definition", {
+        textDocument: { uri },
+        position: { line: multi.range.start.line, character: multi.range.start.character + 1 },
+      });
+      const n = (def.result || []).length;
+      console.log(`\n  goto-definition on line ${multi.range.start.line + 1} returned ${n} location(s):`);
+      for (const l of def.result || []) console.log(`    ${l.uri.split("/demo/")[1] || l.uri}`);
     }
   }
 

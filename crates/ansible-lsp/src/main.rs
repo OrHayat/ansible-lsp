@@ -11,7 +11,23 @@ use ansible_core::workspace::{yaml_files, FileContext};
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
+use serde::{Deserialize, Serialize};
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+/// Payload for `ansible/references`, the custom request the client uses to paint
+/// resolvable references. Separate from documentLink because a link's target hijacks
+/// Cmd+click — fine for one target, wrong when a templated path has several.
+#[derive(Debug, Deserialize)]
+struct ReferencesParams {
+    uri: Url,
+}
+
+#[derive(Debug, Serialize)]
+struct ResolvedRef {
+    range: Range,
+    /// How many files this could reach. >1 means Cmd+click opens a picker.
+    targets: usize,
+}
 
 struct Backend {
     client: Client,
@@ -137,6 +153,25 @@ impl Backend {
         if let Ok(mut f) = self.flagged.lock() {
             *f = still_flagged;
         }
+    }
+
+    /// Every resolvable reference and how many files it reaches.
+    async fn resolved_references(&self, p: ReferencesParams) -> Result<Vec<ResolvedRef>> {
+        let Some(a) = self.analyze(&p.uri) else {
+            return Ok(Vec::new());
+        };
+        Ok(a.refs
+            .iter()
+            .filter(|(_, res)| res.status == Status::Resolved)
+            .map(|(r, res)| {
+                let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
+                let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+                ResolvedRef {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    targets: res.targets.len(),
+                }
+            })
+            .collect())
     }
 
     fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
@@ -283,6 +318,10 @@ impl LanguageServer for Backend {
             .refs
             .iter()
             .filter(|(_, res)| res.status == Status::Resolved)
+            // Exactly one target only. A link's target wins over the definition
+            // provider on Cmd+click, so emitting one for a multi-candidate templated
+            // path would silently drop the other candidates.
+            .filter(|(_, res)| res.targets.len() == 1)
             .filter_map(|(r, res)| {
                 let target = res.targets.first()?;
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
@@ -310,11 +349,13 @@ fn location_at(path: &Path) -> Option<Location> {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
+    let (service, socket) = LspService::build(|client| Backend {
         client,
         docs: Mutex::new(HashMap::new()),
         roots: Mutex::new(Vec::new()),
         flagged: Mutex::new(HashSet::new()),
-    });
+    })
+    .custom_method("ansible/references", Backend::resolved_references)
+    .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
