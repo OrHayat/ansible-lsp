@@ -5,29 +5,9 @@
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
 use ansible_core::resolve::{resolve, SkipReason, Status};
-use ansible_core::workspace::FileContext;
+use ansible_core::workspace::{yaml_files, FileContext};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-fn yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        let name = e.file_name().to_string_lossy().to_string();
-        if p.is_dir() {
-            if !matches!(name.as_str(), ".git" | "__pycache__" | ".pytest_cache" | "node_modules") {
-                yaml_files(&p, out);
-            }
-        } else if matches!(
-            p.extension().and_then(|s| s.to_str()),
-            Some("yml") | Some("yaml")
-        ) {
-            out.push(p);
-        }
-    }
-}
+use std::path::PathBuf;
 
 fn kind_name(k: ReferenceKind) -> &'static str {
     match k {
@@ -45,8 +25,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let mut files = Vec::new();
-    yaml_files(&root, &mut files);
+    let files = yaml_files(&root);
 
     let mut totals: BTreeMap<&str, [usize; 3]> = BTreeMap::new(); // resolved, missing, skipped
     let mut missing: Vec<String> = Vec::new();

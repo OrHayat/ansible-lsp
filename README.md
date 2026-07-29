@@ -13,7 +13,11 @@ crates/ansible-core/   all logic, no LSP, no bindings — where the tests live
   parse.rs             YAML -> byte-span AST. The only module touching saphyr.
   references.rs        AST -> the cross-file references we care about
   resolve.rs           reference -> file on disk, in Ansible's search order
-  workspace.rs         role dir / role tasks dir / project root discovery
+  workspace.rs         role dir / tasks dir / project root / search roots
+  config.rs            ansible.cfg: roles_path, collections_path
+  install.rs           the installed ansible, so builtins and collections resolve
+  glob.rs              templated "{{ x }}/y.yml" -> every file it could reach
+  bin/scan.rs          resolve a whole tree; non-zero exit on missing files
 crates/ansible-lsp/    thin tower-lsp shim over the core
 client/                ~50-line VS Code extension (plain JS, no build step)
 scripts/smoke.js       drives the server over raw stdio, no editor needed
@@ -23,7 +27,8 @@ scripts/smoke.js       drives the server over raw stdio, no editor needed
 
 ```sh
 cargo build --release
-cargo test                      # 14 tests, incl. 4 real-repo regressions
+cargo test                      # 37 tests, incl. real-repo regressions
+./target/release/scan ~/app/ansible   # whole-repo report / CI check
 node scripts/smoke.js           # end-to-end over LSP against ~/app/ansible
 ```
 
@@ -42,11 +47,37 @@ Open this folder and press **F5**. That launches an Extension Development Host w
 Set `ansibleLsp.trace.server` to `verbose` to watch LSP traffic in the *Ansible LSP*
 output channel.
 
+## What it resolves
+
+| Reference | Resolves to |
+| --------- | ----------- |
+| `include_tasks` / `import_tasks` | role `tasks/` -> role dir -> file dir -> project root |
+| `include_role` / `import_role`, `roles:` | `roles_path` from ansible.cfg, then collections |
+| `tasks_from:` | that role's `tasks/<name>.yml`, block and flow forms |
+| module FQCN | in-repo collections, installed collections, and ansible.builtin |
+| templated `{{ }}` paths | every file the pattern could reach (never warns) |
+
+Resolvable references are coloured; literal paths that resolve to nothing get a warning
+listing every path tried. The whole workspace is scanned at startup, so a broken
+reference shows up even in files you never opened.
+
+`demo/tasks/main.yml` exercises all of it, labelled good/bad.
+
+## Deliberate silences
+
+These never warn, each for a reason a test pins down:
+
+- **templated paths** — the target depends on runtime variables, so absence proves nothing
+- **a role with no `tasks/main.yml` but a `tasks_from`** — legal; `roles/cib-batch` in the
+  real repo is exactly this, and 16 working references depend on it
+- **modules from collections that aren't installed** — an uninstalled dependency, not a typo
+- **files that fail to parse** — strict YAML 1.2 is stricter than Ansible's PyYAML
+
 ## Status
 
-Step 1 of the plan (`~/.claude/plans/fancy-stirring-aurora.md`): `include_tasks` /
-`import_tasks` only, definition only. Remaining reference kinds, diagnostics, and the
-execution tree are steps 3–5.
+Steps 0–4 of the plan (`~/.claude/plans/fancy-stirring-aurora.md`). Remaining: the
+differential harness against the legacy plugin, the execution tree (`callHierarchy`),
+and the Neovim lspconfig entry.
 
 ## Two findings that shape the code
 

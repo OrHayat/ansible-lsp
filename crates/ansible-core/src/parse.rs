@@ -161,10 +161,19 @@ impl Document {
     }
 
     fn convert(&self, n: &MarkedYaml) -> Node {
-        let span = Span {
+        let mut span = Span {
             start: self.marker_to_byte(n.span.start.line(), n.span.start.col()),
             end: self.marker_to_byte(n.span.end.line(), n.span.end.col()),
         };
+        // A quoted scalar's span covers its quotes; ranges should mark the value.
+        let text = span.slice(&self.text);
+        if text.len() >= 2 {
+            let b = text.as_bytes();
+            if (b[0] == b'"' || b[0] == b'\'') && b[0] == b[text.len() - 1] {
+                span.start += 1;
+                span.end -= 1;
+            }
+        }
         match &n.data {
             YamlData::Value(v) => Node::Scalar {
                 value: v
@@ -232,6 +241,15 @@ mod tests {
         let (l, c) = doc.byte_to_lsp(quote);
         assert_eq!((l, c), (0, 9));
         assert_eq!(doc.lsp_to_byte(l, c), quote);
+    }
+
+    #[test]
+    fn quoted_scalar_span_excludes_the_quotes() {
+        let src = "- include_tasks: \"{{ proto }}/x.yml\"\n";
+        let doc = Document::new(src.to_string());
+        let nodes = doc.parse().unwrap();
+        let v = nodes[0].items()[0].get("include_tasks").unwrap();
+        assert_eq!(v.span().slice(src), "{{ proto }}/x.yml");
     }
 
     #[test]

@@ -72,3 +72,21 @@
 - name: "The roles: list form lives in demo/playbook.yml"
   ansible.builtin.debug:
     msg: open that file too
+
+# ------------------------------------------------ TEMPLATED PATHS (never warn)
+# The real target depends on a runtime variable, so these can only ever offer
+# candidates. Cmd+click shows every file the pattern could reach.
+
+- name: GOOD — globs to two real files (http_target/, ftp_target/)
+  ansible.builtin.include_tasks: "{{ protocol }}_target/check.yml"
+
+- name: GOOD — wildcard in the filename rather than the directory
+  ansible.builtin.include_tasks: "nested/{{ which }}.yml"
+
+- name: BAD — nothing on disk matches, but still no warning
+  # A variable could expand to anything at runtime, so absence proves nothing.
+  ansible.builtin.include_tasks: "{{ protocol }}_target/nope.yml"
+
+- name: BAD — no literal text to anchor on, so deliberately matches nothing
+  # "*.yml" would otherwise match every task file in the role.
+  ansible.builtin.include_tasks: "{{ anything }}.yml"

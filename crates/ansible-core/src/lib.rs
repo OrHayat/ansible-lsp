@@ -1,4 +1,5 @@
 pub mod config;
+pub mod glob;
 pub mod install;
 pub mod parse;
 pub mod references;

@@ -93,6 +93,33 @@ impl FileContext {
     }
 }
 
+/// Every YAML file under `root`, skipping VCS and cache directories.
+pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                if !matches!(
+                    name.as_str(),
+                    ".git" | "__pycache__" | ".pytest_cache" | "node_modules" | "target"
+                ) {
+                    walk(&p, out);
+                }
+            } else if matches!(
+                p.extension().and_then(|s| s.to_str()),
+                Some("yml") | Some("yaml")
+            ) {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
+}
+
 fn expand_home(p: &str) -> Option<PathBuf> {
     match p.strip_prefix("~/") {
         Some(rest) => std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(rest)),

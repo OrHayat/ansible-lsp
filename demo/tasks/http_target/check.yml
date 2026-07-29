@@ -1,0 +1,2 @@
+- name: HTTP variant — one of two files a templated include can reach
+  ansible.builtin.debug: {msg: http}
