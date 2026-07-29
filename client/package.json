@@ -1,0 +1,47 @@
+{
+  "name": "ansible-lsp-client",
+  "displayName": "Ansible LSP (local)",
+  "description": "Go-to-definition for Ansible file references, backed by a Rust language server.",
+  "publisher": "community-local",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:ansible",
+    "onLanguage:yaml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ansibleLsp.restart",
+        "title": "Restart Server",
+        "category": "Ansible LSP"
+      }
+    ],
+    "configuration": {
+      "title": "Ansible LSP",
+      "properties": {
+        "ansibleLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the ansible-lsp binary. Defaults to ../target/release/ansible-lsp relative to this extension."
+        },
+        "ansibleLsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log LSP traffic to the 'Ansible LSP' output channel."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

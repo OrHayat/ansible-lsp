@@ -1,0 +1,8 @@
+---
+# The `roles:` list form, both spellings.
+- name: Demo play
+  hosts: localhost
+  roles:
+    - demo              # bare string
+    - role: demo        # dict form
+    - no_such_role      # unresolvable, stays plain

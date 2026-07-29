@@ -1,0 +1,4 @@
+---
+- name: Target of the sibling includes in main.yml
+  ansible.builtin.debug:
+    msg: you landed here

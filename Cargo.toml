@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/ansible-core", "crates/ansible-lsp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Pinned exactly: saphyr is pre-1.0, and parse.rs is the only module allowed to
+# touch its API so a version bump stays a one-file change.
+saphyr = "=0.0.11"

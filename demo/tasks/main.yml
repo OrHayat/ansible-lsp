@@ -1,0 +1,74 @@
+---
+# Demo file: open this and look at the colours.
+#
+# TEAL + dotted underline = resolves, Cmd+click jumps there.
+# Plain text                = does not resolve (or isn't supported yet).
+#
+# Everything below is a real reference against this demo role, so you can see
+# exactly what the server does and doesn't handle right now.
+
+# ---------------------------------------------------------------- WORKS TODAY
+
+- name: Sibling file, short key
+  include_tasks: sibling.yml
+
+- name: Sibling file, FQCN key (same thing, normalised)
+  ansible.builtin.include_tasks: sibling.yml
+
+
+- name: missing file
+  ansible.builtin.include_tasks: missing.yml
+
+- name: "Block form with an explicit file: parameter"
+  ansible.builtin.include_tasks:
+    file: sibling.yml
+
+- name: import_tasks resolves the same way
+  ansible.builtin.import_tasks: sibling.yml
+
+- name: Nested subdirectory, relative to THIS role's tasks/ dir
+  # The legacy plugin cannot resolve this one — it looks next to the current
+  # file, which would be tasks/nested/nested/deep.yml.
+  ansible.builtin.include_tasks: nested/deep.yml
+
+# --------------------------------------------------------- DELIBERATELY PLAIN
+
+- name: Typo — no such file, so no colour
+  ansible.builtin.include_tasks: sibbling.yml
+
+- name: Templated — target depends on a runtime variable, never coloured
+  ansible.builtin.include_tasks: "{{ ap_protocol }}/validate.yml"
+
+- name: Commented-out include below must NOT be coloured
+  ansible.builtin.debug:
+    msg: the next line is a comment, not code
+  # ansible.builtin.include_tasks: sibling.yml
+
+# ------------------------------------------------------------- ROLES (work now)
+
+- name: Role by name
+  ansible.builtin.include_role:
+    name: demo
+
+- name: Role with a specific tasks file
+  ansible.builtin.include_role:
+    name: demo
+    tasks_from: sibling
+
+- name: The flow form the legacy plugin gets wrong
+  # Everything is on one line, so the legacy ±6-line scan can't pair tasks_from
+  # with its name. Here they're siblings in one mapping node.
+  ansible.builtin.include_role: { name: demo, tasks_from: sibling }
+
+- name: Role that does not exist — warns
+  ansible.builtin.include_role:
+    name: no_such_role
+
+- name: Role with no tasks/main.yml — silent, because tasks_from supplies the file
+  # roles/cib-batch in the real repo is exactly this: begin/commit/abort.yml and
+  # no main.yml. 16 working references depend on this not warning.
+  ansible.builtin.include_role: { name: demo, tasks_from: sibling }
+
+- name: "The roles: list form lives in demo/playbook.yml"
+  ansible.builtin.debug:
+    msg: open that file too
