@@ -1,0 +1,6 @@
+---
+# Reached as `nested/deep.yml` from main.yml — resolved against the role's
+# tasks/ dir, which is the rule the legacy plugin gets wrong.
+- name: Target of the nested include
+  ansible.builtin.debug:
+    msg: nested target

@@ -1,0 +1,2 @@
+# `dup.yml` exists both here and in ../ — this is the ambiguous case.
+- ansible.builtin.include_tasks: dup.yml

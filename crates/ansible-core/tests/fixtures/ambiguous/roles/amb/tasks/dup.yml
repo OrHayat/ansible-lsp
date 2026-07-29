@@ -1,0 +1,2 @@
+# Candidate A: the role's tasks/ dir. Real ansible-playbook picks THIS one.
+- ansible.builtin.debug: {msg: role tasks dir}

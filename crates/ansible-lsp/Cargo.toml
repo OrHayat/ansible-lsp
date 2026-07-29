@@ -1,0 +1,10 @@
+[package]
+name = "ansible-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ansible-core = { path = "../ansible-core" }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }

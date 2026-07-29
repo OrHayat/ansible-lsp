@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run extension against ~/matrix/ansible",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/client",
+        "${workspaceFolder}/demo",
+        "${env:HOME}/matrix/ansible"
+      ],
+      "outFiles": []
+    }
+  ]
+}

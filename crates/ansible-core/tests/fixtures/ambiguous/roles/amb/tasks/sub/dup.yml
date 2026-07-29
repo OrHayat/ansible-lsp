@@ -1,0 +1,2 @@
+# Candidate B: next to the including file. Ansible does NOT pick this.
+- ansible.builtin.debug: {msg: including file dir}
