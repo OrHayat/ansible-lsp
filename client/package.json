@@ -23,6 +23,16 @@
     "configuration": {
       "title": "Ansible LSP",
       "properties": {
+        "ansibleLsp.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline hints describing what a `when:` does on a run with no extra vars. Diagnostics are unaffected."
+        },
+        "ansibleLsp.inlayHints.explanations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the long explanatory tooltip when hovering an inlay hint. Turn off to keep the hints but drop the prose."
+        },
         "ansibleLsp.serverPath": {
           "type": "string",
           "default": "",

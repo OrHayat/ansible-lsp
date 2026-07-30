@@ -18,8 +18,20 @@ reading the source.
 
 Two layers, and the split matters:
 
-**VS Code settings** — per-user, per-machine: `ansibleLsp.serverPath`,
-`ansibleLsp.trace.server`, `ansibleLsp.scanOnStartup`. Things about *this machine*.
+**VS Code settings** — per-user, per-machine. Things about *this machine*.
+
+Shipped: `ansibleLsp.serverPath`, `ansibleLsp.trace.server`,
+`ansibleLsp.inlayHints.enabled`, `ansibleLsp.inlayHints.explanations`. The last two are
+live — the server calls `workspace/inlayHint/refresh` on
+`didChangeConfiguration`, because a setting that only takes effect on the next keystroke
+reads as a setting that doesn't work.
+
+Still wanted: `ansibleLsp.scanOnStartup`.
+
+**The line that matters:** only *volunteered* output is configurable per-machine.
+Diagnostics are not — a warning is something you asked to be told about, and whether a rule
+runs is a property of the repo, not of who opened it. That belongs in the project file
+below, committed, so CI and every editor agree.
 
 **A project file** — `.ansible-lsp.toml` next to `ansible.cfg`, committed: which rules are on,
 severity overrides, extra roles paths. Things about *this repo*, which have to travel with it,

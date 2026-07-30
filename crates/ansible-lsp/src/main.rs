@@ -31,6 +31,41 @@ struct ResolvedRef {
     targets: usize,
 }
 
+/// User preferences that change what we volunteer, never what we report. Diagnostics are
+/// deliberately not configurable here — a warning you asked for is not fluff, and turning
+/// rules off belongs in a committed project file (T-025), not a per-machine setting.
+#[derive(Clone, Copy)]
+struct Settings {
+    hints: bool,
+    explanations: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { hints: true, explanations: true }
+    }
+}
+
+impl Settings {
+    /// Reads `{ inlayHints: { enabled, explanations } }`. The client normalises both
+    /// `initializationOptions` and `didChangeConfiguration` to this one shape, so the
+    /// server doesn't have to know how VS Code nests things. Anything missing keeps its
+    /// default rather than silently turning a feature off.
+    fn from_json(v: &serde_json::Value) -> Self {
+        let d = Self::default();
+        let get = |key: &str, fallback: bool| {
+            v.get("inlayHints")
+                .and_then(|h| h.get(key))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(fallback)
+        };
+        Self {
+            hints: get("enabled", d.hints),
+            explanations: get("explanations", d.explanations),
+        }
+    }
+}
+
 struct Backend {
     client: Client,
     docs: Mutex<HashMap<Url, String>>,
@@ -43,6 +78,7 @@ struct Backend {
     /// playbook, its roles and its includes, so it must not happen per keystroke.
     /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
+    settings: Mutex<Settings>,
 }
 
 struct Analysis {
@@ -336,6 +372,12 @@ impl LanguageServer for Backend {
             }
         }
 
+        if let Some(opts) = &p.initialization_options {
+            if let Ok(mut s) = self.settings.lock() {
+                *s = Settings::from_json(opts);
+            }
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "ansible-lsp".into(),
@@ -368,6 +410,15 @@ impl LanguageServer for Backend {
         self.scan_workspace().await;
     }
 
+    async fn did_change_configuration(&self, p: DidChangeConfigurationParams) {
+        if let Ok(mut s) = self.settings.lock() {
+            *s = Settings::from_json(&p.settings);
+        }
+        // Already-rendered hints are stale now, so ask for a re-request. Without this
+        // the change only shows on the next edit, which reads as the setting not working.
+        let _ = self.client.inlay_hint_refresh().await;
+    }
+
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
@@ -379,6 +430,10 @@ impl LanguageServer for Backend {
     /// information, which is what inlay hints are for. Also plain LSP, so it carries to
     /// Neovim, unlike the teal decoration.
     async fn inlay_hint(&self, p: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let settings = self.settings.lock().map(|s| *s).unwrap_or_default();
+        if !settings.hints {
+            return Ok(Some(Vec::new()));
+        }
         let Some(a) = self.analyze(&p.text_document.uri) else {
             return Ok(None);
         };
@@ -399,7 +454,7 @@ impl LanguageServer for Backend {
                     label: InlayHintLabel::String(format!(" {label}")),
                     kind: Some(InlayHintKind::PARAMETER),
                     text_edits: None,
-                    tooltip: Some(InlayHintTooltip::String(
+                    tooltip: settings.explanations.then(|| InlayHintTooltip::String(
                         if r.kind == ReferenceKind::ImportPlaybook {
                             // Verified against ansible-core 2.20.4 source and live runs,
                             // not the docs. An earlier version of this string claimed
@@ -537,8 +592,39 @@ async fn main() {
         roots: Mutex::new(Vec::new()),
         flagged: Mutex::new(HashSet::new()),
         mutations: Mutex::new(HashMap::new()),
+        settings: Mutex::new(Settings::default()),
     })
     .custom_method("ansible/references", Backend::resolved_references)
     .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    /// A missing or malformed key must keep the default. Turning a feature off because a
+    /// client sent an unexpected shape would look like the feature is broken.
+    #[test]
+    fn settings_default_to_on_and_parse_both_flags() {
+        let d = Settings::from_json(&serde_json::json!({}));
+        assert!(d.hints && d.explanations);
+
+        let off = Settings::from_json(&serde_json::json!({
+            "inlayHints": { "enabled": false, "explanations": false }
+        }));
+        assert!(!off.hints && !off.explanations);
+
+        // The case the user asked for: keep the hints, drop the prose.
+        let terse = Settings::from_json(&serde_json::json!({
+            "inlayHints": { "explanations": false }
+        }));
+        assert!(terse.hints && !terse.explanations);
+
+        // Wrong types and unrelated payloads fall back rather than disabling anything.
+        let junk = Settings::from_json(&serde_json::json!({
+            "inlayHints": { "enabled": "no" }, "other": 1
+        }));
+        assert!(junk.hints && junk.explanations);
+    }
 }
