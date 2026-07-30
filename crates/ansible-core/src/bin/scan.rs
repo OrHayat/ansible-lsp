@@ -16,6 +16,7 @@ fn kind_name(k: ReferenceKind) -> &'static str {
         ReferenceKind::Role => "role",
         ReferenceKind::TasksFrom => "tasks_from",
         ReferenceKind::Module => "module",
+        ReferenceKind::ImportPlaybook => "import_playbook",
     }
 }
 
