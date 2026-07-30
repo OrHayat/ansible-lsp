@@ -1,0 +1,887 @@
+//! What a `when:` says about a default run, and what's provably wrong with it.
+//!
+//! Not an evaluator — a matcher over a closed set of shapes, plus a variable extractor.
+//! Of this repo's 3466 conditions a large fraction match no shape here and must stay
+//! [`Verdict::Unknown`]; the moment this guesses, anything built on it becomes
+//! untrustworthy, which is what got the call-hierarchy tree scrapped.
+//!
+//! The `| default(D)` filter is what makes the rest tractable: it states the value when
+//! the variable is unset, so the condition carries its own default-run answer without
+//! resolving anything. That matters — Ansible has 22 variable precedence levels.
+
+/// Jinja tests and filters that are not variable references.
+const NOT_VARIABLES: &[&str] = &[
+    // filters
+    "bool", "int", "length", "trim", "lower", "upper", "list", "first", "last", "default",
+    "string", "float", "join", "split", "unique", "sort", "map", "select", "reject",
+    "selectattr", "rejectattr", "regex_replace", "regex_search", "regex_findall",
+    "from_json", "to_json", "from_yaml", "to_yaml", "basename", "dirname", "realpath",
+    "count", "sum", "min", "max", "abs", "round", "flatten", "combine", "dict2items",
+    "items2dict", "difference", "union", "intersect", "ternary", "mandatory", "quote",
+    "b64decode", "b64encode", "type_debug", "json_query", "replace", "indent", "batch",
+    "path_join", "splitext", "expanduser", "relpath", "human_readable", "hash",
+    // operators and tests
+    "not", "and", "or", "in", "is", "if", "else", "true", "false", "none", "defined",
+    "undefined", "changed", "failed", "succeeded", "success", "skipped", "match",
+    "search", "version", "subset", "superset", "iterable", "mapping", "sequence",
+    "number", "boolean", "even", "odd", "sameas", "escaped", "truthy", "falsy",
+];
+
+/// Variables Ansible always provides, so their absence from the workspace means nothing.
+const MAGIC: &[&str] = &[
+    "inventory_hostname", "groups", "group_names", "hostvars", "item", "omit",
+    "play_hosts", "role_name", "role_path", "playbook_dir", "inventory_dir",
+    "inventory_hostname_short", "ansible_check_mode", "ansible_verbosity", "vars",
+];
+
+/// Strip one balanced enclosing pair of parens, if the whole string is wrapped.
+///
+/// `trim_end_matches(')')` cannot be used here — it eats the closing paren of a trailing
+/// `default(...)`, which silently broke every guarded comparison.
+fn strip_outer_parens(s: &str) -> &str {
+    let t = s.trim();
+    if !(t.starts_with('(') && t.ends_with(')')) {
+        return t;
+    }
+    let mut depth = 0usize;
+    for (i, c) in t.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                // The opening paren closes before the end, so it isn't a wrapper.
+                if depth == 0 && i != t.len() - 1 {
+                    return t;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        t[1..t.len() - 1].trim()
+    } else {
+        t
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// `not (skip_x | default(false) | bool)` — 80% of import-level conditions here.
+    UnlessSet { var: String },
+    /// `x | default(true) | bool`
+    UnlessCleared { var: String },
+    /// `x | default(false) | bool` — the flag has to be turned on.
+    OnlyIfSet { var: String },
+    /// `mode | default('native') == 'native'`. `matches_default` is whether the
+    /// defaulted value satisfies the comparison, i.e. whether this runs when unset.
+    WhenEquals {
+        var: String,
+        value: String,
+        negated: bool,
+        matches_default: bool,
+    },
+    /// `mode in ['a', 'b']`
+    WhenIn {
+        var: String,
+        values: Vec<String>,
+        negated: bool,
+    },
+    /// `x is defined` / `x is not defined`. Statically this is the interesting one:
+    /// if `x` is defined nowhere in the workspace, the branch can never be taken.
+    RequiresDefined { var: String, negated: bool },
+    /// `x | default('') | length > 0`
+    RequiresNonEmpty { var: String },
+    /// Literal `when: false`.
+    Never,
+    Unknown,
+}
+
+impl Verdict {
+    /// Inlay text, or `None` when there's nothing honest to say.
+    ///
+    /// Wording is "unless X is set" rather than "runs by default": `default(D)` only
+    /// gives the value when *unset*, and whether it's set somewhere — group_vars,
+    /// inventory, `-e` — is not knowable from the condition.
+    pub fn label(&self) -> Option<String> {
+        Some(match self {
+            Verdict::UnlessSet { var } => format!("runs unless {var} is set"),
+            Verdict::UnlessCleared { var } => format!("runs unless {var} is false"),
+            Verdict::OnlyIfSet { var } => format!("runs only if {var} is set"),
+            Verdict::WhenEquals {
+                var,
+                value,
+                negated,
+                matches_default,
+                // `matches_default` is the default-run answer, so it picks
+                // "runs unless" vs "runs only if"; `negated` picks which side of the
+                // comparison the change has to be on.
+            } => match (matches_default, negated) {
+                (true, false) => format!("runs unless {var} changes from {value}"),
+                (true, true) => format!("runs unless {var} = {value}"),
+                (false, false) => format!("runs only if {var} = {value}"),
+                (false, true) => format!("runs only if {var} changes from {value}"),
+            },
+            Verdict::WhenIn { var, values, negated } => {
+                let list = values.join(", ");
+                if *negated {
+                    format!("runs unless {var} is one of [{list}]")
+                } else {
+                    format!("runs only if {var} is one of [{list}]")
+                }
+            }
+            Verdict::RequiresDefined { var, negated: false } => {
+                format!("runs only if {var} is set")
+            }
+            Verdict::RequiresDefined { var, negated: true } => {
+                format!("runs only if {var} is unset")
+            }
+            Verdict::RequiresNonEmpty { var } => format!("runs only if {var} is non-empty"),
+            Verdict::Never => "never runs".to_string(),
+            Verdict::Unknown => return None,
+        })
+    }
+
+    /// The variable this verdict hinges on, if it hinges on exactly one.
+    pub fn var(&self) -> Option<&str> {
+        match self {
+            Verdict::UnlessSet { var }
+            | Verdict::UnlessCleared { var }
+            | Verdict::OnlyIfSet { var }
+            | Verdict::WhenEquals { var, .. }
+            | Verdict::WhenIn { var, .. }
+            | Verdict::RequiresDefined { var, .. }
+            | Verdict::RequiresNonEmpty { var } => Some(var),
+            Verdict::Never | Verdict::Unknown => None,
+        }
+    }
+
+    /// Two branches on the same variable demanding different values can't both run.
+    pub fn excludes(&self, other: &Verdict) -> bool {
+        match (self, other) {
+            (
+                Verdict::WhenEquals { var: a, value: x, negated: false, .. },
+                Verdict::WhenEquals { var: b, value: y, negated: false, .. },
+            ) => a == b && x != y,
+            (
+                Verdict::WhenIn { var: a, values: x, negated: false },
+                Verdict::WhenIn { var: b, values: y, negated: false },
+            ) => a == b && !x.iter().any(|v| y.contains(v)),
+            (
+                Verdict::RequiresDefined { var: a, negated: p },
+                Verdict::RequiresDefined { var: b, negated: q },
+            ) => a == b && p != q,
+            _ => false,
+        }
+    }
+}
+
+/// Something provably wrong with a condition, independent of any variable's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Problem {
+    /// `when: "{{ x == 1 }}"`. `when:` is templated implicitly; the delimiters cause
+    /// double evaluation. Ansible deprecated this and it breaks on bare variables.
+    JinjaDelimiters,
+    /// `item` referenced with no `loop:`/`with_*` on the task — always undefined.
+    ItemWithoutLoop,
+    /// `x = 'y'` instead of `x == 'y'` — a Jinja syntax error at runtime.
+    AssignmentNotComparison,
+    /// Unbalanced `(`/`)` or an odd number of quotes — a Jinja syntax error.
+    UnbalancedDelimiters,
+}
+
+impl Problem {
+    pub fn rule_id(&self) -> &'static str {
+        match self {
+            Problem::JinjaDelimiters => "when-jinja-delimiters",
+            Problem::ItemWithoutLoop => "when-item-without-loop",
+            Problem::AssignmentNotComparison => "when-assignment",
+            Problem::UnbalancedDelimiters => "when-unbalanced",
+        }
+    }
+
+    pub fn message(&self) -> &'static str {
+        match self {
+            Problem::JinjaDelimiters => {
+                "`when:` is already a Jinja expression — `{{ }}` here evaluates twice \
+                 and misbehaves on bare variables. Drop the delimiters."
+            }
+            Problem::ItemWithoutLoop => {
+                "`item` is only defined inside a loop, and this task has no \
+                 `loop:`/`with_*` — the condition can never evaluate."
+            }
+            Problem::AssignmentNotComparison => {
+                "single `=` is assignment, not comparison — Jinja raises a syntax \
+                 error here at runtime. Use `==`."
+            }
+            Problem::UnbalancedDelimiters => {
+                "unbalanced parentheses or quotes — Jinja raises a syntax error here \
+                 at runtime."
+            }
+        }
+    }
+}
+
+/// Provable faults in one condition. `has_loop` is whether the containing task carries
+/// a `loop:`/`with_*`, which `item` depends on.
+pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
+    let mut out = Vec::new();
+    if cond.contains("{{") || cond.contains("{%") {
+        out.push(Problem::JinjaDelimiters);
+    }
+    let bare = strip_strings(cond);
+    if !has_loop && has_word(&bare, "item") {
+        out.push(Problem::ItemWithoutLoop);
+    }
+    if lone_equals(&bare) {
+        out.push(Problem::AssignmentNotComparison);
+    }
+    if bare.matches('(').count() != bare.matches(')').count()
+        || cond.matches('\'').count() % 2 == 1
+        || cond.matches('"').count() % 2 == 1
+    {
+        out.push(Problem::UnbalancedDelimiters);
+    }
+    out
+}
+
+/// Root variable names a condition depends on, with filters, tests, string literals,
+/// attribute accesses and Ansible's magic variables removed.
+///
+/// The root only: `lustre_mount_check.stat.exists` yields `lustre_mount_check`, because
+/// that's the name a workspace-wide definition search can actually match.
+pub fn variables(cond: &str) -> Vec<String> {
+    let bare = strip_strings(cond);
+    let bytes = bare.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if !(c.is_ascii_alphabetic() || c == '_') {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && {
+            let c = bytes[i] as char;
+            c.is_ascii_alphanumeric() || c == '_'
+        } {
+            i += 1;
+        }
+        let word = &bare[start..i];
+
+        // A `(` after it makes it a call, not a variable.
+        if bare[i..].trim_start().starts_with('(') {
+            continue;
+        }
+        // Preceded by `.` -> an attribute. Preceded by `|` -> a filter name.
+        let before = bare[..start].trim_end();
+        if before.ends_with('.') || before.ends_with('|') {
+            continue;
+        }
+        // `is defined` / `is not defined`: the test name, not a variable.
+        if before.ends_with(" is") || before.ends_with(" is not") {
+            continue;
+        }
+        if NOT_VARIABLES.contains(&word)
+            || MAGIC.contains(&word)
+            || word.starts_with("ansible_")
+            || word.chars().next().is_some_and(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        if !out.iter().any(|v| v == word) {
+            out.push(word.to_string());
+        }
+    }
+    out
+}
+
+/// Whether every clause guards itself, so an undefined variable is swallowed instead of
+/// raising. This is what makes a typo permanent: `skip_smaba | default(false)` is false
+/// forever and nothing ever complains.
+pub fn is_guarded(conditions: &[String]) -> bool {
+    !conditions.is_empty()
+        && conditions
+            .iter()
+            .all(|c| c.contains("default(") || c.contains(" is defined") || c.contains(" is not defined"))
+}
+
+/// Combine the conditions on one task. A list `when:` is clauses ANDed together.
+pub fn classify_all(conditions: &[String]) -> Verdict {
+    let verdicts: Vec<_> = conditions.iter().map(|c| classify(c)).collect();
+    if verdicts.iter().any(|v| *v == Verdict::Never) {
+        return Verdict::Never;
+    }
+    // With several informative clauses there's no single honest summary.
+    let mut known = verdicts.into_iter().filter(|v| *v != Verdict::Unknown);
+    match (known.next(), known.next()) {
+        (Some(v), None) => v,
+        _ => Verdict::Unknown,
+    }
+}
+
+pub fn classify(cond: &str) -> Verdict {
+    let s = normalize(cond);
+    if is_falsy(&s) {
+        return Verdict::Never;
+    }
+    if s.contains("{{") {
+        // Double-templated; `problems()` reports it and the shape is unreliable.
+        return Verdict::Unknown;
+    }
+    // Multiple clauses joined inline: no single summary, same rule as a list `when:`.
+    if s.contains(" and ") || s.contains(" or ") {
+        return Verdict::Unknown;
+    }
+
+    if let Some(inner) = strip_not(&s) {
+        return match classify(&inner) {
+            Verdict::OnlyIfSet { var } => Verdict::UnlessSet { var },
+            Verdict::UnlessCleared { var } => Verdict::OnlyIfSet { var },
+            Verdict::UnlessSet { var } => Verdict::OnlyIfSet { var },
+            Verdict::WhenEquals { var, value, negated, matches_default } => Verdict::WhenEquals {
+                var,
+                value,
+                negated: !negated,
+                matches_default: !matches_default,
+            },
+            Verdict::WhenIn { var, values, negated } => Verdict::WhenIn {
+                var,
+                values,
+                negated: !negated,
+            },
+            Verdict::RequiresDefined { var, negated } => Verdict::RequiresDefined {
+                var,
+                negated: !negated,
+            },
+            Verdict::Never => Verdict::Unknown, // `not false` is always true; nothing useful
+            _ => Verdict::Unknown,
+        };
+    }
+
+    // `x is defined` / `x is not defined`
+    if let Some((lhs, rest)) = s.split_once(" is ") {
+        let (negated, test) = match rest.strip_prefix("not ") {
+            Some(t) => (true, t.trim()),
+            None => (false, rest.trim()),
+        };
+        if test == "defined" {
+            if let Some(var) = plain_var(lhs.trim()) {
+                return Verdict::RequiresDefined { var, negated };
+            }
+        }
+        return Verdict::Unknown;
+    }
+
+    // `x | default('') | length > 0`
+    if let Some(lhs) = s.strip_suffix("> 0").map(str::trim) {
+        if let Some(base) = lhs.strip_suffix("| length").map(str::trim) {
+            if let Some(var) = parse_defaulted(base).map(|(v, _)| v).or_else(|| plain_var(base)) {
+                return Verdict::RequiresNonEmpty { var };
+            }
+        }
+        return Verdict::Unknown;
+    }
+
+    // `x in ['a', 'b']` / `x not in [...]`
+    if let Some((lhs, rhs)) = split_membership(&s) {
+        let (lhs, negated) = match lhs.strip_suffix(" not") {
+            Some(l) => (l.trim(), true),
+            None => (lhs, false),
+        };
+        if let Some(var) = parse_defaulted(lhs).map(|(v, _)| v).or_else(|| plain_var(lhs)) {
+            let values = list_literals(rhs);
+            if !values.is_empty() {
+                return Verdict::WhenIn { var, values, negated };
+            }
+        }
+        return Verdict::Unknown;
+    }
+
+    // `x | default('v') == 'lit'`, and the `!=` form
+    for (op, negated) in [("==", false), ("!=", true)] {
+        if let Some((lhs, rhs)) = s.rsplit_once(op) {
+            let value = unquote(rhs.trim()).to_string();
+            let lhs = strip_outer_parens(lhs);
+            if let Some((var, dflt)) = parse_defaulted(lhs) {
+                let matches_default = (unquote(&dflt) == value) != negated;
+                return Verdict::WhenEquals { var, value, negated, matches_default };
+            }
+            // Unguarded `x == 'lit'`: no default, so nothing is known about an unset run.
+            if plain_var(lhs).is_some() {
+                return Verdict::Unknown;
+            }
+            return Verdict::Unknown;
+        }
+    }
+
+    if let Some((var, dflt)) = parse_defaulted(&s) {
+        if is_truthy(&dflt) {
+            return Verdict::UnlessCleared { var };
+        }
+        if is_falsy(&dflt) {
+            return Verdict::OnlyIfSet { var };
+        }
+    }
+
+    Verdict::Unknown
+}
+
+fn normalize(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn strip_strings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut quote = None;
+    for c in s.chars() {
+        match quote {
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                out.push(' ');
+            }
+            None => out.push(c),
+            Some(q) if c == q => {
+                quote = None;
+                out.push(' ');
+            }
+            Some(_) => out.push(' '),
+        }
+    }
+    out
+}
+
+fn has_word(s: &str, word: &str) -> bool {
+    s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|w| w == word)
+}
+
+/// A `=` that isn't part of `==`, `!=`, `<=`, `>=`.
+fn lone_equals(s: &str) -> bool {
+    let b = s.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c != b'=' {
+            continue;
+        }
+        let prev = i.checked_sub(1).map(|j| b[j]);
+        let next = b.get(i + 1).copied();
+        if matches!(prev, Some(b'=' | b'!' | b'<' | b'>' | b'~')) || next == Some(b'=') {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+fn strip_not(s: &str) -> Option<String> {
+    let rest = s.strip_prefix("not ")?.trim();
+    Some(normalize(strip_outer_parens(rest)))
+}
+
+/// ` in ` / ` not in ` at the top level, returning (lhs, rhs).
+fn split_membership(s: &str) -> Option<(&str, &str)> {
+    let at = s.find(" in ")?;
+    Some((s[..at].trim(), s[at + 4..].trim()))
+}
+
+fn list_literals(s: &str) -> Vec<String> {
+    let t = s.trim();
+    // Must be an actual literal list. `groups['servers']` is a subscript, not a list,
+    // and accepting it produced a bogus one-element "list" of `groups['servers'`.
+    let inner = match (t.strip_prefix('['), t.strip_suffix(']')) {
+        (Some(_), Some(_)) => &t[1..t.len() - 1],
+        _ => match (t.strip_prefix('('), t.strip_suffix(')')) {
+            (Some(_), Some(_)) => &t[1..t.len() - 1],
+            _ => return Vec::new(),
+        },
+    };
+    if inner.contains('[') || inner.contains('|') {
+        return Vec::new();
+    }
+    inner
+        .split(',')
+        .map(|p| unquote(p.trim()).to_string())
+        .filter(|p| !p.is_empty() && !p.contains(' '))
+        .collect()
+}
+
+/// A bare variable name, with an optional dotted path. Returns the root.
+fn plain_var(s: &str) -> Option<String> {
+    let s = strip_outer_parens(s);
+    let root = s.split('.').next()?.trim();
+    if root.is_empty() || !root.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    if NOT_VARIABLES.contains(&root) {
+        return None;
+    }
+    Some(root.to_string())
+}
+
+/// `x | default(false) | bool` -> `("x", "false")`. `None` unless the pipeline is a plain
+/// variable followed by a `default(...)`, so anything with real logic falls through.
+fn parse_defaulted(s: &str) -> Option<(String, String)> {
+    let s = strip_outer_parens(s);
+    let mut parts = s.split('|').map(str::trim);
+    let var = plain_var(parts.next()?)?;
+    let mut dflt = None;
+    for p in parts {
+        if let Some(arg) = p.strip_prefix("default(").and_then(|a| a.strip_suffix(')')) {
+            dflt = Some(arg.trim().to_string());
+        } else if p != "bool" {
+            // An unrecognised filter could change the result; don't guess.
+            return None;
+        }
+    }
+    Some((var, dflt?))
+}
+
+fn unquote(s: &str) -> &str {
+    let b = s.as_bytes();
+    if s.len() >= 2 && (b[0] == b'\'' || b[0] == b'"') && b[0] == b[s.len() - 1] {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+fn is_truthy(s: &str) -> bool {
+    matches!(unquote(s.trim()), "true" | "True" | "yes" | "1")
+}
+
+fn is_falsy(s: &str) -> bool {
+    matches!(unquote(s.trim()), "false" | "False" | "no" | "0")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 45 of this repo's 56 import-level conditions are this shape.
+    #[test]
+    fn skip_flag_runs_unless_set() {
+        let v = classify("not (skip_smtp | default(false) | bool)");
+        assert_eq!(v, Verdict::UnlessSet { var: "skip_smtp".into() });
+        assert_eq!(v.label().unwrap(), "runs unless skip_smtp is set");
+    }
+
+    #[test]
+    fn skip_flag_without_parens_or_bool() {
+        assert_eq!(
+            classify("not skip_format | default(false)"),
+            Verdict::UnlessSet { var: "skip_format".into() }
+        );
+    }
+
+    /// The mutually-exclusive pair from playbooks/lustre-deploy-full.yml.
+    #[test]
+    fn equality_against_the_default_value() {
+        let native = classify("lustre_deployment_mode | default('native') == 'native'");
+        let docker = classify("lustre_deployment_mode | default('native') == 'docker'");
+        assert_eq!(native.var(), Some("lustre_deployment_mode"));
+        assert_eq!(native.label().unwrap(), "runs unless lustre_deployment_mode changes from native");
+        assert_eq!(docker.label().unwrap(), "runs only if lustre_deployment_mode = docker");
+        assert!(native.excludes(&docker));
+        assert!(!native.excludes(&native));
+    }
+
+    #[test]
+    fn not_equals_inverts() {
+        let v = classify("mode | default('native') != 'native'");
+        assert_eq!(v.label().unwrap(), "runs only if mode changes from native");
+    }
+
+    #[test]
+    fn membership_lists() {
+        let v = classify("ap_operation in ['snapshot-expose', 'snapshot-unexpose']");
+        assert_eq!(
+            v,
+            Verdict::WhenIn {
+                var: "ap_operation".into(),
+                values: vec!["snapshot-expose".into(), "snapshot-unexpose".into()],
+                negated: false,
+            }
+        );
+        assert!(v.label().unwrap().starts_with("runs only if ap_operation is one of"));
+        let neg = classify("mode not in ['a', 'b']");
+        assert!(neg.label().unwrap().starts_with("runs unless mode is one of"));
+        assert!(classify("mode in ['a']").excludes(&classify("mode in ['b']")));
+    }
+
+    #[test]
+    fn is_defined_and_its_negation_exclude_each_other() {
+        let d = classify("policies is defined");
+        let u = classify("policies is not defined");
+        assert_eq!(d, Verdict::RequiresDefined { var: "policies".into(), negated: false });
+        assert_eq!(d.label().unwrap(), "runs only if policies is set");
+        assert_eq!(u.label().unwrap(), "runs only if policies is unset");
+        assert!(d.excludes(&u));
+    }
+
+    #[test]
+    fn non_empty_check() {
+        assert_eq!(
+            classify("storage_hosts | default('') | length > 0"),
+            Verdict::RequiresNonEmpty { var: "storage_hosts".into() }
+        );
+    }
+
+    #[test]
+    fn truthy_default_inverts() {
+        assert_eq!(
+            classify("enable_gui | default(true) | bool"),
+            Verdict::UnlessCleared { var: "enable_gui".into() }
+        );
+        assert_eq!(
+            classify("feature_x | default(false) | bool"),
+            Verdict::OnlyIfSet { var: "feature_x".into() }
+        );
+    }
+
+    #[test]
+    fn literal_false_never_runs() {
+        assert_eq!(classify("false"), Verdict::Never);
+        assert_eq!(classify("False"), Verdict::Never);
+    }
+
+    /// Conditions with real logic in them. Refusing to answer is the feature.
+    #[test]
+    fn anything_with_real_logic_is_unknown() {
+        for c in [
+            "policies is defined and policies | length > 0",
+            "ansible_facts['os_family'] == 'RedHat'",
+            "inventory_hostname in groups['servers']",
+            "result.rc != 0",
+            "x | default(false) | some_unknown_filter",
+            "'ftp' in (ec_container_expose | default(['http', 'ftp']))",
+            "zfs_role == \"storage\"",
+        ] {
+            assert_eq!(classify(c), Verdict::Unknown, "should not classify: {c}");
+            assert!(classify(c).label().is_none());
+        }
+    }
+
+    #[test]
+    fn a_list_of_conditions_needs_exactly_one_informative_clause() {
+        assert_eq!(
+            classify_all(&[
+                "not (skip_gui | default(false) | bool)".into(),
+                "result.rc != 0".into(),
+            ]),
+            Verdict::UnlessSet { var: "skip_gui".into() }
+        );
+        assert_eq!(
+            classify_all(&[
+                "not (skip_gui | default(false) | bool)".into(),
+                "mode | default('a') == 'b'".into(),
+            ]),
+            Verdict::Unknown
+        );
+        assert_eq!(classify_all(&["false".into(), "anything".into()]), Verdict::Never);
+    }
+
+    // ---------------------------------------------------------------- problems
+
+    #[test]
+    fn jinja_delimiters_are_a_problem() {
+        assert_eq!(
+            problems("{{ foo == 'bar' }}", false),
+            vec![Problem::JinjaDelimiters]
+        );
+        assert!(problems("foo == 'bar'", false).is_empty());
+    }
+
+    #[test]
+    fn item_needs_a_loop() {
+        assert_eq!(problems("item.rc == 0", false), vec![Problem::ItemWithoutLoop]);
+        assert!(problems("item.rc == 0", true).is_empty());
+        // The word inside a string literal is not a reference.
+        assert!(problems("x == 'item'", false).is_empty());
+        // Nor is it a substring of another identifier.
+        assert!(problems("item_count > 0", false).is_empty());
+    }
+
+    #[test]
+    fn assignment_is_not_comparison() {
+        assert_eq!(
+            problems("mode = 'docker'", false),
+            vec![Problem::AssignmentNotComparison]
+        );
+        for ok in ["a == b", "a != b", "a >= 1", "a <= 1", "x is match('a=b')"] {
+            assert!(
+                !problems(ok, false).contains(&Problem::AssignmentNotComparison),
+                "false positive on {ok}"
+            );
+        }
+    }
+
+    #[test]
+    fn unbalanced_delimiters() {
+        assert!(problems("not (x | default(false)", false).contains(&Problem::UnbalancedDelimiters));
+        assert!(problems("x == 'unterminated", false).contains(&Problem::UnbalancedDelimiters));
+        assert!(!problems("not (x | default(false))", false).contains(&Problem::UnbalancedDelimiters));
+    }
+
+    // ---------------------------------------------------------------- variables
+
+    #[test]
+    fn extracts_root_variables_only() {
+        assert_eq!(variables("lustre_mount_check.stat.exists"), vec!["lustre_mount_check"]);
+        assert_eq!(
+            variables("transport_mode | default('rdma') == 'rdma'"),
+            vec!["transport_mode"]
+        );
+        assert_eq!(variables("snap_uuid is defined and snap_uuid | length > 0"), vec!["snap_uuid"]);
+    }
+
+    /// Every one of these fooled the first version of this extractor.
+    #[test]
+    fn ignores_literals_filters_tests_and_magic_vars() {
+        // string literals
+        assert!(variables("transport_mode | default('rdma') == 'tcp'").iter().all(|v| v == "transport_mode"));
+        // bare filter names after a pipe
+        assert_eq!(variables("x | default('') | length > 0"), vec!["x"]);
+        assert!(!variables("y | bool").contains(&"bool".to_string()));
+        // attribute access
+        assert!(!variables("res.stdout_lines | length > 0").contains(&"stdout_lines".to_string()));
+        // test names
+        assert!(!variables("policies is defined").contains(&"defined".to_string()));
+        assert!(!variables("res is not changed").contains(&"changed".to_string()));
+        // magic and facts
+        assert!(variables("inventory_hostname == 'x'").is_empty());
+        assert!(variables("ansible_facts['os_family'] == 'RedHat'").is_empty());
+        assert!(variables("item.key not in vars").is_empty());
+    }
+
+    /// What makes a typo permanent rather than loud.
+    #[test]
+    fn guarded_conditions_swallow_undefined_variables() {
+        assert!(is_guarded(&["skip_x | default(false) | bool".into()]));
+        assert!(is_guarded(&["snap_uuid is defined".into()]));
+        assert!(!is_guarded(&["zfs_role == 'storage'".into()]));
+        // Every clause must guard itself.
+        assert!(!is_guarded(&[
+            "skip_x | default(false)".into(),
+            "zfs_role == 'storage'".into()
+        ]));
+        assert!(!is_guarded(&[]));
+    }
+}
+
+/// Coverage against the real corpus. Not a unit test — a measurement, so it's ignored by
+/// default. `cargo test -p ansible-core corpus -- --ignored --nocapture`
+#[cfg(test)]
+mod corpus {
+    use super::*;
+    use crate::parse::{Document, Node};
+    use crate::workspace::yaml_files;
+    use std::path::PathBuf;
+
+    fn repo() -> PathBuf {
+        PathBuf::from(std::env::var("HOME").unwrap()).join("app/ansible")
+    }
+
+    fn whens(node: &Node, out: &mut Vec<(Vec<String>, bool)>) {
+        match node {
+            Node::Sequence { items, .. } => items.iter().for_each(|i| whens(i, out)),
+            Node::Mapping { entries, .. } => {
+                if let Some(w) = node.get("when") {
+                    let has_loop = entries.iter().any(|(k, _)| {
+                        matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
+                    });
+                    let cs: Vec<String> = match w {
+                        Node::Sequence { items, .. } => {
+                            items.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect()
+                        }
+                        o => o.as_str().map(str::to_owned).into_iter().collect(),
+                    };
+                    if !cs.is_empty() {
+                        out.push((cs, has_loop));
+                    }
+                }
+                entries.iter().for_each(|(_, v)| whens(v, out));
+            }
+            _ => {}
+        }
+    }
+
+    /// The demo file is the only place these problems exist, so it doubles as the
+    /// fixture. Not ignored — it must not silently stop demonstrating them.
+    #[test]
+    fn demo_file_exercises_every_problem() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demo/tasks/main.yml");
+        let text = std::fs::read_to_string(&path).expect("demo file");
+        let doc = Document::new(text);
+        let nodes = doc.parse().expect("demo must stay parseable");
+        let mut found = Vec::new();
+        for n in &nodes {
+            let mut ws = Vec::new();
+            whens(n, &mut ws);
+            for (cs, has_loop) in ws {
+                for c in &cs {
+                    found.extend(problems(c, has_loop));
+                }
+            }
+        }
+        for want in [
+            Problem::JinjaDelimiters,
+            Problem::ItemWithoutLoop,
+            Problem::AssignmentNotComparison,
+            Problem::UnbalancedDelimiters,
+        ] {
+            assert!(found.contains(&want), "demo no longer shows {want:?}");
+        }
+        // `loop:` + `item` and the noqa'd line must not add a second ItemWithoutLoop
+        // beyond the one deliberate case.
+        let items = found.iter().filter(|p| **p == Problem::ItemWithoutLoop).count();
+        assert_eq!(items, 2, "expected the bad case plus the noqa'd one, got {items}");
+    }
+
+    #[test]
+    #[ignore]
+    fn when_coverage() {
+        let root = repo();
+        if !root.exists() {
+            eprintln!("skip: {} absent", root.display());
+            return;
+        }
+        let mut all = Vec::new();
+        for p in yaml_files(&root) {
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let doc = Document::new(text);
+            let Some(nodes) = doc.parse() else { continue };
+            for n in &nodes {
+                whens(n, &mut all);
+            }
+        }
+        let mut classified = 0;
+        let mut clauses = 0;
+        let mut clause_classified = 0;
+        let mut probs = 0;
+        let mut guarded = 0;
+        for (cs, has_loop) in &all {
+            if classify_all(cs) != Verdict::Unknown {
+                classified += 1;
+            }
+            if is_guarded(cs) {
+                guarded += 1;
+            }
+            for c in cs {
+                clauses += 1;
+                if classify(c) != Verdict::Unknown {
+                    clause_classified += 1;
+                }
+                probs += problems(c, *has_loop).len();
+            }
+        }
+        let pct = |n: usize, d: usize| if d == 0 { 0.0 } else { 100.0 * n as f64 / d as f64 };
+        println!("\ntasks with when:      {}", all.len());
+        println!("  classified          {classified} ({:.0}%)", pct(classified, all.len()));
+        println!("  guarded by default  {guarded} ({:.0}%)", pct(guarded, all.len()));
+        println!("individual clauses    {clauses}");
+        println!("  classified          {clause_classified} ({:.0}%)", pct(clause_classified, clauses));
+        println!("problems found        {probs}");
+        assert_eq!(probs, 0, "repo is clean today; a nonzero count is a new find or a false positive");
+    }
+}

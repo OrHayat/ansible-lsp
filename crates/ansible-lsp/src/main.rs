@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use ansible_core::condition;
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, Status};
@@ -96,23 +97,52 @@ impl Backend {
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {
-        a.refs
+        let range_of = |s: ansible_core::parse::Span| {
+            let (sl, sc) = a.doc.byte_to_lsp(s.start);
+            let (el, ec) = a.doc.byte_to_lsp(s.end);
+            Range::new(Position::new(sl, sc), Position::new(el, ec))
+        };
+        let missing = a
+            .refs
             .iter()
             .filter(|(_, res)| res.status == Status::Missing)
             .filter(|(r, _)| !a.doc.is_suppressed(r.span.start, rule_id(r)))
-            .map(|(r, res)| {
-                let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
-                let (el, ec) = a.doc.byte_to_lsp(r.span.end);
-                Diagnostic {
-                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    source: Some("ansible-lsp".into()),
-                    code: Some(NumberOrString::String(rule_id(r).into())),
-                    message: message_for(r, res, &a.ctx),
-                    ..Default::default()
-                }
+            .map(|(r, res)| Diagnostic {
+                range: range_of(r.span),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(rule_id(r).into())),
+                message: message_for(r, res, &a.ctx),
+                ..Default::default()
+            });
+
+        // Conditions that cannot work whatever the variables hold. Anchored on the
+        // `when:` itself, and deduplicated: one task can hold several references
+        // sharing one condition.
+        let mut seen = HashSet::new();
+        let broken: Vec<Diagnostic> = a
+            .refs
+            .iter()
+            .filter_map(|(r, _)| Some((r, r.condition_span?)))
+            .filter(|(_, span)| seen.insert(span.start))
+            .flat_map(|(r, span)| {
+                r.conditions
+                    .iter()
+                    .flat_map(|c| condition::problems(c, r.repeated))
+                    .map(move |p| (p, span))
             })
-            .collect()
+            .filter(|(p, span)| !a.doc.is_suppressed(span.start, p.rule_id()))
+            .map(|(p, span)| Diagnostic {
+                range: range_of(span),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule_id().into())),
+                message: p.message().into(),
+                ..Default::default()
+            })
+            .collect();
+
+        missing.chain(broken).collect()
     }
 
     /// Resolve every YAML file in the workspace and publish what's broken.
@@ -234,6 +264,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
                     work_done_progress_options: Default::default(),
@@ -257,6 +288,53 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
+    }
+
+    /// What a `when:` means for a default run, shown inline.
+    ///
+    /// Chosen over a diagnostic deliberately: 48 of this repo's 73 conditional imports
+    /// would each become a Problems-panel row, and nothing here is wrong — it's derived
+    /// information, which is what inlay hints are for. Also plain LSP, so it carries to
+    /// Neovim, unlike the teal decoration.
+    async fn inlay_hint(&self, p: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let Some(a) = self.analyze(&p.text_document.uri) else {
+            return Ok(None);
+        };
+        let mut seen: HashSet<u32> = HashSet::new();
+        let hints = a
+            .refs
+            .iter()
+            .filter_map(|(r, _)| {
+                let label = condition::classify_all(&r.conditions).label()?;
+                let (line, character) = a.doc.byte_to_lsp(r.span.end);
+                // One task can hold several references (a role plus its tasks_from),
+                // and they share the one `when:` — don't print it twice.
+                if !seen.insert(line) {
+                    return None;
+                }
+                Some(InlayHint {
+                    position: Position { line, character },
+                    label: InlayHintLabel::String(format!(" {label}")),
+                    kind: Some(InlayHintKind::PARAMETER),
+                    text_edits: None,
+                    tooltip: Some(InlayHintTooltip::String(
+                        if r.kind == ReferenceKind::ImportPlaybook {
+                            "`when:` on a static import is copied onto every task in \
+                             the imported playbook and evaluated per task. The plays \
+                             still run and facts are still gathered."
+                        } else {
+                            "What this condition does on a run with no extra vars. \
+                             `default(D)` gives the value when the variable is unset."
+                        }
+                        .into(),
+                    )),
+                    padding_left: Some(true),
+                    padding_right: None,
+                    data: None,
+                })
+            })
+            .collect();
+        Ok(Some(hints))
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {

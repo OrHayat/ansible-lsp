@@ -22,8 +22,7 @@ in it stays findable.
 
 ## Where the project actually is
 
-8 commits on `main` (`204ecf0`), 44 tests, ~2500 lines. Whole-repo scan of
-`~/app/ansible` right now:
+9 commits on `main`, 63 tests, ~3000 lines. Whole-repo scan of `~/app/ansible`:
 
 ```
 731 files, 1 unparseable
@@ -40,15 +39,19 @@ tasks_from              87        0        0
 The one `missing` is a genuine break in that repo (T-030), not a resolver bug. The 16
 skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 
+`when:` analysis (T-032) classifies 1053 of 2669 conditions and finds **zero** broken ones
+— this repo is clean on the four provable-fault rules.
+
 ## Open
 
 ### P1 — the tool lies or goes silent
 
-| ID    | Title                                                | Size |
-| ----- | ---------------------------------------------------- | ---- |
-| T-012 | [File watcher — diagnostics go stale](open/T-012-file-watcher.md) | S |
-| T-013 | [Hint on unparseable files](open/T-013-unparseable-hint.md) | S |
-| T-014 | [README is stale](open/T-014-readme-drift.md)        | S    |
+| ID    | Title                                                       | Size | Blocked by |
+| ----- | ----------------------------------------------------------- | ---- | ---------- |
+| T-013 | [Hint on unparseable files](open/T-013-unparseable-hint.md)  | S    | —          |
+| T-014 | [README is stale](open/T-014-readme-drift.md)                | S    | —          |
+| T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
+| T-033 | [`when:` vars defined nowhere](open/T-033-undefined-when-vars.md) | L    | —          |
 
 ### P2 — coverage and usability
 
@@ -60,6 +63,11 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 | T-016 | [`vars_files`](open/T-016-vars-files.md)                  | M    | 75   |
 | T-017 | [`include_vars`](open/T-017-include-vars.md)              | M    | 30   |
 | T-018 | [`meta` dependencies](open/T-018-meta-dependencies.md)    | S    | 3    |
+| T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
+| T-032 | [Static `when:` evaluation](open/T-032-static-when.md)    | L    | 2669 |
+
+T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
+shipped; the tree consumer and the code action didn't.
 
 Counts are grep estimates with comments excluded — treat as ±5%. Of T-015's 385, roughly 256
 are local paths worth checking and the rest are paths on the managed host.
@@ -151,3 +159,19 @@ this, and 16 working references depend on it staying quiet.
 **Four real references resolve against the role's `tasks/` dir, not their own directory.** A
 naive existence check ships with 4 false positives on day one.
 → `real_repo_regressions`
+
+**There is no `include_playbook` in Ansible.** Task level has `include_tasks`/`import_tasks`
+and roles have `include_role`/`import_role`, but playbook level has only `import_playbook` —
+no dynamic variant exists. So `when:` is the *only* conditional mechanism at that level, which
+is why all 48 conditional imports here use it. Never recommend `include_playbook`; the real
+alternatives are `meta: end_play`, restructuring into a task file, or `--skip-tags`.
+→ T-031
+
+**`| default(D)` states the value when a variable is unset, which is the only thing that makes
+static `when:` analysis possible** — no variable resolution, no precedence rules. It is also
+what makes a typo permanent: `skip_smaba | default(false)` is false forever and silent.
+→ `condition.rs`, T-033
+
+**Stripping wrapping parens with `trim_end_matches(')')` eats the closing paren of a trailing
+`default(...)`.** It silently broke every guarded comparison and four tests caught it.
+→ `strip_outer_parens`

@@ -90,3 +90,61 @@
 - name: BAD — no literal text to anchor on, so deliberately matches nothing
   # "*.yml" would otherwise match every task file in the role.
   ansible.builtin.include_tasks: "{{ anything }}.yml"
+
+# --------------------------------------------- when: — INLAY HINTS (grey, no squiggle)
+# Derived info, shown to the right of the line. Nothing here is wrong.
+# Not showing? Settings -> search `inlay hints` -> Editor > Inlay Hints: Enabled = on.
+
+- name: "Skip-flag — 289 conditions in the real repo have this shape"
+  ansible.builtin.include_tasks: sibling.yml
+  when: not (skip_demo | default(false) | bool)
+
+- name: "Inverted default"
+  ansible.builtin.include_tasks: sibling.yml
+  when: enable_extras | default(true) | bool
+
+- name: "Membership test"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_protocol in ['http', 'ftp']
+
+- name: "is defined — statically the interesting one"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_override is defined
+
+- name: "Non-empty check"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_hosts | default('') | length > 0
+
+- name: "NO HINT — real logic, so it declines to answer rather than guess"
+  # 61% of the real repo's conditions look like this. Refusing is the feature.
+  ansible.builtin.include_tasks: sibling.yml
+  when: ansible_facts['os_family'] == 'RedHat' and demo_hosts | length > 0
+
+# ------------------------------------- when: — WARNINGS (these can never work at all)
+# Provably broken regardless of what any variable holds. Zero of these exist in
+# ~/app/ansible today — it's clean — so they only appear here.
+
+- name: "BAD — {{ }} inside when: double-evaluates"
+  ansible.builtin.include_tasks: sibling.yml
+  when: "{{ skip_demo == false }}"
+
+- name: "BAD — item without a loop is always undefined"
+  ansible.builtin.include_tasks: sibling.yml
+  when: item.rc == 0
+
+- name: "BAD — single = is assignment, a Jinja syntax error at runtime"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode = 'docker'
+
+- name: "BAD — unbalanced parenthesis"
+  ansible.builtin.include_tasks: sibling.yml
+  when: not (skip_demo | default(false)
+
+- name: "SILENCED — rule-scoped noqa works on these too"
+  ansible.builtin.include_tasks: sibling.yml
+  when: item.rc == 0  # noqa: when-item-without-loop
+
+- name: "GOOD — item with a loop is fine, no warning"
+  ansible.builtin.include_tasks: sibling.yml
+  loop: [1, 2]
+  when: item > 1
