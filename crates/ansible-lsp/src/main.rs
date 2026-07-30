@@ -37,17 +37,16 @@ struct ResolvedRef {
 #[derive(Clone, Copy)]
 struct Settings {
     hints: bool,
-    tooltips: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hints: true, tooltips: true }
+        Self { hints: true }
     }
 }
 
 impl Settings {
-    /// Reads `{ inlayHints: { enabled, tooltips } }`. The client normalises both
+    /// Reads `{ inlayHints: { enabled } }`. The client normalises both
     /// `initializationOptions` and `didChangeConfiguration` to this one shape, so the
     /// server doesn't have to know how VS Code nests things. Anything missing keeps its
     /// default rather than silently turning a feature off.
@@ -59,10 +58,7 @@ impl Settings {
                 .and_then(|b| b.as_bool())
                 .unwrap_or(fallback)
         };
-        Self {
-            hints: get("enabled", d.hints),
-            tooltips: get("tooltips", d.tooltips),
-        }
+        Self { hints: get("enabled", d.hints) }
     }
 }
 
@@ -442,8 +438,8 @@ impl LanguageServer for Backend {
                 MessageType::INFO,
                 format!(
                     "ansible-lsp ready — initializationOptions: {note} | effective: \
-                     inlayHints.enabled={} inlayHints.tooltips={}",
-                    s.hints, s.tooltips
+                     inlayHints.enabled={}",
+                    s.hints
                 ),
             )
             .await;
@@ -459,9 +455,8 @@ impl LanguageServer for Backend {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "settings changed — received: {} | effective: enabled={} \
-                     tooltips={}",
-                    p.settings, s.hints, s.tooltips
+                    "settings changed — received: {} | effective: enabled={}",
+                    p.settings, s.hints
                 ),
             )
             .await;
@@ -500,20 +495,23 @@ impl LanguageServer for Backend {
                 if !seen.insert(line) {
                     return None;
                 }
+                // An import's condition lands on many tasks, and the count is the part
+                // you can't get by reading the line. It used to live in a tooltip —
+                // which meant hovering a ~10px grey label, so nobody ever saw it. Inline
+                // or not at all.
+                let scope = (r.kind == ReferenceKind::ImportPlaybook)
+                    .then(|| self.import_scope(res))
+                    .flatten()
+                    .map(|s| format!(" · {s}"))
+                    .unwrap_or_default();
                 Some(InlayHint {
                     position: Position { line, character },
-                    label: InlayHintLabel::String(format!(" {label}")),
+                    label: InlayHintLabel::String(format!(" {label}{scope}")),
                     kind: Some(InlayHintKind::PARAMETER),
                     text_edits: None,
-                    // Only imports get a tooltip, and only a per-site one. The previous
-                    // version was a paragraph about pushed-down semantics — identical on
-                    // all 48 sites in the real repo, so it stopped being read. A count of
-                    // what the condition actually covers differs every time.
-                    tooltip: (settings.tooltips
-                        && r.kind == ReferenceKind::ImportPlaybook)
-                        .then(|| self.import_scope(res))
-                        .flatten()
-                        .map(InlayHintTooltip::String),
+                    // No tooltips. A hint you have to discover by hovering is a hint that
+                    // doesn't exist.
+                    tooltip: None,
                     padding_left: Some(true),
                     padding_right: None,
                     data: None,
@@ -651,32 +649,28 @@ mod tests {
 
     /// A missing or malformed key must keep the default. Turning a feature off because a
     /// client sent an unexpected shape would look like the feature is broken.
+    /// One switch, and anything unexpected keeps hints ON. Silently disabling a
+    /// feature because a client sent an odd shape is indistinguishable from a bug.
     #[test]
-    fn settings_default_to_on_and_parse_both_flags() {
-        let d = Settings::from_json(&serde_json::json!({}));
-        assert!(d.hints && d.tooltips);
+    fn hints_default_on_and_only_an_explicit_false_disables_them() {
+        assert!(Settings::from_json(&serde_json::json!({})).hints);
+        assert!(!Settings::from_json(&serde_json::json!({
+            "inlayHints": { "enabled": false }
+        }))
+        .hints);
 
-        let off = Settings::from_json(&serde_json::json!({
-            "inlayHints": { "enabled": false, "tooltips": false }
-        }));
-        assert!(!off.hints && !off.tooltips);
-
-        // The two are independent, and confusing them is what got the old name
-        // `explanations` renamed: turning tooltips off leaves the hints in place.
-        let terse = Settings::from_json(&serde_json::json!({
-            "inlayHints": { "tooltips": false }
-        }));
-        assert!(terse.hints && !terse.tooltips);
-
-        // Wrong types, unrelated payloads, and the retired key all fall back to on
-        // rather than silently disabling something.
         for junk in [
-            serde_json::json!({ "inlayHints": { "enabled": "no" }, "other": 1 }),
-            serde_json::json!({ "inlayHints": { "explanations": false } }),
+            serde_json::json!({ "inlayHints": { "enabled": "no" } }),
             serde_json::json!({ "unrelated": true }),
+            // The two retired keys. Both once controlled a tooltip; that tooltip is
+            // gone, and a stale setting must not turn the hints off by accident.
+            serde_json::json!({ "inlayHints": { "explanations": false } }),
+            serde_json::json!({ "inlayHints": { "tooltips": false } }),
         ] {
-            let s = Settings::from_json(&junk);
-            assert!(s.hints && s.tooltips, "should not disable anything: {junk}");
+            assert!(
+                Settings::from_json(&junk).hints,
+                "should not disable hints: {junk}"
+            );
         }
     }
 }

@@ -85,10 +85,9 @@ impl Scope {
         } else {
             parts.join(" and ")
         };
-        Some(format!(
-            "Copied onto {what} across {}, evaluated separately at each — not a single gate.",
-            plural(self.plays, "play")
-        ))
+        // Rendered inline at the end of a line, so it has to be short. The long form
+        // lived in a tooltip nobody found.
+        Some(format!("copied onto {what} in {}", plural(self.plays, "play")))
     }
 }
 
@@ -222,21 +221,15 @@ mod tests {
         assert_eq!(s.plays, 2);
         assert_eq!(s.tasks, 5, "pre_tasks + tasks + post_tasks across both plays");
         assert_eq!(s.roles, 2, "bare and dict forms both count");
-        assert_eq!(
-            s.describe().unwrap(),
-            "Copied onto 5 tasks and 2 roles across 2 plays, evaluated separately at each \
-             — not a single gate."
-        );
+        assert_eq!(s.describe().unwrap(), "copied onto 5 tasks and 2 roles in 2 plays");
     }
 
     #[test]
     fn scope_singularises_and_omits_empty_categories() {
         let d = tmp("scope-one");
         let pb = write(&d, "play.yml", "- hosts: a\n  tasks:\n    - debug: {msg: 1}\n");
-        assert_eq!(
-            scope_of(&pb).describe().unwrap(),
-            "Copied onto 1 task across 1 play, evaluated separately at each — not a single gate."
-        );
+        // Short: this renders inline at the end of a line, not in a tooltip.
+        assert_eq!(scope_of(&pb).describe().unwrap(), "copied onto 1 task in 1 play");
         // No roles mentioned when there are none.
         assert!(!scope_of(&pb).describe().unwrap().contains("role"));
     }

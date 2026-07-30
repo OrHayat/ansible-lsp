@@ -1,18 +1,10 @@
 {
   // ---------------------------------------------------------------- ansible-lsp
-  // Both default to true. Changing either applies immediately — no reload.
-
-  // THE GREY TEXT beside a `when:`. false = no hints at all.
+  // One switch. false = no grey hints beside `when:` lines. Applies immediately.
+  // Diagnostics are unaffected — a warning is silenced per-line with
+  // `# noqa: <rule-id>`, not from here.
   "ansibleLsp.inlayHints.enabled": true,
 
-  // THE HOVER only — the grey text stays either way. It reports how many tasks and
-  // plays an `import_playbook` condition is copied onto. Plain task hints never have
-  // one, so turning this off changes nothing outside playbooks.
-  "ansibleLsp.inlayHints.tooltips": true,
-
-  // Neither affects diagnostics. A warning is something you asked to be told about,
-  // so it is silenced per-line with `# noqa: <rule-id>` instead.
-
-  // Without this the hints never render, whatever the two settings above say.
+  // Without this VS Code renders no inlay hints at all, whatever the above says.
   "editor.inlayHints.enabled": "on"
 }
