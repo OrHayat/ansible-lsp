@@ -50,6 +50,7 @@ fn main() {
             let (line, _) = doc.byte_to_lsp(r.span.start);
             match res.status {
                 Status::Resolved => entry[0] += 1,
+                Status::Missing if doc.is_suppressed(r.span.start) => entry[2] += 1,
                 Status::Missing => {
                     entry[1] += 1;
                     missing.push(format!("{rel}:{}  {}", line + 1, r.value));

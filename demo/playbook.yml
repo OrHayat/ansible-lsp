@@ -28,3 +28,6 @@
   # playbook. It is not a single gate evaluated once.
   import_playbook: imported.yml
   when: not (skip_demo | default(false))
+
+- name: SILENCED — real break, but noqa suppresses the warning
+  import_playbook: also_not_here.yml  # noqa
