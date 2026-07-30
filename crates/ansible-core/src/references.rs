@@ -30,6 +30,12 @@ pub struct Reference {
     pub has_tasks_from: bool,
     /// The containing task has a `when:`, so this call may not happen.
     pub conditional: bool,
+    /// The `when:` clauses themselves, for [`crate::condition`]. A list `when:` is
+    /// several clauses ANDed together.
+    pub conditions: Vec<String>,
+    /// Span of the `when:` value, so a problem with the condition is reported on the
+    /// condition rather than on the reference a few lines away.
+    pub condition_span: Option<Span>,
     /// The containing task has a `loop:`/`with_*`, so it may happen many times.
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
@@ -46,6 +52,8 @@ impl Reference {
             role: None,
             has_tasks_from: false,
             conditional: false,
+            conditions: Vec::new(),
+            condition_span: None,
             repeated: false,
             task_name: None,
         }
@@ -56,6 +64,8 @@ impl Reference {
 #[derive(Default, Clone)]
 struct TaskContext {
     conditional: bool,
+    conditions: Vec<String>,
+    condition_span: Option<Span>,
     repeated: bool,
     name: Option<String>,
 }
@@ -65,6 +75,8 @@ impl TaskContext {
         let has = |k: &str| mapping.get(k).is_some();
         Self {
             conditional: has("when"),
+            conditions: mapping.get("when").map(clauses).unwrap_or_default(),
+            condition_span: mapping.get("when").map(|w| w.span()),
             repeated: mapping
                 .entries()
                 .iter()
@@ -75,8 +87,21 @@ impl TaskContext {
 
     fn apply(&self, r: &mut Reference) {
         r.conditional = self.conditional;
+        r.conditions = self.conditions.clone();
+        r.condition_span = self.condition_span;
         r.repeated = self.repeated;
         r.task_name = self.name.clone();
+    }
+}
+
+/// A `when:` is either one expression or a list of them.
+fn clauses(when: &Node) -> Vec<String> {
+    match when {
+        Node::Sequence { items, .. } => items
+            .iter()
+            .filter_map(|i| i.as_str().map(str::to_owned))
+            .collect(),
+        other => other.as_str().map(str::to_owned).into_iter().collect(),
     }
 }
 

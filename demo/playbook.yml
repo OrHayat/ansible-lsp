@@ -39,3 +39,39 @@
   # This repo already carries `# noqa: command-instead-of-module` for ansible-lint;
   # those lines must not accidentally disable these checks.
   import_playbook: definitely_not_here.yml  # noqa: command-instead-of-module
+
+# ------------------------------------------------------- STATIC when: (inlay hints)
+# Grey text appears to the RIGHT of these lines saying what a default run does.
+# No squiggle, no Problems entry — it's derived info, not a complaint.
+#
+# If you see nothing: Cmd+Shift+P -> "Preferences: Open Settings (UI)" ->
+# search `inlay hints` -> set Editor > Inlay Hints: Enabled to `on`.
+
+- name: "The skip-flag pattern — 45 of 56 real conditions in ~/matrix/ansible"
+  import_playbook: imported.yml
+  when: not (skip_demo | default(false) | bool)
+
+- name: "Inverted default — same shape, opposite meaning"
+  import_playbook: imported.yml
+  when: enable_extras | default(true) | bool
+
+- name: "Mutually exclusive pair, branch 1 — the default value satisfies it"
+  import_playbook: imported.yml
+  when: demo_mode | default('native') == 'native'
+
+- name: "Mutually exclusive pair, branch 2 — same var, so these two can never both run"
+  import_playbook: imported.yml
+  when: demo_mode | default('native') == 'docker'
+
+- name: "NO HINT — real logic, so it stays silent rather than guessing"
+  # 56% of this repo's 3466 conditions look like this. Refusing to answer is the
+  # feature; a tree that guesses is the thing that got the call-hierarchy version
+  # scrapped.
+  import_playbook: imported.yml
+  when: ansible_facts['os_family'] == 'RedHat' and groups['x'] | length > 0
+
+- name: "NO HINT — two informative clauses have no single honest summary"
+  import_playbook: imported.yml
+  when:
+    - not (skip_demo | default(false) | bool)
+    - demo_mode | default('native') == 'docker'
