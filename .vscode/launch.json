@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run extension against ~/app/ansible",
+      "name": "Run extension against demo folder",
       "type": "extensionHost",
       "request": "launch",
       "args": [

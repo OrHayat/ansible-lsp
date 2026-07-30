@@ -2,7 +2,7 @@
   "name": "ansible-lsp-client",
   "displayName": "Ansible LSP (local)",
   "description": "Go-to-definition for Ansible file references, backed by a Rust language server.",
-  "publisher": "community-local",
+  "publisher": "or hayat",
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.75.0"
