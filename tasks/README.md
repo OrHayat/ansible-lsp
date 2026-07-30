@@ -49,7 +49,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 | ID    | Title                                                       | Size | Blocked by |
 | ----- | ----------------------------------------------------------- | ---- | ---------- |
 | T-013 | [Hint on unparseable files](open/T-013-unparseable-hint.md)  | S    | —          |
-| T-014 | [README is stale](open/T-014-readme-drift.md)                | S    | —          |
 | T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
 | T-033 | [`when:` vars defined nowhere](open/T-033-undefined-when-vars.md) | L    | —          |
 
@@ -113,6 +112,7 @@ navigation win.
 | T-009 | [`import_playbook`](closed/T-009-import-playbook.md)           | done     |
 | T-010 | [`# noqa` suppression, rule-scoped](closed/T-010-noqa-suppression.md) | done |
 | T-011 | [Execution tree via LSP call hierarchy](closed/T-011-call-hierarchy-tree.md) | **rejected** |
+| T-014 | [README is stale](closed/T-014-readme-drift.md)                | done     |
 
 ## Settled — don't re-derive these
 

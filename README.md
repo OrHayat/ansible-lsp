@@ -1,7 +1,8 @@
 # ansible-lsp
 
-Go-to-definition and (soon) broken-reference diagnostics for Ansible, as a Rust language
-server. VS Code today via a thin client; Neovim later via lspconfig against the same binary.
+Go-to-definition, broken-reference diagnostics, and `when:` explanations for Ansible, as a
+Rust language server. VS Code today via a thin client; Neovim later via lspconfig against the
+same binary.
 
 Replaces `community-local.ansible-role-goto`, which resolves paths relative to the including
 file — wrong in the four real cases pinned in `resolve.rs`'s tests.
@@ -19,7 +20,7 @@ crates/ansible-core/   all logic, no LSP, no bindings — where the tests live
   glob.rs              templated "{{ x }}/y.yml" -> every file it could reach
   bin/scan.rs          resolve a whole tree; non-zero exit on missing files
 crates/ansible-lsp/    thin tower-lsp shim over the core
-client/                ~50-line VS Code extension (plain JS, no build step)
+client/                ~140-line VS Code extension (plain JS, no build step)
 scripts/smoke.js       drives the server over raw stdio, no editor needed
 ```
 
@@ -27,10 +28,10 @@ scripts/smoke.js       drives the server over raw stdio, no editor needed
 
 ```sh
 cargo build --release
-cargo test                      # 37 tests, incl. real-repo regressions
+cargo test                      # 86 tests, incl. real-repo regressions
 ./target/release/scan ~/app/ansible   # whole-repo report / CI check
 node scripts/smoke.js           # end-to-end over LSP against ~/app/ansible
-python3 scripts/inlay-hints.py  # inlay hints per settings combination, no editor
+python3 scripts/inlay-hints.py  # `when:` hover per settings combination, no editor
 ```
 
 `scripts/smoke.js` needs node on PATH — it's installed via nvm but not exported in
@@ -42,8 +43,14 @@ export PATH=~/.nvm/versions/node/v24.11.0/bin:$PATH
 
 ## Try it in VS Code
 
-Open this folder and press **F5**. That launches an Extension Development Host with
-`~/app/ansible` open. Cmd+click any `include_tasks:` value.
+Open this folder and run **Run → Start Debugging** (F5 where the key is free — on some Macs
+it's the dictation key and does nothing). That launches an Extension Development Host with the
+`demo/` folder open. Ctrl+click (Cmd+click on macOS) any `include_tasks:` value, and hover a
+`when:` on an `import_playbook` to see what the condition does.
+
+On Windows the server binary is `ansible-lsp.exe`; the client resolves that automatically.
+Rebuilding the release binary needs the Dev Host stopped first — Windows locks a running
+`.exe`.
 
 Set `ansibleLsp.trace.server` to `verbose` to watch LSP traffic in the *Ansible LSP*
 output channel.
@@ -76,9 +83,8 @@ These never warn, each for a reason a test pins down:
 
 ## Status
 
-Steps 0–4 of the plan (`~/.claude/plans/fancy-stirring-aurora.md`). Remaining: the
-differential harness against the legacy plugin, the execution tree (`callHierarchy`),
-and the Neovim lspconfig entry.
+The backlog is the single source of truth: [`tasks/README.md`](tasks/README.md). Open
+tickets, what's shipped, and what was rejected all live there, so this section can't drift.
 
 ## Two findings that shape the code
 
