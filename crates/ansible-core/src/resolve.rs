@@ -64,9 +64,19 @@ impl Resolution {
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
-    // ImportPlaybook is excluded: it resolves before variables exist, so a templated
-    // path there is a bug worth reporting rather than a runtime unknown.
-    if r.templated && r.kind != ReferenceKind::ImportPlaybook {
+    // A templated static import is wrong whatever is on disk — Ansible templates the
+    // string before looking, so it can never reach a file literally named `{{ x }}.yml`.
+    // Don't touch the filesystem; report the templating itself.
+    if r.templated && r.kind == ReferenceKind::ImportPlaybook {
+        return Resolution {
+            status: Status::Missing,
+            targets: Vec::new(),
+            candidates: Vec::new(),
+            skip_reason: None,
+        };
+    }
+
+    if r.templated {
         let bases = match r.kind {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
             _ => return Resolution::skipped(SkipReason::Templated),
@@ -362,7 +372,9 @@ mod tests {
         }
     }
 
-    /// Unlike include_tasks, a templated static import cannot work — report it.
+    /// Unlike include_tasks, a templated static import cannot work — report it, and
+    /// report it without consulting the filesystem: a file literally named
+    /// `{{ env }}-setup.yml` would resolve here but Ansible could never reach it.
     #[test]
     fn templated_import_playbook_is_reported_not_skipped() {
         let Some(root) = repo() else { return };
@@ -370,9 +382,11 @@ mod tests {
             &root.join("playbooks/site.yml"),
             "- import_playbook: \"{{ env }}-setup.yml\"\n",
         );
-        assert_eq!(
-            first(&out, ReferenceKind::ImportPlaybook).status,
-            Status::Missing
+        let res = first(&out, ReferenceKind::ImportPlaybook);
+        assert_eq!(res.status, Status::Missing);
+        assert!(
+            res.candidates.is_empty(),
+            "must not imply it went looking for a braces-named file"
         );
     }
 

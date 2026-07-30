@@ -152,6 +152,31 @@ impl Document {
         end
     }
 
+    /// Is the diagnostic at `byte` silenced by a `# noqa` comment?
+    ///
+    /// Accepted on the same line or the line immediately above, matching
+    /// ansible-lint's convention. Comments are absent from the AST, so this reads
+    /// the raw source.
+    pub fn is_suppressed(&self, byte: usize) -> bool {
+        let (line, _) = self.byte_to_lsp(byte);
+        let has_noqa = |idx: usize| {
+            self.line_starts
+                .get(idx)
+                .map(|&start| {
+                    let end = self
+                        .line_starts
+                        .get(idx + 1)
+                        .copied()
+                        .unwrap_or(self.text.len());
+                    self.text
+                        .get(start..end)
+                        .is_some_and(|l| l.contains("# noqa"))
+                })
+                .unwrap_or(false)
+        };
+        has_noqa(line as usize) || (line > 0 && has_noqa(line as usize - 1))
+    }
+
     /// `None` = not valid YAML 1.2. Not an error: strict YAML rejects files the
     /// PyYAML Ansible uses accepts, so callers must degrade to "no references" rather
     /// than reporting anything broken.
@@ -250,6 +275,19 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let v = nodes[0].items()[0].get("include_tasks").unwrap();
         assert_eq!(v.span().slice(src), "{{ proto }}/x.yml");
+    }
+
+    #[test]
+    fn noqa_suppresses_on_the_line_and_the_line_above() {
+        let src = "- include_tasks: a.yml\n\
+                   - include_tasks: b.yml  # noqa\n\
+                   # noqa\n\
+                   - include_tasks: c.yml\n";
+        let doc = Document::new(src.to_string());
+        let at = |needle: &str| src.find(needle).unwrap();
+        assert!(!doc.is_suppressed(at("a.yml")));
+        assert!(doc.is_suppressed(at("b.yml")));
+        assert!(doc.is_suppressed(at("c.yml")));
     }
 
     #[test]

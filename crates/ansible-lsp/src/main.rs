@@ -99,6 +99,7 @@ impl Backend {
         a.refs
             .iter()
             .filter(|(_, res)| res.status == Status::Missing)
+            .filter(|(r, _)| !a.doc.is_suppressed(r.span.start))
             .map(|(r, res)| {
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(r.span.end);
