@@ -1,0 +1,21 @@
+---
+# Imported by playbook.yml under `when: not (demo_done | default(false))`.
+# This playbook SETS that variable while it runs, which is the bug: the condition is
+# copied onto every task here and re-evaluated per task, so everything below the
+# set_fact is silently skipped.
+
+- name: Demo — a playbook that mutates the variable gating its own import
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: This one runs — demo_done is still unset
+      ansible.builtin.debug:
+        msg: before
+
+    - name: The moment that breaks it
+      ansible.builtin.set_fact:
+        demo_done: true
+
+    - name: "NEVER RUNS — the imported when: now evaluates false for every later task"
+      ansible.builtin.debug:
+        msg: after

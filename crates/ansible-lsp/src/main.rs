@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ansible_core::condition;
+use ansible_core::mutation;
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, Status};
@@ -38,6 +39,10 @@ struct Backend {
     /// URIs we've published non-empty diagnostics for, so a later scan can clear
     /// the ones that got fixed.
     flagged: Mutex<HashSet<Url>>,
+    /// Variables each imported playbook mutates while running. Computing this walks the
+    /// playbook, its roles and its includes, so it must not happen per keystroke.
+    /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
+    mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
 }
 
 struct Analysis {
@@ -79,7 +84,8 @@ impl Backend {
             self.client.publish_diagnostics(uri.clone(), vec![], None).await;
             return;
         };
-        let diagnostics = Self::diagnostics_of(&a);
+        let mut diagnostics = Self::diagnostics_of(&a);
+        diagnostics.extend(self.mutated_condition_diagnostics(&a));
         self.track(uri, &diagnostics);
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
@@ -145,6 +151,81 @@ impl Backend {
         missing.chain(broken).collect()
     }
 
+    /// A `when:` on `import_playbook` whose variable the imported playbook itself sets.
+    ///
+    /// The condition is copied onto every imported task and re-evaluated per task, so a
+    /// `set_fact` inside flips it mid-run: everything before runs, everything after
+    /// silently skips. `set_fact` is host-scoped, so a cluster can split. This is the
+    /// only `when:` rule that needs to read other files.
+    fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for (r, res) in &a.refs {
+            if r.kind != ReferenceKind::ImportPlaybook || r.conditions.is_empty() {
+                continue;
+            }
+            let Some(span) = r.condition_span else { continue };
+            if a.doc.is_suppressed(span.start, "when-import-var-mutated") {
+                continue;
+            }
+            let used: Vec<String> = r
+                .conditions
+                .iter()
+                .flat_map(|c| condition::variables(c))
+                .collect();
+            if used.is_empty() {
+                continue;
+            }
+            for target in &res.targets {
+                let mutated = self.mutated_vars(target);
+                let mut hit: Vec<&String> =
+                    used.iter().filter(|v| mutated.contains(*v)).collect();
+                if hit.is_empty() {
+                    continue;
+                }
+                hit.sort();
+                hit.dedup();
+                let names = hit
+                    .iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let (sl, sc) = a.doc.byte_to_lsp(span.start);
+                let (el, ec) = a.doc.byte_to_lsp(span.end);
+                out.push(Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("when-import-var-mutated".into())),
+                    message: format!(
+                        "{names} is set by `{}` while it runs. This `when:` is copied onto \
+                         every imported task and re-evaluated per task, so it flips \
+                         partway through: tasks before the assignment run, tasks after \
+                         are silently skipped. `set_fact` is per-host, so hosts can \
+                         diverge. Gate with a variable the import doesn't assign, or use \
+                         `meta: end_play` inside it.",
+                        shorten(target, &a.ctx)
+                    ),
+                    ..Default::default()
+                });
+                break;
+            }
+        }
+        out
+    }
+
+    fn mutated_vars(&self, target: &Path) -> std::sync::Arc<HashSet<String>> {
+        if let Ok(cache) = self.mutations.lock() {
+            if let Some(hit) = cache.get(target) {
+                return hit.clone();
+            }
+        }
+        let computed = std::sync::Arc::new(mutation::mutated_vars(target));
+        if let Ok(mut cache) = self.mutations.lock() {
+            cache.insert(target.to_path_buf(), computed.clone());
+        }
+        computed
+    }
+
     /// Resolve every YAML file in the workspace and publish what's broken.
     ///
     /// I/O bound (~3.5 s over 731 files) so it runs detached and publishes as it
@@ -163,7 +244,8 @@ impl Backend {
                 }
                 let Ok(text) = std::fs::read_to_string(&path) else { continue };
                 let Some(a) = Self::analyze_text(text, &path) else { continue };
-                let diagnostics = Self::diagnostics_of(&a);
+                let mut diagnostics = Self::diagnostics_of(&a);
+                diagnostics.extend(self.mutated_condition_diagnostics(&a));
                 if diagnostics.is_empty() {
                     continue;
                 }
@@ -449,6 +531,7 @@ async fn main() {
         docs: Mutex::new(HashMap::new()),
         roots: Mutex::new(Vec::new()),
         flagged: Mutex::new(HashSet::new()),
+        mutations: Mutex::new(HashMap::new()),
     })
     .custom_method("ansible/references", Backend::resolved_references)
     .finish();
