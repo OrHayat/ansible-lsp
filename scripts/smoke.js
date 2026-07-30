@@ -181,6 +181,34 @@ function positionOf(text, needle) {
     console.log(`      ${d.message.split("\n")[0]}`);
   }
 
+  // Execution tree via callHierarchy, on the real repo's site.yml.
+  const play = path.join(REPO, "playbooks", "access-point-http-functional-tests.yml");
+  if (fs.existsSync(play)) {
+    const uri = `file://${play}`;
+    notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "ansible", version: 1, text: fs.readFileSync(play, "utf8") },
+    });
+    const prep = await request("textDocument/prepareCallHierarchy", {
+      textDocument: { uri },
+      position: { line: 0, character: 0 },
+    });
+    const item = (prep.result || [])[0];
+    if (item) {
+      const walk = async (node, depth, seen) => {
+        if (depth > 2 || seen.has(node.uri)) return;
+        seen.add(node.uri);
+        const out = await request("callHierarchy/outgoingCalls", { item: node });
+        for (const c of out.result || []) {
+          const detail = c.to.detail ? `  — ${c.to.detail}` : "";
+          console.log(`${"  ".repeat(depth + 1)}${c.to.name}${detail}`);
+          await walk(c.to, depth + 1, seen);
+        }
+      };
+      console.log(`\nexecution tree: ${item.name}`);
+      await walk(item, 0, new Set());
+    }
+  }
+
   // Repo-wide scan: diagnostics for files we never opened.
   process.stdout.write("\nwaiting for workspace scan");
   for (let i = 0; i < 40 && !diagnostics.has(`file://${REPO}/site.yml`); i++) {

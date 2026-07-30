@@ -26,6 +26,12 @@ pub struct Reference {
     /// For `Role`: the same include carried a `tasks_from`, so `tasks/main.yml` is
     /// not required — a role can exist purely as named task files.
     pub has_tasks_from: bool,
+    /// The containing task has a `when:`, so this call may not happen.
+    pub conditional: bool,
+    /// The containing task has a `loop:`/`with_*`, so it may happen many times.
+    pub repeated: bool,
+    /// The containing task's `name:`, for labelling an execution tree.
+    pub task_name: Option<String>,
 }
 
 impl Reference {
@@ -37,7 +43,38 @@ impl Reference {
             span,
             role: None,
             has_tasks_from: false,
+            conditional: false,
+            repeated: false,
+            task_name: None,
         }
+    }
+}
+
+/// What the task around a reference says about whether, and how often, it runs.
+#[derive(Default, Clone)]
+struct TaskContext {
+    conditional: bool,
+    repeated: bool,
+    name: Option<String>,
+}
+
+impl TaskContext {
+    fn of(mapping: &Node) -> Self {
+        let has = |k: &str| mapping.get(k).is_some();
+        Self {
+            conditional: has("when"),
+            repeated: mapping
+                .entries()
+                .iter()
+                .any(|(k, _)| matches!(k.as_str(), Some(key) if key == "loop" || key.starts_with("with_"))),
+            name: mapping.get("name").and_then(|n| n.as_str()).map(str::to_owned),
+        }
+    }
+
+    fn apply(&self, r: &mut Reference) {
+        r.conditional = self.conditional;
+        r.repeated = self.repeated;
+        r.task_name = self.name.clone();
     }
 }
 
@@ -58,9 +95,15 @@ fn walk(node: &Node, out: &mut Vec<Reference>) {
     match node {
         Node::Sequence { items, .. } => items.iter().for_each(|i| walk(i, out)),
         Node::Mapping { entries, .. } => {
+            // `when:`/`loop:` sit on the task, alongside the reference itself.
+            let ctx = TaskContext::of(node);
             for (k, v) in entries {
                 if let Some(key) = k.as_str() {
+                    let before = out.len();
                     handle(key, k, v, out);
+                    for r in &mut out[before..] {
+                        ctx.apply(r);
+                    }
                 }
                 walk(v, out);
             }
@@ -189,6 +232,25 @@ mod tests {
     fn span_points_at_the_value() {
         let src = "- include_tasks: _converge_one_ap.yml\n";
         assert_eq!(refs(src)[0].span.slice(src), "_converge_one_ap.yml");
+    }
+
+    #[test]
+    fn task_conditions_attach_to_the_reference() {
+        let r = refs(
+            "- name: maybe\n  include_tasks: a.yml\n  when: x is defined\n\
+             - name: many\n  include_tasks: b.yml\n  loop: [1, 2]\n\
+             - name: always\n  include_tasks: c.yml\n",
+        );
+        assert!(r[0].conditional && !r[0].repeated);
+        assert!(r[1].repeated && !r[1].conditional);
+        assert!(!r[2].conditional && !r[2].repeated);
+        assert_eq!(r[0].task_name.as_deref(), Some("maybe"));
+    }
+
+    #[test]
+    fn with_items_counts_as_repeated() {
+        let r = refs("- include_tasks: a.yml\n  with_items: [1]\n");
+        assert!(r[0].repeated);
     }
 
     #[test]
