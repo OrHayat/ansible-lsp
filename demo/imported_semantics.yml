@@ -1,0 +1,56 @@
+---
+# What a `when:` on the IMPORT does to this file.
+#
+# Imported by playbook.yml under `when: not (skip_demo | default(false) | bool)`.
+# None of this is something the language server detects — it is the runtime behaviour
+# the tooltip describes, written out so you can see each piece.
+#
+# Verified against ansible-core 2.20.4: source (`playbook_include.py`,
+# `play_iterator.py`) plus live runs. Not from the docs, which are vaguer than this.
+
+- name: "The play itself still runs"
+  hosts: localhost
+
+  # ASKED FOR, BUT SKIPPED. When the import's condition is false, the implicit
+  # "Gathering Facts" task is skipped too — `playbook_include.py:114` marks the play
+  # `_included_conditional` and `play_iterator.py:172` applies the condition to the
+  # synthetic setup task. Added in Ansible 2.3 (PR #21734) to fix issue #21528.
+  #
+  # Before 2.3 facts WERE gathered for a fully-skipped playbook. You are on 2.20.4,
+  # so this is history, not a caveat.
+  gather_facts: true
+
+  # The play banner still prints and hosts are still matched even when everything is
+  # skipped — the host shows up in the recap with `skipped=N`. So a "skipped" playbook
+  # still looks like it ran.
+
+  tasks:
+    - name: "Plain task — receives the import's condition verbatim"
+      ansible.builtin.debug:
+        msg: gated by the import
+
+    - name: "Task with its OWN when: — the two are ANDed, not replaced"
+      # `playbook_include.py:130-132` PREPENDS the import's condition to this task's
+      # existing one. Both must pass. A task cannot opt out of the import's gate by
+      # having its own condition.
+      ansible.builtin.debug:
+        msg: needs the import condition AND this one
+      when: demo_local_flag | default(true) | bool
+
+    - name: "Notifies a handler"
+      ansible.builtin.debug:
+        msg: notifying
+      changed_when: true
+      notify: demo handler
+
+  # Handlers are NOT in the list the condition is copied onto — only
+  # pre_tasks + roles + tasks + post_tasks. A handler carries no copy of the gate.
+  #
+  # Normally that is invisible: if every notifying task was skipped, nothing notifies,
+  # so nothing fires. It becomes visible when the gate variable FLIPS mid-run — a task
+  # notifies while the gate is true, the gate then goes false, and the handler still
+  # runs at flush time. That is the `when-import-var-mutated` case, from a second angle.
+  handlers:
+    - name: demo handler
+      ansible.builtin.debug:
+        msg: handlers do not inherit the import's condition

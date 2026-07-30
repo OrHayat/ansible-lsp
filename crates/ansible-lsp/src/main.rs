@@ -401,9 +401,14 @@ impl LanguageServer for Backend {
                     text_edits: None,
                     tooltip: Some(InlayHintTooltip::String(
                         if r.kind == ReferenceKind::ImportPlaybook {
-                            "`when:` on a static import is copied onto every task in \
-                             the imported playbook and evaluated per task. The plays \
-                             still run and facts are still gathered."
+                            // Verified against ansible-core 2.20.4 source and live runs,
+                            // not the docs. An earlier version of this string claimed
+                            // facts are still gathered; that stopped being true in 2.3.
+                            "`when:` on a static import is prepended to the `when:` of \
+                             every task in the imported playbook — pre_tasks, roles, \
+                             tasks and post_tasks, but NOT handlers — and evaluated per \
+                             task. The play still runs and its banner prints; the \
+                             implicit fact gathering is skipped with it."
                         } else {
                             "What this condition does on a run with no extra vars. \
                              `default(D)` gives the value when the variable is unset."

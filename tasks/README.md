@@ -133,9 +133,28 @@ therefore mean *no references*, never *broken*. "Does it parse" is not a proxy f
 Ansible."
 → `unparseable_yields_none_not_panic`
 
-**`when:` on an `import_playbook` is not a gate.** Ansible copies it onto every task in every
-imported play. Any tree or diagnostic must say *pushed down*, not *conditional*.
-→ `task_conditions_attach_to_the_reference`
+**`when:` on an `import_playbook` is not a gate.** Verified against ansible-core 2.20.4
+source and live runs, not the docs:
+
+- it is **prepended** to each task's own `when:` — an AND, so a task cannot opt out
+  (`playbook_include.py:130-132`)
+- it lands on `pre_tasks + roles + tasks + post_tasks`, **not handlers**. A handler already
+  notified still fires after the gate flips.
+- the play still runs: banner prints, hosts matched, recap shows `skipped=N`
+- **the implicit fact gathering is skipped with it** — `play._included_conditional`
+  (`playbook_include.py:114`) read by `play_iterator.py:172`. Added in Ansible 2.3,
+  PR #21734, for issue #21528. Before 2.3 facts *were* gathered; not worth encoding.
+
+An earlier tooltip claimed "facts are still gathered". It was wrong, and it was wrong
+because it was written from reasoning instead of from a run — the same mistake the
+first-match-wins and char-offset findings exist to prevent.
+→ `task_conditions_attach_to_the_reference`, `demo/imported_semantics.yml`
+
+**A `set_fact` inside an imported playbook on the variable its import is gated on
+half-executes the playbook**, and because facts are host-scoped, hosts diverge. Confirmed
+by a live two-host run. **ansible-lint has no rule for this** — in 26.1.1 `import_playbook`
+appears only in `fqcn.py`. So `when-import-var-mutated` is novel, not a reimplementation.
+→ `mutation.rs`, `finds_the_real_daos_case`
 
 **A templated `import_playbook` can never resolve** — a static import expands before variables
 exist. The only place `{{ }}` means "wrong" rather than "unknown".
