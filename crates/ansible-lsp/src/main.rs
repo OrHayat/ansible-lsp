@@ -79,6 +79,8 @@ struct Backend {
     /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
     settings: Mutex<Settings>,
+    /// What arrived in `initializationOptions`, logged once the client can receive it.
+    startup_note: Mutex<String>,
 }
 
 struct Analysis {
@@ -372,11 +374,19 @@ impl LanguageServer for Backend {
             }
         }
 
-        if let Some(opts) = &p.initialization_options {
-            if let Ok(mut s) = self.settings.lock() {
-                *s = Settings::from_json(opts);
+        // Logged rather than applied silently: "the setting does nothing" is otherwise
+        // indistinguishable from "the client never sent it", and in a multi-root window
+        // a folder-level settings.json is ignored for window-scoped keys.
+        let received = match &p.initialization_options {
+            Some(opts) => {
+                if let Ok(mut s) = self.settings.lock() {
+                    *s = Settings::from_json(opts);
+                }
+                opts.to_string()
             }
-        }
+            None => "none — client sent no initializationOptions".to_string(),
+        };
+        self.startup_note.lock().map(|mut n| *n = received).ok();
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -404,8 +414,17 @@ impl LanguageServer for Backend {
         tokio::task::spawn_blocking(|| {
             ansible_core::install::AnsibleInstall::detect();
         });
+        let note = self.startup_note.lock().map(|n| n.clone()).unwrap_or_default();
+        let s = self.settings.lock().map(|s| *s).unwrap_or_default();
         self.client
-            .log_message(MessageType::INFO, "ansible-lsp ready")
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "ansible-lsp ready — initializationOptions: {note} | effective: \
+                     inlayHints.enabled={} inlayHints.explanations={}",
+                    s.hints, s.explanations
+                ),
+            )
             .await;
         self.scan_workspace().await;
     }
@@ -414,6 +433,17 @@ impl LanguageServer for Backend {
         if let Ok(mut s) = self.settings.lock() {
             *s = Settings::from_json(&p.settings);
         }
+        let s = self.settings.lock().map(|s| *s).unwrap_or_default();
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "settings changed — received: {} | effective: enabled={} \
+                     explanations={}",
+                    p.settings, s.hints, s.explanations
+                ),
+            )
+            .await;
         // Already-rendered hints are stale now, so ask for a re-request. Without this
         // the change only shows on the next edit, which reads as the setting not working.
         let _ = self.client.inlay_hint_refresh().await;
@@ -595,6 +625,7 @@ async fn main() {
         flagged: Mutex::new(HashSet::new()),
         mutations: Mutex::new(HashMap::new()),
         settings: Mutex::new(Settings::default()),
+        startup_note: Mutex::new(String::new()),
     })
     .custom_method("ansible/references", Backend::resolved_references)
     .finish();

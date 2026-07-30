@@ -44,6 +44,19 @@ from a per-folder file there, and marks them "cannot be applied in this window".
 Extension Development Host, set them in **User settings** (`Cmd+,`, search `ansible lsp`).
 The file next door is the copy-paste source, and it does work if you open `demo/` on its own.
 
+**If a change seems to do nothing**, don't guess — the server logs what it received.
+View → Output → **Ansible LSP**:
+
+```
+ansible-lsp ready — initializationOptions: {"inlayHints":{"explanations":false}} |
+  effective: inlayHints.enabled=true inlayHints.explanations=false
+```
+
+`initializationOptions: none` means the client never sent them — the dev host is running an
+old `extension.js`, so Run → Stop Debugging and start again. If the options arrived but the
+value isn't the one you set, VS Code is ignoring your settings file, which for a window-scoped
+key in a multi-root window is exactly what it does.
+
 Window scope is deliberate: the server keeps one setting for the whole session, so letting
 VS Code offer a per-folder value would promise something it cannot honour.
 
