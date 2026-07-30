@@ -36,6 +36,7 @@ fn main() {
     let mut unparseable = 0usize;
     let mut mutated: Vec<String> = Vec::new();
     let mut empty_glob: Vec<String> = Vec::new();
+    let mut tmpl_vars: BTreeMap<String, usize> = BTreeMap::new();
     let mut broken_when: Vec<String> = Vec::new();
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
 
@@ -107,6 +108,24 @@ fn main() {
                     r.value
                 ));
             }
+            if r.templated {
+                let mut rest = r.value.as_str();
+                while let Some(i) = rest.find("{{") {
+                    let after = &rest[i + 2..];
+                    let Some(j) = after.find("}}") else { break };
+                    let expr = after[..j].trim();
+                    // The root identifier of the expression, which is what a
+                    // substitution would have to know.
+                    let root: String = expr
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !root.is_empty() {
+                        *tmpl_vars.entry(root).or_default() += 1;
+                    }
+                    rest = &after[j + 2..];
+                }
+            }
             let entry = totals.entry(kind_name(r.kind)).or_default();
             let rel = path.strip_prefix(&root).unwrap_or(path).display();
             let (line, _) = doc.byte_to_lsp(r.span.start);
@@ -150,6 +169,15 @@ fn main() {
             println!("  {r}");
         }
     }
+    if !tmpl_vars.is_empty() {
+        let mut v: Vec<_> = tmpl_vars.iter().collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        println!("\nVARIABLES USED IN TEMPLATED PATHS ({}):", v.len());
+        for (name, n) in v {
+            println!("  {n:4}  {name}");
+        }
+    }
+
     if !empty_glob.is_empty() {
         println!("\nTEMPLATED, MATCHES NOTHING ({}):", empty_glob.len());
         for l in &empty_glob {

@@ -51,6 +51,15 @@ Search order per the resolution table: `template` -> role `templates/` -> `<play
 Also: `dest:` is *always* remote and must never be treated as a reference. Worth an explicit
 test so nobody adds it later by pattern-matching on "path-shaped argument".
 
+## Re-run the magic-variable survey when this lands
+
+`scan` prints `VARIABLES USED IN TEMPLATED PATHS`. Today it shows 11 distinct variables,
+of which the only knowable ones — `role_path` (4) and `playbook_dir` (4) — are already
+expanded rather than globbed. But that survey only covers reference kinds the extractor
+supports, and `src:` is the largest unsupported block. Template and file paths are exactly
+where `{{ role_path }}/files/x.conf` is idiomatic, so expect new entries and check whether
+any are magic variables that should be expanded instead of treated as unknown.
+
 ## Done when
 
 - [ ] `template:`/`copy:` `src:` navigate to role `templates/`/`files/`
@@ -59,3 +68,4 @@ test so nobody adds it later by pattern-matching on "path-shaped argument".
 - [ ] a module absent from the table yields no diagnostic
 - [ ] `dest:` is never a reference
 - [ ] corpus gate: zero new warnings across all 731 files
+- [ ] the templated-variable survey re-run, and any new magic variables expanded
