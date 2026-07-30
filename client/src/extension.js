@@ -24,6 +24,18 @@ function serverPath(context) {
   );
 }
 
+// Sent at startup and again on change. Normalised here so the server sees one shape
+// rather than having to know VS Code's nesting.
+function hintSettings() {
+  const c = vscode.workspace.getConfiguration("ansibleLsp");
+  return {
+    inlayHints: {
+      enabled: c.get("inlayHints.enabled", true),
+      explanations: c.get("inlayHints.explanations", true),
+    },
+  };
+}
+
 function isYaml(doc) {
   return (
     doc &&
@@ -80,6 +92,7 @@ function activate(context) {
         { scheme: "file", language: "ansible" },
         { scheme: "file", language: "yaml" },
       ],
+      initializationOptions: hintSettings(),
     }
   );
 
@@ -98,6 +111,13 @@ function activate(context) {
       await client.restart();
       vscode.window.visibleTextEditors.forEach(repaint);
       vscode.window.setStatusBarMessage("Ansible LSP restarted", 2000);
+    }),
+    // Settings take effect immediately; the server asks VS Code to re-request hints.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration("ansibleLsp.inlayHints")) return;
+      client?.sendNotification("workspace/didChangeConfiguration", {
+        settings: hintSettings(),
+      });
     }),
     vscode.window.onDidChangeActiveTextEditor(repaint),
     vscode.window.onDidChangeVisibleTextEditors((es) => es.forEach(repaint)),

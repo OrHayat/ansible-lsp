@@ -26,6 +26,16 @@ work. The message lists every path tried, in order.
 extra vars. Nothing is wrong; it's derived information. If you see none, set
 `Editor > Inlay Hints: Enabled` to `on`.
 
+Too chatty? Two settings, both live — no reload:
+
+| Setting | Effect |
+| ------- | ------ |
+| `ansibleLsp.inlayHints.explanations` | `false` keeps the hints, drops the long hover prose |
+| `ansibleLsp.inlayHints.enabled` | `false` removes the hints entirely |
+
+Neither touches diagnostics. Warnings are things you asked to be told about, so they are not
+configurable here — silencing a rule is `# noqa`, or a committed project file (T-025).
+
 ## Deliberate silences
 
 Each of these stays quiet for a reason a test pins down, and each would be a false positive
