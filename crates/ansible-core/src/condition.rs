@@ -147,17 +147,16 @@ impl Verdict {
             Verdict::Never => "never runs".to_string(),
             Verdict::Always => "always runs — this `when:` has no effect".to_string(),
             Verdict::All { parts, unreadable } => {
-                let mut reqs: Vec<String> = parts.iter().filter_map(|p| p.requirement()).collect();
-                if reqs.is_empty() {
-                    return None;
+                // Inline space is tight, so name the first requirement and fold the rest
+                // (further readable clauses plus unreadable ones) into a count.
+                let reqs: Vec<String> = parts.iter().filter_map(|p| p.requirement()).collect();
+                let first = reqs.first()?;
+                let extra = reqs.len() - 1 + unreadable;
+                if extra == 0 {
+                    format!("runs only if {first}")
+                } else {
+                    format!("runs only if {first} +{extra} more")
                 }
-                if *unreadable > 0 {
-                    reqs.push(format!(
-                        "{unreadable} more condition{}",
-                        if *unreadable == 1 { "" } else { "s" }
-                    ));
-                }
-                format!("runs only if {}", reqs.join(" and "))
             }
             Verdict::Unknown => return None,
         })
@@ -166,7 +165,7 @@ impl Verdict {
     /// This clause as a bare requirement, for joining with siblings. Deliberately drops
     /// the "runs unless" framing — that describes a whole condition, and a clause ANDed
     /// with others does not describe the whole condition.
-    fn requirement(&self) -> Option<String> {
+    pub fn requirement(&self) -> Option<String> {
         Some(match self {
             Verdict::UnlessSet { var } => format!("{var} unset"),
             Verdict::OnlyIfSet { var } => format!("{var} set"),
@@ -779,7 +778,7 @@ mod tests {
         ]);
         assert_eq!(
             both.label().unwrap(),
-            "runs only if skip_demo unset and demo_mode = docker"
+            "runs only if skip_demo unset +1 more"
         );
         assert!(matches!(both, Verdict::All { unreadable: 0, .. }));
     }
@@ -794,7 +793,7 @@ mod tests {
         ]);
         assert_eq!(
             v.label().unwrap(),
-            "runs only if skip_gui unset and 1 more condition"
+            "runs only if skip_gui unset +1 more"
         );
 
         let two = classify_all(&[
@@ -804,7 +803,7 @@ mod tests {
         ]);
         assert_eq!(
             two.label().unwrap(),
-            "runs only if skip_gui unset and 2 more conditions"
+            "runs only if skip_gui unset +2 more"
         );
 
         // All clauses unreadable stays silent — there is nothing to say.
@@ -832,19 +831,26 @@ mod tests {
 
     #[test]
     fn every_requirement_shape_renders() {
+        for (cond, req) in [
+            ("demo_mode | default('native') != 'docker'", "demo_mode != docker"),
+            ("proto in ['http', 'ftp']", "proto in [http, ftp]"),
+            ("other not in ['a']", "other not in [a]"),
+            ("flag is not defined", "flag unset"),
+            ("hosts | default('') | length > 0", "hosts non-empty"),
+            ("enabled | default(true) | bool", "enabled not false"),
+        ] {
+            assert_eq!(classify(cond).requirement().as_deref(), Some(req), "{cond}");
+        }
+    }
+
+    #[test]
+    fn multi_clause_names_the_first_and_counts_the_rest() {
         let v = classify_all(&[
             "demo_mode | default('native') != 'docker'".into(),
             "proto in ['http', 'ftp']".into(),
-            "other not in ['a']".into(),
             "flag is not defined".into(),
-            "hosts | default('') | length > 0".into(),
-            "enabled | default(true) | bool".into(),
         ]);
-        assert_eq!(
-            v.label().unwrap(),
-            "runs only if demo_mode != docker and proto in [http, ftp] and \
-             other not in [a] and flag unset and hosts non-empty and enabled not false"
-        );
+        assert_eq!(v.label().unwrap(), "runs only if demo_mode != docker +2 more");
     }
 
     #[test]

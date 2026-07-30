@@ -74,9 +74,6 @@ struct Backend {
     /// playbook, its roles and its includes, so it must not happen per keystroke.
     /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
-    /// Per-import task/play counts, keyed by resolved target. Same reason as
-    /// `mutations`: reading the file must not happen per keystroke.
-    scopes: Mutex<HashMap<PathBuf, Option<String>>>,
     settings: Mutex<Settings>,
     /// What arrived in `initializationOptions`, logged once the client can receive it.
     startup_note: Mutex<String>,
@@ -250,24 +247,6 @@ impl Backend {
         out
     }
 
-    /// How much of the imported playbook this condition covers. `None` when the target
-    /// is ambiguous or unreadable — a guess here would be worse than silence.
-    fn import_scope(&self, res: &Resolution) -> Option<String> {
-        let [target] = res.targets.as_slice() else {
-            return None;
-        };
-        if let Ok(cache) = self.scopes.lock() {
-            if let Some(hit) = cache.get(target) {
-                return hit.clone();
-            }
-        }
-        let text = mutation::scope_of(target).describe();
-        if let Ok(mut cache) = self.scopes.lock() {
-            cache.insert(target.clone(), text.clone());
-        }
-        text
-    }
-
     fn mutated_vars(&self, target: &Path) -> std::sync::Arc<HashSet<String>> {
         if let Ok(cache) = self.mutations.lock() {
             if let Some(hit) = cache.get(target) {
@@ -345,6 +324,35 @@ impl Backend {
     }
 }
 
+/// Hover markdown for a conditional reference: every clause spelled out in plain English
+/// (or verbatim when it doesn't match a known shape), plus the reminder that an import's
+/// `when:` fans out onto the whole imported file.
+fn when_hover(r: &Reference) -> String {
+    let raw = |c: &str| format!("`{}`", c.trim());
+    let mut s = String::from("**`when:`**");
+    if let [only] = r.conditions.as_slice() {
+        // A single clause is the whole condition, so keep the "runs unless / only if"
+        // framing that says what it decides.
+        let line = condition::classify(only).label().unwrap_or_else(|| raw(only));
+        s.push_str(&format!("\n\n{line}"));
+    } else {
+        // Listed clauses are ANDed. Say so, and state each as a bare requirement rather
+        // than as its own "runs only if" sentence, which would read as standalone.
+        s.push_str("\n\nRuns only when **all** hold:");
+        for c in &r.conditions {
+            let line = condition::classify(c).requirement().unwrap_or_else(|| raw(c));
+            s.push_str(&format!("\n- {line}"));
+        }
+    }
+    if r.kind == ReferenceKind::ImportPlaybook {
+        s.push_str(
+            "\n\n_The condition is copied onto every task in the imported playbook and \
+             re-checked per task._",
+        );
+    }
+    s
+}
+
 fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
     // Listing a candidate path with `{{ }}` still in it explains nothing. The real
     // problem is that a static import is expanded before play variables exist.
@@ -415,7 +423,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 definition_provider: Some(OneOf::Left(true)),
-                inlay_hint_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
                     work_done_progress_options: Default::default(),
@@ -460,65 +468,45 @@ impl LanguageServer for Backend {
                 ),
             )
             .await;
-        // Already-rendered hints are stale now, so ask for a re-request. Without this
-        // the change only shows on the next edit, which reads as the setting not working.
-        let _ = self.client.inlay_hint_refresh().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
 
-    /// What a `when:` means for a default run, shown inline.
+    /// What a `when:` means, on hover over the conditional reference.
     ///
-    /// Chosen over a diagnostic deliberately: 48 of this repo's 73 conditional imports
-    /// would each become a Problems-panel row, and nothing here is wrong — it's derived
-    /// information, which is what inlay hints are for. Also plain LSP, so it carries to
-    /// Neovim, unlike the teal decoration.
-    async fn inlay_hint(&self, p: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+    /// Hover, not an inlay: the explanation is wanted on demand, not painted onto every
+    /// conditional line where it clutters the file and collides with the editor's own
+    /// end-of-line blame. Hover has room to spell out every clause instead of a truncated
+    /// stub. Plain LSP, so it carries to Neovim, unlike the teal decoration.
+    async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
         let settings = self.settings.lock().map(|s| *s).unwrap_or_default();
         if !settings.hints {
-            return Ok(Some(Vec::new()));
+            return Ok(None);
         }
-        let Some(a) = self.analyze(&p.text_document.uri) else {
+        let uri = &p.text_document_position_params.text_document.uri;
+        let pos = p.text_document_position_params.position;
+        let Some(a) = self.analyze(uri) else {
             return Ok(None);
         };
-        let mut seen: HashSet<u32> = HashSet::new();
-        let hints = a
-            .refs
-            .iter()
-            .filter_map(|(r, res)| {
-                let label = condition::classify_all(&r.conditions).label()?;
-                let (line, character) = a.doc.byte_to_lsp(r.span.end);
-                // One task can hold several references (a role plus its tasks_from),
-                // and they share the one `when:` — don't print it twice.
-                if !seen.insert(line) {
-                    return None;
-                }
-                // An import's condition lands on many tasks, and the count is the part
-                // you can't get by reading the line. It used to live in a tooltip —
-                // which meant hovering a ~10px grey label, so nobody ever saw it. Inline
-                // or not at all.
-                let scope = (r.kind == ReferenceKind::ImportPlaybook)
-                    .then(|| self.import_scope(res))
-                    .flatten()
-                    .map(|s| format!(" · {s}"))
-                    .unwrap_or_default();
-                Some(InlayHint {
-                    position: Position { line, character },
-                    label: InlayHintLabel::String(format!(" {label}{scope}")),
-                    kind: Some(InlayHintKind::PARAMETER),
-                    text_edits: None,
-                    // No tooltips. A hint you have to discover by hovering is a hint that
-                    // doesn't exist.
-                    tooltip: None,
-                    padding_left: Some(true),
-                    padding_right: None,
-                    data: None,
-                })
-            })
-            .collect();
-        Ok(Some(hints))
+        let byte = a.doc.lsp_to_byte(pos.line, pos.character);
+        // Anchor on the reference value (the import path), not on `when:`: it's the thing
+        // you point at, and it's already painted teal as clickable.
+        let Some((r, _)) = a.refs.iter().find(|(r, _)| {
+            !r.conditions.is_empty() && r.span.start <= byte && byte <= r.span.end
+        }) else {
+            return Ok(None);
+        };
+        let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
+        let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: when_hover(r),
+            }),
+            range: Some(Range::new(Position::new(sl, sc), Position::new(el, ec))),
+        }))
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
@@ -634,7 +622,6 @@ async fn main() {
         roots: Mutex::new(Vec::new()),
         flagged: Mutex::new(HashSet::new()),
         mutations: Mutex::new(HashMap::new()),
-        scopes: Mutex::new(HashMap::new()),
         settings: Mutex::new(Settings::default()),
         startup_note: Mutex::new(String::new()),
     })

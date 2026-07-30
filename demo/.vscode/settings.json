@@ -1,10 +1,7 @@
 {
   // ---------------------------------------------------------------- ansible-lsp
-  // One switch. false = no grey hints beside `when:` lines. Applies immediately.
+  // One switch. false = no `when:` explanation on hover. Applies immediately.
   // Diagnostics are unaffected — a warning is silenced per-line with
   // `# noqa: <rule-id>`, not from here.
-  "ansibleLsp.inlayHints.enabled": true,
-
-  // Without this VS Code renders no inlay hints at all, whatever the above says.
-  "editor.inlayHints.enabled": "on"
+  "ansibleLsp.inlayHints.enabled": true
 }
