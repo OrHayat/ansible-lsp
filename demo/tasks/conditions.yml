@@ -1,0 +1,144 @@
+---
+# `when:` analysis. Two separate things happen in this file:
+#
+#   GREY TEXT to the right of a line = an inlay hint. Derived info, nothing is wrong.
+#   YELLOW SQUIGGLE on the when: value = a warning. That condition can never work.
+#
+# No hints showing? Settings -> search `inlay hints` -> Editor > Inlay Hints: Enabled = on.
+#
+# Every verdict the classifier can produce appears below exactly once, so this file is
+# also the fixture that proves each one still works.
+
+# =========================================================== INLAY HINTS — one per verdict
+# Wording is "unless X is set" rather than "runs by default" on purpose: `default(D)`
+# only tells us the value when X is UNSET. Whether it's set in group_vars, inventory or
+# -e is not knowable from the condition, so claiming "by default" would overstate it.
+
+- name: "UnlessSet — the skip-flag pattern, 289 conditions in the real repo"
+  ansible.builtin.include_tasks: sibling.yml
+  when: not (skip_demo | default(false) | bool)
+
+- name: "OnlyIfSet — same shape without the `not`, so the flag has to be turned on"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_extra_feature | default(false) | bool
+
+- name: "UnlessCleared — default(true), so it runs until you switch it off"
+  ansible.builtin.include_tasks: sibling.yml
+  when: enable_extras | default(true) | bool
+
+- name: "WhenEquals, default matches — so this is the branch that runs untouched"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode | default('native') == 'native'
+
+- name: "WhenEquals, default does not match — the alternative branch"
+  # Together with the line above this is a mutually exclusive pair: same variable,
+  # different literals, so they can never both run. `Verdict::excludes` computes that;
+  # nothing consumes it yet (T-024).
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode | default('native') == 'docker'
+
+- name: "WhenEquals negated — `!=` flips which side the change has to be on"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode | default('native') != 'native'
+
+- name: "WhenIn — membership against a literal list"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_protocol in ['nfs', 'smb']
+
+- name: "WhenIn negated"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_protocol not in ['nfs', 'smb']
+
+- name: "RequiresDefined — statically the interesting one"
+  # If demo_override is defined nowhere in the workspace, this branch can never be
+  # taken. Detecting that needs the whole-workspace variable index (T-033).
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_override is defined
+
+- name: "RequiresDefined negated"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_override is not defined
+
+- name: "RequiresNonEmpty"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_hosts | default('') | length > 0
+
+- name: "Never — a YAML boolean, so this task is dead code"
+  # `false` here is a real YAML bool, not the string "false". It used to reach the
+  # classifier as "Boolean(false)" and go unrecognised — pinned now by
+  # `a_yaml_boolean_when_reaches_the_classifier`.
+  ansible.builtin.include_tasks: sibling.yml
+  when: false
+
+# ============================================================= NO HINT — declining to answer
+# 61% of the real repo's 2669 conditions land here. Refusing to answer is the feature:
+# a guess in an execution tree is what got the call-hierarchy version scrapped.
+
+- name: "NO HINT — real boolean logic"
+  ansible.builtin.include_tasks: sibling.yml
+  when: ansible_facts['os_family'] == 'RedHat' and demo_hosts | length > 0
+
+- name: "NO HINT — unguarded comparison, so nothing is known about an unset run"
+  # Without `| default(...)` there is no statement of what happens when the variable
+  # is missing, and Ansible has 22 precedence levels we deliberately do not resolve.
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode == 'docker'
+
+- name: "NO HINT — an unrecognised filter could change the result"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_hosts | default('') | some_custom_filter
+
+- name: "NO HINT — two informative clauses have no single honest summary"
+  ansible.builtin.include_tasks: sibling.yml
+  when:
+    - not (skip_demo | default(false) | bool)
+    - demo_mode | default('native') == 'docker'
+
+- name: "HINT — a list where only one clause is informative, so that one is reported"
+  ansible.builtin.include_tasks: sibling.yml
+  when:
+    - not (skip_demo | default(false) | bool)
+    - demo_result.rc != 0
+
+# ================================================== WARNINGS — provably broken conditions
+# Wrong whatever any variable holds. ZERO of these exist in ~/matrix/ansible — it is
+# clean on all four rules — so this file is the only place they can be seen.
+
+- name: "BAD — when-jinja-delimiters: `when:` is already a Jinja expression"
+  ansible.builtin.include_tasks: sibling.yml
+  when: "{{ skip_demo == false }}"
+
+- name: "BAD — when-item-without-loop: `item` only exists inside a loop"
+  ansible.builtin.include_tasks: sibling.yml
+  when: item.rc == 0
+
+- name: "BAD — when-assignment: single `=` is a Jinja syntax error at runtime"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode = 'docker'
+
+- name: "BAD — when-unbalanced: the parenthesis never closes"
+  ansible.builtin.include_tasks: sibling.yml
+  when: not (skip_demo | default(false)
+
+# ==================================================================== SUPPRESSION AND EDGES
+
+- name: "SILENCED — rule-scoped noqa, same syntax as ansible-lint"
+  ansible.builtin.include_tasks: sibling.yml
+  when: item.rc == 0  # noqa: when-item-without-loop
+
+- name: "NOT SILENCED — another rule's id leaves this one alone"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode = 'docker'  # noqa: when-item-without-loop
+
+- name: "GOOD — `item` with a loop is correct, so no warning"
+  ansible.builtin.include_tasks: sibling.yml
+  loop: [1, 2]
+  when: item > 1
+
+- name: "GOOD — the word `item` inside a string literal is not a reference"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_mode | default('x') == 'item'
+
+- name: "GOOD — `item_count` merely starts with `item`, so it must not warn"
+  ansible.builtin.include_tasks: sibling.yml
+  when: item_count | default(0) | int > 0

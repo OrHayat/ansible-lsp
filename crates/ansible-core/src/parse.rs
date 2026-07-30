@@ -218,11 +218,16 @@ impl Document {
             }
         }
         match &n.data {
+            // Non-string scalars must render as their YAML text, not Rust's `Debug`.
+            // `when: false` was arriving as "Boolean(false)", so no consumer could
+            // recognise it as falsy.
             YamlData::Value(v) => Node::Scalar {
                 value: v
                     .as_str()
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{v:?}")),
+                    .or_else(|| v.as_bool().map(|b| b.to_string()))
+                    .or_else(|| v.as_integer().map(|i| i.to_string()))
+                    .unwrap_or_else(|| span.slice(&self.text).trim().to_string()),
                 span,
             },
             YamlData::Sequence(items) => Node::Sequence {
@@ -327,6 +332,24 @@ mod tests {
     fn unparseable_yields_none_not_panic() {
         let doc = Document::new("- name: \"unterminated\n  bad: [".to_string());
         assert!(doc.parse().is_none());
+    }
+
+    /// `when: false` is a YAML boolean, and rendering it with Rust's `Debug` gave
+    /// "Boolean(false)" — so nothing downstream could see it as falsy.
+    #[test]
+    fn non_string_scalars_render_as_yaml_text() {
+        let src = "- when: false\n  other: 42\n  legacy: yes\n";
+        let doc = Document::new(src.to_string());
+        let nodes = doc.parse().unwrap();
+        let m = &nodes[0].items()[0];
+        assert_eq!(m.get("when").unwrap().as_str(), Some("false"));
+        assert_eq!(m.get("other").unwrap().as_str(), Some("42"));
+        // `yes` is a plain STRING in YAML 1.2 — it was only a boolean in 1.1, which is
+        // what PyYAML and therefore Ansible still use. Another face of the laxity
+        // difference already pinned by `unparseable_yields_none_not_panic`. Consumers
+        // that care must treat "yes"/"no" as booleans themselves; `condition::is_truthy`
+        // does.
+        assert_eq!(m.get("legacy").unwrap().as_str(), Some("yes"));
     }
 
     #[test]
