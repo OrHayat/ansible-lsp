@@ -30,6 +30,7 @@ cargo build --release
 cargo test                      # 37 tests, incl. real-repo regressions
 ./target/release/scan ~/matrix/ansible   # whole-repo report / CI check
 node scripts/smoke.js           # end-to-end over LSP against ~/matrix/ansible
+python3 scripts/inlay-hints.py  # inlay hints per settings combination, no editor
 ```
 
 `scripts/smoke.js` needs node on PATH — it's installed via nvm but not exported in
