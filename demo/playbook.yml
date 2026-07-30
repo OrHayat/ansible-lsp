@@ -38,7 +38,7 @@
 - name: NOT SILENCED — another tool's rule id leaves ours alone
   # This repo already carries `# noqa: command-instead-of-module` for ansible-lint;
   # those lines must not accidentally disable these checks.
-  import_playbook: definitely_not_here.yml  # noqa: command-instead-of-module
+  import_playbook: definitely_not_here.yml  
 
 # ------------------------------------------------------- STATIC when: (inlay hints)
 # Grey text appears to the RIGHT of these lines saying what a default run does.
@@ -63,6 +63,10 @@
   import_playbook: imported.yml
   when: demo_mode | default('native') == 'docker'
 
+- name: "Always — the condition has no effect, so the import is unconditional"
+  import_playbook: imported.yml
+  when: true
+
 - name: "NO HINT — real logic, so it stays silent rather than guessing"
   # 56% of this repo's 3466 conditions look like this. Refusing to answer is the
   # feature; a tree that guesses is the thing that got the call-hierarchy version
@@ -75,3 +79,11 @@
   when:
     - not (skip_demo | default(false) | bool)
     - demo_mode | default('native') == 'docker'
+
+- name: "never run"
+  import_playbook: imported.yml
+  when: false
+  
+- name: "always run"
+  import_playbook: imported.yml
+  when: true

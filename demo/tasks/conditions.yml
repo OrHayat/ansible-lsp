@@ -63,6 +63,12 @@
   ansible.builtin.include_tasks: sibling.yml
   when: demo_hosts | default('') | length > 0
 
+- name: "Always — a no-op condition, the mirror of `when: false`"
+  # Worth surfacing because it reads as if it gates something and doesn't. Usually a
+  # leftover from debugging.
+  ansible.builtin.include_tasks: sibling.yml
+  when: true
+
 - name: "Never — a YAML boolean, so this task is dead code"
   # `false` here is a real YAML bool, not the string "false". It used to reach the
   # classifier as "Boolean(false)" and go unrecognised — pinned now by

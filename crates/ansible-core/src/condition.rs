@@ -93,6 +93,8 @@ pub enum Verdict {
     RequiresNonEmpty { var: String },
     /// Literal `when: false`.
     Never,
+    /// Literal `when: true` — the condition has no effect at all.
+    Always,
     Unknown,
 }
 
@@ -137,6 +139,7 @@ impl Verdict {
             }
             Verdict::RequiresNonEmpty { var } => format!("runs only if {var} is non-empty"),
             Verdict::Never => "never runs".to_string(),
+            Verdict::Always => "always runs — this `when:` has no effect".to_string(),
             Verdict::Unknown => return None,
         })
     }
@@ -151,7 +154,7 @@ impl Verdict {
             | Verdict::WhenIn { var, .. }
             | Verdict::RequiresDefined { var, .. }
             | Verdict::RequiresNonEmpty { var } => Some(var),
-            Verdict::Never | Verdict::Unknown => None,
+            Verdict::Never | Verdict::Always | Verdict::Unknown => None,
         }
     }
 
@@ -312,8 +315,14 @@ pub fn classify_all(conditions: &[String]) -> Verdict {
     if verdicts.iter().any(|v| *v == Verdict::Never) {
         return Verdict::Never;
     }
-    // With several informative clauses there's no single honest summary.
-    let mut known = verdicts.into_iter().filter(|v| *v != Verdict::Unknown);
+    // Clauses are ANDed, so an `Always` clause constrains nothing and must not mask a
+    // sibling that does. It only stands alone.
+    if verdicts.iter().all(|v| *v == Verdict::Always) {
+        return verdicts.into_iter().next().unwrap_or(Verdict::Unknown);
+    }
+    let mut known = verdicts
+        .into_iter()
+        .filter(|v| *v != Verdict::Unknown && *v != Verdict::Always);
     match (known.next(), known.next()) {
         (Some(v), None) => v,
         _ => Verdict::Unknown,
@@ -324,6 +333,11 @@ pub fn classify(cond: &str) -> Verdict {
     let s = normalize(cond);
     if is_falsy(&s) {
         return Verdict::Never;
+    }
+    // `true` is in NOT_VARIABLES, so without this it falls through to `Unknown` and
+    // `when: true` says nothing while `when: false` says "never runs".
+    if is_truthy(&s) {
+        return Verdict::Always;
     }
     if s.contains("{{") {
         // Double-templated; `problems()` reports it and the shape is unreliable.
@@ -354,7 +368,8 @@ pub fn classify(cond: &str) -> Verdict {
                 var,
                 negated: !negated,
             },
-            Verdict::Never => Verdict::Unknown, // `not false` is always true; nothing useful
+            Verdict::Never => Verdict::Always,
+            Verdict::Always => Verdict::Never,
             _ => Verdict::Unknown,
         };
     }
@@ -638,6 +653,33 @@ mod tests {
         );
     }
 
+    /// `when: true` is a no-op, and saying so is the mirror of `when: false`.
+    #[test]
+    fn literal_true_always_runs() {
+        assert_eq!(classify("true"), Verdict::Always);
+        assert_eq!(classify("True"), Verdict::Always);
+        // YAML 1.2 leaves `yes` a string; PyYAML would have made it a bool.
+        assert_eq!(classify("yes"), Verdict::Always);
+        assert_eq!(
+            classify("true").label().unwrap(),
+            "always runs — this `when:` has no effect"
+        );
+        assert_eq!(classify("not (true)"), Verdict::Never);
+        assert_eq!(classify("not (false)"), Verdict::Always);
+    }
+
+    /// An `Always` clause in a list constrains nothing, so it must not hide a sibling
+    /// that does.
+    #[test]
+    fn always_does_not_mask_an_informative_sibling() {
+        assert_eq!(
+            classify_all(&["true".into(), "not (skip_gui | default(false))".into()]),
+            Verdict::UnlessSet { var: "skip_gui".into() }
+        );
+        assert_eq!(classify_all(&["true".into()]), Verdict::Always);
+        assert_eq!(classify_all(&["true".into(), "true".into()]), Verdict::Always);
+    }
+
     #[test]
     fn literal_false_never_runs() {
         assert_eq!(classify("false"), Verdict::Never);
@@ -870,6 +912,7 @@ mod corpus {
         );
         assert!(has(&|v| matches!(v, Verdict::RequiresNonEmpty { .. })), "RequiresNonEmpty");
         assert!(has(&|v| *v == Verdict::Never), "Never");
+        assert!(has(&|v| *v == Verdict::Always), "Always");
         assert!(has(&|v| *v == Verdict::Unknown), "Unknown");
         // Both polarities of the guarded comparison, incl. the `!=` form.
         assert!(
