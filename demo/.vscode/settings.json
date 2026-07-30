@@ -4,7 +4,7 @@
 
   // false = drop the hover tooltip on import_playbook hints. Plain task hints have
   // no tooltip at all — the hint already says what the condition does.
-  "ansibleLsp.inlayHints.explanations": true,
+  "ansibleLsp.inlayHints.explanations": false,
 
   // false = no hints at all.
   "ansibleLsp.inlayHints.enabled": true,
