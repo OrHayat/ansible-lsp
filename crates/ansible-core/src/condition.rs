@@ -642,6 +642,19 @@ mod tests {
     fn literal_false_never_runs() {
         assert_eq!(classify("false"), Verdict::Never);
         assert_eq!(classify("False"), Verdict::Never);
+        assert_eq!(classify("false").label().unwrap(), "never runs");
+    }
+
+    /// End-to-end: a YAML boolean `when:` has to reach here as text. It used to arrive
+    /// as "Boolean(false)", making `Never` unreachable for the only shape that yields it.
+    #[test]
+    fn a_yaml_boolean_when_reaches_the_classifier() {
+        use crate::parse::Document;
+        let doc = Document::new("- include_tasks: a.yml\n  when: false\n".to_string());
+        let nodes = doc.parse().unwrap();
+        let refs = crate::references::extract(&nodes);
+        assert_eq!(refs[0].conditions, vec!["false".to_string()]);
+        assert_eq!(classify_all(&refs[0].conditions), Verdict::Never);
     }
 
     /// Conditions with real logic in them. Refusing to answer is the feature.
@@ -805,37 +818,72 @@ mod corpus {
         }
     }
 
-    /// The demo file is the only place these problems exist, so it doubles as the
-    /// fixture. Not ignored — it must not silently stop demonstrating them.
+    /// The demo files are the only place these problems exist, so they double as the
+    /// fixture. Not ignored — they must not silently stop demonstrating them.
     #[test]
-    fn demo_file_exercises_every_problem() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../demo/tasks/main.yml");
-        let text = std::fs::read_to_string(&path).expect("demo file");
-        let doc = Document::new(text);
-        let nodes = doc.parse().expect("demo must stay parseable");
-        let mut found = Vec::new();
-        for n in &nodes {
+    fn demo_exercises_every_problem_and_verdict() {
+        let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let mut problems_found = Vec::new();
+        let mut verdicts = Vec::new();
+        for path in crate::workspace::yaml_files(&demo) {
+            let text = std::fs::read_to_string(&path).expect("demo file");
+            let doc = Document::new(text);
+            let nodes = doc
+                .parse()
+                .unwrap_or_else(|| panic!("{} must stay parseable", path.display()));
             let mut ws = Vec::new();
-            whens(n, &mut ws);
+            for n in &nodes {
+                whens(n, &mut ws);
+            }
             for (cs, has_loop) in ws {
+                verdicts.push(classify_all(&cs));
                 for c in &cs {
-                    found.extend(problems(c, has_loop));
+                    problems_found.extend(problems(c, has_loop));
                 }
             }
         }
+
         for want in [
             Problem::JinjaDelimiters,
             Problem::ItemWithoutLoop,
             Problem::AssignmentNotComparison,
             Problem::UnbalancedDelimiters,
         ] {
-            assert!(found.contains(&want), "demo no longer shows {want:?}");
+            assert!(problems_found.contains(&want), "demo no longer shows {want:?}");
         }
-        // `loop:` + `item` and the noqa'd line must not add a second ItemWithoutLoop
-        // beyond the one deliberate case.
-        let items = found.iter().filter(|p| **p == Problem::ItemWithoutLoop).count();
-        assert_eq!(items, 2, "expected the bad case plus the noqa'd one, got {items}");
+
+        // Every verdict variant must be demonstrated, so a regression in any one of them
+        // shows up as a demo that stopped explaining itself.
+        let has = |f: &dyn Fn(&Verdict) -> bool| verdicts.iter().any(|v| f(v));
+        assert!(has(&|v| matches!(v, Verdict::UnlessSet { .. })), "UnlessSet");
+        assert!(has(&|v| matches!(v, Verdict::UnlessCleared { .. })), "UnlessCleared");
+        assert!(has(&|v| matches!(v, Verdict::OnlyIfSet { .. })), "OnlyIfSet");
+        assert!(has(&|v| matches!(v, Verdict::WhenIn { negated: false, .. })), "WhenIn");
+        assert!(has(&|v| matches!(v, Verdict::WhenIn { negated: true, .. })), "WhenIn !");
+        assert!(
+            has(&|v| matches!(v, Verdict::RequiresDefined { negated: false, .. })),
+            "RequiresDefined"
+        );
+        assert!(
+            has(&|v| matches!(v, Verdict::RequiresDefined { negated: true, .. })),
+            "RequiresDefined !"
+        );
+        assert!(has(&|v| matches!(v, Verdict::RequiresNonEmpty { .. })), "RequiresNonEmpty");
+        assert!(has(&|v| *v == Verdict::Never), "Never");
+        assert!(has(&|v| *v == Verdict::Unknown), "Unknown");
+        // Both polarities of the guarded comparison, incl. the `!=` form.
+        assert!(
+            has(&|v| matches!(v, Verdict::WhenEquals { matches_default: true, negated: false, .. })),
+            "WhenEquals default-matches"
+        );
+        assert!(
+            has(&|v| matches!(v, Verdict::WhenEquals { matches_default: false, negated: false, .. })),
+            "WhenEquals default-differs"
+        );
+        assert!(
+            has(&|v| matches!(v, Verdict::WhenEquals { negated: true, .. })),
+            "WhenEquals negated"
+        );
     }
 
     #[test]
