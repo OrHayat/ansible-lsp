@@ -63,6 +63,13 @@
   import_playbook: imported.yml
   when: demo_mode | default('native') == 'docker'
 
+- name: "BAD — when-import-var-mutated: the import sets the variable it is gated on"
+  # The one rule here that reads other files. mutating.yml does `set_fact: demo_done`,
+  # so this condition flips partway through and the playbook half-executes. Found a
+  # real instance of this in ~/matrix/ansible at playbooks/daos-deploy-full.yml:247.
+  import_playbook: mutating.yml
+  when: not (demo_done | default(false) | bool)
+
 - name: "Always — the condition has no effect, so the import is unconditional"
   import_playbook: imported.yml
   when: true

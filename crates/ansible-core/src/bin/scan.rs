@@ -2,6 +2,8 @@
 //!
 //! Doubles as the CI check: non-zero exit when literal file paths are missing.
 
+use ansible_core::condition;
+use ansible_core::mutation;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
 use ansible_core::resolve::{resolve, rule_id, SkipReason, Status};
@@ -32,6 +34,9 @@ fn main() {
     let mut missing: Vec<String> = Vec::new();
     let mut unresolved_roles: Vec<String> = Vec::new();
     let mut unparseable = 0usize;
+    let mut mutated: Vec<String> = Vec::new();
+    let mut broken_when: Vec<String> = Vec::new();
+    let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
 
     for path in &files {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -45,6 +50,48 @@ fn main() {
         let ctx = FileContext::discover(path);
         for r in extract(&nodes) {
             let res = resolve(&r, &ctx);
+
+            // Conditions that cannot work at all, and the cross-file one.
+            if let Some(span) = r.condition_span {
+                let (cl, _) = doc.byte_to_lsp(span.start);
+                for c in &r.conditions {
+                    for p in condition::problems(c, r.repeated) {
+                        if !doc.is_suppressed(span.start, p.rule_id()) {
+                            broken_when.push(format!(
+                                "  {}:{}  {}",
+                                path.strip_prefix(&root).unwrap_or(path).display(),
+                                cl + 1,
+                                p.rule_id()
+                            ));
+                        }
+                    }
+                }
+                if r.kind == ReferenceKind::ImportPlaybook
+                    && !doc.is_suppressed(span.start, "when-import-var-mutated")
+                {
+                    let used: Vec<String> = r
+                        .conditions
+                        .iter()
+                        .flat_map(|c| condition::variables(c))
+                        .collect();
+                    for target in &res.targets {
+                        let m = mut_cache
+                            .entry(target.clone())
+                            .or_insert_with(|| mutation::mutated_vars(target));
+                        let hit: Vec<&String> = used.iter().filter(|v| m.contains(*v)).collect();
+                        if !hit.is_empty() {
+                            mutated.push(format!(
+                                "  {}:{}  {:?} set by {}",
+                                path.strip_prefix(&root).unwrap_or(path).display(),
+                                cl + 1,
+                                hit,
+                                target.strip_prefix(&root).unwrap_or(target).display()
+                            ));
+                        }
+                    }
+                }
+            }
+
             let entry = totals.entry(kind_name(r.kind)).or_default();
             let rel = path.strip_prefix(&root).unwrap_or(path).display();
             let (line, _) = doc.byte_to_lsp(r.span.start);
@@ -88,6 +135,22 @@ fn main() {
             println!("  {r}");
         }
     }
+    if !broken_when.is_empty() {
+        println!("\nBROKEN `when:` ({}):", broken_when.len());
+        for l in &broken_when {
+            println!("{l}");
+        }
+    }
+
+    // The condition is copied onto every imported task, so a `set_fact` inside the
+    // import flips it mid-run and the playbook half-executes.
+    if !mutated.is_empty() {
+        println!("\nCONDITION VARIABLE MUTATED BY THE IMPORT ({}):", mutated.len());
+        for l in &mutated {
+            println!("{l}");
+        }
+    }
+
 
     std::process::exit(if missing.is_empty() { 0 } else { 1 });
 }

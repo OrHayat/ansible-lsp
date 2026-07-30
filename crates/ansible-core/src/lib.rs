@@ -2,6 +2,7 @@ pub mod condition;
 pub mod config;
 pub mod glob;
 pub mod install;
+pub mod mutation;
 pub mod parse;
 pub mod references;
 pub mod resolve;
