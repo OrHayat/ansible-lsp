@@ -41,42 +41,32 @@ repo, so it stopped being read. A count differs every time.
 Plain task hints have no tooltip: the hint already states the answer, so hovering could only
 restate it.
 
-Too chatty? Two settings, both live — no reload. They're written out in
-[`.vscode/settings.json`](.vscode/settings.json) next door:
+One switch, applied immediately: **`ansibleLsp.inlayHints.enabled`** — `false` removes the
+hints. It's in [`.vscode/settings.json`](.vscode/settings.json) next door. Diagnostics are
+unaffected; a warning is silenced per-line with `# noqa: <rule-id>`.
 
-| Setting | Controls | `false` means |
-| ------- | -------- | ------------- |
-| `ansibleLsp.inlayHints.enabled` | the grey text | no hints at all |
-| `ansibleLsp.inlayHints.tooltips` | the hover only | hints stay, nothing on hover |
-
-They are independent. Turning tooltips off leaves every hint exactly where it was — if you
-want the grey text gone, it's `enabled`. (This setting was called `explanations`, which read
-as "the wordy part of the hint" and misled twice. Renamed.)
-
-**Where to actually put them.** Both are *window*-scoped, and the debug launcher opens this
-folder **and** `~/app/ansible` as a multi-root workspace — so VS Code will not apply them
-from a per-folder file there, and marks them "cannot be applied in this window". In the
-Extension Development Host, set them in **User settings** (`Cmd+,`, search `ansible lsp`).
-The file next door is the copy-paste source, and it does work if you open `demo/` on its own.
-
-**If a change seems to do nothing**, don't guess — the server logs what it received.
-View → Output → **Ansible LSP**:
+Being *window*-scoped, it will not apply from a per-folder file in the multi-root debug
+window — set it in User settings (`Cmd+,`, search `ansible lsp`). If a change seems to do
+nothing, View → Output → **Ansible LSP** logs what the server actually received:
 
 ```
-ansible-lsp ready — initializationOptions: {"inlayHints":{"explanations":false}} |
-  effective: inlayHints.enabled=true inlayHints.explanations=false
+ansible-lsp ready — initializationOptions: {"inlayHints":{"enabled":false}} |
+  effective: inlayHints.enabled=false
 ```
 
-`initializationOptions: none` means the client never sent them — the dev host is running an
-old `extension.js`, so Run → Stop Debugging and start again. If the options arrived but the
-value isn't the one you set, VS Code is ignoring your settings file, which for a window-scoped
-key in a multi-root window is exactly what it does.
+`initializationOptions: none` means the dev host is running an old `extension.js` — Run →
+Stop Debugging, then start again.
 
-Window scope is deliberate: the server keeps one setting for the whole session, so letting
-VS Code offer a per-folder value would promise something it cannot honour.
+An `import_playbook` hint also carries how much its condition covers, inline:
 
-Neither touches diagnostics. Warnings are things you asked to be told about, so they are not
-configurable here — silencing a rule is `# noqa`, or a committed project file (T-025).
+```
+runs unless lustre_deployment_mode changes from native · copied onto 15 tasks in 5 plays
+```
+
+The first half says what the condition decides, the second how much it decides. That count
+used to be a hover tooltip, which meant mousing over a ~10px grey label — so nobody ever saw
+it. **There are no tooltips now.** A hint you have to discover by hovering is a hint that
+does not exist.
 
 ## Deliberate silences
 

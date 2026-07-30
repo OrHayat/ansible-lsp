@@ -21,18 +21,22 @@ Two layers, and the split matters:
 **VS Code settings** — per-user, per-machine. Things about *this machine*.
 
 Shipped: `ansibleLsp.serverPath`, `ansibleLsp.trace.server`,
-`ansibleLsp.inlayHints.enabled`, `ansibleLsp.inlayHints.tooltips`. The last two are
+`ansibleLsp.inlayHints.enabled`. It is
 live — the server calls `workspace/inlayHint/refresh` on
 `didChangeConfiguration`, because a setting that only takes effect on the next keystroke
 reads as a setting that doesn't work.
 
 Still wanted: `ansibleLsp.scanOnStartup`.
 
-**Name settings after what they switch off, not after what they contain.** `tooltips` was
-first called `explanations`, which sounded like "the wordy part of the hint" — so setting it
-false and seeing the hints remain read as a broken setting, twice. The server logs its
-effective settings at startup precisely because that failure mode is otherwise unfalsifiable
-from the editor.
+**A setting for an invisible feature is worse than no setting.** There was briefly a second
+switch for inlay-hint tooltips — named `explanations`, then `tooltips`. Both readings failed:
+turning it off left the hints in place, so it looked broken. The root cause wasn't the name,
+it was that VS Code shows an inlay hint's tooltip only when you hover the hint label itself,
+a ~10px target nobody discovers. The information moved inline and the setting was deleted.
+Retired keys are covered by a test asserting they can't disable anything.
+
+The server logs its effective settings at startup because "the setting does nothing" is
+otherwise unfalsifiable from inside the editor.
 
 **The line that matters:** only *volunteered* output is configurable per-machine.
 Diagnostics are not — a warning is something you asked to be told about, and whether a rule

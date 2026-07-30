@@ -29,10 +29,7 @@ function serverPath(context) {
 function hintSettings() {
   const c = vscode.workspace.getConfiguration("ansibleLsp");
   return {
-    inlayHints: {
-      enabled: c.get("inlayHints.enabled", true),
-      tooltips: c.get("inlayHints.tooltips", true),
-    },
+    inlayHints: { enabled: c.get("inlayHints.enabled", true) },
   };
 }
 
