@@ -44,10 +44,14 @@ restate it.
 Too chatty? Two settings, both live — no reload. They're written out in
 [`.vscode/settings.json`](.vscode/settings.json) next door:
 
-| Setting | Effect |
-| ------- | ------ |
-| `ansibleLsp.inlayHints.explanations` | `false` drops the hover tooltip on `import_playbook` hints |
-| `ansibleLsp.inlayHints.enabled` | `false` removes the hints entirely |
+| Setting | Controls | `false` means |
+| ------- | -------- | ------------- |
+| `ansibleLsp.inlayHints.enabled` | the grey text | no hints at all |
+| `ansibleLsp.inlayHints.tooltips` | the hover only | hints stay, nothing on hover |
+
+They are independent. Turning tooltips off leaves every hint exactly where it was — if you
+want the grey text gone, it's `enabled`. (This setting was called `explanations`, which read
+as "the wordy part of the hint" and misled twice. Renamed.)
 
 **Where to actually put them.** Both are *window*-scoped, and the debug launcher opens this
 folder **and** `~/matrix/ansible` as a multi-root workspace — so VS Code will not apply them
