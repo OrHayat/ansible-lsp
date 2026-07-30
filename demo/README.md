@@ -26,9 +26,20 @@ work. The message lists every path tried, in order.
 extra vars. Nothing is wrong; it's derived information. If you see none, set
 `Editor > Inlay Hints: Enabled` to `on`.
 
-Only `import_playbook` hints have a hover tooltip, because only that construct behaves in a
-way the hint alone can't convey. A plain task's hint states the answer outright, so hovering
-it would just restate the method.
+Only `import_playbook` hints have a hover tooltip, and it carries a per-site fact rather than
+a lecture — how much the condition actually covers:
+
+```
+runs unless daos_deployment_mode changes from native
+  ⤷ Copied onto 15 tasks across 5 plays, evaluated separately at each — not a single gate.
+```
+
+The hint says what the condition decides; the tooltip says how much it decides. An earlier
+version was a paragraph about pushed-down semantics — identical on all 48 sites in the real
+repo, so it stopped being read. A count differs every time.
+
+Plain task hints have no tooltip: the hint already states the answer, so hovering could only
+restate it.
 
 Too chatty? Two settings, both live — no reload. They're written out in
 [`.vscode/settings.json`](.vscode/settings.json) next door:

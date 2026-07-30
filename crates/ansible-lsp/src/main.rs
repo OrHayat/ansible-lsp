@@ -78,6 +78,9 @@ struct Backend {
     /// playbook, its roles and its includes, so it must not happen per keystroke.
     /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
+    /// Per-import task/play counts, keyed by resolved target. Same reason as
+    /// `mutations`: reading the file must not happen per keystroke.
+    scopes: Mutex<HashMap<PathBuf, Option<String>>>,
     settings: Mutex<Settings>,
     /// What arrived in `initializationOptions`, logged once the client can receive it.
     startup_note: Mutex<String>,
@@ -249,6 +252,24 @@ impl Backend {
             }
         }
         out
+    }
+
+    /// How much of the imported playbook this condition covers. `None` when the target
+    /// is ambiguous or unreadable — a guess here would be worse than silence.
+    fn import_scope(&self, res: &Resolution) -> Option<String> {
+        let [target] = res.targets.as_slice() else {
+            return None;
+        };
+        if let Ok(cache) = self.scopes.lock() {
+            if let Some(hit) = cache.get(target) {
+                return hit.clone();
+            }
+        }
+        let text = mutation::scope_of(target).describe();
+        if let Ok(mut cache) = self.scopes.lock() {
+            cache.insert(target.clone(), text.clone());
+        }
+        text
     }
 
     fn mutated_vars(&self, target: &Path) -> std::sync::Arc<HashSet<String>> {
@@ -471,7 +492,7 @@ impl LanguageServer for Backend {
         let hints = a
             .refs
             .iter()
-            .filter_map(|(r, _)| {
+            .filter_map(|(r, res)| {
                 let label = condition::classify_all(&r.conditions).label()?;
                 let (line, character) = a.doc.byte_to_lsp(r.span.end);
                 // One task can hold several references (a role plus its tasks_from),
@@ -484,24 +505,15 @@ impl LanguageServer for Backend {
                     label: InlayHintLabel::String(format!(" {label}")),
                     kind: Some(InlayHintKind::PARAMETER),
                     text_edits: None,
-                    // Only imports get a tooltip. A plain task's hint already states the
-                    // answer, so hovering it added nothing — the old text explained the
-                    // method rather than the condition, which is noise.
+                    // Only imports get a tooltip, and only a per-site one. The previous
+                    // version was a paragraph about pushed-down semantics — identical on
+                    // all 48 sites in the real repo, so it stopped being read. A count of
+                    // what the condition actually covers differs every time.
                     tooltip: (settings.explanations
                         && r.kind == ReferenceKind::ImportPlaybook)
-                        .then(|| {
-                            // Verified against ansible-core 2.20.4 source and live runs,
-                            // not the docs. An earlier version claimed facts are still
-                            // gathered; that stopped being true in 2.3.
-                            InlayHintTooltip::String(
-                                "`when:` here is prepended to the `when:` of every task \
-                                 in the imported playbook — pre_tasks, roles, tasks and \
-                                 post_tasks, but not handlers — and evaluated per task. \
-                                 The play still runs and its banner prints; fact \
-                                 gathering is skipped with it."
-                                    .into(),
-                            )
-                        }),
+                        .then(|| self.import_scope(res))
+                        .flatten()
+                        .map(InlayHintTooltip::String),
                     padding_left: Some(true),
                     padding_right: None,
                     data: None,
@@ -624,6 +636,7 @@ async fn main() {
         roots: Mutex::new(Vec::new()),
         flagged: Mutex::new(HashSet::new()),
         mutations: Mutex::new(HashMap::new()),
+        scopes: Mutex::new(HashMap::new()),
         settings: Mutex::new(Settings::default()),
         startup_note: Mutex::new(String::new()),
     })

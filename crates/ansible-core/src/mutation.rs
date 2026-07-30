@@ -23,6 +23,75 @@ use crate::workspace::FileContext;
 /// this off the pathological end of a diamond-shaped include graph.
 const MAX_DEPTH: usize = 4;
 
+/// How much of a playbook an import's `when:` actually covers.
+///
+/// The point of showing this: "runs unless skip_demo is set" says what the condition
+/// decides, not how much it decides. A static paragraph about pushed-down semantics is
+/// the same on every site and stops being read; a count is different every time.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Scope {
+    pub plays: usize,
+    /// Entries under `tasks:`/`pre_tasks:`/`post_tasks:`. Not expanded — an
+    /// `include_tasks` counts as one, because that is one place the condition lands.
+    pub tasks: usize,
+    /// `roles:` entries. Their tasks receive the condition too, so they are named
+    /// separately rather than folded into a task count that would then be wrong.
+    pub roles: usize,
+}
+
+/// Count the plays, top-level tasks and roles in a playbook file.
+pub fn scope_of(playbook: &Path) -> Scope {
+    let Ok(text) = std::fs::read_to_string(playbook) else {
+        return Scope::default();
+    };
+    let doc = Document::new(text);
+    let Some(nodes) = doc.parse() else {
+        return Scope::default();
+    };
+    let mut s = Scope::default();
+    for doc_node in &nodes {
+        for play in doc_node.items() {
+            if play.get("hosts").is_none() && play.get("import_playbook").is_none() {
+                continue;
+            }
+            s.plays += 1;
+            for key in ["tasks", "pre_tasks", "post_tasks"] {
+                s.tasks += play.get(key).map(|n| n.items().len()).unwrap_or(0);
+            }
+            s.roles += play.get("roles").map(|n| n.items().len()).unwrap_or(0);
+        }
+    }
+    s
+}
+
+impl Scope {
+    /// `None` when there is nothing worth saying.
+    pub fn describe(&self) -> Option<String> {
+        if self.plays == 0 {
+            return None;
+        }
+        let plural = |n: usize, word: &str| {
+            format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+        };
+        let mut parts = Vec::new();
+        if self.tasks > 0 {
+            parts.push(plural(self.tasks, "task"));
+        }
+        if self.roles > 0 {
+            parts.push(plural(self.roles, "role"));
+        }
+        let what = if parts.is_empty() {
+            return None;
+        } else {
+            parts.join(" and ")
+        };
+        Some(format!(
+            "Copied onto {what} across {}, evaluated separately at each — not a single gate.",
+            plural(self.plays, "play")
+        ))
+    }
+}
+
 /// Variables `playbook` assigns while running, following roles and includes.
 ///
 /// Over-collecting is the safe direction for the caller: a name here only matters if it
@@ -139,6 +208,48 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn scope_counts_plays_tasks_and_roles() {
+        let d = tmp("scope");
+        let pb = write(
+            &d,
+            "play.yml",
+            "- hosts: a\n  pre_tasks:\n    - debug: {msg: 1}\n  roles:\n    - r1\n    - role: r2\n             \n  tasks:\n    - debug: {msg: 2}\n    - debug: {msg: 3}\n  post_tasks:\n    - debug: {msg: 4}\n             \n- hosts: b\n  tasks:\n    - debug: {msg: 5}\n",
+        );
+        let s = scope_of(&pb);
+        assert_eq!(s.plays, 2);
+        assert_eq!(s.tasks, 5, "pre_tasks + tasks + post_tasks across both plays");
+        assert_eq!(s.roles, 2, "bare and dict forms both count");
+        assert_eq!(
+            s.describe().unwrap(),
+            "Copied onto 5 tasks and 2 roles across 2 plays, evaluated separately at each \
+             — not a single gate."
+        );
+    }
+
+    #[test]
+    fn scope_singularises_and_omits_empty_categories() {
+        let d = tmp("scope-one");
+        let pb = write(&d, "play.yml", "- hosts: a\n  tasks:\n    - debug: {msg: 1}\n");
+        assert_eq!(
+            scope_of(&pb).describe().unwrap(),
+            "Copied onto 1 task across 1 play, evaluated separately at each — not a single gate."
+        );
+        // No roles mentioned when there are none.
+        assert!(!scope_of(&pb).describe().unwrap().contains("role"));
+    }
+
+    /// Silence beats a wrong number: an unreadable or empty target says nothing.
+    #[test]
+    fn scope_declines_rather_than_guessing() {
+        let d = tmp("scope-none");
+        assert_eq!(scope_of(&d.join("does-not-exist.yml")).describe(), None);
+        let empty = write(&d, "empty.yml", "- hosts: a\n");
+        assert_eq!(scope_of(&empty).describe(), None, "a play with no tasks or roles");
+        let bad = write(&d, "bad.yml", "- name: \"unterminated\n  x: [");
+        assert_eq!(scope_of(&bad).describe(), None, "unparseable");
     }
 
     #[test]
