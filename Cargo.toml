@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]
-# Pinned exactly: saphyr is pre-1.0, and parse.rs is the only module allowed to
-# touch its API so a version bump stays a one-file change.
-saphyr = "=0.0.11"
+# The YAML parser. A pure-Rust libyaml port — lenient like Ansible (PyYAML/libyaml), so it
+# accepts real playbooks strict YAML 1.2 rejects. Confined to parse_libyaml.rs, the only
+# module allowed to touch its API, so a version bump stays a one-file change.
+libyaml-safer = "0.3"

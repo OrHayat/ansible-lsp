@@ -1,10 +1,6 @@
-//! YAML -> byte-span AST. The only module that touches `saphyr`.
-//!
-//! saphyr's `Marker` uses CHARACTER offsets, not bytes — invisible in ASCII, wrong on
-//! any line with non-ASCII (this repo has em dashes in task names). Converting here,
-//! once, lets every other module assume bytes and slice `&text[span]` safely.
-
-use saphyr::{LoadableYamlNode, MarkedYaml, YamlData};
+//! Byte-span AST types plus the source/line index. The actual YAML parsing lives in
+//! [`crate::parse_libyaml`] (libyaml, lenient like Ansible); this module owns the [`Node`]
+//! tree, [`Span`], and byte<->line/UTF-16 conversion every other module builds on.
 
 /// Byte offsets. Always bytes — never chars, never UTF-16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,27 +92,6 @@ impl Document {
         Self { text, line_starts }
     }
 
-    /// saphyr `Marker` -> byte offset. `line` is 1-based, `col` a 0-based CHAR column.
-    fn marker_to_byte(&self, line: usize, char_col: usize) -> usize {
-        let idx = line.saturating_sub(1);
-        let start = self
-            .line_starts
-            .get(idx)
-            .copied()
-            .unwrap_or(self.text.len());
-        let end = self
-            .line_starts
-            .get(idx + 1)
-            .copied()
-            .unwrap_or(self.text.len());
-        let line_text = self.text.get(start..end).unwrap_or("");
-        match line_text.char_indices().nth(char_col) {
-            Some((b, _)) => start + b,
-            // Column past end of line (e.g. a span ending at the newline): clamp.
-            None => end,
-        }
-    }
-
     /// 0-based line and 0-based UTF-16 column, for the LSP boundary.
     pub fn byte_to_lsp(&self, byte: usize) -> (u32, u32) {
         let line = self
@@ -195,54 +170,19 @@ impl Document {
         }
     }
 
-    /// `None` = not valid YAML 1.2. Not an error: strict YAML rejects files the
-    /// PyYAML Ansible uses accepts, so callers must degrade to "no references" rather
-    /// than reporting anything broken.
+    /// `None` = not valid YAML even to Ansible. Parsing is delegated to
+    /// [`crate::parse_libyaml`], which follows libyaml's leniency, so files that are valid
+    /// to Ansible but not to strict YAML 1.2 (under-indented multi-line quoted scalars)
+    /// analyse like any other.
     pub fn parse(&self) -> Option<Vec<Node>> {
-        let docs = MarkedYaml::load_from_str(&self.text).ok()?;
-        Some(docs.iter().map(|d| self.convert(d)).collect())
+        crate::parse_libyaml::parse_lenient(&self.text)
     }
 
-    fn convert(&self, n: &MarkedYaml) -> Node {
-        let mut span = Span {
-            start: self.marker_to_byte(n.span.start.line(), n.span.start.col()),
-            end: self.marker_to_byte(n.span.end.line(), n.span.end.col()),
-        };
-        // A quoted scalar's span covers its quotes; ranges should mark the value.
-        let text = span.slice(&self.text);
-        if text.len() >= 2 {
-            let b = text.as_bytes();
-            if (b[0] == b'"' || b[0] == b'\'') && b[0] == b[text.len() - 1] {
-                span.start += 1;
-                span.end -= 1;
-            }
-        }
-        match &n.data {
-            // Non-string scalars must render as their YAML text, not Rust's `Debug`.
-            // `when: false` was arriving as "Boolean(false)", so no consumer could
-            // recognise it as falsy.
-            YamlData::Value(v) => Node::Scalar {
-                value: v
-                    .as_str()
-                    .map(str::to_owned)
-                    .or_else(|| v.as_bool().map(|b| b.to_string()))
-                    .or_else(|| v.as_integer().map(|i| i.to_string()))
-                    .unwrap_or_else(|| span.slice(&self.text).trim().to_string()),
-                span,
-            },
-            YamlData::Sequence(items) => Node::Sequence {
-                items: items.iter().map(|c| self.convert(c)).collect(),
-                span,
-            },
-            YamlData::Mapping(map) => Node::Mapping {
-                entries: map
-                    .iter()
-                    .map(|(k, v)| (self.convert(k), self.convert(v)))
-                    .collect(),
-                span,
-            },
-            _ => Node::Other { span },
-        }
+    /// Where [`Self::parse`] failed, as a byte span, or `None` if it parses. Because parsing
+    /// now matches Ansible, a failure here means the file is broken *for Ansible too* — so a
+    /// caller may say so more firmly than the old strict-1.2 "may still be valid" hedge.
+    pub fn parse_error(&self) -> Option<Span> {
+        crate::parse_libyaml::parse_lenient_error(&self.text)
     }
 }
 
@@ -250,7 +190,8 @@ impl Document {
 mod tests {
     use super::*;
 
-    /// Non-ASCII before the target shifts saphyr's char marker off the byte offset.
+    /// Non-ASCII before the target must not shift the target's byte offset — the classic
+    /// char-vs-byte marker trap.
     #[test]
     fn spans_are_byte_accurate_past_non_ascii() {
         let src = "---\n\
@@ -289,6 +230,23 @@ mod tests {
         let (l, c) = doc.byte_to_lsp(quote);
         assert_eq!((l, c), (0, 9));
         assert_eq!(doc.lsp_to_byte(l, c), quote);
+    }
+
+    #[test]
+    fn parse_error_points_at_the_break() {
+        // Unquoted ": " inside a value — the single most common accidental YAML break.
+        let doc = Document::new("---\n- name: Block form with a file: parameter\n".to_string());
+        assert!(doc.parse().is_none(), "this should not parse");
+        let span = doc.parse_error().expect("a failed parse must report where");
+        let (line, _) = doc.byte_to_lsp(span.start);
+        assert_eq!(line, 1, "the break is on the second line");
+        assert!(span.end > span.start, "range must not be empty");
+    }
+
+    #[test]
+    fn parse_error_is_none_when_it_parses() {
+        let doc = Document::new("- name: fine\n  include_tasks: go.yml\n".to_string());
+        assert!(doc.parse_error().is_none());
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub mod glob;
 pub mod install;
 pub mod mutation;
 pub mod parse;
+pub mod parse_libyaml;
 pub mod references;
 pub mod resolve;
 pub mod workspace;

@@ -1,0 +1,34 @@
+# GOOD — parses now. Strict YAML 1.2 rejected this shape; Ansible's parser (libyaml) accepts
+# it, and since the parser swap (T-036) so do we. The offender is `_summary:` below: a
+# multi-line double-quoted scalar whose closing `}}"` sits at the KEY's indent, not deeper
+# than it. YAML 1.2 requires continuation lines to be indented past the key, so a strict
+# parser errors on that closing line; libyaml/PyYAML don't enforce it, so real playbooks are
+# full of this. Anonymized from a role's `_run.yml` in a real repo.
+- name: "Build beacon_setup.py argv ({{ _beacon_mode }})"
+  ansible.builtin.set_fact:
+    # This block is fine even for strict YAML 1.2 — its closing `}}"` (below) is indented
+    # PAST the key, so it was never the problem. Here for contrast with `_summary:`.
+    _beacon_args: "{{
+        [_beacon_mode]
+        + (['--driver', _beacon_driver] if _beacon_driver else [])
+        + (['--skip-selftest'] if (beacon_skip_selftest | bool) else [])
+      }}"
+
+- name: "Run beacon_setup.py ({{ _beacon_mode }})"
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/beacon_setup.py {{ _beacon_args | join(' ') }}"
+  register: _beacon_result
+  vars:
+    # The script prints JSON as the last stdout line. `vars:` evaluates per task at run time,
+    # so the checks below read typed fields, not substrings.
+    _summary: "{{
+      (_beacon_result.stdout_lines | default(['{}']))
+      | reject('equalto', '')
+      | list
+      | last
+      | from_json
+    }}"
+  changed_when: _summary.changed | default(0) | int > 0
+  failed_when: >-
+    _beacon_result.rc != 0
+    or (_summary.failed | default(0) | int) > 0
