@@ -35,6 +35,7 @@ fn main() {
     let mut unresolved_roles: Vec<String> = Vec::new();
     let mut unparseable = 0usize;
     let mut mutated: Vec<String> = Vec::new();
+    let mut empty_glob: Vec<String> = Vec::new();
     let mut broken_when: Vec<String> = Vec::new();
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
 
@@ -92,6 +93,20 @@ fn main() {
                 }
             }
 
+            // Templated, and the pattern reaches nothing on disk. Not warned about —
+            // this list exists to judge whether that silence is right.
+            if r.templated
+                && res.status == Status::Skipped
+                && matches!(r.kind, ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks)
+            {
+                let (l, _) = doc.byte_to_lsp(r.span.start);
+                empty_glob.push(format!(
+                    "  {}:{}  {}",
+                    path.strip_prefix(&root).unwrap_or(path).display(),
+                    l + 1,
+                    r.value
+                ));
+            }
             let entry = totals.entry(kind_name(r.kind)).or_default();
             let rel = path.strip_prefix(&root).unwrap_or(path).display();
             let (line, _) = doc.byte_to_lsp(r.span.start);
@@ -135,6 +150,13 @@ fn main() {
             println!("  {r}");
         }
     }
+    if !empty_glob.is_empty() {
+        println!("\nTEMPLATED, MATCHES NOTHING ({}):", empty_glob.len());
+        for l in &empty_glob {
+            println!("{l}");
+        }
+    }
+
     if !broken_when.is_empty() {
         println!("\nBROKEN `when:` ({}):", broken_when.len());
         for l in &broken_when {

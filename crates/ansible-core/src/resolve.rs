@@ -69,6 +69,76 @@ pub fn rule_id(r: &Reference) -> &'static str {
     }
 }
 
+/// Expand the magic variables whose value we already know, into every plausible literal.
+///
+/// Returns `(expansions, still_templated)`. `still_templated` means at least one `{{ }}`
+/// survived, so the caller must glob rather than diagnose.
+///
+/// `role_path` is not a runtime unknown — Ansible defines it as the directory of the role
+/// containing the task, which is exactly `FileContext::role_dir`. Treating it as opaque
+/// left 4 real references in `~/matrix/ansible` unnavigable, all pointing at files that
+/// exist.
+///
+/// `playbook_dir` is different and taught the lesson the hard way: substituting it with
+/// the project root produced 4 false "missing file" warnings, because the playbooks live
+/// in `<root>/playbooks/` and the references read `{{ playbook_dir }}/../roles/...`.
+/// Which playbook is running is genuinely a runtime fact, so it expands to *several*
+/// candidates and a hit on any of them counts. Guessing one would be a false positive
+/// generator, and this resolver's whole value rests on not producing those.
+/// The third element says whether anything was substituted. That matters: an expanded
+/// `{{ role_path }}/x.yml` is a COMPLETE path, so it must not then be joined onto the
+/// task search dirs. Joining only looked correct while the roots happened to be absolute
+/// — with a relative root it appended, producing `demo/tasks/demo/tasks/x.yml`.
+fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
+    let mut out = vec![value.to_string()];
+
+    let mut apply = |name: &str, dirs: Vec<PathBuf>, out: &mut Vec<String>| {
+        let forms = [format!("{{{{ {name} }}}}"), format!("{{{{{name}}}}}")];
+        if !out.iter().any(|v| forms.iter().any(|f| v.contains(f.as_str()))) {
+            return;
+        }
+        let replacements: Vec<String> = dirs
+            .iter()
+            .filter_map(|d| d.to_str().map(str::to_owned))
+            .collect();
+        if replacements.is_empty() {
+            return;
+        }
+        let mut expanded = Vec::new();
+        for v in out.iter() {
+            for d in &replacements {
+                let mut s = v.clone();
+                for f in &forms {
+                    s = s.replace(f.as_str(), d);
+                }
+                expanded.push(s);
+            }
+        }
+        *out = expanded;
+    };
+
+    // Exactly one possible value: the role this file belongs to.
+    apply(
+        "role_path",
+        ctx.role_dir.iter().cloned().collect(),
+        &mut out,
+    );
+
+    // Ambiguous. The project root covers a top-level playbook; `<root>/playbooks` covers
+    // the convention this repo actually uses.
+    let playbook_dirs: Vec<PathBuf> = ctx
+        .project_root
+        .iter()
+        .flat_map(|r| [r.clone(), r.join("playbooks")])
+        .collect();
+    apply("playbook_dir", playbook_dirs.clone(), &mut out);
+    apply("inventory_dir", playbook_dirs, &mut out);
+
+    let still_templated = out.iter().any(|v| v.contains("{{"));
+    let substituted = out.len() != 1 || out[0] != value;
+    (out, still_templated, substituted)
+}
+
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
@@ -84,7 +154,12 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
         };
     }
 
-    if r.templated {
+    // `{{ role_path }}` and friends are known here, so substitute before deciding this
+    // is unknowable. A value that becomes fully literal is then resolved — and diagnosed
+    // — like any other path.
+    let (values, templated, substituted) = expand_magic(&r.value, ctx);
+
+    if templated {
         let bases = match r.kind {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
             _ => return Resolution::skipped(SkipReason::Templated),
@@ -104,6 +179,13 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
 
     match r.kind {
         ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => {
+            // An expansion is already anchored at the directory it named, so the search
+            // path does not apply to it.
+            if substituted {
+                return Resolution::from_candidates(unique(
+                    values.iter().map(|v| normalise(Path::new(v))),
+                ));
+            }
             Resolution::from_candidates(unique(
                 ctx.task_search_dirs()
                     .iter()
@@ -328,6 +410,64 @@ mod tests {
         );
         assert_eq!(res.status, Status::Missing);
         assert!(!res.candidates.is_empty());
+    }
+
+    /// `role_path` is the role's own directory, known at parse time. Four real
+    /// references in `~/matrix/ansible` were unnavigable until this landed.
+    #[test]
+    fn role_path_expands_to_the_containing_role() {
+        let Some(root) = repo() else { return };
+        let res = resolve_in(
+            &root.join("roles/daos-container/tasks/main.yml"),
+            "\"{{ role_path }}/../common/tasks/set-marker.yml\"",
+        );
+        assert_eq!(res.status, Status::Resolved, "should resolve, not glob");
+        assert_eq!(
+            res.targets[0],
+            root.join("roles/common/tasks/set-marker.yml"),
+            "`..` must collapse across the substituted role dir"
+        );
+    }
+
+    /// The mistake this design exists to prevent: `playbook_dir` is a runtime fact, and
+    /// substituting it with the project root alone produced 4 false "missing file"
+    /// warnings, because this repo's playbooks live in `<root>/playbooks/`.
+    #[test]
+    fn playbook_dir_tries_every_plausible_location() {
+        let Some(root) = repo() else { return };
+        let res = resolve_in(
+            &root.join("roles/daos-storage/tasks/main.yml"),
+            "\"{{ playbook_dir }}/../roles/common/tasks/check-prerequisites.yml\"",
+        );
+        assert_eq!(
+            res.status,
+            Status::Resolved,
+            "resolves via <root>/playbooks, not <root>"
+        );
+    }
+
+    /// Substituted-to-literal means fully diagnosable — the point of substituting at all.
+    #[test]
+    fn an_expanded_path_that_is_missing_still_warns() {
+        let Some(root) = repo() else { return };
+        let res = resolve_in(
+            &root.join("roles/daos-container/tasks/main.yml"),
+            "\"{{ role_path }}/tasks/definitely-not-here.yml\"",
+        );
+        assert_eq!(res.status, Status::Missing);
+        assert!(!res.candidates.is_empty(), "message must list what was tried");
+    }
+
+    /// Outside a role there is no `role_path`, so it must stay unknown rather than be
+    /// guessed at.
+    #[test]
+    fn role_path_outside_a_role_is_not_substituted() {
+        let Some(root) = repo() else { return };
+        let res = resolve_in(
+            &root.join("site.yml"),
+            "\"{{ role_path }}/tasks/whatever.yml\"",
+        );
+        assert_ne!(res.status, Status::Missing, "must not warn on an unknown value");
     }
 
     /// Templated values may resolve to several files or none — either way they must
