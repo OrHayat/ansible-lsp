@@ -6,3 +6,25 @@
     - demo              # bare string
     - role: demo        # dict form
     - no_such_role      # unresolvable, stays plain
+
+# ---------------------------------------------------------- import_playbook
+# Play-level, static. Resolved against this file's directory, then the project
+# root — no roles_path, no collections.
+
+- name: GOOD — imports a real playbook
+  import_playbook: imported.yml
+
+- name: BAD — no such playbook, warns
+  import_playbook: not_here.yml
+
+- name: BAD — templated, and this one warns unlike other templated paths
+  # A static import is expanded before variables exist, so a variable here can
+  # never resolve. Everywhere else `{{ }}` means "runtime unknown, stay quiet";
+  # here it means the line is wrong.
+  import_playbook: "{{ env }}-setup.yml"
+
+- name: "GOOD — resolves; note what the when: actually does"
+  # Ansible copies this condition onto EVERY task in EVERY play of the imported
+  # playbook. It is not a single gate evaluated once.
+  import_playbook: imported.yml
+  when: not (skip_demo | default(false))

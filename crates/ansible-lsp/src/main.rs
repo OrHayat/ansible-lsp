@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ansible_core::parse::{Document, Node};
-use ansible_core::references::{self, Reference};
+use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, Resolution, Status};
 use ansible_core::workspace::{yaml_files, FileContext};
 
@@ -102,17 +102,11 @@ impl Backend {
             .map(|(r, res)| {
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(r.span.end);
-                let tried = res
-                    .candidates
-                    .iter()
-                    .map(|c| format!("  {}", shorten(c, &a.ctx)))
-                    .collect::<Vec<_>>()
-                    .join("\n");
                 Diagnostic {
                     range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
                     severity: Some(DiagnosticSeverity::WARNING),
                     source: Some("ansible-lsp".into()),
-                    message: format!("no file found for `{}`. Tried:\n{tried}", r.value),
+                    message: message_for(r, res, &a.ctx),
                     ..Default::default()
                 }
             })
@@ -180,6 +174,27 @@ impl Backend {
             .into_iter()
             .find(|r| r.span.start <= byte && byte <= r.span.end)
     }
+}
+
+fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
+    // Listing a candidate path with `{{ }}` still in it explains nothing. The real
+    // problem is that a static import is expanded before play variables exist.
+    if r.templated && r.kind == ReferenceKind::ImportPlaybook {
+        return format!(
+            "`import_playbook` is expanded before play variables exist, so `{}` cannot \
+             resolve. Only extra-vars (-e) are available here — play vars, host vars and \
+             set_fact are not. Use one import per case with `when:`, or a dynamic \
+             `include_tasks` inside a play.",
+            r.value
+        );
+    }
+    let tried = res
+        .candidates
+        .iter()
+        .map(|c| format!("  {}", shorten(c, ctx)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("no file found for `{}`. Tried:\n{tried}", r.value)
 }
 
 /// Candidate paths are absolute and long; show them relative to the project root.

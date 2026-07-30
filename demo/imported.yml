@@ -1,0 +1,7 @@
+---
+# Target of the import_playbook examples in playbook.yml.
+- name: Imported play
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - ansible.builtin.debug: {msg: imported}
