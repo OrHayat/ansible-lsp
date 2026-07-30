@@ -92,9 +92,12 @@ pub fn rule_id(r: &Reference) -> &'static str {
 fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
     let mut out = vec![value.to_string()];
 
-    let mut apply = |name: &str, dirs: Vec<PathBuf>, out: &mut Vec<String>| {
+    let apply = |name: &str, dirs: Vec<PathBuf>, out: &mut Vec<String>| {
         let forms = [format!("{{{{ {name} }}}}"), format!("{{{{{name}}}}}")];
-        if !out.iter().any(|v| forms.iter().any(|f| v.contains(f.as_str()))) {
+        if !out
+            .iter()
+            .any(|v| forms.iter().any(|f| v.contains(f.as_str())))
+        {
             return;
         }
         let replacements: Vec<String> = dirs
@@ -455,7 +458,10 @@ mod tests {
             "\"{{ role_path }}/tasks/definitely-not-here.yml\"",
         );
         assert_eq!(res.status, Status::Missing);
-        assert!(!res.candidates.is_empty(), "message must list what was tried");
+        assert!(
+            !res.candidates.is_empty(),
+            "message must list what was tried"
+        );
     }
 
     /// Outside a role there is no `role_path`, so it must stay unknown rather than be
@@ -467,7 +473,11 @@ mod tests {
             &root.join("site.yml"),
             "\"{{ role_path }}/tasks/whatever.yml\"",
         );
-        assert_ne!(res.status, Status::Missing, "must not warn on an unknown value");
+        assert_ne!(
+            res.status,
+            Status::Missing,
+            "must not warn on an unknown value"
+        );
     }
 
     /// Templated values may resolve to several files or none — either way they must
@@ -497,7 +507,11 @@ mod tests {
             "\"{{ proto }}_access_point/_converge_one_ap.yml\"",
         );
         assert_eq!(res.status, Status::Resolved);
-        assert!(res.targets.len() >= 2, "expected several, got {:?}", res.targets);
+        assert!(
+            res.targets.len() >= 2,
+            "expected several, got {:?}",
+            res.targets
+        );
     }
 
     #[test]
@@ -507,10 +521,7 @@ mod tests {
             ("playbooks/lustre-full-deploy.yml", "lustre-infrastructure.yml"),
             ("playbooks/app/setup.yml", "../../network-setup.yml"),
         ] {
-            let out = resolve_src(
-                &root.join(from),
-                &format!("- import_playbook: {target}\n"),
-            );
+            let out = resolve_src(&root.join(from), &format!("- import_playbook: {target}\n"));
             let res = first(&out, ReferenceKind::ImportPlaybook);
             if res.status != Status::Resolved {
                 // Path may not exist in this checkout; only assert when it does.
@@ -561,7 +572,10 @@ mod tests {
             "- include_role: { name: cib-batch, tasks_from: begin }\n",
         );
         assert_eq!(first(&out, ReferenceKind::Role).status, Status::Skipped);
-        assert_eq!(first(&out, ReferenceKind::TasksFrom).status, Status::Resolved);
+        assert_eq!(
+            first(&out, ReferenceKind::TasksFrom).status,
+            Status::Resolved
+        );
     }
 
     /// Same role, no tasks_from: now main.yml really is required, so it's an error.
@@ -580,7 +594,10 @@ mod tests {
     #[test]
     fn unknown_role_name_is_reported() {
         let Some(root) = repo() else { return };
-        let out = resolve_src(&root.join("site.yml"), "- hosts: all\n  roles:\n    - lustre\n");
+        let out = resolve_src(
+            &root.join("site.yml"),
+            "- hosts: all\n  roles:\n    - lustre\n",
+        );
         let res = first(&out, ReferenceKind::Role);
         assert_eq!(res.status, Status::Missing);
         assert!(!res.candidates.is_empty(), "must report where it looked");
@@ -703,9 +720,13 @@ mod perf {
     #[test]
     #[ignore = "profiling aid: cargo test perf -- --ignored --nocapture"]
     fn profile_largest_file() {
-        let Ok(home) = std::env::var("HOME") else { return };
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
         let root = PathBuf::from(&home).join("app/ansible");
-        if !root.is_dir() { return; }
+        if !root.is_dir() {
+            return;
+        }
         // find largest yml
         let mut biggest: Option<(PathBuf, u64)> = None;
         fn walk(d: &Path, best: &mut Option<(PathBuf, u64)>) {
@@ -713,12 +734,20 @@ mod perf {
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
-                    let n = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if n == ".git" || n == "__pycache__" { continue; }
+                    let n = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if n == ".git" || n == "__pycache__" {
+                        continue;
+                    }
                     walk(&p, best);
                 } else if p.extension().map_or(false, |x| x == "yml") {
                     let s = e.metadata().map(|m| m.len()).unwrap_or(0);
-                    if best.as_ref().map_or(true, |(_, b)| s > *b) { *best = Some((p, s)); }
+                    if best.as_ref().map_or(true, |(_, b)| s > *b) {
+                        *best = Some((p, s));
+                    }
                 }
             }
         }
@@ -745,12 +774,17 @@ mod perf {
         println!("collection_roots x1: {:?} ({} roots)", t.elapsed(), n);
 
         let t = Instant::now();
-        for r in &refs { let _ = resolve(r, &ctx); }
+        for r in &refs {
+            let _ = resolve(r, &ctx);
+        }
         println!("resolve all:  {:?}", t.elapsed());
 
         let by_kind = |k: ReferenceKind| refs.iter().filter(|r| r.kind == k).count();
-        println!("  modules={} roles={} tasks={}",
-            by_kind(ReferenceKind::Module), by_kind(ReferenceKind::Role),
-            by_kind(ReferenceKind::IncludeTasks));
+        println!(
+            "  modules={} roles={} tasks={}",
+            by_kind(ReferenceKind::Module),
+            by_kind(ReferenceKind::Role),
+            by_kind(ReferenceKind::IncludeTasks)
+        );
     }
 }
