@@ -2,7 +2,8 @@
   // ---------------------------------------------------------------- ansible-lsp
   // Both default to true. Changing either applies immediately — no reload.
 
-  // false = keep the grey hints, drop the long hover prose. The "less fluff" switch.
+  // false = drop the hover tooltip on import_playbook hints. Plain task hints have
+  // no tooltip at all — the hint already says what the condition does.
   "ansibleLsp.inlayHints.explanations": true,
 
   // false = no hints at all.

@@ -26,12 +26,16 @@ work. The message lists every path tried, in order.
 extra vars. Nothing is wrong; it's derived information. If you see none, set
 `Editor > Inlay Hints: Enabled` to `on`.
 
+Only `import_playbook` hints have a hover tooltip, because only that construct behaves in a
+way the hint alone can't convey. A plain task's hint states the answer outright, so hovering
+it would just restate the method.
+
 Too chatty? Two settings, both live — no reload. They're written out in
 [`.vscode/settings.json`](.vscode/settings.json) next door:
 
 | Setting | Effect |
 | ------- | ------ |
-| `ansibleLsp.inlayHints.explanations` | `false` keeps the hints, drops the long hover prose |
+| `ansibleLsp.inlayHints.explanations` | `false` drops the hover tooltip on `import_playbook` hints |
 | `ansibleLsp.inlayHints.enabled` | `false` removes the hints entirely |
 
 **Where to actually put them.** Both are *window*-scoped, and the debug launcher opens this
