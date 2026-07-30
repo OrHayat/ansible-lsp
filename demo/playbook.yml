@@ -81,11 +81,20 @@
   import_playbook: imported.yml
   when: ansible_facts['os_family'] == 'RedHat' and groups['x'] | length > 0
 
-- name: "NO HINT — two informative clauses have no single honest summary"
+- name: "Both clauses readable — listed together, ANDed"
+  # This said "NO HINT — no single honest summary" until the clause-combining landed.
+  # A stale label is the same class of problem as a wrong tooltip, so it is worth
+  # noticing that the demo can rot independently of the code.
   import_playbook: imported.yml
   when:
     - not (skip_demo | default(false) | bool)
     - demo_mode | default('native') == 'docker'
+
+- name: "What the import's when: does to the imported file"
+  # Open imported_semantics.yml — the per-task copy, the AND with a task's own when:,
+  # the skipped fact gathering, and the handler exclusion, each written out.
+  import_playbook: imported_semantics.yml
+  when: not (skip_demo | default(false) | bool)
 
 - name: "never run"
   import_playbook: imported.yml

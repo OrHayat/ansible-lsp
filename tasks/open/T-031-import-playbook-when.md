@@ -85,22 +85,24 @@ Three things this must not do:
   equivalent to a gate here. An info that reads as a reprimand gets suppressed wholesale, and
   then T-024's labelling loses its explanation too.
 
-### What the cost actually is
+### What the cost actually is — now verified
 
-The copy differs from a real gate only when the variable can change during the run — a
-`set_fact` or a registered result. None of the 48 do that. What remains is overhead, not
-incorrectness:
+Checked against ansible-core 2.20.4 source and live runs. The full semantics are in the
+board's *Settled* section; the short version:
 
-- the play is set up and its banner prints, so a "skipped" playbook still looks like it ran
-- facts are gathered for those hosts regardless
+- the play still runs — banner, host matching, `skipped=N` in the recap. So a skipped
+  playbook still looks like it ran.
+- **fact gathering is skipped too**, contrary to what this ticket and the shipped tooltip
+  originally said. Since Ansible 2.3.
 - every task reports `skipping:`, so a skipped playbook emits N lines of output
+- the condition is ANDed onto each task's own `when:`, and handlers are excluded
 
-**Verify this before writing the message.** Whether implicit fact-gathering is actually
-suppressed is the kind of thing this project has been wrong about before — `first match wins`
-and the char-offset markers were both settled by running the real tool, not by reading docs.
-Build a two-playbook fixture, run `ansible-playbook`, and record the result in the board's
-*Settled* table. It decides whether the message says "costs you fact-gathering" or something
-stronger.
+So the cost is output noise and a misleading banner, not wasted fact-gathering and not
+incorrectness — **except** in the mutation case, which is a real bug and now has its own
+rule (`when-import-var-mutated`).
+
+The lesson worth keeping: the wrong claim shipped in a user-facing tooltip because it was
+reasoned rather than run. This ticket said to verify first and that step was skipped.
 
 Feeds T-024 directly: the tree's **pushed down** label is the same fact rendered differently, and
 both should come from one place in the code.
@@ -111,7 +113,7 @@ both should come from one place in the code.
 - [x] the tooltip explains the per-task copying, not just "this is conditional"
 - [x] the word *conditional* appears nowhere in the wording
 - [x] `demo/playbook.yml` exercises the case and its comments agree
-- [ ] fact-gathering behaviour verified against real `ansible-playbook`, result recorded in
-      the board's *Settled* table
+- [x] fact-gathering behaviour verified against real `ansible-playbook`, result recorded in
+      the board's *Settled* table — it is **skipped**, and the tooltip said otherwise
 - [ ] a code action offering `meta: end_play` or extraction to a task file
 - [ ] the explanation lives in one function shared with T-024's label
