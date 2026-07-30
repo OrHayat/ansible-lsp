@@ -6,6 +6,7 @@ mic key on this Mac).
 
 | File | Shows |
 | ---- | ----- |
+| `ansible.cfg` | marks the project root, so `playbook_dir` and the role path have values |
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
 | `tasks/conditions.yml` | `when:` analysis — every verdict and every warning rule |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
@@ -75,6 +76,10 @@ if it warned:
 
 - **templated paths** (`"{{ protocol }}_target/check.yml"`) — a variable can expand to
   anything at runtime, so absence proves nothing. Navigation offers every candidate instead.
+  **But not every `{{ }}` is unknowable**: `role_path`, `playbook_dir` and `inventory_dir`
+  are magic variables whose values we already hold, so they expand to a literal path and
+  are diagnosed like any other. Four real references in `~/app/ansible` were dead until
+  that landed.
 - **a role with no `tasks/main.yml` but a `tasks_from:`** — legal. `roles/cib-batch` in the
   real repo is exactly this and 16 working references depend on it.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.

@@ -91,6 +91,31 @@
   # "*.yml" would otherwise match every task file in the role.
   ansible.builtin.include_tasks: "{{ anything }}.yml"
 
+# ------------------------------------------- MAGIC VARIABLES (look templated, aren't)
+# `{{ role_path }}` reads like a runtime unknown and isn't: Ansible defines it as the
+# directory of the role containing the task, which is exactly what FileContext already
+# knows. Four references in ~/app/ansible were unnavigable until this was handled.
+#
+# Because these expand to a literal path, they get REAL diagnostics — unlike genuinely
+# templated paths, which can only ever offer candidates.
+
+- name: GOOD — role_path expands to this role's own directory
+  ansible.builtin.include_tasks: "{{ role_path }}/tasks/sibling.yml"
+
+- name: GOOD — and `..` collapses across the expansion
+  ansible.builtin.include_tasks: "{{ role_path }}/tasks/nested/../sibling.yml"
+
+- name: BAD — expands to a literal path that doesn't exist, so it WARNS
+  # This is the payoff: a `{{ }}` path that we can actually check gets checked, instead
+  # of being waved through as "templated, absence proves nothing".
+  ansible.builtin.include_tasks: "{{ role_path }}/tasks/no_such_file.yml"
+
+- name: "GOOD — playbook_dir is ambiguous, so every plausible location is tried"
+  # Which playbook is running is a genuine runtime fact. Substituting one guess for it
+  # produced 4 FALSE warnings on the real repo, whose playbooks live in <root>/playbooks/
+  # while the project root is <root>. Now both are candidates and a hit on either counts.
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/sibling.yml"
+
 # ----------------------------------------------------------------- when: ANALYSIS
 # Moved to its own file so this one stays about navigation. Cmd+click to open it —
 # every verdict and every warning rule is in there, labelled.
