@@ -90,6 +90,7 @@ navigation win.
 | T-027 | [Differential harness vs the legacy plugin](open/T-027-differential-harness.md) | M | — |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M   | —          |
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
+| T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
 
 ### Downstream — not this repo's code
 
