@@ -4,7 +4,7 @@
 
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
-use ansible_core::resolve::{resolve, SkipReason, Status};
+use ansible_core::resolve::{resolve, rule_id, SkipReason, Status};
 use ansible_core::workspace::{yaml_files, FileContext};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ fn main() {
             let (line, _) = doc.byte_to_lsp(r.span.start);
             match res.status {
                 Status::Resolved => entry[0] += 1,
-                Status::Missing if doc.is_suppressed(r.span.start) => entry[2] += 1,
+                Status::Missing if doc.is_suppressed(r.span.start, rule_id(&r)) => entry[2] += 1,
                 Status::Missing => {
                     entry[1] += 1;
                     missing.push(format!("{rel}:{}  {}", line + 1, r.value));
