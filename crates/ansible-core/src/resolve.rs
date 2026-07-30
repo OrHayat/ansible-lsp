@@ -61,6 +61,14 @@ impl Resolution {
     }
 }
 
+/// Diagnostic rule id, for `# noqa: <id>` and for display.
+pub fn rule_id(r: &Reference) -> &'static str {
+    match (r.kind, r.templated) {
+        (ReferenceKind::ImportPlaybook, true) => "templated-import",
+        _ => "missing-file",
+    }
+}
+
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.

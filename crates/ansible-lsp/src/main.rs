@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference, ReferenceKind};
-use ansible_core::resolve::{self, Resolution, Status};
+use ansible_core::resolve::{self, rule_id, Resolution, Status};
 use ansible_core::workspace::{yaml_files, FileContext};
 
 use tower_lsp::jsonrpc::Result;
@@ -99,7 +99,7 @@ impl Backend {
         a.refs
             .iter()
             .filter(|(_, res)| res.status == Status::Missing)
-            .filter(|(r, _)| !a.doc.is_suppressed(r.span.start))
+            .filter(|(r, _)| !a.doc.is_suppressed(r.span.start, rule_id(r)))
             .map(|(r, res)| {
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(r.span.end);
@@ -107,6 +107,7 @@ impl Backend {
                     range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
                     severity: Some(DiagnosticSeverity::WARNING),
                     source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String(rule_id(r).into())),
                     message: message_for(r, res, &a.ctx),
                     ..Default::default()
                 }

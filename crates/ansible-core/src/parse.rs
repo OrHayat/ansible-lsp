@@ -152,29 +152,47 @@ impl Document {
         end
     }
 
-    /// Is the diagnostic at `byte` silenced by a `# noqa` comment?
+    /// Is the diagnostic `rule` at `byte` silenced by a `# noqa` comment?
     ///
-    /// Accepted on the same line or the line immediately above, matching
-    /// ansible-lint's convention. Comments are absent from the AST, so this reads
-    /// the raw source.
-    pub fn is_suppressed(&self, byte: usize) -> bool {
+    /// Follows ansible-lint: `# noqa: rule-a rule-b` silences only those rules, a bare
+    /// `# noqa` silences everything. Rule scoping matters — this repo already carries
+    /// `# noqa: command-instead-of-module` for ansible-lint, and a substring match
+    /// would let those lines silently disable our checks too.
+    ///
+    /// Accepted on the reference's own line or the line above. Comments are absent
+    /// from the AST, so this reads raw source.
+    pub fn is_suppressed(&self, byte: usize, rule: &str) -> bool {
         let (line, _) = self.byte_to_lsp(byte);
-        let has_noqa = |idx: usize| {
-            self.line_starts
-                .get(idx)
-                .map(|&start| {
-                    let end = self
-                        .line_starts
-                        .get(idx + 1)
-                        .copied()
-                        .unwrap_or(self.text.len());
-                    self.text
-                        .get(start..end)
-                        .is_some_and(|l| l.contains("# noqa"))
-                })
-                .unwrap_or(false)
+        let idx = line as usize;
+        self.line_suppresses(idx, rule) || (idx > 0 && self.line_suppresses(idx - 1, rule))
+    }
+
+    fn line_suppresses(&self, idx: usize, rule: &str) -> bool {
+        let Some(&start) = self.line_starts.get(idx) else {
+            return false;
         };
-        has_noqa(line as usize) || (line > 0 && has_noqa(line as usize - 1))
+        let end = self
+            .line_starts
+            .get(idx + 1)
+            .copied()
+            .unwrap_or(self.text.len());
+        let Some(line) = self.text.get(start..end) else {
+            return false;
+        };
+        let Some(at) = line.find("# noqa") else {
+            return false;
+        };
+        let rest = line[at + "# noqa".len()..].trim_end();
+        match rest.strip_prefix(':') {
+            // Scoped: only the rules named.
+            Some(ids) => ids
+                .split([' ', ',', '\t'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .any(|id| id == rule),
+            // Bare `# noqa` silences everything on the line.
+            None => true,
+        }
     }
 
     /// `None` = not valid YAML 1.2. Not an error: strict YAML rejects files the
@@ -278,16 +296,31 @@ mod tests {
     }
 
     #[test]
-    fn noqa_suppresses_on_the_line_and_the_line_above() {
+    fn bare_noqa_suppresses_on_the_line_and_the_line_above() {
         let src = "- include_tasks: a.yml\n\
                    - include_tasks: b.yml  # noqa\n\
                    # noqa\n\
                    - include_tasks: c.yml\n";
         let doc = Document::new(src.to_string());
         let at = |needle: &str| src.find(needle).unwrap();
-        assert!(!doc.is_suppressed(at("a.yml")));
-        assert!(doc.is_suppressed(at("b.yml")));
-        assert!(doc.is_suppressed(at("c.yml")));
+        assert!(!doc.is_suppressed(at("a.yml"), "missing-file"));
+        assert!(doc.is_suppressed(at("b.yml"), "missing-file"));
+        assert!(doc.is_suppressed(at("c.yml"), "missing-file"));
+    }
+
+    /// This repo carries `# noqa: command-instead-of-module` for ansible-lint. A
+    /// substring match would let those lines disable our checks by accident.
+    #[test]
+    fn another_tools_noqa_does_not_silence_ours() {
+        let src = "- include_tasks: a.yml  # noqa: command-instead-of-module\n\
+                   - include_tasks: b.yml  # noqa: missing-file\n\
+                   - include_tasks: c.yml  # noqa: yaml[line-length] missing-file\n";
+        let doc = Document::new(src.to_string());
+        let at = |needle: &str| src.find(needle).unwrap();
+        assert!(!doc.is_suppressed(at("a.yml"), "missing-file"));
+        assert!(doc.is_suppressed(at("b.yml"), "missing-file"));
+        assert!(doc.is_suppressed(at("c.yml"), "missing-file"));
+        assert!(!doc.is_suppressed(at("c.yml"), "templated-import"));
     }
 
     #[test]

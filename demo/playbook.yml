@@ -29,5 +29,13 @@
   import_playbook: imported.yml
   when: not (skip_demo | default(false))
 
-- name: SILENCED — real break, but noqa suppresses the warning
+- name: SILENCED — bare noqa silences everything on the line
   import_playbook: also_not_here.yml  # noqa
+
+- name: SILENCED — by rule id, the precise form
+  import_playbook: still_not_here.yml  # noqa: missing-file
+
+- name: NOT SILENCED — another tool's rule id leaves ours alone
+  # This repo already carries `# noqa: command-instead-of-module` for ansible-lint;
+  # those lines must not accidentally disable these checks.
+  import_playbook: definitely_not_here.yml  # noqa: command-instead-of-module
