@@ -2,8 +2,9 @@
   // ---------------------------------------------------------------- ansible-lsp
   // Both default to true. Changing either applies immediately — no reload.
 
-  // false = drop the hover tooltip on import_playbook hints. Plain task hints have
-  // no tooltip at all — the hint already says what the condition does.
+  // false = drop the hover tooltip on import_playbook hints, which reports how many
+  // tasks and plays the condition is copied onto. Plain task hints have no tooltip at
+  // all — the hint already says what the condition does.
   "ansibleLsp.inlayHints.explanations": false,
 
   // false = no hints at all.

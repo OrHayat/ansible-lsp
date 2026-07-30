@@ -41,6 +41,7 @@
       ansible.builtin.debug:
         msg: notifying
       changed_when: true
+
       notify: demo handler
 
   # Handlers are NOT in the list the condition is copied onto — only
