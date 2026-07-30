@@ -12,6 +12,8 @@ pub enum ReferenceKind {
     TasksFrom,
     /// A 3-part FQCN used as a task key, e.g. `volumez.daos.pool_create:`.
     Module,
+    /// `import_playbook:` — play-level, static, so never legitimately templated.
+    ImportPlaybook,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +130,12 @@ fn handle(key: &str, key_node: &Node, value: &Node, out: &mut Vec<Reference>) {
             };
             if let Some(Node::Scalar { value, span }) = target {
                 out.push(Reference::new(kind, value, *span));
+            }
+        }
+
+        "import_playbook" => {
+            if let Node::Scalar { value, span } = value {
+                out.push(Reference::new(ReferenceKind::ImportPlaybook, value, *span));
             }
         }
 
@@ -251,6 +259,20 @@ mod tests {
     fn with_items_counts_as_repeated() {
         let r = refs("- include_tasks: a.yml\n  with_items: [1]\n");
         assert!(r[0].repeated);
+    }
+
+    #[test]
+    fn import_playbook_is_extracted() {
+        let r = of(
+            "- name: infra\n  import_playbook: daos-infrastructure.yml\n  when: x\n\
+             - ansible.builtin.import_playbook: ../../network-setup.yml\n",
+            ReferenceKind::ImportPlaybook,
+        );
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].value, "daos-infrastructure.yml");
+        assert_eq!(r[1].value, "../../network-setup.yml");
+        // `when:` on a static import is pushed onto every imported task, not a gate.
+        assert!(r[0].conditional);
     }
 
     #[test]

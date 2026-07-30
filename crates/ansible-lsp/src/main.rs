@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ansible_core::parse::{Document, Node};
-use ansible_core::references::{self, Reference, ReferenceKind};
+use ansible_core::references::{self, Reference};
 use ansible_core::resolve::{self, Resolution, Status};
 use ansible_core::workspace::{yaml_files, FileContext};
 
@@ -174,91 +174,12 @@ impl Backend {
             .collect())
     }
 
-    /// Expanding a file yields its references as outgoing calls. VS Code and Neovim
-    /// both render call hierarchy natively, so the execution tree survives the move
-    /// to vim without a custom UI.
-    fn outgoing_from(path: &Path) -> Vec<CallHierarchyOutgoingCall> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        let Some(a) = Self::analyze_text(text, path) else {
-            return Vec::new();
-        };
-        a.refs
-            .iter()
-            .filter(|(_, res)| res.status == Status::Resolved)
-            // Control flow only. Module calls are leaves, and at 3662 of them in this
-            // repo they bury the structure the tree exists to show.
-            .filter(|(r, _)| r.kind != ReferenceKind::Module)
-            .filter_map(|(r, res)| {
-                let target = res.targets.first()?;
-                let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
-                let (el, ec) = a.doc.byte_to_lsp(r.span.end);
-                Some(CallHierarchyOutgoingCall {
-                    to: item_for(target, r, res.targets.len()),
-                    // Where in the caller this call is written.
-                    from_ranges: vec![Range::new(
-                        Position::new(sl, sc),
-                        Position::new(el, ec),
-                    )],
-                })
-            })
-            .collect()
-    }
-
     fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         references::extract(nodes)
             .into_iter()
             .find(|r| r.span.start <= byte && byte <= r.span.end)
     }
-}
-
-/// A call-tree node. `detail` carries what static analysis cannot promise: whether the
-/// call is conditional, repeated, or one of several possible targets.
-fn item_for(target: &Path, r: &Reference, target_count: usize) -> CallHierarchyItem {
-    let mut tags = Vec::new();
-    if r.conditional {
-        tags.push("when".to_string());
-    }
-    if r.repeated {
-        tags.push("loop".to_string());
-    }
-    if r.templated {
-        tags.push(format!("dynamic, {target_count} candidates"));
-    }
-    let detail = match (r.task_name.as_deref(), tags.is_empty()) {
-        (Some(n), true) => Some(n.to_string()),
-        (Some(n), false) => Some(format!("{n}  [{}]", tags.join(", "))),
-        (None, false) => Some(format!("[{}]", tags.join(", "))),
-        (None, true) => None,
-    };
-    let zero = Range::new(Position::new(0, 0), Position::new(0, 0));
-    CallHierarchyItem {
-        // A bare "main.yml" says nothing about which role it belongs to.
-        name: match r.kind {
-            ReferenceKind::Role => r.value.clone(),
-            _ => last_two(target),
-        },
-        kind: SymbolKind::FILE,
-        tags: None,
-        detail,
-        uri: Url::from_file_path(target).unwrap_or_else(|_| Url::parse("file:///").unwrap()),
-        range: zero,
-        selection_range: zero,
-        data: None,
-    }
-}
-
-/// `.../roles/sync-state/tasks/nfs_access_point/reconcile.yml` -> `nfs_access_point/reconcile.yml`
-fn last_two(p: &Path) -> String {
-    let mut parts: Vec<_> = p.components().rev().take(2).collect();
-    parts.reverse();
-    parts
-        .iter()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// Candidate paths are absolute and long; show them relative to the project root.
@@ -300,7 +221,6 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: Default::default(),
                 }),
-                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 ..Default::default()
             },
         })
@@ -386,41 +306,6 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         Ok(Some(GotoDefinitionResponse::Array(locations)))
-    }
-
-    /// Entry point for the execution tree: the file under the cursor.
-    async fn prepare_call_hierarchy(
-        &self,
-        p: CallHierarchyPrepareParams,
-    ) -> Result<Option<Vec<CallHierarchyItem>>> {
-        let uri = p.text_document_position_params.text_document.uri;
-        let Ok(path) = uri.to_file_path() else {
-            return Ok(None);
-        };
-        let zero = Range::new(Position::new(0, 0), Position::new(0, 0));
-        Ok(Some(vec![CallHierarchyItem {
-            name: path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default(),
-            kind: SymbolKind::FILE,
-            tags: None,
-            detail: path.parent().map(|d| d.display().to_string()),
-            uri,
-            range: zero,
-            selection_range: zero,
-            data: None,
-        }]))
-    }
-
-    async fn outgoing_calls(
-        &self,
-        p: CallHierarchyOutgoingCallsParams,
-    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
-        let Ok(path) = p.item.uri.to_file_path() else {
-            return Ok(None);
-        };
-        Ok(Some(Self::outgoing_from(&path)))
     }
 
     /// Every resolvable reference. The client also paints these, so what's clickable is

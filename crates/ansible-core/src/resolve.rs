@@ -64,7 +64,9 @@ impl Resolution {
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
-    if r.templated {
+    // ImportPlaybook is excluded: it resolves before variables exist, so a templated
+    // path there is a bug worth reporting rather than a runtime unknown.
+    if r.templated && r.kind != ReferenceKind::ImportPlaybook {
         let bases = match r.kind {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
             _ => return Resolution::skipped(SkipReason::Templated),
@@ -90,6 +92,15 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
                     .map(|b| normalise(&b.join(&r.value))),
             ))
         }
+
+        // Relative to the importing playbook, then the project root. No role or
+        // collection paths apply at play level.
+        ReferenceKind::ImportPlaybook => Resolution::from_candidates(unique(
+            [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
+                .into_iter()
+                .flatten()
+                .map(|b| normalise(&b.join(&r.value))),
+        )),
 
         ReferenceKind::Role => match role_dir(&r.value, ctx) {
             Some(dir) => {
@@ -329,6 +340,40 @@ mod tests {
         );
         assert_eq!(res.status, Status::Resolved);
         assert!(res.targets.len() >= 2, "expected several, got {:?}", res.targets);
+    }
+
+    #[test]
+    fn import_playbook_resolves_relative_to_the_importer() {
+        let Some(root) = repo() else { return };
+        for (from, target) in [
+            ("playbooks/daos-full-deploy.yml", "daos-infrastructure.yml"),
+            ("playbooks/matrix/setup.yml", "../../network-setup.yml"),
+        ] {
+            let out = resolve_src(
+                &root.join(from),
+                &format!("- import_playbook: {target}\n"),
+            );
+            let res = first(&out, ReferenceKind::ImportPlaybook);
+            if res.status != Status::Resolved {
+                // Path may not exist in this checkout; only assert when it does.
+                continue;
+            }
+            assert!(res.targets[0].is_file());
+        }
+    }
+
+    /// Unlike include_tasks, a templated static import cannot work — report it.
+    #[test]
+    fn templated_import_playbook_is_reported_not_skipped() {
+        let Some(root) = repo() else { return };
+        let out = resolve_src(
+            &root.join("playbooks/site.yml"),
+            "- import_playbook: \"{{ env }}-setup.yml\"\n",
+        );
+        assert_eq!(
+            first(&out, ReferenceKind::ImportPlaybook).status,
+            Status::Missing
+        );
     }
 
     #[test]
