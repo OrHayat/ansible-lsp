@@ -37,17 +37,17 @@ struct ResolvedRef {
 #[derive(Clone, Copy)]
 struct Settings {
     hints: bool,
-    explanations: bool,
+    tooltips: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hints: true, explanations: true }
+        Self { hints: true, tooltips: true }
     }
 }
 
 impl Settings {
-    /// Reads `{ inlayHints: { enabled, explanations } }`. The client normalises both
+    /// Reads `{ inlayHints: { enabled, tooltips } }`. The client normalises both
     /// `initializationOptions` and `didChangeConfiguration` to this one shape, so the
     /// server doesn't have to know how VS Code nests things. Anything missing keeps its
     /// default rather than silently turning a feature off.
@@ -61,7 +61,7 @@ impl Settings {
         };
         Self {
             hints: get("enabled", d.hints),
-            explanations: get("explanations", d.explanations),
+            tooltips: get("tooltips", d.tooltips),
         }
     }
 }
@@ -442,8 +442,8 @@ impl LanguageServer for Backend {
                 MessageType::INFO,
                 format!(
                     "ansible-lsp ready — initializationOptions: {note} | effective: \
-                     inlayHints.enabled={} inlayHints.explanations={}",
-                    s.hints, s.explanations
+                     inlayHints.enabled={} inlayHints.tooltips={}",
+                    s.hints, s.tooltips
                 ),
             )
             .await;
@@ -460,8 +460,8 @@ impl LanguageServer for Backend {
                 MessageType::INFO,
                 format!(
                     "settings changed — received: {} | effective: enabled={} \
-                     explanations={}",
-                    p.settings, s.hints, s.explanations
+                     tooltips={}",
+                    p.settings, s.hints, s.tooltips
                 ),
             )
             .await;
@@ -509,7 +509,7 @@ impl LanguageServer for Backend {
                     // version was a paragraph about pushed-down semantics — identical on
                     // all 48 sites in the real repo, so it stopped being read. A count of
                     // what the condition actually covers differs every time.
-                    tooltip: (settings.explanations
+                    tooltip: (settings.tooltips
                         && r.kind == ReferenceKind::ImportPlaybook)
                         .then(|| self.import_scope(res))
                         .flatten()
@@ -654,23 +654,29 @@ mod tests {
     #[test]
     fn settings_default_to_on_and_parse_both_flags() {
         let d = Settings::from_json(&serde_json::json!({}));
-        assert!(d.hints && d.explanations);
+        assert!(d.hints && d.tooltips);
 
         let off = Settings::from_json(&serde_json::json!({
-            "inlayHints": { "enabled": false, "explanations": false }
+            "inlayHints": { "enabled": false, "tooltips": false }
         }));
-        assert!(!off.hints && !off.explanations);
+        assert!(!off.hints && !off.tooltips);
 
-        // The case the user asked for: keep the hints, drop the prose.
+        // The two are independent, and confusing them is what got the old name
+        // `explanations` renamed: turning tooltips off leaves the hints in place.
         let terse = Settings::from_json(&serde_json::json!({
-            "inlayHints": { "explanations": false }
+            "inlayHints": { "tooltips": false }
         }));
-        assert!(terse.hints && !terse.explanations);
+        assert!(terse.hints && !terse.tooltips);
 
-        // Wrong types and unrelated payloads fall back rather than disabling anything.
-        let junk = Settings::from_json(&serde_json::json!({
-            "inlayHints": { "enabled": "no" }, "other": 1
-        }));
-        assert!(junk.hints && junk.explanations);
+        // Wrong types, unrelated payloads, and the retired key all fall back to on
+        // rather than silently disabling something.
+        for junk in [
+            serde_json::json!({ "inlayHints": { "enabled": "no" }, "other": 1 }),
+            serde_json::json!({ "inlayHints": { "explanations": false } }),
+            serde_json::json!({ "unrelated": true }),
+        ] {
+            let s = Settings::from_json(&junk);
+            assert!(s.hints && s.tooltips, "should not disable anything: {junk}");
+        }
     }
 }

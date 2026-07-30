@@ -31,7 +31,7 @@ function hintSettings() {
   return {
     inlayHints: {
       enabled: c.get("inlayHints.enabled", true),
-      explanations: c.get("inlayHints.explanations", true),
+      tooltips: c.get("inlayHints.tooltips", true),
     },
   };
 }

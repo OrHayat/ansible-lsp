@@ -8,7 +8,7 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}/client",
         "${workspaceFolder}/demo",
-        "${env:HOME}/app/ansible"
+        // "${env:HOME}/app/ansible"
       ],
       "outFiles": []
     }

@@ -2,13 +2,13 @@
   // ---------------------------------------------------------------- ansible-lsp
   // Both default to true. Changing either applies immediately — no reload.
 
-  // false = drop the hover tooltip on import_playbook hints, which reports how many
-  // tasks and plays the condition is copied onto. Plain task hints have no tooltip at
-  // all — the hint already says what the condition does.
-  "ansibleLsp.inlayHints.explanations": false,
-
-  // false = no hints at all.
+  // THE GREY TEXT beside a `when:`. false = no hints at all.
   "ansibleLsp.inlayHints.enabled": true,
+
+  // THE HOVER only — the grey text stays either way. It reports how many tasks and
+  // plays an `import_playbook` condition is copied onto. Plain task hints never have
+  // one, so turning this off changes nothing outside playbooks.
+  "ansibleLsp.inlayHints.tooltips": true,
 
   // Neither affects diagnostics. A warning is something you asked to be told about,
   // so it is silenced per-line with `# noqa: <rule-id>` instead.

@@ -26,12 +26,12 @@
         "ansibleLsp.inlayHints.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show inline hints describing what a `when:` does on a run with no extra vars. Diagnostics are unaffected."
+          "description": "Show the grey inline hints describing what a `when:` does on a run with no extra vars. Turn this off to remove the hints entirely. Diagnostics are unaffected."
         },
-        "ansibleLsp.inlayHints.explanations": {
+        "ansibleLsp.inlayHints.tooltips": {
           "type": "boolean",
           "default": true,
-          "description": "Show the hover tooltip explaining what a `when:` on `import_playbook` does. Only import hints carry one \u2014 a plain task's hint already states the answer."
+          "description": "Show the hover tooltip on `import_playbook` hints, reporting how many tasks and plays the condition is copied onto. Does not affect the hints themselves \u2014 that is Inlay Hints: Enabled."
         },
         "ansibleLsp.serverPath": {
           "type": "string",

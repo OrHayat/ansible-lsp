@@ -21,12 +21,18 @@ Two layers, and the split matters:
 **VS Code settings** — per-user, per-machine. Things about *this machine*.
 
 Shipped: `ansibleLsp.serverPath`, `ansibleLsp.trace.server`,
-`ansibleLsp.inlayHints.enabled`, `ansibleLsp.inlayHints.explanations`. The last two are
+`ansibleLsp.inlayHints.enabled`, `ansibleLsp.inlayHints.tooltips`. The last two are
 live — the server calls `workspace/inlayHint/refresh` on
 `didChangeConfiguration`, because a setting that only takes effect on the next keystroke
 reads as a setting that doesn't work.
 
 Still wanted: `ansibleLsp.scanOnStartup`.
+
+**Name settings after what they switch off, not after what they contain.** `tooltips` was
+first called `explanations`, which sounded like "the wordy part of the hint" — so setting it
+false and seeing the hints remain read as a broken setting, twice. The server logs its
+effective settings at startup precisely because that failure mode is otherwise unfalsifiable
+from the editor.
 
 **The line that matters:** only *volunteered* output is configurable per-machine.
 Diagnostics are not — a warning is something you asked to be told about, and whether a rule
