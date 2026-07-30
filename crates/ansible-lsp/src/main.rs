@@ -454,22 +454,24 @@ impl LanguageServer for Backend {
                     label: InlayHintLabel::String(format!(" {label}")),
                     kind: Some(InlayHintKind::PARAMETER),
                     text_edits: None,
-                    tooltip: settings.explanations.then(|| InlayHintTooltip::String(
-                        if r.kind == ReferenceKind::ImportPlaybook {
+                    // Only imports get a tooltip. A plain task's hint already states the
+                    // answer, so hovering it added nothing — the old text explained the
+                    // method rather than the condition, which is noise.
+                    tooltip: (settings.explanations
+                        && r.kind == ReferenceKind::ImportPlaybook)
+                        .then(|| {
                             // Verified against ansible-core 2.20.4 source and live runs,
-                            // not the docs. An earlier version of this string claimed
-                            // facts are still gathered; that stopped being true in 2.3.
-                            "`when:` on a static import is prepended to the `when:` of \
-                             every task in the imported playbook — pre_tasks, roles, \
-                             tasks and post_tasks, but NOT handlers — and evaluated per \
-                             task. The play still runs and its banner prints; the \
-                             implicit fact gathering is skipped with it."
-                        } else {
-                            "What this condition does on a run with no extra vars. \
-                             `default(D)` gives the value when the variable is unset."
-                        }
-                        .into(),
-                    )),
+                            // not the docs. An earlier version claimed facts are still
+                            // gathered; that stopped being true in 2.3.
+                            InlayHintTooltip::String(
+                                "`when:` here is prepended to the `when:` of every task \
+                                 in the imported playbook — pre_tasks, roles, tasks and \
+                                 post_tasks, but not handlers — and evaluated per task. \
+                                 The play still runs and its banner prints; fact \
+                                 gathering is skipped with it."
+                                    .into(),
+                            )
+                        }),
                     padding_left: Some(true),
                     padding_right: None,
                     data: None,

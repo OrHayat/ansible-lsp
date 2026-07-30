@@ -31,7 +31,7 @@
         "ansibleLsp.inlayHints.explanations": {
           "type": "boolean",
           "default": true,
-          "description": "Include the long explanatory tooltip when hovering an inlay hint. Turn off to keep the hints but drop the prose."
+          "description": "Show the hover tooltip explaining what a `when:` on `import_playbook` does. Only import hints carry one \u2014 a plain task's hint already states the answer."
         },
         "ansibleLsp.serverPath": {
           "type": "string",
