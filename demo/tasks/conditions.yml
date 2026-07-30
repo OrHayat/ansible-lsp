@@ -94,17 +94,30 @@
   ansible.builtin.include_tasks: sibling.yml
   when: demo_hosts | default('') | some_custom_filter
 
-- name: "NO HINT — two informative clauses have no single honest summary"
+# ------------------------------------------------------------- ANDed CLAUSES (a list)
+# A list `when:` is clauses ANDed. Reporting one of them as the whole condition
+# overstates it; reporting nothing understates it. So the hint lists what is required
+# and counts what it could not read.
+
+- name: "Both clauses readable — listed together"
   ansible.builtin.include_tasks: sibling.yml
   when:
     - not (skip_demo | default(false) | bool)
     - demo_mode | default('native') == 'docker'
 
-- name: "HINT — a list where only one clause is informative, so that one is reported"
+- name: "One readable clause plus an unreadable one — the other is counted, not dropped"
+  # This is NOT "runs unless skip_demo is set": the task also needs demo_result.rc != 0,
+  # which cannot be read statically. Saying the first half only would be a lie.
   ansible.builtin.include_tasks: sibling.yml
   when:
     - not (skip_demo | default(false) | bool)
     - demo_result.rc != 0
+
+- name: "NO HINT — every clause unreadable, so there is nothing to say"
+  ansible.builtin.include_tasks: sibling.yml
+  when:
+    - demo_result.rc != 0
+    - demo_other.state == demo_wanted.state
 
 # ================================================== WARNINGS — provably broken conditions
 # Wrong whatever any variable holds. ZERO of these exist in ~/app/ansible — it is

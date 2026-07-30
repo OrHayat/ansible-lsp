@@ -95,6 +95,12 @@ pub enum Verdict {
     Never,
     /// Literal `when: true` — the condition has no effect at all.
     Always,
+    /// Several clauses ANDed. `unreadable` counts the ones that matched no shape, so
+    /// the label can say the summary is partial instead of implying it is complete.
+    All {
+        parts: Vec<Verdict>,
+        unreadable: usize,
+    },
     Unknown,
 }
 
@@ -140,7 +146,44 @@ impl Verdict {
             Verdict::RequiresNonEmpty { var } => format!("runs only if {var} is non-empty"),
             Verdict::Never => "never runs".to_string(),
             Verdict::Always => "always runs — this `when:` has no effect".to_string(),
+            Verdict::All { parts, unreadable } => {
+                let mut reqs: Vec<String> = parts.iter().filter_map(|p| p.requirement()).collect();
+                if reqs.is_empty() {
+                    return None;
+                }
+                if *unreadable > 0 {
+                    reqs.push(format!(
+                        "{unreadable} more condition{}",
+                        if *unreadable == 1 { "" } else { "s" }
+                    ));
+                }
+                format!("runs only if {}", reqs.join(" and "))
+            }
             Verdict::Unknown => return None,
+        })
+    }
+
+    /// This clause as a bare requirement, for joining with siblings. Deliberately drops
+    /// the "runs unless" framing — that describes a whole condition, and a clause ANDed
+    /// with others does not describe the whole condition.
+    fn requirement(&self) -> Option<String> {
+        Some(match self {
+            Verdict::UnlessSet { var } => format!("{var} unset"),
+            Verdict::OnlyIfSet { var } => format!("{var} set"),
+            Verdict::UnlessCleared { var } => format!("{var} not false"),
+            Verdict::WhenEquals { var, value, negated: false, .. } => format!("{var} = {value}"),
+            Verdict::WhenEquals { var, value, negated: true, .. } => format!("{var} != {value}"),
+            Verdict::WhenIn { var, values, negated } => format!(
+                "{var} {}in [{}]",
+                if *negated { "not " } else { "" },
+                values.join(", ")
+            ),
+            Verdict::RequiresDefined { var, negated: false } => format!("{var} set"),
+            Verdict::RequiresDefined { var, negated: true } => format!("{var} unset"),
+            Verdict::RequiresNonEmpty { var } => format!("{var} non-empty"),
+            Verdict::Never | Verdict::Always | Verdict::All { .. } | Verdict::Unknown => {
+                return None
+            }
         })
     }
 
@@ -154,7 +197,7 @@ impl Verdict {
             | Verdict::WhenIn { var, .. }
             | Verdict::RequiresDefined { var, .. }
             | Verdict::RequiresNonEmpty { var } => Some(var),
-            Verdict::Never | Verdict::Always | Verdict::Unknown => None,
+            Verdict::Never | Verdict::Always | Verdict::All { .. } | Verdict::Unknown => None,
         }
     }
 
@@ -320,12 +363,17 @@ pub fn classify_all(conditions: &[String]) -> Verdict {
     if verdicts.iter().all(|v| *v == Verdict::Always) {
         return verdicts.into_iter().next().unwrap_or(Verdict::Unknown);
     }
-    let mut known = verdicts
+    let unreadable = verdicts.iter().filter(|v| **v == Verdict::Unknown).count();
+    let parts: Vec<Verdict> = verdicts
         .into_iter()
-        .filter(|v| *v != Verdict::Unknown && *v != Verdict::Always);
-    match (known.next(), known.next()) {
-        (Some(v), None) => v,
-        _ => Verdict::Unknown,
+        .filter(|v| *v != Verdict::Unknown && *v != Verdict::Always)
+        .collect();
+    match (parts.len(), unreadable) {
+        (0, _) => Verdict::Unknown,
+        // A lone readable clause with unreadable siblings is NOT the whole condition,
+        // so it must not be reported as though it were.
+        (1, 0) => parts.into_iter().next().unwrap_or(Verdict::Unknown),
+        _ => Verdict::All { parts, unreadable },
     }
 }
 
@@ -370,6 +418,9 @@ pub fn classify(cond: &str) -> Verdict {
             },
             Verdict::Never => Verdict::Always,
             Verdict::Always => Verdict::Never,
+            // De Morgan on a conjunction gives a disjunction, which these verdicts
+            // cannot express. Refuse rather than invert it wrongly.
+            Verdict::All { .. } => Verdict::Unknown,
             _ => Verdict::Unknown,
         };
     }
@@ -716,23 +767,94 @@ mod tests {
         }
     }
 
+    /// Clauses in a list are ANDed. Reporting one of them as if it were the whole
+    /// condition overstates it in one direction; reporting nothing understates it in
+    /// the other. Both were wrong, so a multi-clause `when:` now says what it requires.
     #[test]
-    fn a_list_of_conditions_needs_exactly_one_informative_clause() {
+    fn multiple_clauses_are_reported_together() {
+        // The case that prompted this: two readable clauses used to yield no hint.
+        let both = classify_all(&[
+            "not (skip_demo | default(false) | bool)".into(),
+            "demo_mode | default('native') == 'docker'".into(),
+        ]);
         assert_eq!(
-            classify_all(&[
-                "not (skip_gui | default(false) | bool)".into(),
-                "result.rc != 0".into(),
-            ]),
+            both.label().unwrap(),
+            "runs only if skip_demo unset and demo_mode = docker"
+        );
+        assert!(matches!(both, Verdict::All { unreadable: 0, .. }));
+    }
+
+    /// One readable clause plus an unreadable sibling is NOT the readable one — the task
+    /// also needs whatever the other clause says.
+    #[test]
+    fn an_unreadable_sibling_is_counted_not_dropped() {
+        let v = classify_all(&[
+            "not (skip_gui | default(false) | bool)".into(),
+            "result.rc != 0".into(),
+        ]);
+        assert_eq!(
+            v.label().unwrap(),
+            "runs only if skip_gui unset and 1 more condition"
+        );
+
+        let two = classify_all(&[
+            "not (skip_gui | default(false) | bool)".into(),
+            "result.rc != 0".into(),
+            "other.thing is match('x')".into(),
+        ]);
+        assert_eq!(
+            two.label().unwrap(),
+            "runs only if skip_gui unset and 2 more conditions"
+        );
+
+        // All clauses unreadable stays silent — there is nothing to say.
+        assert_eq!(
+            classify_all(&["result.rc != 0".into(), "a.b == c.d".into()]),
+            Verdict::Unknown
+        );
+    }
+
+    /// A single clause keeps the richer default-run wording; only ANDed clauses fall
+    /// back to bare requirements.
+    #[test]
+    fn a_lone_clause_keeps_its_default_run_wording() {
+        assert_eq!(
+            classify_all(&["not (skip_gui | default(false) | bool)".into()]),
             Verdict::UnlessSet { var: "skip_gui".into() }
         );
         assert_eq!(
-            classify_all(&[
-                "not (skip_gui | default(false) | bool)".into(),
-                "mode | default('a') == 'b'".into(),
-            ]),
-            Verdict::Unknown
+            classify_all(&["not (skip_gui | default(false) | bool)".into()])
+                .label()
+                .unwrap(),
+            "runs unless skip_gui is set"
         );
+    }
+
+    #[test]
+    fn every_requirement_shape_renders() {
+        let v = classify_all(&[
+            "demo_mode | default('native') != 'docker'".into(),
+            "proto in ['http', 'ftp']".into(),
+            "other not in ['a']".into(),
+            "flag is not defined".into(),
+            "hosts | default('') | length > 0".into(),
+            "enabled | default(true) | bool".into(),
+        ]);
+        assert_eq!(
+            v.label().unwrap(),
+            "runs only if demo_mode != docker and proto in [http, ftp] and \
+             other not in [a] and flag unset and hosts non-empty and enabled not false"
+        );
+    }
+
+    #[test]
+    fn never_and_always_still_dominate_correctly() {
         assert_eq!(classify_all(&["false".into(), "anything".into()]), Verdict::Never);
+        // `true` constrains nothing, so it must not become a listed requirement.
+        assert_eq!(
+            classify_all(&["true".into(), "not (skip_gui | default(false))".into()]),
+            Verdict::UnlessSet { var: "skip_gui".into() }
+        );
     }
 
     // ---------------------------------------------------------------- problems
