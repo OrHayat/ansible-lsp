@@ -115,7 +115,12 @@ impl Backend {
     /// unsupported kinds stay silent — a warning you can't trust is worse than none.
     async fn publish_diagnostics(&self, uri: &Url) {
         let Some(a) = self.analyze(uri) else {
-            self.client.publish_diagnostics(uri.clone(), vec![], None).await;
+            // No analysis means the file didn't parse. Since the parser now matches Ansible's
+            // (libyaml), a parse failure is a real one — a play that loads this file will
+            // fail — so it's an error, not a silent gap.
+            let diags = self.unparseable_diagnostic(uri);
+            self.track(uri, &diags);
+            self.client.publish_diagnostics(uri.clone(), diags, None).await;
             return;
         };
         let mut diagnostics = Self::diagnostics_of(&a);
@@ -134,6 +139,34 @@ impl Backend {
                 f.insert(uri.clone());
             }
         }
+    }
+
+    /// One ERROR at the parse-error position when an open file isn't valid YAML. The parser
+    /// matches Ansible (libyaml), so this is invalid for Ansible too — a play that loads the
+    /// file will fail. Empty when the file is fine, isn't open, or is `# noqa`-suppressed.
+    fn unparseable_diagnostic(&self, uri: &Url) -> Vec<Diagnostic> {
+        let Some(text) = self.text_of(uri) else {
+            return Vec::new();
+        };
+        let doc = Document::new(text);
+        let Some(span) = doc.parse_error() else {
+            return Vec::new();
+        };
+        if doc.is_suppressed(span.start, "unparseable") {
+            return Vec::new();
+        }
+        let (sl, sc) = doc.byte_to_lsp(span.start);
+        let (el, ec) = doc.byte_to_lsp(span.end);
+        vec![Diagnostic {
+            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String("unparseable".into())),
+            message: "Invalid YAML — Ansible's parser rejects this too, so a play that loads \
+                      this file will fail. References here aren't analysed."
+                .into(),
+            ..Default::default()
+        }]
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {

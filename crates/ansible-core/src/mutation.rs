@@ -204,6 +204,10 @@ mod tests {
     fn demo_shows_the_mutated_condition_case() {
         let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
         for f in crate::workspace::yaml_files(&demo) {
+            // `unparseable*.yml` are broken on purpose — the fixtures for the T-013 hint.
+            if f.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("unparseable")) {
+                continue;
+            }
             let text = std::fs::read_to_string(&f).unwrap();
             assert!(
                 crate::parse::Document::new(text).parse().is_some(),

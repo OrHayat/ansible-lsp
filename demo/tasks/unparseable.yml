@@ -1,0 +1,9 @@
+# BAD — unparseable: the unquoted ": " in the task name below is invalid YAML — and unlike
+# lenient_scalar.yml, it's broken for Ansible's parser (libyaml) too, not just strict 1.2. So
+# the file genuinely won't run. The server can't analyse references here; instead of going
+# silent it drops a hint on the offending line. Silence it with `# noqa: unparseable`
+# (see unparseable_silenced.yml).
+- name: Restart the service: gracefully
+  ansible.builtin.service:
+    name: nginx
+    state: restarted

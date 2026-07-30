@@ -10,6 +10,9 @@ mic key on this Mac).
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
 | `tasks/conditions.yml` | `when:` analysis — every verdict and every warning rule |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
+| `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |
+| `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |
+| `tasks/unparseable_silenced.yml` | the same break, quieted with `# noqa: unparseable` |
 
 Prefixes are consistent: **GOOD** resolves or is analysed, **BAD** is deliberately broken,
 **SILENCED** is suppressed by `# noqa`, **NO HINT** means the tool declines to answer.
@@ -23,28 +26,21 @@ clicking it.
 **Yellow squiggle** — a literal path that resolved to nothing, or a condition that cannot
 work. The message lists every path tried, in order.
 
-**Grey text to the right of a line** — an inlay hint: what a `when:` does on a run with no
-extra vars. Nothing is wrong; it's derived information. If you see none, set
-`Editor > Inlay Hints: Enabled` to `on`.
+**Hover a `when:` reference** — hover the value of a conditional `import_playbook` (or any
+reference carrying a `when:`) to see what the condition does: every clause spelled out, and,
+for an import, the note that the condition is copied onto every task in the imported file.
+It's on demand, so there's no grey inline text cluttering the line or fighting the editor's
+own end-of-line blame.
 
-Only `import_playbook` hints have a hover tooltip, and it carries a per-site fact rather than
-a lecture — how much the condition actually covers:
-
-```
-runs unless lustre_deployment_mode changes from native
-  ⤷ Copied onto 15 tasks across 5 plays, evaluated separately at each — not a single gate.
-```
-
-The hint says what the condition decides; the tooltip says how much it decides. An earlier
-version was a paragraph about pushed-down semantics — identical on all 48 sites in the real
-repo, so it stopped being read. A count differs every time.
-
-Plain task hints have no tooltip: the hint already states the answer, so hovering could only
-restate it.
+**Red error, `unparseable`** — a file that isn't valid YAML (see `tasks/unparseable.yml`).
+The parser matches Ansible's (libyaml), so a file we can't parse is one Ansible can't load
+either — a play that includes it will fail. It's flagged on the offending line rather than
+silently skipped. `# noqa: unparseable` silences it for the templated/partial files you know
+won't parse standalone.
 
 One switch, applied immediately: **`ansibleLsp.inlayHints.enabled`** — `false` removes the
-hints. It's in [`.vscode/settings.json`](.vscode/settings.json) next door. Diagnostics are
-unaffected; a warning is silenced per-line with `# noqa: <rule-id>`.
+`when:` hover. It's in [`.vscode/settings.json`](.vscode/settings.json) next door. Diagnostics
+are unaffected; a warning is silenced per-line with `# noqa: <rule-id>`.
 
 Being *window*-scoped, it will not apply from a per-folder file in the multi-root debug
 window — set it in User settings (`Cmd+,`, search `ansible lsp`). If a change seems to do
@@ -57,17 +53,6 @@ ansible-lsp ready — initializationOptions: {"inlayHints":{"enabled":false}} |
 
 `initializationOptions: none` means the dev host is running an old `extension.js` — Run →
 Stop Debugging, then start again.
-
-An `import_playbook` hint also carries how much its condition covers, inline:
-
-```
-runs unless lustre_deployment_mode changes from native · copied onto 15 tasks in 5 plays
-```
-
-The first half says what the condition decides, the second how much it decides. That count
-used to be a hover tooltip, which meant mousing over a ~10px grey label — so nobody ever saw
-it. **There are no tooltips now.** A hint you have to discover by hovering is a hint that
-does not exist.
 
 ## Deliberate silences
 
@@ -83,17 +68,16 @@ if it warned:
 - **a role with no `tasks/main.yml` but a `tasks_from:`** — legal. `roles/cib-batch` in the
   real repo is exactly this and 16 working references depend on it.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.
-- **files that fail to parse** — strict YAML 1.2 rejects files Ansible's PyYAML accepts.
-  Today that means silence, which is itself a problem (T-013).
 - **61% of `when:` conditions** — real boolean logic, unguarded comparisons, unknown filters.
   Guessing would make the analysis untrustworthy.
 
 ## Two traps this demo has fallen into
 
 **Unquoted `: ` in a task name.** `name: Block form with an explicit file: parameter` is
-invalid YAML, and an unparseable file yields no references and no diagnostics — so the server
-goes completely silent and looks broken. It happened three times while writing these files,
-and it's the whole argument for T-013. Quote any name containing a colon.
+invalid YAML — for Ansible too, so the play won't run. The server used to go silent on such
+files (looking broken itself); T-013 made it flag them, and since the parser now matches
+Ansible it's a hard `unparseable` error. It happened three times while writing these files.
+Quote any name containing a colon.
 
 **Every example here is load-bearing.** `demo_exercises_every_problem_and_verdict` asserts
 this folder still demonstrates all four warning rules and all twelve verdicts. Deleting an

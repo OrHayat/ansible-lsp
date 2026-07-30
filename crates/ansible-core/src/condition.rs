@@ -996,6 +996,10 @@ mod corpus {
         let mut problems_found = Vec::new();
         let mut verdicts = Vec::new();
         for path in crate::workspace::yaml_files(&demo) {
+            // `unparseable*.yml` are broken on purpose — the fixtures for the T-013 hint.
+            if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("unparseable")) {
+                continue;
+            }
             let text = std::fs::read_to_string(&path).expect("demo file");
             let doc = Document::new(text);
             let nodes = doc

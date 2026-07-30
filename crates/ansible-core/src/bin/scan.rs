@@ -33,7 +33,7 @@ fn main() {
     let mut totals: BTreeMap<&str, [usize; 3]> = BTreeMap::new(); // resolved, missing, skipped
     let mut missing: Vec<String> = Vec::new();
     let mut unresolved_roles: Vec<String> = Vec::new();
-    let mut unparseable = 0usize;
+    let mut unparseable: Vec<String> = Vec::new();
     let mut mutated: Vec<String> = Vec::new();
     let mut empty_glob: Vec<String> = Vec::new();
     let mut tmpl_vars: BTreeMap<String, usize> = BTreeMap::new();
@@ -46,7 +46,14 @@ fn main() {
         };
         let doc = Document::new(text);
         let Some(nodes) = doc.parse() else {
-            unparseable += 1;
+            let rel = path.strip_prefix(&root).unwrap_or(path).display();
+            match doc.parse_error() {
+                Some(span) => {
+                    let (line, _) = doc.byte_to_lsp(span.start);
+                    unparseable.push(format!("{rel}:{}", line + 1));
+                }
+                None => unparseable.push(rel.to_string()),
+            }
             continue;
         };
         let ctx = FileContext::discover(path);
@@ -150,10 +157,17 @@ fn main() {
         }
     }
 
-    println!("{} files, {unparseable} unparseable\n", files.len());
+    println!("{} files, {} unparseable\n", files.len(), unparseable.len());
     println!("{:<16} {:>9} {:>8} {:>8}", "kind", "resolved", "missing", "skipped");
     for (k, [r, m, s]) in &totals {
         println!("{k:<16} {r:>9} {m:>8} {s:>8}");
+    }
+
+    if !unparseable.is_empty() {
+        println!("\nUNPARSEABLE ({}):", unparseable.len());
+        for f in &unparseable {
+            println!("  {f}");
+        }
     }
 
     if !missing.is_empty() {

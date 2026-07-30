@@ -1,0 +1,7 @@
+# SILENCED — same genuinely-invalid YAML as unparseable.yml, but the `# noqa: unparseable`
+# on the broken line suppresses the hint. The escape hatch: a file you know the tool can't
+# parse (a Jinja-templated `.yml`, a partial include) and don't want flagged every time.
+- name: Restart the service: gracefully  # noqa: unparseable
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
