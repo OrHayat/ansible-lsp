@@ -20,7 +20,14 @@ function serverPath(context) {
     .get("serverPath");
   return (
     configured ||
-    context.asAbsolutePath(path.join("..", "target", "release", "ansible-lsp"))
+    context.asAbsolutePath(
+      path.join(
+        "..",
+        "target",
+        "release",
+        process.platform === "win32" ? "ansible-lsp.exe" : "ansible-lsp"
+      )
+    )
   );
 }
 
