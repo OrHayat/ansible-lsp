@@ -63,6 +63,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 | T-016 | [`vars_files`](open/T-016-vars-files.md)                  | M    | 75   |
 | T-017 | [`include_vars`](open/T-017-include-vars.md)              | M    | 30   |
 | T-018 | [`meta` dependencies](open/T-018-meta-dependencies.md)    | S    | 3    |
+| T-034 | [Templating that only looks dynamic](open/T-034-statically-knowable-templating.md) | M | 21 |
 | T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
 | T-032 | [Static `when:` evaluation](open/T-032-static-when.md)    | L    | 2669 |
 
@@ -185,6 +186,14 @@ no dynamic variant exists. So `when:` is the *only* conditional mechanism at tha
 is why all 48 conditional imports here use it. Never recommend `include_playbook`; the real
 alternatives are `meta: end_play`, restructuring into a task file, or `--skip-tags`.
 → T-031
+
+**Not every `{{ }}` is a runtime unknown.** `role_path` is the containing role's
+directory and `playbook_dir`/`inventory_dir` are known too; treating them as opaque left 4
+real references dead. The general rule: expand what the file already states, glob what it
+doesn't, and never expand a `vars:`/`set_fact` literal — those sit under 22 precedence
+levels, so expanding one invents certainty. `scan` prints the variables still appearing in
+templated paths, so "is anything left" is one command.
+→ `expand_magic`, `role_path_expands_to_the_containing_role`, T-034
 
 **`| default(D)` states the value when a variable is unset, which is the only thing that makes
 static `when:` analysis possible** — no variable resolution, no precedence rules. It is also
