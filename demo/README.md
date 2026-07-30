@@ -26,12 +26,22 @@ work. The message lists every path tried, in order.
 extra vars. Nothing is wrong; it's derived information. If you see none, set
 `Editor > Inlay Hints: Enabled` to `on`.
 
-Too chatty? Two settings, both live — no reload:
+Too chatty? Two settings, both live — no reload. They're written out in
+[`.vscode/settings.json`](.vscode/settings.json) next door:
 
 | Setting | Effect |
 | ------- | ------ |
 | `ansibleLsp.inlayHints.explanations` | `false` keeps the hints, drops the long hover prose |
 | `ansibleLsp.inlayHints.enabled` | `false` removes the hints entirely |
+
+**Where to actually put them.** Both are *window*-scoped, and the debug launcher opens this
+folder **and** `~/app/ansible` as a multi-root workspace — so VS Code will not apply them
+from a per-folder file there, and marks them "cannot be applied in this window". In the
+Extension Development Host, set them in **User settings** (`Cmd+,`, search `ansible lsp`).
+The file next door is the copy-paste source, and it does work if you open `demo/` on its own.
+
+Window scope is deliberate: the server keeps one setting for the whole session, so letting
+VS Code offer a per-folder value would promise something it cannot honour.
 
 Neither touches diagnostics. Warnings are things you asked to be told about, so they are not
 configurable here — silencing a rule is `# noqa`, or a committed project file (T-025).

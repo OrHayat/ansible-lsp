@@ -1,0 +1,16 @@
+{
+  // ---------------------------------------------------------------- ansible-lsp
+  // Both default to true. Changing either applies immediately — no reload.
+
+  // false = keep the grey hints, drop the long hover prose. The "less fluff" switch.
+  "ansibleLsp.inlayHints.explanations": true,
+
+  // false = no hints at all.
+  "ansibleLsp.inlayHints.enabled": true,
+
+  // Neither affects diagnostics. A warning is something you asked to be told about,
+  // so it is silenced per-line with `# noqa: <rule-id>` instead.
+
+  // Without this the hints never render, whatever the two settings above say.
+  "editor.inlayHints.enabled": "on"
+}
