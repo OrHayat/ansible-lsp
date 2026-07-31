@@ -11,7 +11,8 @@ file — wrong in the four real cases pinned in `resolve.rs`'s tests.
 
 ```
 crates/ansible-core/   all logic, no LSP, no bindings — where the tests live
-  parse.rs             YAML -> byte-span AST. The only module touching saphyr.
+  parse.rs             byte-span AST types + byte<->line/UTF-16 index
+  parse_libyaml.rs     the YAML parser (libyaml, lenient like Ansible). Only parser module.
   references.rs        AST -> the cross-file references we care about
   resolve.rs           reference -> file on disk, in Ansible's search order
   workspace.rs         role dir / tasks dir / project root / search roots
@@ -28,7 +29,7 @@ scripts/smoke.js       drives the server over raw stdio, no editor needed
 
 ```sh
 cargo build --release
-cargo test                      # 86 tests, incl. real-repo regressions
+cargo test                      # 93 tests, incl. real-repo regressions
 ./target/release/scan ~/app/ansible   # whole-repo report / CI check
 node scripts/smoke.js           # end-to-end over LSP against ~/app/ansible
 python3 scripts/inlay-hints.py  # `when:` hover per settings combination, no editor
@@ -79,7 +80,9 @@ These never warn, each for a reason a test pins down:
 - **a role with no `tasks/main.yml` but a `tasks_from`** — legal; `roles/cib-batch` in the
   real repo is exactly this, and 16 working references depend on it
 - **modules from collections that aren't installed** — an uninstalled dependency, not a typo
-- **files that fail to parse** — strict YAML 1.2 is stricter than Ansible's PyYAML
+
+(A file that fails to parse is *not* in this list anymore: the parser matches Ansible's, so a
+parse failure is a real one and gets an `unparseable` error — see the finding below.)
 
 ## Status
 
@@ -88,13 +91,16 @@ tickets, what's shipped, and what was rejected all live there, so this section c
 
 ## Two findings that shape the code
 
-**saphyr markers are character offsets, not byte offsets.** Invisible in ASCII; wrong on
-any line containing non-ASCII, which this repo has (em dashes in task names). `parse.rs`
-converts once, at the boundary, so everything downstream can assume bytes. There are three
-coordinate systems in play — saphyr chars, Rust bytes, LSP UTF-16 — and mixing them silently
-shifts ranges.
+**Match Ansible's parser, not the spec.** Strict YAML 1.2 rejects real playbooks Ansible
+runs — e.g. `roles/lustre-nvme-binding/tasks/_run.yml:45`, a multi-line double-quoted scalar
+whose continuation lines aren't indented past their key. The old strict parser (saphyr, and
+yaml-rust2) errored on it; PyYAML/libyaml don't enforce that rule, so it ships in production.
+We parse with `libyaml-safer` (a pure-Rust libyaml port), which accepts exactly what Ansible
+accepts (T-036, verified: 729/729 corpus). Consequence: a file we can't parse is one Ansible
+can't load either, so it's a real `unparseable` **error**, not a silent gap.
 
-**Strict YAML 1.2 is stricter than Ansible.** `roles/lustre-nvme-binding/tasks/_run.yml:45`
-fails in both saphyr and yaml-rust2 but PyYAML accepts it, so it runs in production. An
-unparseable file must therefore yield no references and no diagnostics — never a false
-"missing file" warning. "Does it parse" is not a proxy for "is it valid Ansible."
+**Byte offsets, not character offsets — but watch the third coordinate.** Three coordinate
+systems are in play: source bytes, char columns, and LSP UTF-16. libyaml's marks are byte
+offsets, so `parse_libyaml.rs` builds byte spans directly — but LSP still wants UTF-16, and
+any line with non-ASCII (this repo has em dashes and emoji in names) will shift ranges if the
+two are mixed. The em-dash / emoji round-trip tests pin it.

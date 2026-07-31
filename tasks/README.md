@@ -22,10 +22,11 @@ in it stays findable.
 
 ## Where the project actually is
 
-9 commits on `main`, 63 tests, ~3000 lines. Whole-repo scan of `~/app/ansible`:
+35 commits, 93 tests, ~4500 lines. Whole-repo scan of `~/app/ansible` (kind breakdown from
+a reference run with Ansible installed — `module` resolution needs it):
 
 ```
-731 files, 1 unparseable
+729 files, 0 unparseable
 
 kind              resolved  missing  skipped
 import_playbook         73        0        0
@@ -37,7 +38,8 @@ tasks_from              87        0        0
 ```
 
 The one `missing` is a genuine break in that repo (T-030), not a resolver bug. The 16
-skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
+skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. The last
+`unparseable` (`_run.yml`) went to 0 when we swapped to a libyaml parser (T-036).
 
 `when:` analysis (T-032) classifies 1053 of 2669 conditions and finds **zero** broken ones
 — this repo is clean on the four provable-fault rules.
@@ -48,9 +50,9 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 
 | ID    | Title                                                       | Size | Blocked by |
 | ----- | ----------------------------------------------------------- | ---- | ---------- |
-| T-013 | [Hint on unparseable files](open/T-013-unparseable-hint.md)  | S    | —          |
 | T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
 | T-033 | [`when:` vars defined nowhere](open/T-033-undefined-when-vars.md) | L    | —          |
+| T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -65,6 +67,11 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`.
 | T-034 | [Templating that only looks dynamic](open/T-034-statically-knowable-templating.md) | M | 21 |
 | T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
 | T-032 | [Static `when:` evaluation](open/T-032-static-when.md)    | L    | 2669 |
+| T-038 | [Resolve file-hitting lookups](open/T-038-file-lookups.md) | M   | —    |
+| T-039 | [`requirements.yml` ↔ installed collections](open/T-039-requirements-collections.md) | M | — |
+| T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L | — |
+| T-041 | [`meta/argument_specs.yml` role signatures](open/T-041-role-argument-specs.md) | M | — |
+| T-042 | [Resolver gaps: collections, `*_from`](open/T-042-resolver-gaps.md) | S | — |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -113,6 +120,9 @@ navigation win.
 | T-010 | [`# noqa` suppression, rule-scoped](closed/T-010-noqa-suppression.md) | done |
 | T-011 | [Execution tree via LSP call hierarchy](closed/T-011-call-hierarchy-tree.md) | **rejected** |
 | T-014 | [README is stale](closed/T-014-readme-drift.md)                | done     |
+| T-013 | [Unparseable files flagged as errors](closed/T-013-unparseable-hint.md) | done |
+| T-036 | [libyaml parser, matches Ansible](closed/T-036-parse-what-ansible-parses.md) | done |
+| T-043 | [Docs stale after the parser swap](closed/T-043-docs-stale-after-parser-swap.md) | done |
 
 ## Settled — don't re-derive these
 
@@ -124,16 +134,19 @@ file's own directory.** The opposite of what most people assume. Verified by run
 `ansible-playbook` against a constructed fixture, not by reading docs.
 → `matches_ansible_when_a_name_exists_in_two_search_paths`, `tests/fixtures/ambiguous/`
 
-**saphyr markers are character offsets, not byte offsets.** So there are three coordinate
-systems — saphyr chars, Rust bytes, LSP UTF-16 — and mixing them is invisible in ASCII and
-wrong on every line with an em dash. Converted once, in `parse.rs`.
-→ `spans_are_byte_accurate_past_non_ascii`, `emoji_and_utf16_roundtrip`
+**Byte offsets, not character offsets — but LSP still wants UTF-16.** libyaml's marks are byte
+offsets, so `parse_libyaml.rs` builds byte spans directly (no char->byte conversion, unlike the
+old saphyr parser). The one remaining coordinate mismatch is bytes vs LSP UTF-16, which shifts
+ranges on any line with non-ASCII — this repo has em dashes and emoji in names.
+→ `spans_are_byte_accurate_past_non_ascii`, `emoji_span_slices_exactly`
 
-**Strict YAML 1.2 is stricter than Ansible.** `roles/lustre-nvme-binding/tasks/_run.yml:45` fails
-in both saphyr and yaml-rust2 but PyYAML accepts it, so it runs in production. Unparseable must
-therefore mean *no references*, never *broken*. "Does it parse" is not a proxy for "is it valid
-Ansible."
-→ `unparseable_yields_none_not_panic`
+**Match Ansible's parser, not the YAML 1.2 spec (T-036).** `roles/lustre-nvme-binding/tasks/_run.yml:45`
+— a multi-line double-quoted scalar whose continuation lines aren't indented past their key —
+is invalid YAML 1.2 (the old saphyr and yaml-rust2 parsers reject it) but PyYAML/libyaml accept
+it, so it runs in production. We parse with `libyaml-safer`, which accepts exactly what Ansible
+accepts (729/729 corpus). **Supersedes** the earlier "unparseable must mean no references, never
+broken" rule: a file we can't parse is one Ansible can't load either, so it's a real error.
+→ `accepts_the_underindented_scalar_class`, `parse_libyaml::corpus_smoke`
 
 **`when:` on an `import_playbook` is not a gate.** Verified against ansible-core 2.20.4
 source and live runs, not the docs:

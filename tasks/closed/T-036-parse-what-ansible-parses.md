@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | L    | —          |
+| done   | P2       | L    | —          |
 
 ## Problem
 

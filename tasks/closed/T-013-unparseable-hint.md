@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P1       | S    | —          |
+| done   | P1       | S    | —          |
 
 ## Problem
 
@@ -37,7 +37,17 @@ find out which file.
 
 ## Done when
 
-- [ ] breaking the YAML in `demo/tasks/main.yml` produces a visible hint, not silence
-- [ ] `# noqa: unparseable` silences it
-- [ ] `scan` names the unparseable files instead of just counting them
-- [ ] severity is HINT, never WARNING — the file may be perfectly valid to Ansible
+- [x] breaking the YAML produces a visible diagnostic, not silence (demo: `tasks/unparseable.yml`)
+- [x] `# noqa: unparseable` silences it (demo: `tasks/unparseable_silenced.yml`)
+- [x] `scan` names the unparseable files instead of just counting them
+- [x] ~~severity is HINT, never WARNING~~ → **ERROR**, see note
+
+## Closing note — severity flipped to ERROR
+
+Originally shipped as a grey HINT, on the reasoning that a strict-YAML-1.2 failure might still
+be valid to Ansible. **T-036 removed that possibility**: the parser now matches Ansible
+(libyaml), so a file we can't parse is one Ansible can't load either — a play that includes it
+fails. So the diagnostic is now a red **ERROR** with an honest message. The `# noqa` escape
+hatch stays, for files you know don't parse standalone (a Jinja-templated `.yml`, a partial
+include). See T-037 (vault): a vaulted file isn't YAML and must be exempted so this error
+doesn't false-positive.
