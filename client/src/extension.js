@@ -37,6 +37,7 @@ function hintSettings() {
   const c = vscode.workspace.getConfiguration("ansibleLsp");
   return {
     inlayHints: { enabled: c.get("inlayHints.enabled", true) },
+    ansiblePath: c.get("ansiblePath", ""),
   };
 }
 
@@ -131,6 +132,28 @@ function activate(context) {
       }
     })
   );
+
+  // Persistent "is Ansible installed" indicator. A startup toast auto-dismisses and gets
+  // buried under VS Code's own notifications; a status-bar item stays until it's fixed.
+  const ansibleStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    0
+  );
+  context.subscriptions.push(ansibleStatus);
+  // Registered before start() so the `ansible/status` the server sends during `initialized`
+  // isn't missed.
+  client.onNotification("ansible/status", (p) => {
+    if (p && p.found === false) {
+      ansibleStatus.text = "$(warning) Ansible: not found";
+      ansibleStatus.tooltip =
+        "ansible isn't on PATH, so builtin modules (ansible.builtin.*) and installed " +
+        "collections can't resolve. Files, roles, and in-repo modules still work. " +
+        "Install ansible-core (WSL on Windows).";
+      ansibleStatus.show();
+    } else {
+      ansibleStatus.hide();
+    }
+  });
 
   // Not awaited: activate() must return promptly so the extension host isn't blocked.
   client.start().then(() => vscode.window.visibleTextEditors.forEach(repaint));

@@ -62,6 +62,14 @@ impl Settings {
     }
 }
 
+/// Server -> client: whether an Ansible install was found. Drives the client's status bar,
+/// which (unlike a startup toast) stays visible until it's resolved.
+enum AnsibleStatus {}
+impl tower_lsp::lsp_types::notification::Notification for AnsibleStatus {
+    type Params = serde_json::Value;
+    const METHOD: &'static str = "ansible/status";
+}
+
 struct Backend {
     client: Client,
     docs: Mutex<HashMap<Url, String>>,
@@ -440,6 +448,15 @@ impl LanguageServer for Backend {
                 if let Ok(mut s) = self.settings.lock() {
                     *s = Settings::from_json(opts);
                 }
+                // Which Ansible to index, when several exist or none is on PATH. Read here,
+                // before the first `detect()` in `initialized`, so the setting wins.
+                if let Some(path) = opts
+                    .get("ansiblePath")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    ansible_core::install::set_package_dir_override(PathBuf::from(path));
+                }
                 opts.to_string()
             }
             None => "none — client sent no initializationOptions".to_string(),
@@ -469,9 +486,30 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _: InitializedParams) {
         // Detecting the ansible install shells out to `ansible --version` (~500 ms).
         // Warm it here, off the request path, so the first documentLink isn't slow.
-        tokio::task::spawn_blocking(|| {
-            ansible_core::install::AnsibleInstall::detect();
-        });
+        let install = tokio::task::spawn_blocking(|| {
+            ansible_core::install::AnsibleInstall::detect().clone()
+        })
+        .await
+        .unwrap_or_default();
+        // No install means builtins and installed collections can't resolve — say so, so a
+        // plain `ansible.builtin.debug` that won't jump reads as "no Ansible here", not "the
+        // tool is broken". In-repo files, roles, and modules still work. The status
+        // notification drives a persistent status-bar item; the toast is the immediate nudge.
+        let found = install.package_dir.is_some();
+        let _ = self
+            .client
+            .send_notification::<AnsibleStatus>(serde_json::json!({ "found": found }))
+            .await;
+        if !found {
+            self.client
+                .show_message(
+                    MessageType::WARNING,
+                    "Ansible not found on PATH — builtin modules (ansible.builtin.*) and \
+                     installed collections won't resolve. In-repo files, roles, and modules \
+                     still work. Install ansible-core (WSL on Windows).",
+                )
+                .await;
+        }
         let note = self.startup_note.lock().map(|n| n.clone()).unwrap_or_default();
         let s = self.settings.lock().map(|s| *s).unwrap_or_default();
         self.client

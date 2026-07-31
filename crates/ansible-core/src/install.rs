@@ -13,6 +13,15 @@ pub struct AnsibleInstall {
 }
 
 static DETECTED: OnceLock<AnsibleInstall> = OnceLock::new();
+/// Explicit `ansible` package dir from the client's `ansibleLsp.ansiblePath` setting, seeded
+/// before the first `detect()`. Config-driven, so it's per-project and live on reload.
+static OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Seed the package-dir override from config. Must run before the first `detect()`; a later
+/// call is ignored, since detection is cached for the process.
+pub fn set_package_dir_override(dir: PathBuf) {
+    let _ = OVERRIDE.set(dir);
+}
 
 impl AnsibleInstall {
     /// Detected once per process by shelling out to `ansible --version` (~300 ms).
@@ -22,10 +31,11 @@ impl AnsibleInstall {
 
     fn run() -> Self {
         // Fast path: derive everything from the filesystem. `ansible --version` is
-        // authoritative but costs ~500 ms of Python startup, which lands straight on
-        // the first request.
+        // authoritative but costs ~500 ms of Python startup — and on Windows it crashes
+        // outright (Ansible's control node isn't supported there), so once the filesystem
+        // has found the package we must NOT fall through to it.
         let fast = Self::from_filesystem();
-        if fast.package_dir.is_some() && !fast.collection_roots.is_empty() {
+        if fast.package_dir.is_some() {
             return fast;
         }
         Self::from_version_command().unwrap_or(fast)
@@ -36,24 +46,55 @@ impl AnsibleInstall {
     fn from_filesystem() -> Self {
         let mut install = Self::default();
 
-        if let Some(exe) = which("ansible") {
-            // .../libexec/bin/ansible -> .../libexec/lib/python3.14/site-packages/ansible
-            if let Some(bin) = exe.parent() {
-                if let Some(prefix) = bin.parent() {
-                    if let Some(pkg) = find_site_packages(prefix) {
-                        let bundled = pkg.with_file_name("ansible_collections");
-                        if bundled.is_dir() {
-                            install.collection_roots.push(bundled);
+        // Explicit override from the `ansibleLsp.ansiblePath` setting: point straight at the
+        // `ansible` package dir. The escape hatch for installs the walk-up can't find — uv/pipx
+        // (the exe is a shim outside the venv), and Windows, where `ansible --version` crashes
+        // so there's no fallback.
+        if let Some(pkg) = OVERRIDE.get().cloned() {
+            if pkg.join("modules").is_dir() {
+                let bundled = pkg.with_file_name("ansible_collections");
+                if bundled.is_dir() {
+                    install.collection_roots.push(bundled);
+                }
+                install.package_dir = Some(pkg);
+            }
+        }
+
+        if install.package_dir.is_none() {
+            if let Some(exe) = which("ansible") {
+                // .../bin/ansible -> .../lib/python3.x/site-packages/ansible (Unix), or
+                // ...\Scripts\ansible.exe -> ...\Lib\site-packages\ansible (Windows).
+                if let Some(bin) = exe.parent() {
+                    if let Some(prefix) = bin.parent() {
+                        if let Some(pkg) = find_site_packages(prefix) {
+                            let bundled = pkg.with_file_name("ansible_collections");
+                            if bundled.is_dir() {
+                                install.collection_roots.push(bundled);
+                            }
+                            install.package_dir = Some(pkg);
                         }
-                        install.package_dir = Some(pkg);
                     }
                 }
             }
         }
 
+        // uv/pipx put the `ansible` executable behind a shim outside the venv, so the
+        // walk-up above can't reach the package. Probe their conventional tool-install dirs
+        // directly — this is what makes a `uv tool install ansible-core` just work, with no
+        // env var and no working `ansible` CLI (which crashes on Windows anyway).
+        if install.package_dir.is_none() {
+            if let Some(pkg) = find_tool_install() {
+                let bundled = pkg.with_file_name("ansible_collections");
+                if bundled.is_dir() {
+                    install.collection_roots.push(bundled);
+                }
+                install.package_dir = Some(pkg);
+            }
+        }
+
         let mut roots = Vec::new();
-        if let Ok(env) = std::env::var("ANSIBLE_COLLECTIONS_PATH") {
-            roots.extend(env.split(':').map(PathBuf::from));
+        if let Some(env) = std::env::var_os("ANSIBLE_COLLECTIONS_PATH") {
+            roots.extend(std::env::split_paths(&env));
         }
         if let Ok(home) = std::env::var("HOME") {
             roots.push(PathBuf::from(home).join(".ansible/collections"));
@@ -117,20 +158,84 @@ impl AnsibleInstall {
 
 /// First `name` on PATH, with symlinks resolved.
 fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var("PATH").ok()?;
-    path.split(':')
-        .map(|d| PathBuf::from(d).join(name))
-        .find(|p| p.is_file())
-        .and_then(|p| std::fs::canonicalize(p).ok())
+    let path = std::env::var_os("PATH")?;
+    // On Windows the executable is `ansible.exe` (pip console script), PATH is `;`-separated,
+    // and entries contain `:` (`C:\...`). `split_paths` handles the separator per-platform;
+    // the extension list covers the console-script forms.
+    let exts: &[&str] = if cfg!(windows) {
+        &["exe", "cmd", "bat", ""]
+    } else {
+        &[""]
+    };
+    for dir in std::env::split_paths(&path) {
+        for ext in exts {
+            let cand = if ext.is_empty() {
+                dir.join(name)
+            } else {
+                dir.join(format!("{name}.{ext}"))
+            };
+            if cand.is_file() {
+                return std::fs::canonicalize(cand).ok();
+            }
+        }
+    }
+    None
 }
 
 /// `<prefix>/lib/python3.X/site-packages/ansible`, whichever python version.
+/// Find an `ansible` package inside a uv or pipx tool install, in their standard locations.
+/// The tool venv is `<base>/<tool>/`, and `find_site_packages` handles the per-OS layout.
+fn find_tool_install() -> Option<PathBuf> {
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let mut bases: Vec<PathBuf> = Vec::new();
+    // uv tool dir: $UV_TOOL_DIR, else %APPDATA%\uv\tools (Windows) / ~/.local/share/uv/tools.
+    if let Some(d) = env("UV_TOOL_DIR") {
+        bases.push(d);
+    }
+    if let Some(d) = env("APPDATA") {
+        bases.push(d.join("uv").join("tools"));
+    }
+    // pipx: $PIPX_HOME/venvs, else %LOCALAPPDATA%\pipx\venvs (Windows).
+    if let Some(d) = env("PIPX_HOME") {
+        bases.push(d.join("venvs"));
+    }
+    if let Some(d) = env("LOCALAPPDATA") {
+        bases.push(d.join("pipx").join("venvs"));
+    }
+    if let Some(h) = env("HOME") {
+        bases.push(h.join(".local/share/uv/tools"));
+        bases.push(h.join(".local/share/pipx/venvs"));
+        bases.push(h.join(".local/pipx/venvs"));
+    }
+    for base in bases {
+        // `uv tool install ansible-core` -> ansible-core; `pipx install ansible` -> ansible.
+        for tool in ["ansible-core", "ansible"] {
+            if let Some(pkg) = find_site_packages(&base.join(tool)) {
+                return Some(pkg);
+            }
+        }
+    }
+    None
+}
+
 fn find_site_packages(prefix: &Path) -> Option<PathBuf> {
-    let lib = prefix.join("lib");
-    for entry in std::fs::read_dir(lib).ok()?.flatten() {
-        let candidate = entry.path().join("site-packages/ansible");
-        if candidate.join("modules").is_dir() {
-            return Some(candidate);
+    let has_modules = |p: &Path| p.join("modules").is_dir();
+    // `lib` and `Lib` (Windows) — separate entries matter on case-sensitive filesystems.
+    for lib in ["lib", "Lib"] {
+        let libdir = prefix.join(lib);
+        // Windows venv: <prefix>/Lib/site-packages/ansible, no pythonX.Y level.
+        let direct = libdir.join("site-packages/ansible");
+        if has_modules(&direct) {
+            return Some(direct);
+        }
+        // Unix venv/system: <prefix>/lib/pythonX.Y/site-packages/ansible.
+        if let Ok(rd) = std::fs::read_dir(&libdir) {
+            for entry in rd.flatten() {
+                let candidate = entry.path().join("site-packages/ansible");
+                if has_modules(&candidate) {
+                    return Some(candidate);
+                }
+            }
         }
     }
     None
@@ -152,5 +257,14 @@ mod tests {
             "ansible.builtin.systemd should have a source file"
         );
         assert!(!i.collection_roots.is_empty());
+    }
+
+    /// The Windows bug that hid builtins: PATH is `;`-separated there and entries hold `:`,
+    /// and the exe is `<name>.exe`. Find a binary every platform ships to prove the lookup
+    /// works — `cmd` on Windows (always in System32 on PATH), `sh` on Unix.
+    #[test]
+    fn which_finds_a_ubiquitous_binary() {
+        let name = if cfg!(windows) { "cmd" } else { "sh" };
+        assert!(which(name).is_some(), "which should locate `{name}` on PATH");
     }
 }

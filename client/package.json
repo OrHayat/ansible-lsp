@@ -33,6 +33,11 @@
           "default": "",
           "description": "Absolute path to the ansible-lsp binary. Defaults to ../target/release/ansible-lsp relative to this extension."
         },
+        "ansibleLsp.ansiblePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the `ansible` package directory (the folder containing `modules/`), e.g. .../site-packages/ansible. Set this to pick which install to index when several exist, or when none is on PATH. Takes effect on reload. Leave empty to auto-detect (PATH, then uv/pipx tool dirs)."
+        },
         "ansibleLsp.trace.server": {
           "type": "string",
           "enum": [
