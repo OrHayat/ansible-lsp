@@ -289,18 +289,35 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
     out
 }
 
-/// Root variable names a condition depends on, with filters, tests, string literals,
-/// attribute accesses and Ansible's magic variables removed.
+/// Each root variable *use* in a Jinja expression, with its byte range in `expr` — the
+/// span-aware core of [`variables`]. Filters, tests, attribute accesses, magic vars and
+/// string-literal contents are excluded; the root only (`foo.bar.baz` -> `foo`).
 ///
-/// The root only: `lustre_mount_check.stat.exists` yields `lustre_mount_check`, because
-/// that's the name a workspace-wide definition search can actually match.
-pub fn variables(cond: &str) -> Vec<String> {
-    let bare = strip_strings(cond);
-    let bytes = bare.as_bytes();
-    let mut out: Vec<String> = Vec::new();
+/// Scans the original text — not the string-stripped copy [`variables`] used to use — so
+/// the offsets stay byte-accurate past non-ASCII. Uses are returned in order and NOT
+/// deduplicated, so each occurrence keeps its own span.
+pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
+    let bytes = expr.as_bytes();
+    let mut out: Vec<(String, usize, usize)> = Vec::new();
     let mut i = 0;
+    let mut quote: Option<u8> = None;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let b = bytes[i];
+        // Skip string-literal contents in place, so identifiers inside them aren't matched
+        // and offsets outside them are unaffected.
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            quote = Some(b);
+            i += 1;
+            continue;
+        }
+        let c = b as char;
         if !(c.is_ascii_alphabetic() || c == '_') {
             i += 1;
             continue;
@@ -312,14 +329,14 @@ pub fn variables(cond: &str) -> Vec<String> {
         } {
             i += 1;
         }
-        let word = &bare[start..i];
+        let word = &expr[start..i];
 
         // A `(` after it makes it a call, not a variable.
-        if bare[i..].trim_start().starts_with('(') {
+        if expr[i..].trim_start().starts_with('(') {
             continue;
         }
         // Preceded by `.` -> an attribute. Preceded by `|` -> a filter name.
-        let before = bare[..start].trim_end();
+        let before = expr[..start].trim_end();
         if before.ends_with('.') || before.ends_with('|') {
             continue;
         }
@@ -334,8 +351,21 @@ pub fn variables(cond: &str) -> Vec<String> {
         {
             continue;
         }
-        if !out.iter().any(|v| v == word) {
-            out.push(word.to_string());
+        out.push((word.to_string(), start, i));
+    }
+    out
+}
+
+/// Root variable names a condition depends on, with filters, tests, string literals,
+/// attribute accesses and Ansible's magic variables removed.
+///
+/// The root only: `lustre_mount_check.stat.exists` yields `lustre_mount_check`, because
+/// that's the name a workspace-wide definition search can actually match.
+pub fn variables(cond: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (name, _, _) in variable_uses(cond) {
+        if !out.iter().any(|v| v == &name) {
+            out.push(name);
         }
     }
     out

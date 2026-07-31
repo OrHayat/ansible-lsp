@@ -7,7 +7,8 @@
 //! `-e` extra-vars) are separate steps; a name absent here is *not* proof it's undefined.
 
 use crate::ast::{Ast, Block, Play, PlayItem, Stmt, Task};
-use crate::parse::Span;
+use crate::condition;
+use crate::parse::{Node, Span};
 
 /// How a variable came to be defined. Ordered loosely by Ansible's precedence, low to
 /// high, though this pass doesn't yet rank across files.
@@ -60,6 +61,82 @@ impl VarIndex {
 
 fn short_key(key: &str) -> &str {
     key.rsplit('.').next().unwrap_or(key)
+}
+
+/// A place a variable is *used*, with the absolute span of the name.
+#[derive(Debug, Clone)]
+pub struct VarUse {
+    pub name: String,
+    pub span: Span,
+}
+
+/// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
+/// in the document, so the returned spans are absolute. Literal text outside `{{ }}` is
+/// not scanned — only a template expression references variables.
+pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
+    let mut i = 0;
+    while let Some(open) = text[i..].find("{{") {
+        let expr_start = i + open + 2;
+        let Some(close_rel) = text[expr_start..].find("}}") else {
+            break;
+        };
+        let expr = &text[expr_start..expr_start + close_rel];
+        for (name, s, e) in condition::variable_uses(expr) {
+            out.push(VarUse {
+                name,
+                span: Span {
+                    start: base + expr_start + s,
+                    end: base + expr_start + e,
+                },
+            });
+        }
+        i = expr_start + close_rel + 2;
+    }
+}
+
+/// Variable uses in a bare Jinja expression (a `when:` clause), where the whole string is
+/// the expression rather than literal text with `{{ }}` islands.
+pub fn expression_uses(expr: &str, base: usize, out: &mut Vec<VarUse>) {
+    for (name, s, e) in condition::variable_uses(expr) {
+        out.push(VarUse {
+            name,
+            span: Span {
+                start: base + s,
+                end: base + e,
+            },
+        });
+    }
+}
+
+/// Every variable use in a parsed file. A `when:` value is treated as one expression; any
+/// other scalar is treated as literal text with `{{ }}` templates. Walks the raw tree so
+/// every scalar's span is exact.
+pub fn uses(nodes: &[Node]) -> Vec<VarUse> {
+    let mut out = Vec::new();
+    for n in nodes {
+        walk_uses(n, false, &mut out);
+    }
+    out
+}
+
+fn walk_uses(node: &Node, in_when: bool, out: &mut Vec<VarUse>) {
+    match node {
+        Node::Scalar { value, span } => {
+            if in_when {
+                expression_uses(value, span.start, out);
+            } else {
+                template_uses(value, span.start, out);
+            }
+        }
+        Node::Sequence { items, .. } => items.iter().for_each(|i| walk_uses(i, in_when, out)),
+        Node::Mapping { entries, .. } => {
+            for (k, v) in entries {
+                let is_when = k.as_str().map(short_key) == Some("when");
+                walk_uses(v, is_when, out);
+            }
+        }
+        Node::Other { .. } => {}
+    }
 }
 
 /// Build the variable-definition index for one parsed file.
@@ -200,5 +277,52 @@ mod tests {
             "- hosts: all\n  tasks:\n    - set_fact: { x: 1 }\n    - set_fact: { x: 2 }\n",
         );
         assert_eq!(i.get("x").len(), 2);
+    }
+
+    #[test]
+    fn template_use_span_is_the_variable_only() {
+        let text = "prefix-{{ db_host }}/rest";
+        let mut out = Vec::new();
+        template_uses(text, 0, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "db_host");
+        assert_eq!(out[0].span.slice(text), "db_host");
+    }
+
+    #[test]
+    fn literal_outside_delimiters_is_not_a_use() {
+        let mut out = Vec::new();
+        template_uses("just a path.yml", 0, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn uses_treats_when_as_expression_and_values_as_templates() {
+        let src = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - debug:\n",
+            "        msg: \"{{ greeting }} world\"\n",
+            "      when: enabled | default(false)\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let u = uses(&nodes);
+        let names: Vec<&str> = u.iter().map(|x| x.name.as_str()).collect();
+        assert!(names.contains(&"greeting"), "template var: {names:?}");
+        assert!(names.contains(&"enabled"), "when var: {names:?}");
+        // `msg` (a key) and `world` (literal) are not variables.
+        assert!(!names.contains(&"world"));
+        assert!(!names.contains(&"msg"));
+        // Spans are exact.
+        let g = u.iter().find(|x| x.name == "greeting").unwrap();
+        assert_eq!(g.span.slice(src), "greeting");
+    }
+
+    #[test]
+    fn attribute_and_filter_roots_only() {
+        let mut out = Vec::new();
+        template_uses("{{ result.stat.exists | default(false) }}", 0, &mut out);
+        let names: Vec<&str> = out.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["result"]);
     }
 }
