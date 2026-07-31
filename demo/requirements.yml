@@ -1,0 +1,7 @@
+---
+# Collections the demo's module examples (demo/tasks/modules.yml) reference.
+# Install them so go-to-definition on the FQCNs resolves to source:
+#   ansible-galaxy collection install -r demo/requirements.yml
+collections:
+  - name: community.general
+  - name: ansible.posix

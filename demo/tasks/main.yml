@@ -122,3 +122,10 @@
 
 - name: "when: hints and warnings live in conditions.yml"
   ansible.builtin.include_tasks: conditions.yml
+
+# ------------------------------------------------------- MODULE GO-TO-DEFINITION
+# Cmd+click a module's FQCN to open its .py source — builtins plus the
+# community.general / ansible.posix collections. Examples in modules.yml.
+
+- name: "module source navigation lives in modules.yml"
+  ansible.builtin.include_tasks: modules.yml

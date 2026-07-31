@@ -1,0 +1,47 @@
+---
+# Module go-to-definition: Cmd+click the FQCN to open the module's .py source.
+#
+# TEAL + dotted underline = resolves. Plain text = the collection isn't installed
+# here (or it's a typo — the server stays quiet either way, since a missing
+# collection is not a mistake in your file).
+#
+# Requires `ansibleLsp.ansiblePath` pointed at an `ansible` package dir whose
+# sibling `ansible_collections/` holds these collections. With ansible_source
+# (builtins + community.general + ansible.posix cloned) all three below resolve.
+
+# ------------------------------------------------------------- ansible.builtin
+- name: Builtin — resolves into the ansible package's modules/
+  ansible.builtin.debug:
+    msg: hello
+
+# ---------------------------------------------------------- community.general
+- name: Collection module — community.general
+  community.general.nmcli:
+    conn_name: eth0
+    type: ethernet
+    state: present
+
+- name: Another community.general module
+  community.general.pacman:
+    name: tmux
+    state: present
+
+# --------------------------------------------------------------- ansible.posix
+- name: Collection module — ansible.posix
+  ansible.posix.firewalld:
+    service: https
+    state: enabled
+    permanent: true
+
+- name: Another ansible.posix module
+  ansible.posix.mount:
+    path: /mnt/data
+    src: /dev/sdb1
+    fstype: ext4
+    state: mounted
+
+# ---------------------------------------------------------- DELIBERATELY PLAIN
+- name: Not installed here — stays plain, no warning
+  community.crypto.openssl_certificate:
+    path: /etc/ssl/cert.pem
+    state: present
