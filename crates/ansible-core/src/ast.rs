@@ -56,6 +56,8 @@ pub struct Play {
     pub tasks: Vec<Stmt>,
     pub post_tasks: Vec<Stmt>,
     pub handlers: Vec<Stmt>,
+    /// `vars:` bound at play scope.
+    pub vars: Vec<VarBinding>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
 }
@@ -76,6 +78,8 @@ pub struct Block {
     /// `when:` clauses on the block. ANDed; empty if absent.
     pub when: Vec<String>,
     pub when_span: Option<Span>,
+    /// `vars:` bound at block scope.
+    pub vars: Vec<VarBinding>,
     pub directives: Vec<Directive>,
 }
 
@@ -92,6 +96,10 @@ pub struct Task {
     pub looped: bool,
     /// `register:` name — a variable this task defines for the rest of the play.
     pub register: Option<String>,
+    /// Span of the `register:` value, if present.
+    pub register_span: Option<Span>,
+    /// `vars:` bound at task scope.
+    pub vars: Vec<VarBinding>,
     pub directives: Vec<Directive>,
 }
 
@@ -118,6 +126,14 @@ pub struct Directive {
     pub key: String,
     pub key_span: Span,
     pub value: Span,
+}
+
+/// A `name: value` entry under a `vars:` mapping. The span covers the value, to anchor
+/// go-to-definition on the variable.
+#[derive(Debug, Clone)]
+pub struct VarBinding {
+    pub name: String,
+    pub span: Span,
 }
 
 /// Lift the raw document tree into the semantic model.
@@ -161,6 +177,23 @@ fn is_looped(node: &Node) -> bool {
     node.entries().iter().any(|(k, _)| {
         matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
     })
+}
+
+/// The `name: value` bindings under a node's `vars:` mapping.
+fn vars_of(node: &Node) -> Vec<VarBinding> {
+    node.get("vars")
+        .map(|m| {
+            m.entries()
+                .iter()
+                .filter_map(|(k, v)| {
+                    Some(VarBinding {
+                        name: k.as_str()?.to_string(),
+                        span: v.span(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Collect the directive keys of `node` that `keep` accepts. Directives are never FQCN,
@@ -232,6 +265,7 @@ fn build_play(node: &Node) -> Play {
         tasks: stmts("tasks"),
         post_tasks: stmts("post_tasks"),
         handlers: stmts("handlers"),
+        vars: vars_of(node),
         directives: collect_directives(node, |k| {
             keywords::is_play_directive(k) && !STRUCTURAL.contains(&k)
         }),
@@ -291,6 +325,7 @@ fn build_block(node: &Node) -> Block {
         always: stmts("always"),
         when: when.map(clauses).unwrap_or_default(),
         when_span: when.map(|w| w.span()),
+        vars: vars_of(node),
         directives: collect_directives(node, |k| {
             keywords::is_block_directive(k)
                 && k != "name"
@@ -309,6 +344,8 @@ fn build_task(node: &Node) -> Task {
         when_span: when.map(|w| w.span()),
         looped: is_looped(node),
         register: node.get("register").and_then(|n| n.as_str()).map(str::to_owned),
+        register_span: node.get("register").map(|n| n.span()),
+        vars: vars_of(node),
         directives: collect_directives(node, |k| keywords::is_task_directive(k) && k != "name"),
     }
 }

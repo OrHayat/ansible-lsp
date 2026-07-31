@@ -9,4 +9,5 @@ pub mod parse;
 pub mod parse_libyaml;
 pub mod references;
 pub mod resolve;
+pub mod vars;
 pub mod workspace;
