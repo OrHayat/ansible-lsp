@@ -1,7 +1,9 @@
+pub mod ast;
 pub mod condition;
 pub mod config;
 pub mod glob;
 pub mod install;
+pub mod keywords;
 pub mod mutation;
 pub mod parse;
 pub mod parse_libyaml;
