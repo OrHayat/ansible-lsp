@@ -1,5 +1,6 @@
 //! AST -> cross-file references.
 
+use crate::ast::{self, Action, Ast, Import, Play, PlayItem, Stmt, Task};
 use crate::parse::{Node, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,97 +61,102 @@ impl Reference {
     }
 }
 
-/// What the task around a reference says about whether, and how often, it runs.
-#[derive(Default, Clone)]
-struct TaskContext {
-    conditional: bool,
-    conditions: Vec<String>,
-    condition_span: Option<Span>,
-    repeated: bool,
-    name: Option<String>,
-}
-
-impl TaskContext {
-    fn of(mapping: &Node) -> Self {
-        let has = |k: &str| mapping.get(k).is_some();
-        Self {
-            conditional: has("when"),
-            conditions: mapping.get("when").map(clauses).unwrap_or_default(),
-            condition_span: mapping.get("when").map(|w| w.span()),
-            repeated: mapping
-                .entries()
-                .iter()
-                .any(|(k, _)| matches!(k.as_str(), Some(key) if key == "loop" || key.starts_with("with_"))),
-            name: mapping.get("name").and_then(|n| n.as_str()).map(str::to_owned),
-        }
-    }
-
-    fn apply(&self, r: &mut Reference) {
-        r.conditional = self.conditional;
-        r.conditions = self.conditions.clone();
-        r.condition_span = self.condition_span;
-        r.repeated = self.repeated;
-        r.task_name = self.name.clone();
-    }
-}
-
-/// A `when:` is either one expression or a list of them.
-fn clauses(when: &Node) -> Vec<String> {
-    match when {
-        Node::Sequence { items, .. } => items
-            .iter()
-            .filter_map(|i| i.as_str().map(str::to_owned))
-            .collect(),
-        other => other.as_str().map(str::to_owned).into_iter().collect(),
-    }
-}
-
 /// `ansible.builtin.include_tasks` -> `include_tasks`
 fn short_key(key: &str) -> &str {
     key.rsplit('.').next().unwrap_or(key)
 }
 
+/// Every cross-file reference in a parsed file. Walks the semantic model
+/// ([`crate::ast`]) rather than the raw tree, so a task's module and its `when:`/`loop:`
+/// context are read from structure instead of re-detected key by key.
 pub fn extract(nodes: &[Node]) -> Vec<Reference> {
     let mut out = Vec::new();
-    for n in nodes {
-        walk(n, &mut out);
+    match ast::build(nodes) {
+        Ast::Playbook(items) => items.iter().for_each(|it| play_item(it, &mut out)),
+        Ast::Tasks(stmts) => stmts.iter().for_each(|s| stmt(s, &mut out)),
+        Ast::Other => {}
     }
     out
 }
 
-fn walk(node: &Node, out: &mut Vec<Reference>) {
-    match node {
-        Node::Sequence { items, .. } => items.iter().for_each(|i| walk(i, out)),
-        Node::Mapping { entries, .. } => {
-            // `when:`/`loop:` sit on the task, alongside the reference itself.
-            let ctx = TaskContext::of(node);
-            for (k, v) in entries {
-                if let Some(key) = k.as_str() {
-                    let before = out.len();
-                    handle(key, k, v, out);
-                    for r in &mut out[before..] {
-                        ctx.apply(r);
-                    }
-                }
-                walk(v, out);
-            }
-        }
-        _ => {}
+fn play_item(item: &PlayItem, out: &mut Vec<Reference>) {
+    match item {
+        PlayItem::Play(p) => play(p, out),
+        PlayItem::Import(i) => import_playbook(i, out),
     }
 }
 
-fn handle(key: &str, key_node: &Node, value: &Node, out: &mut Vec<Reference>) {
-    match short_key(key) {
+fn play(p: &Play, out: &mut Vec<Reference>) {
+    for role in &p.roles {
+        let mut r = Reference::new(ReferenceKind::Role, &role.name, role.span);
+        // A `roles:` entry inherits the play's identity, not a task's.
+        r.task_name = p.name.clone();
+        out.push(r);
+    }
+    for s in p
+        .pre_tasks
+        .iter()
+        .chain(&p.tasks)
+        .chain(&p.post_tasks)
+        .chain(&p.handlers)
+    {
+        stmt(s, out);
+    }
+}
+
+fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
+    if let Some(file) = &i.file {
+        let mut r = Reference::new(ReferenceKind::ImportPlaybook, file, i.span);
+        // A `when:` on a static import isn't a gate — it's copied onto every imported task.
+        r.conditional = i.when_span.is_some();
+        r.conditions = i.when.clone();
+        r.condition_span = i.when_span;
+        out.push(r);
+    }
+}
+
+fn stmt(s: &Stmt, out: &mut Vec<Reference>) {
+    match s {
+        Stmt::Task(t) => task(t, out),
+        // A block-level `when:` propagates to each contained task at runtime, but that's
+        // the resolver's concern; here a block only nests statements.
+        Stmt::Block(b) => b
+            .block
+            .iter()
+            .chain(&b.rescue)
+            .chain(&b.always)
+            .for_each(|s| stmt(s, out)),
+    }
+}
+
+fn task(t: &Task, out: &mut Vec<Reference>) {
+    let Some(action) = &t.action else { return };
+    let before = out.len();
+    module_refs(action, out);
+    // The task's `when:`/`loop:`/`name:` belong to every reference it produced.
+    for r in &mut out[before..] {
+        r.conditional = t.when_span.is_some();
+        r.conditions = t.when.clone();
+        r.condition_span = t.when_span;
+        r.repeated = t.looped;
+        r.task_name = t.name.clone();
+    }
+}
+
+/// The reference(s) a task's module implies: an include target, a role + `tasks_from`, or
+/// a bare FQCN module.
+fn module_refs(a: &Action, out: &mut Vec<Reference>) {
+    match short_key(&a.name) {
         "include_tasks" | "import_tasks" => {
-            let kind = if short_key(key) == "include_tasks" {
+            let kind = if short_key(&a.name) == "include_tasks" {
                 ReferenceKind::IncludeTasks
             } else {
                 ReferenceKind::ImportTasks
             };
             // `include_tasks: f.yml` and `include_tasks:\n  file: f.yml`
-            let target = match value {
-                Node::Scalar { .. } => Some(value),
-                Node::Mapping { .. } => value.get("file"),
+            let target = match &a.args {
+                Node::Scalar { .. } => Some(&a.args),
+                Node::Mapping { .. } => a.args.get("file"),
                 _ => None,
             };
             if let Some(Node::Scalar { value, span }) = target {
@@ -158,20 +164,19 @@ fn handle(key: &str, key_node: &Node, value: &Node, out: &mut Vec<Reference>) {
             }
         }
 
+        // `import_playbook` as a task key is unusual, but keep parity with the old walk.
         "import_playbook" => {
-            if let Node::Scalar { value, span } = value {
+            if let Node::Scalar { value, span } = &a.args {
                 out.push(Reference::new(ReferenceKind::ImportPlaybook, value, *span));
             }
         }
 
         "include_role" | "import_role" => {
-            // Block and flow forms are the same AST, so `name` and `tasks_from` are
-            // always siblings in one mapping — no line-proximity guessing.
-            let name = match value.get("name") {
+            let name = match a.args.get("name") {
                 Some(Node::Scalar { value, span }) => Some((value.clone(), *span)),
                 _ => None,
             };
-            let tasks_from = value.get("tasks_from");
+            let tasks_from = a.args.get("tasks_from");
             if let Some((n, span)) = &name {
                 let mut r = Reference::new(ReferenceKind::Role, n, *span);
                 r.has_tasks_from = tasks_from.is_some();
@@ -184,33 +189,11 @@ fn handle(key: &str, key_node: &Node, value: &Node, out: &mut Vec<Reference>) {
             }
         }
 
-        "roles" => {
-            for item in value.items() {
-                match item {
-                    // - myrole
-                    Node::Scalar { value, span } => {
-                        out.push(Reference::new(ReferenceKind::Role, value, *span));
-                    }
-                    // - role: myrole
-                    Node::Mapping { .. } => {
-                        if let Some(Node::Scalar { value, span }) = item.get("role") {
-                            out.push(Reference::new(ReferenceKind::Role, value, *span));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         _ => {
-            // A 3-part dotted name is only a module when it's a task KEY. Values can
-            // look identical — this repo contains the URL `example.atlassian.net`.
-            if key.split('.').count() == 3 && !key.contains(' ') {
-                out.push(Reference::new(
-                    ReferenceKind::Module,
-                    key,
-                    key_node.span(),
-                ));
+            // A 3-part dotted name in module position is a collection FQCN. The old walk
+            // matched any 3-part *key*; the AST already knows this key is the module.
+            if a.name.split('.').count() == 3 && !a.name.contains(' ') {
+                out.push(Reference::new(ReferenceKind::Module, &a.name, a.key_span));
             }
         }
     }

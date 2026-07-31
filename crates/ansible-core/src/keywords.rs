@@ -134,8 +134,11 @@ pub fn is_block_directive(key: &str) -> bool {
 /// Does this mapping look like a play? Plays are the only nodes with `hosts:`, and a
 /// bare `import_playbook:` entry sits in the same top-level sequence.
 pub fn is_play(keys: impl Iterator<Item = impl AsRef<str>>) -> bool {
-    keys.into_iter()
-        .any(|k| matches!(k.as_ref(), "hosts" | "import_playbook"))
+    keys.into_iter().any(|k| {
+        let s = k.as_ref();
+        // `import_playbook` may be written FQCN (`ansible.builtin.import_playbook`).
+        s == "hosts" || s.rsplit('.').next() == Some("import_playbook")
+    })
 }
 
 #[cfg(test)]

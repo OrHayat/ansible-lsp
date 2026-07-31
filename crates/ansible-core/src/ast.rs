@@ -38,6 +38,10 @@ pub struct Import {
     /// Span of the `import_playbook` value.
     pub span: Span,
     pub file: Option<String>,
+    /// A `when:` on a static import is copied onto every imported task — see
+    /// [`crate::condition`]. ANDed clauses; empty if absent.
+    pub when: Vec<String>,
+    pub when_span: Option<Span>,
     pub directives: Vec<Directive>,
 }
 
@@ -69,6 +73,9 @@ pub struct Block {
     pub block: Vec<Stmt>,
     pub rescue: Vec<Stmt>,
     pub always: Vec<Stmt>,
+    /// `when:` clauses on the block. ANDed; empty if absent.
+    pub when: Vec<String>,
+    pub when_span: Option<Span>,
     pub directives: Vec<Directive>,
 }
 
@@ -78,6 +85,11 @@ pub struct Task {
     pub name: Option<String>,
     /// The module and its args. `None` for a malformed task with no module key.
     pub action: Option<Action>,
+    /// `when:` clauses. ANDed together; empty if the task is unconditional.
+    pub when: Vec<String>,
+    pub when_span: Option<Span>,
+    /// The task has a `loop:`/`with_*`, so it may run many times.
+    pub looped: bool,
     pub directives: Vec<Directive>,
 }
 
@@ -87,8 +99,9 @@ pub struct Action {
     pub name: String,
     /// Span of the module key (or of the `action:`/`local_action:` value).
     pub key_span: Span,
-    /// Span of the args node.
-    pub args: Span,
+    /// The args node: a scalar (`include_tasks: f.yml`) or a mapping (`{ file: f.yml }` /
+    /// module parameters). Kept whole so callers can read `file:`/`name:`/`tasks_from:`.
+    pub args: Node,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +144,23 @@ fn name_of(node: &Node) -> Option<String> {
     node.get("name").and_then(|n| n.as_str()).map(str::to_owned)
 }
 
+/// A `when:` is either one expression or a list of them (ANDed).
+fn clauses(when: &Node) -> Vec<String> {
+    match when {
+        Node::Sequence { items, .. } => items
+            .iter()
+            .filter_map(|i| i.as_str().map(str::to_owned))
+            .collect(),
+        other => other.as_str().map(str::to_owned).into_iter().collect(),
+    }
+}
+
+fn is_looped(node: &Node) -> bool {
+    node.entries().iter().any(|(k, _)| {
+        matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
+    })
+}
+
 /// Collect the directive keys of `node` that `keep` accepts. Directives are never FQCN,
 /// so any dotted key is skipped (it's the module).
 fn collect_directives(node: &Node, keep: impl Fn(&str) -> bool) -> Vec<Directive> {
@@ -154,14 +184,25 @@ fn build_play_item(node: &Node) -> Option<PlayItem> {
     if !matches!(node, Node::Mapping { .. }) {
         return None;
     }
-    if let Some(v) = node.get("import_playbook") {
+    if let Some(v) = import_playbook_value(node) {
+        let when = node.get("when");
         return Some(PlayItem::Import(Import {
             span: v.span(),
             file: v.as_str().map(str::to_owned),
+            when: when.map(clauses).unwrap_or_default(),
+            when_span: when.map(|w| w.span()),
             directives: collect_directives(node, keywords::is_play_directive),
         }));
     }
     Some(PlayItem::Play(build_play(node)))
+}
+
+/// The value of an `import_playbook` key, bare or FQCN.
+fn import_playbook_value(node: &Node) -> Option<&Node> {
+    node.entries()
+        .iter()
+        .find(|(k, _)| k.as_str().map(short_key) == Some("import_playbook"))
+        .map(|(_, v)| v)
 }
 
 fn build_play(node: &Node) -> Play {
@@ -239,12 +280,15 @@ fn build_block(node: &Node) -> Block {
             .map(|n| build_stmts(n.items()))
             .unwrap_or_default()
     };
+    let when = node.get("when");
     Block {
         span: node.span(),
         name: name_of(node),
         block: stmts("block"),
         rescue: stmts("rescue"),
         always: stmts("always"),
+        when: when.map(clauses).unwrap_or_default(),
+        when_span: when.map(|w| w.span()),
         directives: collect_directives(node, |k| {
             keywords::is_block_directive(k)
                 && k != "name"
@@ -254,10 +298,14 @@ fn build_block(node: &Node) -> Block {
 }
 
 fn build_task(node: &Node) -> Task {
+    let when = node.get("when");
     Task {
         span: node.span(),
         name: name_of(node),
         action: find_action(node),
+        when: when.map(clauses).unwrap_or_default(),
+        when_span: when.map(|w| w.span()),
+        looped: is_looped(node),
         directives: collect_directives(node, |k| keywords::is_task_directive(k) && k != "name"),
     }
 }
@@ -272,7 +320,7 @@ fn find_action(node: &Node) -> Option<Action> {
                 return Some(Action {
                     name,
                     key_span: v.span(),
-                    args: v.span(),
+                    args: v.clone(),
                 });
             }
         }
@@ -284,7 +332,7 @@ fn find_action(node: &Node) -> Option<Action> {
             return Some(Action {
                 name: key.to_string(),
                 key_span: k.span(),
-                args: v.span(),
+                args: v.clone(),
             });
         }
     }
