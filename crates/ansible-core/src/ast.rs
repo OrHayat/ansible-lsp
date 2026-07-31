@@ -90,6 +90,8 @@ pub struct Task {
     pub when_span: Option<Span>,
     /// The task has a `loop:`/`with_*`, so it may run many times.
     pub looped: bool,
+    /// `register:` name — a variable this task defines for the rest of the play.
+    pub register: Option<String>,
     pub directives: Vec<Directive>,
 }
 
@@ -306,6 +308,7 @@ fn build_task(node: &Node) -> Task {
         when: when.map(clauses).unwrap_or_default(),
         when_span: when.map(|w| w.span()),
         looped: is_looped(node),
+        register: node.get("register").and_then(|n| n.as_str()).map(str::to_owned),
         directives: collect_directives(node, |k| keywords::is_task_directive(k) && k != "name"),
     }
 }

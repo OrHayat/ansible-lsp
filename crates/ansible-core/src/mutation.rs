@@ -13,7 +13,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::parse::{Document, Node};
+use crate::ast::{self, Ast, PlayItem, Stmt, Task};
+use crate::parse::Document;
 use crate::references::{self, ReferenceKind};
 use crate::resolve;
 use crate::workspace::FileContext;
@@ -46,9 +47,7 @@ fn walk_file(path: &Path, depth: usize, out: &mut HashSet<String>, visited: &mut
     let doc = Document::new(text);
     let Some(nodes) = doc.parse() else { return };
 
-    for n in &nodes {
-        collect_assignments(n, out);
-    }
+    collect_assignments(&ast::build(&nodes), out);
 
     // Follow anything that can carry a `set_fact` into this playbook's run.
     let ctx = FileContext::discover(path);
@@ -88,33 +87,55 @@ fn role_task_files(role_main: &Path) -> Vec<PathBuf> {
 /// `set_fact:` keys and `register:` values — the two ways a task changes a variable
 /// mid-run. Play/role `vars:` are deliberately excluded: they're bound before the tasks
 /// run, so they can't flip a condition partway through.
-fn collect_assignments(node: &Node, out: &mut HashSet<String>) {
-    match node {
-        Node::Sequence { items, .. } => items.iter().for_each(|i| collect_assignments(i, out)),
-        Node::Mapping { entries, .. } => {
-            for (k, v) in entries {
-                match k.as_str().map(short_key) {
-                    Some("set_fact") => {
-                        for (fact, _) in v.entries() {
-                            if let Some(name) = fact.as_str() {
-                                // `cacheable` is a set_fact option, not a fact.
-                                if name != "cacheable" {
-                                    out.insert(name.to_string());
-                                }
-                            }
-                        }
+fn collect_assignments(tree: &Ast, out: &mut HashSet<String>) {
+    match tree {
+        Ast::Playbook(items) => {
+            for it in items {
+                if let PlayItem::Play(p) = it {
+                    for s in p
+                        .pre_tasks
+                        .iter()
+                        .chain(&p.tasks)
+                        .chain(&p.post_tasks)
+                        .chain(&p.handlers)
+                    {
+                        collect_stmt(s, out);
                     }
-                    Some("register") => {
-                        if let Some(name) = v.as_str() {
-                            out.insert(name.to_string());
-                        }
-                    }
-                    _ => {}
                 }
-                collect_assignments(v, out);
             }
         }
-        _ => {}
+        Ast::Tasks(stmts) => stmts.iter().for_each(|s| collect_stmt(s, out)),
+        Ast::Other => {}
+    }
+}
+
+fn collect_stmt(s: &Stmt, out: &mut HashSet<String>) {
+    match s {
+        Stmt::Task(t) => collect_task(t, out),
+        Stmt::Block(b) => b
+            .block
+            .iter()
+            .chain(&b.rescue)
+            .chain(&b.always)
+            .for_each(|s| collect_stmt(s, out)),
+    }
+}
+
+fn collect_task(t: &Task, out: &mut HashSet<String>) {
+    if let Some(a) = &t.action {
+        if short_key(&a.name) == "set_fact" {
+            for (fact, _) in a.args.entries() {
+                if let Some(name) = fact.as_str() {
+                    // `cacheable` is a set_fact option, not a fact.
+                    if name != "cacheable" {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(reg) = &t.register {
+        out.insert(reg.clone());
     }
 }
 
