@@ -129,3 +129,10 @@
 
 - name: "module source navigation lives in modules.yml"
   ansible.builtin.include_tasks: modules.yml
+
+# ----------------------------------------------------- VARIABLE GO-TO-DEFINITION
+# Cmd+click a {{ variable }} or a when: name to jump to where it's defined in the
+# same file (play vars, set_fact, register). Examples in variables.yml.
+
+- name: "variable go-to-definition lives in variables.yml"
+  ansible.builtin.include_tasks: variables.yml

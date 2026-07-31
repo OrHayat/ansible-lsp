@@ -4,11 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use ansible_core::ast;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, Status};
+use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
 
 use tower_lsp::jsonrpc::Result;
@@ -363,6 +365,39 @@ impl Backend {
             .into_iter()
             .find(|r| r.span.start <= byte && byte <= r.span.end)
     }
+
+    /// If `pos` sits on a variable use, the location(s) where that variable is defined in
+    /// the same file. `None` when the cursor isn't on a use, or the name has no in-file
+    /// definition — absence here is not proof it's undefined (inventory, role defaults and
+    /// `vars_files` aren't indexed yet), so we stay silent rather than guess.
+    fn variable_defs_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+        uri: &Url,
+    ) -> Option<Vec<Location>> {
+        let byte = doc.lsp_to_byte(pos.line, pos.character);
+        let use_ = vars::uses(nodes)
+            .into_iter()
+            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+        let index = vars::index(&ast::build(nodes));
+        let defs = index.get(&use_.name);
+        if defs.is_empty() {
+            return None;
+        }
+        let locations: Vec<Location> = defs
+            .iter()
+            .map(|d| {
+                let (sl, sc) = doc.byte_to_lsp(d.span.start);
+                let (el, ec) = doc.byte_to_lsp(d.span.end);
+                Location {
+                    uri: uri.clone(),
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                }
+            })
+            .collect();
+        Some(locations)
+    }
 }
 
 /// Hover markdown for a conditional reference: every clause spelled out in plain English
@@ -630,6 +665,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let Some(reference) = Self::reference_at(&doc, &nodes, pos) else {
+            // Not on a file/role/module reference — maybe on a variable use. Jump to where
+            // it's defined in this file (cross-file sources are a later step).
+            if let Some(locs) = Self::variable_defs_at(&doc, &nodes, pos, &uri) {
+                return Ok(Some(GotoDefinitionResponse::Array(locs)));
+            }
             return Ok(None);
         };
 

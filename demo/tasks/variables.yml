@@ -1,0 +1,38 @@
+---
+# Variable go-to-definition: Cmd+click a `{{ variable }}`, or a name inside `when:`, to
+# jump to where it's defined IN THIS FILE — play vars, set_fact, or register.
+#
+# Cross-file sources (role defaults/vars, vars_files, include_vars) and inventory aren't
+# indexed yet, so a variable that comes from those won't jump — and that silence is
+# deliberate: absence of an in-file definition is not proof the variable is undefined.
+
+- hosts: localhost
+  vars:
+    service_port: 8080
+    base_url: "http://localhost"
+  tasks:
+    - name: Play vars — Cmd+click base_url or service_port jumps up to the play
+      ansible.builtin.debug:
+        msg: "{{ base_url }}:{{ service_port }}"
+
+    - name: A registered result defines a variable for the rest of the play
+      ansible.builtin.command: echo hi
+      register: cmd_result
+
+    - name: Cmd+click cmd_result, here and in the when, jumps to where it was registered
+      ansible.builtin.debug:
+        msg: "{{ cmd_result.stdout }}"
+      when: cmd_result.rc == 0
+
+    - name: A set_fact defines feature_on
+      ansible.builtin.set_fact:
+        feature_on: true
+
+    - name: A when variable — Cmd+click feature_on jumps to the set_fact above
+      ansible.builtin.debug:
+        msg: enabled
+      when: feature_on | default(false)
+
+    - name: Undefined in this file — no jump, and no warning (it may come from inventory)
+      ansible.builtin.debug:
+        msg: "{{ from_inventory }}"
