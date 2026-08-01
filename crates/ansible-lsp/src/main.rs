@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use ansible_core::ast;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Node};
@@ -363,21 +362,25 @@ impl Backend {
             })
             .collect();
 
-        // Variable uses that resolve to an in-file definition are clickable too, so paint
-        // them the same way. A use with no in-file definition stays plain — same silence as
-        // go-to-definition, since it may come from inventory or a not-yet-indexed source.
-        if let Some(nodes) = a.doc.parse() {
-            let index = vars::index(&ast::build(&nodes));
+        // Variable uses that resolve to a definition — in this file or, following the same
+        // deterministic paths as go-to-definition, another one — are clickable too, so paint
+        // them. A use with no reachable definition stays plain, matching go-to-definition's
+        // silence (it may come from inventory or a caller). This walks includes/roles per
+        // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
+        if let (Some(nodes), Ok(path)) = (a.doc.parse(), p.uri.to_file_path()) {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for d in vars::definitions(&path, &nodes) {
+                *counts.entry(d.name).or_default() += 1;
+            }
             for u in vars::uses(&nodes) {
-                let defs = index.get(&u.name);
-                if defs.is_empty() {
+                let Some(&n) = counts.get(&u.name) else {
                     continue;
-                }
+                };
                 let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(u.span.end);
                 out.push(ResolvedRef {
                     range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-                    targets: defs.len(),
+                    targets: n,
                     kind: "variable",
                 });
             }
