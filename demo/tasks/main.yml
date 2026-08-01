@@ -133,6 +133,9 @@
 # ----------------------------------------------------- VARIABLE GO-TO-DEFINITION
 # Cmd+click a {{ variable }} or a when: name to jump to where it's defined in the
 # same file (play vars, set_fact, register). Examples in variables.yml.
+#
+# CROSS-FILE variables (role defaults/vars, vars_files, a role's set_fact) live in
+# ../cross_file_vars.yml — a standalone playbook, so open that file directly.
 
 - name: "variable go-to-definition lives in variables.yml"
   ansible.builtin.include_tasks: variables.yml
