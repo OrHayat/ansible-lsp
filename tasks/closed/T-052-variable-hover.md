@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | T-048, T-049 |
+| done   | P2       | S    | T-048, T-049 |
 
 ## Problem
 
@@ -37,7 +37,10 @@ work, T-035/T-052-value). A value that is itself templated is shown verbatim.
 
 ## Done when
 
-- [ ] hovering a variable shows its source, file and value
-- [ ] multiple definitions are listed, not collapsed to one
-- [ ] cross-file definitions (role defaults, vars_files) render their file
-- [ ] no hover for names with no reachable definition
+- [x] hovering a variable shows its source, file and value
+- [x] multiple definitions are listed, not collapsed to one
+- [x] cross-file definitions (role defaults, vars_files) render their file
+- [x] no hover for names with no reachable definition
+
+Resolution: commit `c2bd855`. Value shown for value-span sources; `set_fact`/`register`
+show source only (their span is the name, not the value).
