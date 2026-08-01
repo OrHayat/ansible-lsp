@@ -1,0 +1,9 @@
+---
+# Named group_vars — applies ONLY to hosts in the `webservers` group (precedence level 7),
+# unlike group_vars/all which applies to every host. Indexed and clickable, but host-scoped:
+# whether it's actually in effect depends on which group the target host is in, and that
+# needs the inventory to know. This play targets localhost (not a webserver), so at runtime
+# this wouldn't apply — the tool still points you to the real definition and flags it
+# host-scoped rather than pretending it's the value.
+http_port: 8080
+worker_processes: 4

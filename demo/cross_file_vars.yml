@@ -40,3 +40,11 @@
     - name: A variable layered across role default, group_vars and host_vars
       ansible.builtin.debug:
         msg: "deploying to {{ deploy_region }}"
+
+    # http_port lives only in group_vars/webservers — a NAMED group. Hover shows
+    # "group_vars · webservers.yml = 8080" and flags it host-scoped: it applies only to
+    # hosts in the webservers group. This play targets localhost, so it wouldn't actually
+    # apply at runtime — but it's a real definition, so go-to-def still takes you there.
+    - name: A group-scoped variable — only for hosts in the webservers group
+      ansible.builtin.debug:
+        msg: "listening on {{ http_port }}"
