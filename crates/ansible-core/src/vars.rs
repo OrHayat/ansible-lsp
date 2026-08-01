@@ -355,6 +355,59 @@ pub fn effective(defs: &[Located]) -> Option<&Located> {
 /// [`crate::mutation`]'s cap; the definitions that matter are one or two hops away.
 const MAX_DEPTH: usize = 4;
 
+/// Sources whose span points at the variable's *value* (not its name), and whose value isn't
+/// host-dependent — so their literal can be read for path substitution (T-056).
+fn value_span_source(s: VarSource) -> bool {
+    matches!(
+        s,
+        VarSource::PlayVars
+            | VarSource::BlockVars
+            | VarSource::TaskVars
+            | VarSource::VarsFiles
+            | VarSource::RoleDefaults
+            | VarSource::RoleVars
+            | VarSource::GroupVarsAll
+            | VarSource::IncludeVars
+    )
+}
+
+/// Statically-knowable literal values per variable name, for expanding `{{ var }}` in paths
+/// (T-056). Only host-independent, value-span sources with a plain (non-templated) literal —
+/// never `set_fact`/`register` (name span), `host_vars`/named `group_vars` (host-dependent),
+/// or a value that is itself templated. `text` is the in-memory source of `path`, so
+/// same-file spans slice correctly; other files are read from disk.
+pub fn known_literals(
+    path: &Path,
+    text: &str,
+    nodes: &[Node],
+) -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+    let mut disk: HashMap<PathBuf, String> = HashMap::new();
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for d in definitions(path, nodes) {
+        if !value_span_source(d.source) {
+            continue;
+        }
+        let value = {
+            let src: &str = if d.file == path {
+                text
+            } else {
+                disk.entry(d.file.clone())
+                    .or_insert_with(|| std::fs::read_to_string(&d.file).unwrap_or_default())
+            };
+            d.span.slice(src).trim().to_string()
+        };
+        if value.is_empty() || value.contains("{{") {
+            continue;
+        }
+        let vals = out.entry(d.name).or_default();
+        if !vals.contains(&value) {
+            vals.push(value);
+        }
+    }
+    out
+}
+
 /// Every variable definition discoverable *from* `path`: its own in-file definitions, the
 /// role `defaults/`+`vars/` and `vars_files:` it pulls in, and the `set_fact`/`register`/
 /// `vars:` in the task files and roles it includes. Deterministic paths only — no folder
@@ -810,6 +863,30 @@ mod tests {
         // Play vars bind before tasks, so position doesn't matter.
         let pv = Located { source: VarSource::PlayVars, ..sf.clone() };
         assert!(pv.in_effect_at(file, 50));
+    }
+
+    #[test]
+    fn known_literals_takes_value_span_sources_only() {
+        let d = std::env::temp_dir().join("ansible-lsp-lits");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "host_vars/web01.yml", "region: eu\n");
+        let play = d.join("play.yml");
+        let src = concat!(
+            "- hosts: all\n",
+            "  vars:\n",
+            "    env: prod\n",
+            "  tasks:\n",
+            "    - set_fact: { built: yes }\n",
+        );
+        std::fs::write(&play, src).unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap())
+            .parse()
+            .unwrap();
+        let lits = known_literals(&play, src, &nodes);
+        assert_eq!(lits.get("env"), Some(&vec!["prod".to_string()])); // play var value
+        assert!(!lits.contains_key("built")); // set_fact span is the name, excluded
+        assert!(!lits.contains_key("region")); // host_vars is host-dependent, excluded
     }
 
     #[test]

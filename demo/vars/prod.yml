@@ -1,0 +1,4 @@
+---
+# Loaded by include_vars: "vars/{{ env }}.yml" when env == prod. Reachable for navigation
+# because env's value is a known literal (a play var), so {{ env }} is substituted.
+prod_feature: enabled

@@ -3,6 +3,7 @@
 use crate::install::AnsibleInstall;
 use crate::references::{Reference, ReferenceKind};
 use crate::workspace::FileContext;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +141,101 @@ fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
     let still_templated = out.iter().any(|v| v.contains("{{"));
     let substituted = out.len() != 1 || out[0] != value;
     (out, still_templated, substituted)
+}
+
+/// Like [`resolve`], but first substitutes `{{ var }}` tokens with a variable's known-literal
+/// value (T-056), so a path like `{{ env }}.yml` becomes navigable when `env` is knowable.
+/// Navigation only: the result is marked templated so it is NEVER warned about — a variable
+/// can be overridden at runtime by `-e`, so a "missing" here would be a false certainty.
+pub fn resolve_with(
+    r: &Reference,
+    ctx: &FileContext,
+    literals: &HashMap<String, Vec<String>>,
+) -> Resolution {
+    if r.value.contains("{{") {
+        if let Some(bases) = path_bases(r.kind, ctx) {
+            let subs = substitute_literals(&r.value, literals);
+            if !subs.is_empty() {
+                let mut cands = Vec::new();
+                for v in &subs {
+                    for b in &bases {
+                        cands.push(normalise(&b.join(v)));
+                    }
+                }
+                let mut res = Resolution::from_candidates(unique(cands.into_iter()));
+                // Offer, don't assert: navigable, but never a warning.
+                res.skip_reason = Some(SkipReason::Templated);
+                if res.status == Status::Missing {
+                    res.status = Status::Skipped;
+                }
+                return res;
+            }
+        }
+    }
+    resolve(r, ctx)
+}
+
+/// The base directories a path-shaped reference is resolved against. `None` for name-shaped
+/// kinds (role/module/tasks_from), which aren't file paths to substitute into.
+fn path_bases(kind: ReferenceKind, ctx: &FileContext) -> Option<Vec<PathBuf>> {
+    match kind {
+        ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => Some(ctx.task_search_dirs()),
+        ReferenceKind::ImportPlaybook => Some(
+            [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
+                .into_iter()
+                .flatten()
+                .collect(),
+        ),
+        ReferenceKind::IncludeVars => {
+            let mut b = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
+            if let Some(role) = &ctx.role_dir {
+                b.push(role.join("vars"));
+            }
+            if let Some(root) = &ctx.project_root {
+                b.push(root.clone());
+            }
+            Some(b)
+        }
+        _ => None,
+    }
+}
+
+/// Substitute every `{{ var }}` in `value` with the variable's literal value(s). A token must
+/// be a bare identifier with a known literal; anything else (a filter, an unknown var) makes
+/// the whole value unresolvable — return empty, so the caller falls back to normal handling.
+/// Several values for one variable produce several results (a candidate each).
+fn substitute_literals(value: &str, literals: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut results = vec![String::new()];
+    let mut rest = value;
+    loop {
+        let Some(open) = rest.find("{{") else { break };
+        let prefix = &rest[..open];
+        let after = &rest[open + 2..];
+        let Some(close) = after.find("}}") else {
+            return Vec::new();
+        };
+        let token = after[..close].trim();
+        if token.is_empty() || !token.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Vec::new();
+        }
+        let Some(vals) = literals.get(token) else {
+            return Vec::new();
+        };
+        let mut next = Vec::new();
+        for base in &results {
+            for v in vals {
+                next.push(format!("{base}{prefix}{v}"));
+            }
+        }
+        results = next;
+        rest = &after[close + 2..];
+    }
+    for r in &mut results {
+        r.push_str(rest);
+    }
+    results.sort();
+    results.dedup();
+    results
 }
 
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
@@ -366,6 +462,48 @@ mod tests {
 
     fn first(out: &[(Reference, Resolution)], kind: ReferenceKind) -> &Resolution {
         &out.iter().find(|(r, _)| r.kind == kind).expect("kind").1
+    }
+
+    #[test]
+    fn resolve_with_substitutes_a_known_literal_for_navigation() {
+        let d = std::env::temp_dir().join("ansible-lsp-t056");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("prod.yml"), "x: 1\n").unwrap();
+        let ctx = FileContext::discover(&d.join("play.yml")); // file_dir = d
+        let nodes = Document::new("- include_vars: \"{{ env }}.yml\"\n".to_string())
+            .parse()
+            .unwrap();
+        let refs = extract(&nodes);
+        let r = refs
+            .iter()
+            .find(|r| r.kind == ReferenceKind::IncludeVars)
+            .unwrap();
+
+        let mut lit = HashMap::new();
+        lit.insert("env".to_string(), vec!["prod".to_string()]);
+        let res = resolve_with(r, &ctx, &lit);
+        assert_eq!(res.status, Status::Resolved);
+        assert!(res.targets.iter().any(|t| t.ends_with("prod.yml")));
+        // Navigation only — never a warning.
+        assert_eq!(res.skip_reason, Some(SkipReason::Templated));
+
+        // Without the literal it falls back to templated handling: no false "missing".
+        let res2 = resolve_with(r, &ctx, &HashMap::new());
+        assert_ne!(res2.status, Status::Missing);
+    }
+
+    #[test]
+    fn substitute_literals_needs_every_token_and_a_bare_identifier() {
+        let mut lit = HashMap::new();
+        lit.insert("env".to_string(), vec!["prod".to_string(), "staging".to_string()]);
+        // Two values -> two candidates.
+        let mut got = substitute_literals("{{ env }}.yml", &lit);
+        got.sort();
+        assert_eq!(got, vec!["prod.yml".to_string(), "staging.yml".to_string()]);
+        // A filter or unknown var -> unresolvable (empty), caller falls back.
+        assert!(substitute_literals("{{ env | upper }}.yml", &lit).is_empty());
+        assert!(substitute_literals("{{ other }}.yml", &lit).is_empty());
     }
 
     /// The four references in this repo that do NOT resolve relative to the including

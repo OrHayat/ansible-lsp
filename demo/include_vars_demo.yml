@@ -5,6 +5,8 @@
 
 - name: include_vars demo
   hosts: localhost
+  vars:
+    env: prod
   tasks:
     - name: Load DB settings mid-play
       ansible.builtin.include_vars: vars/db_settings.yml
@@ -25,6 +27,13 @@
     - name: Load invalid file
       ansible.builtin.include_vars: vars/not_exists.yml
 
-    # Templated target: skipped, never warned — the real path is only known at runtime.
-    - name: Templated target is not checked
-      ansible.builtin.include_vars: "{{ env }}.yml"
+    # KNOWN-VALUE templating (T-056): env is a play var = prod, so {{ env }} is substituted
+    # and this NAVIGATES to vars/prod.yml — Ctrl+click offers it. Still no warning: a -e
+    # override could change env, so it's navigation only, never a missing-file complaint.
+    - name: Templated but knowable — navigates to vars/prod.yml
+      ansible.builtin.include_vars: "vars/{{ env }}.yml"
+
+    # Genuinely unknown: nothing defines `region`, so this stays runtime — globbed, not
+    # navigable, never warned.
+    - name: Templated and unknown — stays runtime
+      ansible.builtin.include_vars: "vars/{{ region }}.yml"

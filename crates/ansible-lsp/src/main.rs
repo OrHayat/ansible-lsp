@@ -113,10 +113,13 @@ impl Backend {
         let doc = Document::new(text);
         let nodes = doc.parse()?;
         let ctx = FileContext::discover(path);
+        // Variable values that are statically knowable, so a `{{ var }}` in a path can be
+        // navigated to its real target (T-056). Navigation only — resolve_with never warns.
+        let literals = vars::known_literals(path, &doc.text, &nodes);
         let refs = references::extract(&nodes)
             .into_iter()
             .map(|r| {
-                let res = resolve::resolve(&r, &ctx);
+                let res = resolve::resolve_with(&r, &ctx, &literals);
                 (r, res)
             })
             .collect();

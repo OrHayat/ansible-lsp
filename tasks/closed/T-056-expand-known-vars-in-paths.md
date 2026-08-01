@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-048, T-034 |
+| done   | P2       | M    | T-048, T-034 |
 
 ## Problem
 
@@ -53,8 +53,18 @@ is exactly what templated paths already do.
 
 ## Done when
 
-- [ ] `{{ var }}` with a single known-literal definition resolves its path for navigation
-- [ ] multiple literal definitions offer one candidate each
-- [ ] host-dependent / fact / `-e` / templated values stay globbed, not substituted
-- [ ] expanded user-var paths are navigable but never warned about
-- [ ] corpus gate: zero new warnings
+- [x] `{{ var }}` with a single known-literal definition resolves its path for navigation
+      (`resolve::resolve_with` + `substitute_literals`)
+- [x] multiple literal definitions offer one candidate each (cartesian over token values)
+- [x] host-dependent / fact / `-e` / templated values stay globbed, not substituted
+      (`vars::known_literals` takes value-span, host-independent sources only; a bare
+      identifier token only)
+- [x] expanded user-var paths are navigable but never warned about (`SkipReason::Templated`,
+      Missing → Skipped)
+- [x] corpus gate: `scan` uses plain `resolve`, so warnings are unchanged; the LSP path uses
+      `resolve_with`
+
+Resolution: `resolve_with`/`substitute_literals` in resolve.rs, `known_literals` in vars.rs,
+wired through `analyze_text`. demo: `include_vars_demo.yml` (`env: prod` → `vars/prod.yml`).
+Follow-up: `set_fact` values would need a value span (currently name-only), and non-path kinds
+aren't substituted.
