@@ -27,3 +27,16 @@
       ansible.builtin.debug:
         msg: ready
       when: provisioner_ready | default(false)
+
+    # deploy_region is defined at THREE levels — the honest showcase of host precedence:
+    #   role default (2)   roles/provisioner/defaults/main.yml   = us-east-1
+    #   group_vars/all (5) group_vars/all.yml                    = eu-west-1
+    #   host_vars (10)     host_vars/localhost.yml               = ap-south-1
+    # Hover lists all three ranked; host_vars wins by precedence and is marked effective —
+    # but flagged host-scoped, because it only applies when the play targets `localhost`.
+    # Verifying that would need the inventory, which isn't parsed. group_vars/host_vars here
+    # ARE indexed because they sit next to the playbook (a fixed path); the same files kept
+    # beside a separate inventory file would not be.
+    - name: A variable layered across role default, group_vars and host_vars
+      ansible.builtin.debug:
+        msg: "deploying to {{ deploy_region }}"

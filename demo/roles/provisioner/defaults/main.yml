@@ -3,3 +3,5 @@
 # Cmd+click a use of provisioner_user jumps here.
 provisioner_user: deploy
 provisioner_retries: 5
+# Overridden by group_vars/all and host_vars in this demo — see cross_file_vars.yml.
+deploy_region: us-east-1

@@ -3,10 +3,11 @@
 //!
 //! [`index`] covers one parsed file: play/block/task `vars:`, `set_fact:`, `register:`.
 //! [`definitions`] extends that across files by deterministic paths only — role
-//! `defaults/`/`vars/`, `vars_files:`, and the `set_fact`/`register` in included task files
-//! and roles. Still not covered: `include_vars:`, group_vars/host_vars (ambiguous folder,
-//! deliberately not scanned), variables injected by a caller, and the opaque runtime
-//! sources (inventory, `-e`). So a name absent here is *not* proof it's undefined.
+//! `defaults/`/`vars/`, `vars_files:`, playbook-adjacent `group_vars/`/`host_vars/`, and the
+//! `set_fact`/`register` in included task files and roles. Still not covered: `include_vars:`,
+//! group_vars/host_vars kept beside a *separate inventory file* (needs the inventory's path,
+//! not guessed), variables injected by a caller, and the opaque runtime sources (inventory
+//! host-matching, `-e`). So a name absent here is *not* proof it's undefined.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,7 +21,7 @@ use crate::workspace::{yaml_files, FileContext};
 
 /// How a variable came to be defined. Ordered loosely by Ansible's precedence, low to
 /// high, though this pass doesn't yet rank across files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VarSource {
     /// A play `vars:` entry.
     PlayVars,
@@ -38,15 +39,25 @@ pub enum VarSource {
     RoleDefaults,
     /// A key in the enclosing role's `vars/main.yml`.
     RoleVars,
+    /// A key in a playbook-adjacent `group_vars/all` file — applies to every host.
+    GroupVarsAll,
+    /// A key in a playbook-adjacent `group_vars/<group>` file — applies only to hosts in
+    /// that group, which is host-dependent.
+    GroupVars,
+    /// A key in a playbook-adjacent `host_vars/<host>` file — applies only to that host.
+    HostVars,
 }
 
 impl VarSource {
-    /// Ansible's variable-precedence level (higher wins). Only the sources we index — the
-    /// host-dependent inventory levels (3–10) and extra-vars (22) aren't here. Note every
-    /// value below is ≥ 12, so inventory (≤ 10) can only ever override `RoleDefaults` (2).
+    /// Ansible's variable-precedence level (higher wins). Only the sources we index; the
+    /// inventory-adjacent copies (next to a separate inventory file) and extra-vars (22)
+    /// aren't here.
     pub fn precedence(self) -> u8 {
         match self {
             VarSource::RoleDefaults => 2,
+            VarSource::GroupVarsAll => 5,
+            VarSource::GroupVars => 7,
+            VarSource::HostVars => 10,
             VarSource::PlayVars => 12,
             VarSource::VarsFiles => 14,
             VarSource::RoleVars => 15,
@@ -54,6 +65,13 @@ impl VarSource {
             VarSource::TaskVars => 17,
             VarSource::SetFact | VarSource::Register => 19,
         }
+    }
+
+    /// True for sources whose applicability depends on the target host — a named `group_vars`
+    /// or `host_vars` file. We can point at the definition, but not assert it's in effect for
+    /// a given host without parsing inventory.
+    pub fn host_scoped(self) -> bool {
+        matches!(self, VarSource::GroupVars | VarSource::HostVars)
     }
 }
 
@@ -349,6 +367,12 @@ fn collect(
         }
     }
 
+    // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
+    // a workspace scan. The inventory-adjacent copies (next to a separate inventory file)
+    // need the inventory's location, which we don't guess, so those stay unindexed.
+    read_var_dir(&ctx.file_dir.join("group_vars"), true, out);
+    read_var_dir(&ctx.file_dir.join("host_vars"), false, out);
+
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
     if depth < MAX_DEPTH {
@@ -395,6 +419,33 @@ fn role_task_files(role_main: &Path) -> Vec<PathBuf> {
     match role_main.parent() {
         Some(tasks_dir) => yaml_files(tasks_dir),
         None => vec![role_main.to_path_buf()],
+    }
+}
+
+/// Read every `*.yml` in a playbook-adjacent `group_vars/` or `host_vars/` directory. The
+/// source is derived from the file name: `group_vars/all` applies to all hosts, any other
+/// name is group- or host-scoped.
+fn read_var_dir(dir: &Path, group: bool, out: &mut Vec<Located>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if !matches!(
+            p.extension().and_then(|s| s.to_str()),
+            Some("yml") | Some("yaml")
+        ) {
+            continue;
+        }
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let source = if !group {
+            VarSource::HostVars
+        } else if stem == "all" {
+            VarSource::GroupVarsAll
+        } else {
+            VarSource::GroupVars
+        };
+        read_var_file(&p, source, out);
     }
 }
 
@@ -623,17 +674,31 @@ mod tests {
         )
         .unwrap();
 
+        // prov_user is now layered: role default (2) < group_vars/all (5) < host_vars (10),
+        // both playbook-adjacent.
+        write(&d, "group_vars/all.yml", "prov_user: from_group\n");
+        write(&d, "host_vars/web01.yml", "prov_user: from_host\n");
+
         let nodes = Document::new(std::fs::read_to_string(&play).unwrap())
             .parse()
             .unwrap();
         let defs = definitions(&play, &nodes);
         let src = |n: &str| defs.iter().find(|x| x.name == n).map(|x| x.source);
         assert_eq!(src("shared_endpoint"), Some(VarSource::VarsFiles));
-        assert_eq!(src("prov_user"), Some(VarSource::RoleDefaults));
         assert_eq!(src("prov_ready"), Some(VarSource::SetFact));
+        // prov_user has all three layers, and host_vars wins by precedence.
+        let user_defs: Vec<_> = defs.iter().filter(|d| d.name == "prov_user").cloned().collect();
+        let sources: HashSet<VarSource> = user_defs.iter().map(|d| d.source).collect();
+        assert!(sources.contains(&VarSource::RoleDefaults));
+        assert!(sources.contains(&VarSource::GroupVarsAll));
+        assert!(sources.contains(&VarSource::HostVars));
+        assert_eq!(effective(&user_defs).unwrap().source, VarSource::HostVars);
         // Each points at the file it actually lives in.
-        let f = |n: &str| defs.iter().find(|x| x.name == n).map(|x| x.file.clone());
-        assert!(f("shared_endpoint").unwrap().ends_with("vars/shared.yml"));
-        assert!(f("prov_user").unwrap().ends_with("roles/prov/defaults/main.yml"));
+        assert!(defs
+            .iter()
+            .find(|x| x.name == "shared_endpoint")
+            .unwrap()
+            .file
+            .ends_with("vars/shared.yml"));
     }
 }

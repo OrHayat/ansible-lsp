@@ -1,0 +1,6 @@
+---
+# Playbook-adjacent host_vars for the host `localhost` (precedence level 10). Outranks
+# group_vars/all — but only for this host. The tool marks it effective by precedence and
+# flags that it's host-scoped: on a different host it wouldn't apply, and verifying that
+# needs the inventory, which isn't parsed. That's the honest edge of the limitation.
+deploy_region: ap-south-1

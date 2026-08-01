@@ -486,9 +486,12 @@ impl Backend {
             format!("**`{}`**", use_.name)
         };
         let mut md = format!("{header}\n\n{}", lines.join("\n"));
-        // The only invisible levels that could still change the answer: `-e` always, and
-        // inventory *only* when the winner is a role default (everything else outranks it).
-        let caveat = if defs[0].source == vars::VarSource::RoleDefaults {
+        // A host-scoped winner (group_vars/<group>, host_vars/<host>) is only in effect for
+        // matching hosts — we can't verify that without inventory. A role-default winner can
+        // still be overridden by inventory we don't index. Otherwise only `-e` can.
+        let caveat = if defs[0].source.host_scoped() {
+            "_Host-scoped: in effect only for matching hosts; `-e` can override._"
+        } else if defs[0].source == vars::VarSource::RoleDefaults {
             "_Inventory (per-host) or `-e` can still override._"
         } else if multiple {
             "_`-e` extra-vars can still override._"
@@ -517,6 +520,9 @@ fn source_label(s: vars::VarSource) -> &'static str {
         VarsFiles => "vars_files",
         RoleDefaults => "role default",
         RoleVars => "role var",
+        GroupVarsAll => "group_vars/all",
+        GroupVars => "group_vars",
+        HostVars => "host_vars",
     }
 }
 
@@ -526,7 +532,8 @@ fn source_label(s: vars::VarSource) -> &'static str {
 fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
-        PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars => {
+        PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
+        | GroupVarsAll | GroupVars | HostVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
                 return None;

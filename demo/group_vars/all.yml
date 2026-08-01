@@ -1,0 +1,6 @@
+---
+# Playbook-adjacent group_vars/all — applies to every host (precedence level 5). Overrides
+# the provisioner role's default for deploy_region. This folder sits next to the playbook, a
+# deterministic location, so it IS indexed (unlike group_vars kept beside a separate
+# inventory file, which needs the inventory's path).
+deploy_region: eu-west-1
