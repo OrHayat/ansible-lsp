@@ -49,13 +49,18 @@
       vars:
         local_note: task-scoped only
 
-    # Precedence in action: base_url is a play var (level 12) AND is redefined here by
-    # set_fact (level 19). At runtime the set_fact wins — but Cmd+click on base_url offers
-    # BOTH definitions rather than guessing one, the same way a templated path offers every
-    # candidate. Which one actually applies is a runtime fact the editor can't assert.
+    # Precedence + ordering: base_url is a play var (level 12) and is redefined below by a
+    # set_fact (level 19). Go-to-def and hover are ordering-aware — the FIRST task's use of
+    # base_url (above) sees only the play var, because this set_fact hadn't run yet.
     - name: Redefine base_url with a set_fact
       ansible.builtin.set_fact:
         base_url: "https://prod.example.com"
+
+    - name: After the set_fact, base_url has TWO in-effect definitions
+      # Hover/Cmd+click base_url here and you get both — play var AND the set_fact above,
+      # since both have run by this point. The early use got only one. That's the ordering.
+      ansible.builtin.debug:
+        msg: "{{ base_url }}"
 
     - name: Undefined in this file — no jump, and no warning (it may come from inventory)
       ansible.builtin.debug:

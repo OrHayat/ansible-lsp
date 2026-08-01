@@ -234,6 +234,23 @@ pub struct Located {
     pub file: PathBuf,
 }
 
+impl Located {
+    /// Whether this definition can be in effect at a use at byte `use_pos` in `use_file`.
+    ///
+    /// Play/block/task `vars:`, `vars_files:` and role defaults/vars bind before the tasks
+    /// run, so they always apply. `set_fact`/`register` happen at a point in the run: in the
+    /// *same* file, one after the use hasn't executed yet, so it can't define that use. Across
+    /// files we can't order it against the use, so we keep it rather than guess.
+    pub fn in_effect_at(&self, use_file: &Path, use_pos: usize) -> bool {
+        match self.source {
+            VarSource::SetFact | VarSource::Register => {
+                self.file != use_file || self.span.start < use_pos
+            }
+            _ => true,
+        }
+    }
+}
+
 /// How far to follow includes/roles when gathering set_fact/register. Matches
 /// [`crate::mutation`]'s cap; the definitions that matter are one or two hops away.
 const MAX_DEPTH: usize = 4;
@@ -510,6 +527,26 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    #[test]
+    fn set_fact_after_a_use_is_not_in_effect() {
+        let file = Path::new("play.yml");
+        let sf = Located {
+            name: "x".into(),
+            source: VarSource::SetFact,
+            span: Span { start: 100, end: 110 },
+            file: file.to_path_buf(),
+        };
+        // A use before the set_fact: not yet defined by it.
+        assert!(!sf.in_effect_at(file, 50));
+        // A use after it: in effect.
+        assert!(sf.in_effect_at(file, 150));
+        // A set_fact in another file can't be ordered against this use — kept.
+        assert!(sf.in_effect_at(Path::new("other.yml"), 50));
+        // Play vars bind before tasks, so position doesn't matter.
+        let pv = Located { source: VarSource::PlayVars, ..sf.clone() };
+        assert!(pv.in_effect_at(file, 50));
     }
 
     #[test]

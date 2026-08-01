@@ -368,14 +368,17 @@ impl Backend {
         // silence (it may come from inventory or a caller). This walks includes/roles per
         // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
         if let (Some(nodes), Ok(path)) = (a.doc.parse(), p.uri.to_file_path()) {
-            let mut counts: HashMap<String, usize> = HashMap::new();
-            for d in vars::definitions(&path, &nodes) {
-                *counts.entry(d.name).or_default() += 1;
-            }
+            let all = vars::definitions(&path, &nodes);
             for u in vars::uses(&nodes) {
-                let Some(&n) = counts.get(&u.name) else {
+                // In-effect count depends on the use position (a later set_fact hasn't run),
+                // so it's computed per use rather than once per name.
+                let n = all
+                    .iter()
+                    .filter(|d| d.name == u.name && d.in_effect_at(&path, u.span.start))
+                    .count();
+                if n == 0 {
                     continue;
-                };
+                }
                 let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(u.span.end);
                 out.push(ResolvedRef {
@@ -412,7 +415,7 @@ impl Backend {
         let path = uri.to_file_path().ok()?;
         let defs: Vec<vars::Located> = vars::definitions(&path, nodes)
             .into_iter()
-            .filter(|d| d.name == use_.name)
+            .filter(|d| d.name == use_.name && d.in_effect_at(&path, use_.span.start))
             .collect();
         if defs.is_empty() {
             return None;
@@ -460,7 +463,7 @@ impl Backend {
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let defs: Vec<vars::Located> = vars::definitions(path, nodes)
             .into_iter()
-            .filter(|d| d.name == use_.name)
+            .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
             .collect();
         if defs.is_empty() {
             return None;
