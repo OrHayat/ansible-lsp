@@ -417,36 +417,23 @@ impl Backend {
             .into_iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(&path, use_.span.start))
             .collect();
-        if defs.is_empty() {
-            return None;
-        }
-        // A definition's span is in *its own* file, so map each through that file's line
-        // index. The current file uses the in-memory (possibly unsaved) text; others are
-        // read from disk once and cached.
-        let mut cache: HashMap<PathBuf, Document> = HashMap::new();
-        let mut locations = Vec::new();
-        for d in defs {
-            let target = cache.entry(d.file.clone()).or_insert_with(|| {
-                if d.file == path {
-                    Document::new(doc.text.clone())
-                } else {
-                    Document::new(std::fs::read_to_string(&d.file).unwrap_or_default())
-                }
-            });
-            let (sl, sc) = target.byte_to_lsp(d.span.start);
-            let (el, ec) = target.byte_to_lsp(d.span.end);
-            let Ok(u) = Url::from_file_path(&d.file) else {
-                continue;
-            };
-            locations.push(Location {
-                uri: u,
-                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-            });
-        }
-        if locations.is_empty() {
-            return None;
-        }
-        Some(locations)
+        // Jump to the definition that actually applies here — highest precedence, latest on a
+        // tie — rather than a picker of every assignment. (hover lists them all, ranked.)
+        let d = vars::effective(&defs)?;
+        // The definition's span is in *its own* file: current file from the in-memory
+        // (possibly unsaved) buffer, others read from disk.
+        let target = if d.file == path {
+            Document::new(doc.text.clone())
+        } else {
+            Document::new(std::fs::read_to_string(&d.file).ok()?)
+        };
+        let (sl, sc) = target.byte_to_lsp(d.span.start);
+        let (el, ec) = target.byte_to_lsp(d.span.end);
+        let u = Url::from_file_path(&d.file).ok()?;
+        Some(vec![Location {
+            uri: u,
+            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+        }])
     }
 
     /// Markdown for the variable under the cursor: each place it's defined (source, file and
@@ -461,16 +448,24 @@ impl Backend {
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
-        let defs: Vec<vars::Located> = vars::definitions(path, nodes)
+        let mut defs: Vec<vars::Located> = vars::definitions(path, nodes)
             .into_iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
             .collect();
         if defs.is_empty() {
             return None;
         }
+        // Highest precedence first (latest on a tie): defs[0] is what actually applies here.
+        defs.sort_by(|a, b| {
+            b.source
+                .precedence()
+                .cmp(&a.source.precedence())
+                .then(b.span.start.cmp(&a.span.start))
+        });
+        let multiple = defs.len() > 1;
         let mut texts: HashMap<PathBuf, String> = HashMap::new();
         let mut lines = Vec::new();
-        for d in &defs {
+        for (i, d) in defs.iter().enumerate() {
             let text = texts.entry(d.file.clone()).or_insert_with(|| {
                 if d.file == *path {
                     doc.text.clone()
@@ -479,19 +474,30 @@ impl Backend {
                 }
             });
             let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
+            let mark = if multiple && i == 0 { "  ← effective" } else { "" };
             match def_value(d, text) {
-                Some(v) => lines.push(format!("- {} · `{loc}` = `{v}`", source_label(d.source))),
-                None => lines.push(format!("- {} · `{loc}`", source_label(d.source))),
+                Some(v) => lines.push(format!("- {} · `{loc}` = `{v}`{mark}", source_label(d.source))),
+                None => lines.push(format!("- {} · `{loc}`{mark}", source_label(d.source))),
             }
         }
-        let header = if defs.len() == 1 {
-            format!("**`{}`**", use_.name)
-        } else {
+        let header = if multiple {
             format!("**`{}`** — {} definitions", use_.name, defs.len())
+        } else {
+            format!("**`{}`**", use_.name)
         };
         let mut md = format!("{header}\n\n{}", lines.join("\n"));
-        if defs.len() > 1 {
-            md.push_str("\n\n_Which applies is a runtime fact — inventory and `-e` can override._");
+        // The only invisible levels that could still change the answer: `-e` always, and
+        // inventory *only* when the winner is a role default (everything else outranks it).
+        let caveat = if defs[0].source == vars::VarSource::RoleDefaults {
+            "_Inventory (per-host) or `-e` can still override._"
+        } else if multiple {
+            "_`-e` extra-vars can still override._"
+        } else {
+            ""
+        };
+        if !caveat.is_empty() {
+            md.push_str("\n\n");
+            md.push_str(caveat);
         }
         let (sl, sc) = doc.byte_to_lsp(use_.span.start);
         let (el, ec) = doc.byte_to_lsp(use_.span.end);

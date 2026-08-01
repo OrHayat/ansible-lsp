@@ -40,6 +40,23 @@ pub enum VarSource {
     RoleVars,
 }
 
+impl VarSource {
+    /// Ansible's variable-precedence level (higher wins). Only the sources we index — the
+    /// host-dependent inventory levels (3–10) and extra-vars (22) aren't here. Note every
+    /// value below is ≥ 12, so inventory (≤ 10) can only ever override `RoleDefaults` (2).
+    pub fn precedence(self) -> u8 {
+        match self {
+            VarSource::RoleDefaults => 2,
+            VarSource::PlayVars => 12,
+            VarSource::VarsFiles => 14,
+            VarSource::RoleVars => 15,
+            VarSource::BlockVars => 16,
+            VarSource::TaskVars => 17,
+            VarSource::SetFact | VarSource::Register => 19,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VarDef {
     pub name: String,
@@ -249,6 +266,19 @@ impl Located {
             _ => true,
         }
     }
+}
+
+/// The definition that wins among `defs` — which must already be filtered to one name and
+/// to those in effect at the use. Highest precedence; ties broken by latest position (the
+/// last assignment wins). `None` if empty. Caveat: `-e` (and, only when the winner is a role
+/// default, inventory) can still override at runtime — those aren't indexed.
+pub fn effective(defs: &[Located]) -> Option<&Located> {
+    defs.iter().max_by(|a, b| {
+        a.source
+            .precedence()
+            .cmp(&b.source.precedence())
+            .then(a.span.start.cmp(&b.span.start))
+    })
 }
 
 /// How far to follow includes/roles when gathering set_fact/register. Matches
@@ -527,6 +557,23 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    #[test]
+    fn effective_picks_highest_precedence_then_latest() {
+        let mk = |src, start| Located {
+            name: "x".into(),
+            source: src,
+            span: Span { start, end: start + 1 },
+            file: PathBuf::from("f.yml"),
+        };
+        // set_fact (19) beats a play var (12) regardless of position.
+        let defs = vec![mk(VarSource::PlayVars, 10), mk(VarSource::SetFact, 5)];
+        assert_eq!(effective(&defs).unwrap().source, VarSource::SetFact);
+        // Two set_facts: the later one wins.
+        let defs = vec![mk(VarSource::SetFact, 5), mk(VarSource::SetFact, 90)];
+        assert_eq!(effective(&defs).unwrap().span.start, 90);
+        assert!(effective(&[]).is_none());
     }
 
     #[test]

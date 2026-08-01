@@ -56,9 +56,10 @@
       ansible.builtin.set_fact:
         base_url: "https://prod.example.com"
 
-    - name: After the set_fact, base_url has TWO in-effect definitions
-      # Hover/Cmd+click base_url here and you get both — play var AND the set_fact above,
-      # since both have run by this point. The early use got only one. That's the ordering.
+    - name: After the set_fact, base_url resolves to the set_fact
+      # Both the play var and the set_fact are in effect here. Hover lists both and marks the
+      # set_fact "effective" (level 19 outranks the play var's 12); Cmd+click jumps straight
+      # to it, not a picker. The early use above saw only the play var. Ordering + precedence.
       ansible.builtin.debug:
         msg: "{{ base_url }}"
 
