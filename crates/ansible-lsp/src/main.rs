@@ -545,7 +545,6 @@ impl Backend {
         }
         md.push_str("Substituting:\n");
         md.push_str(&lines.join("\n"));
-        md.push_str("\n\n_Navigation only — `-e` could override these at runtime._");
         let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
         let (el, ec) = a.doc.byte_to_lsp(r.span.end);
         Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
