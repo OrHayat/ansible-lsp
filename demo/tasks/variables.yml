@@ -33,6 +33,30 @@
         msg: enabled
       when: feature_on | default(false)
 
+    # Block-scoped vars (precedence level 16) — visible to the tasks the block wraps.
+    - name: A block binds vars for the tasks inside it
+      block:
+        - name: Cmd+click retries_left jumps down to the block vars
+          ansible.builtin.debug:
+            msg: "{{ retries_left }} attempts left"
+      vars:
+        retries_left: 3
+
+    # Task-scoped vars (level 17) — visible only to this one task.
+    - name: A task binds a var scoped to just itself
+      ansible.builtin.debug:
+        msg: "{{ local_note }}"
+      vars:
+        local_note: task-scoped only
+
+    # Precedence in action: base_url is a play var (level 12) AND is redefined here by
+    # set_fact (level 19). At runtime the set_fact wins — but Cmd+click on base_url offers
+    # BOTH definitions rather than guessing one, the same way a templated path offers every
+    # candidate. Which one actually applies is a runtime fact the editor can't assert.
+    - name: Redefine base_url with a set_fact
+      ansible.builtin.set_fact:
+        base_url: "https://prod.example.com"
+
     - name: Undefined in this file — no jump, and no warning (it may come from inventory)
       ansible.builtin.debug:
         msg: "{{ from_inventory }}"
