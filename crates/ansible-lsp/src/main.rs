@@ -527,8 +527,14 @@ impl Backend {
             let Some(v) = def_value(d, text) else {
                 continue;
             };
-            let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
-            lines.push(format!("- `{token}` = `{v}` — {} · `{loc}`", source_label(d.source)));
+            let line = line_of(text, d.span.start);
+            let label = format!("{}:{line}", short_path(&d.file));
+            // A clickable link to the definition — file URI with a line fragment.
+            let loc = Url::from_file_path(&d.file)
+                .ok()
+                .map(|u| format!("[{label}]({u}#L{line})"))
+                .unwrap_or_else(|| format!("`{label}`"));
+            lines.push(format!("- `{token}` = `{v}` — {} · {loc}", source_label(d.source)));
         }
         if lines.is_empty() {
             return None;
