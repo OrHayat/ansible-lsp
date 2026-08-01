@@ -475,9 +475,18 @@ impl Backend {
             });
             let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
             let mark = if multiple && i == 0 { "  ← effective" } else { "" };
+            // A conditionally-defined var (task under a `when:`) reads as "only when …" —
+            // that's how "web01 but not web02" shows up without any inventory.
+            let cond = d
+                .condition
+                .as_ref()
+                .map(|c| format!(" _(only when `{}`)_", c.trim()))
+                .unwrap_or_default();
             match def_value(d, text) {
-                Some(v) => lines.push(format!("- {} · `{loc}` = `{v}`{mark}", source_label(d.source))),
-                None => lines.push(format!("- {} · `{loc}`{mark}", source_label(d.source))),
+                Some(v) => {
+                    lines.push(format!("- {} · `{loc}` = `{v}`{cond}{mark}", source_label(d.source)))
+                }
+                None => lines.push(format!("- {} · `{loc}`{cond}{mark}", source_label(d.source))),
             }
         }
         let header = if multiple {

@@ -81,6 +81,10 @@ pub struct VarDef {
     pub source: VarSource,
     /// Span to jump to — the value of the binding, the fact key, or the register name.
     pub span: Span,
+    /// The `when:` guarding the defining task, if any — so a conditionally set/registered
+    /// variable reads as "defined only when …" (e.g. per-host via `inventory_hostname`),
+    /// straight from the playbook, no inventory needed.
+    pub condition: Option<String>,
 }
 
 /// Every in-file variable definition, in document order.
@@ -100,10 +104,21 @@ impl VarIndex {
     }
 
     fn push(&mut self, name: impl Into<String>, source: VarSource, span: Span) {
+        self.push_cond(name, source, span, None);
+    }
+
+    fn push_cond(
+        &mut self,
+        name: impl Into<String>,
+        source: VarSource,
+        span: Span,
+        condition: Option<String>,
+    ) {
         self.defs.push(VarDef {
             name: name.into(),
             source,
             span,
+            condition,
         });
     }
 }
@@ -237,8 +252,11 @@ fn block(b: &Block, idx: &mut VarIndex) {
 }
 
 fn task(t: &Task, idx: &mut VarIndex) {
+    // A task's `when:` guards everything it defines — so the variable is only set on the
+    // hosts/runs where the condition holds.
+    let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));
     for v in &t.vars {
-        idx.push(v.name.clone(), VarSource::TaskVars, v.span);
+        idx.push_cond(v.name.clone(), VarSource::TaskVars, v.span, cond.clone());
     }
     if let Some(a) = &t.action {
         if short_key(&a.name) == "set_fact" {
@@ -246,14 +264,14 @@ fn task(t: &Task, idx: &mut VarIndex) {
                 if let Some(name) = fact.as_str() {
                     // `cacheable` is a set_fact option, not a fact.
                     if name != "cacheable" {
-                        idx.push(name, VarSource::SetFact, fact.span());
+                        idx.push_cond(name, VarSource::SetFact, fact.span(), cond.clone());
                     }
                 }
             }
         }
     }
     if let (Some(name), Some(span)) = (&t.register, t.register_span) {
-        idx.push(name.clone(), VarSource::Register, span);
+        idx.push_cond(name.clone(), VarSource::Register, span, cond.clone());
     }
 }
 
@@ -267,6 +285,8 @@ pub struct Located {
     pub source: VarSource,
     pub span: Span,
     pub file: PathBuf,
+    /// The `when:` guarding the defining task, if any (see [`VarDef::condition`]).
+    pub condition: Option<String>,
 }
 
 impl Located {
@@ -342,6 +362,7 @@ fn collect(
             source: d.source,
             span: d.span,
             file: path.to_path_buf(),
+            condition: d.condition.clone(),
         });
     }
 
@@ -466,6 +487,7 @@ fn read_var_file(file: &Path, source: VarSource, out: &mut Vec<Located>) {
                         source,
                         span: v.span(),
                         file: file.to_path_buf(),
+                        condition: None,
                     });
                 }
             }
@@ -617,6 +639,7 @@ mod tests {
             source: src,
             span: Span { start, end: start + 1 },
             file: PathBuf::from("f.yml"),
+            condition: None,
         };
         // set_fact (19) beats a play var (12) regardless of position.
         let defs = vec![mk(VarSource::PlayVars, 10), mk(VarSource::SetFact, 5)];
@@ -635,6 +658,7 @@ mod tests {
             source: VarSource::SetFact,
             span: Span { start: 100, end: 110 },
             file: file.to_path_buf(),
+            condition: None,
         };
         // A use before the set_fact: not yet defined by it.
         assert!(!sf.in_effect_at(file, 50));

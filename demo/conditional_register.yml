@@ -1,0 +1,22 @@
+---
+# Per-host variables with NO inventory files at all. A registered variable exists only on
+# the hosts where its task actually ran — and what decides that is the `when:` right here in
+# the playbook, which the tool can read. So "web01 but not web02" comes straight from the
+# file, not from any inventory.
+
+- name: Conditional register demo
+  hosts: all
+  tasks:
+    - name: Check nginx — only web01 runs this, so only web01 registers nginx_state
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_state
+      when: inventory_hostname == 'web01'
+
+    # Hover nginx_state below: it shows the register AND the guard —
+    #   register · conditional_register.yml:12  (only when inventory_hostname == 'web01')
+    # That "only when" is the honest per-host story, with no inventory involved. On web02 the
+    # task was skipped, so nginx_state carries a skipped result there rather than a real value.
+    - name: Use the registered result — meaningful only where the check ran
+      ansible.builtin.debug:
+        msg: "nginx is {{ nginx_state.stdout }}"
+      when: inventory_hostname == 'web01'
