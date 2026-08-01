@@ -445,6 +445,103 @@ impl Backend {
         }
         Some(locations)
     }
+
+    /// Markdown for the variable under the cursor: each place it's defined (source, file and
+    /// value), plus the range of the use to anchor the hover. `None` if the cursor isn't on a
+    /// variable use, or the name has no reachable definition.
+    fn variable_hover_at(
+        doc: &Document,
+        nodes: &[Node],
+        byte: usize,
+        path: &Path,
+    ) -> Option<(String, Range)> {
+        let use_ = vars::uses(nodes)
+            .into_iter()
+            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+        let defs: Vec<vars::Located> = vars::definitions(path, nodes)
+            .into_iter()
+            .filter(|d| d.name == use_.name)
+            .collect();
+        if defs.is_empty() {
+            return None;
+        }
+        let mut texts: HashMap<PathBuf, String> = HashMap::new();
+        let mut lines = Vec::new();
+        for d in &defs {
+            let text = texts.entry(d.file.clone()).or_insert_with(|| {
+                if d.file == *path {
+                    doc.text.clone()
+                } else {
+                    std::fs::read_to_string(&d.file).unwrap_or_default()
+                }
+            });
+            let loc = short_path(&d.file);
+            match def_value(d, text) {
+                Some(v) => lines.push(format!("- {} · `{loc}` = `{v}`", source_label(d.source))),
+                None => lines.push(format!("- {} · `{loc}`", source_label(d.source))),
+            }
+        }
+        let header = if defs.len() == 1 {
+            format!("**`{}`**", use_.name)
+        } else {
+            format!("**`{}`** — {} definitions", use_.name, defs.len())
+        };
+        let mut md = format!("{header}\n\n{}", lines.join("\n"));
+        if defs.len() > 1 {
+            md.push_str("\n\n_Which applies is a runtime fact — inventory and `-e` can override._");
+        }
+        let (sl, sc) = doc.byte_to_lsp(use_.span.start);
+        let (el, ec) = doc.byte_to_lsp(use_.span.end);
+        Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
+    }
+}
+
+/// Human label for a variable's definition source.
+fn source_label(s: vars::VarSource) -> &'static str {
+    use vars::VarSource::*;
+    match s {
+        PlayVars => "play var",
+        BlockVars => "block var",
+        TaskVars => "task var",
+        SetFact => "set_fact",
+        Register => "register",
+        VarsFiles => "vars_files",
+        RoleDefaults => "role default",
+        RoleVars => "role var",
+    }
+}
+
+/// The literal value of a definition, when its span points at a value (play/block/task vars,
+/// vars_files, role defaults/vars). `set_fact`/`register` spans point at the name, so those
+/// carry no value here. Whitespace-collapsed and length-capped for a one-line hover.
+fn def_value(d: &vars::Located, text: &str) -> Option<String> {
+    use vars::VarSource::*;
+    match d.source {
+        PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars => {
+            let raw = d.span.slice(text).trim();
+            if raw.is_empty() {
+                return None;
+            }
+            let one = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            Some(if one.chars().count() > 60 {
+                format!("{}…", one.chars().take(60).collect::<String>())
+            } else {
+                one
+            })
+        }
+        SetFact | Register => None,
+    }
+}
+
+/// The last few components of a path, for a compact "where it's defined" label.
+fn short_path(p: &Path) -> String {
+    let comps: Vec<_> = p.components().collect();
+    let start = comps.len().saturating_sub(3);
+    comps[start..]
+        .iter()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Hover markdown for a conditional reference: every clause spelled out in plain English
@@ -635,31 +732,41 @@ impl LanguageServer for Backend {
     /// stub. Plain LSP, so it carries to Neovim, unlike the teal decoration.
     async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
         let settings = self.settings.lock().map(|s| *s).unwrap_or_default();
-        if !settings.hints {
-            return Ok(None);
-        }
         let uri = &p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
         let Some(a) = self.analyze(uri) else {
             return Ok(None);
         };
         let byte = a.doc.lsp_to_byte(pos.line, pos.character);
-        // Anchor on the reference value (the import path), not on `when:`: it's the thing
-        // you point at, and it's already painted teal as clickable.
-        let Some((r, _)) = a.refs.iter().find(|(r, _)| {
-            !r.conditions.is_empty() && r.span.start <= byte && byte <= r.span.end
-        }) else {
-            return Ok(None);
-        };
-        let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
-        let (el, ec) = a.doc.byte_to_lsp(r.span.end);
-        Ok(Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: when_hover(r),
-            }),
-            range: Some(Range::new(Position::new(sl, sc), Position::new(el, ec))),
-        }))
+        // `when:` hover, anchored on the reference value (the import path) — the thing you
+        // point at, already painted teal as clickable. Gated on the hints setting, like the
+        // inlay it replaced; variable hover below is always available.
+        if let Some((r, _)) = a.refs.iter().find(|(r, _)| {
+            settings.hints && !r.conditions.is_empty() && r.span.start <= byte && byte <= r.span.end
+        }) {
+            let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
+            let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: when_hover(r),
+                }),
+                range: Some(Range::new(Position::new(sl, sc), Position::new(el, ec))),
+            }));
+        }
+        // Variable hover: where the variable under the cursor is defined, and its value.
+        if let (Ok(path), Some(nodes)) = (uri.to_file_path(), a.doc.parse()) {
+            if let Some((value, range)) = Self::variable_hover_at(&a.doc, &nodes, byte, &path) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: Some(range),
+                }));
+            }
+        }
+        Ok(None)
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
