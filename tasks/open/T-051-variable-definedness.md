@@ -39,10 +39,21 @@ or extra-vars."
   silence while those sources are incomplete.
 - Suppressible via `# noqa`, like every other diagnostic.
 
+## Progress
+
+The **condition-aware coverage** half landed (commit `9b4b016`): `crate::guard` does
+propositional implication over `when:` conditions, and `var-uncovered-when` warns when a use
+runs under a broader condition than any in-effect definition covers (e.g. used for
+`web01 or web02`, registered only on `web01`). Conservative — only with a definition present,
+only within the use's own condition vocabulary. Remaining: the **never-defined-anywhere** base
+case below (the riskier one).
+
 ## Done when
 
-- [ ] a genuinely-undefined variable in a playbook is flagged, with a message that names what
-      was searched and concedes the opaque sources
+- [x] a use guarded more broadly than its definitions cover is flagged, naming the gap
+      (`var-uncovered-when`, `guard.rs`)
+- [ ] a genuinely-undefined variable (no reachable definition at all) is flagged, with a
+      message that names what was searched and concedes the opaque sources
 - [ ] zero warnings on magic vars, `ansible_*`, loop vars, or anything with a reachable def
 - [ ] role/task files that legitimately receive vars from a caller are not false-flagged
 - [ ] corpus gate: no new warnings on the demo or fixtures
