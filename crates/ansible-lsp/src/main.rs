@@ -491,6 +491,66 @@ impl Backend {
     /// Markdown for the variable under the cursor: each place it's defined (source, file and
     /// value), plus the range of the use to anchor the hover. `None` if the cursor isn't on a
     /// variable use, or the name has no reachable definition.
+    /// Hover for a templated reference path (`{{ env }}.yml`) that was resolved by
+    /// substituting known-value variables: show what it resolves to, and for each variable
+    /// its value and where that value is defined — so "why does this go to prod.yml" is
+    /// answered in place.
+    fn path_substitution_hover(
+        a: &Analysis,
+        nodes: &[Node],
+        byte: usize,
+        path: &Path,
+    ) -> Option<(String, Range)> {
+        let (r, res) = a.refs.iter().find(|(r, _)| {
+            r.value.contains("{{") && r.span.start <= byte && byte <= r.span.end
+        })?;
+        let idents = template_idents(&r.value);
+        if idents.is_empty() {
+            return None;
+        }
+        let defs = vars::definitions(path, nodes);
+        let mut texts: HashMap<PathBuf, String> = HashMap::new();
+        let mut lines = Vec::new();
+        for token in idents {
+            let cands: Vec<vars::Located> =
+                defs.iter().filter(|d| d.name == token).cloned().collect();
+            let Some(d) = vars::effective(&cands) else {
+                continue;
+            };
+            let text = texts.entry(d.file.clone()).or_insert_with(|| {
+                if d.file == *path {
+                    a.doc.text.clone()
+                } else {
+                    std::fs::read_to_string(&d.file).unwrap_or_default()
+                }
+            });
+            let Some(v) = def_value(d, text) else {
+                continue;
+            };
+            let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
+            lines.push(format!("- `{token}` = `{v}` — {} · `{loc}`", source_label(d.source)));
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let mut md = String::new();
+        if !res.targets.is_empty() {
+            let t = res
+                .targets
+                .iter()
+                .map(|p| short_path(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            md.push_str(&format!("**→ `{t}`**\n\n"));
+        }
+        md.push_str("Substituting:\n");
+        md.push_str(&lines.join("\n"));
+        md.push_str("\n\n_Navigation only — `-e` could override these at runtime._");
+        let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
+        let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+        Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
+    }
+
     fn variable_hover_at(
         doc: &Document,
         nodes: &[Node],
@@ -609,6 +669,22 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
         }
         SetFact | Register => None,
     }
+}
+
+/// The bare-identifier `{{ tokens }}` in a string (a filter or expression is not one).
+fn template_idents(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = value;
+    while let Some(o) = rest.find("{{") {
+        let after = &rest[o + 2..];
+        let Some(c) = after.find("}}") else { break };
+        let tok = after[..c].trim();
+        if !tok.is_empty() && tok.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
+            out.push(tok.to_string());
+        }
+        rest = &after[c + 2..];
+    }
+    out
 }
 
 /// 1-based line number of a byte offset, for a `file:line` hover reference.
@@ -842,6 +918,17 @@ impl LanguageServer for Backend {
         }
         // Variable hover: where the variable under the cursor is defined, and its value.
         if let (Ok(path), Some(nodes)) = (uri.to_file_path(), a.doc.parse()) {
+            // A templated path that resolved via known variables: explain the substitution —
+            // what it resolves to, and each variable's value and where it's defined.
+            if let Some((value, range)) = Self::path_substitution_hover(&a, &nodes, byte, &path) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: Some(range),
+                }));
+            }
             if let Some((value, range)) = Self::variable_hover_at(&a.doc, &nodes, byte, &path) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
