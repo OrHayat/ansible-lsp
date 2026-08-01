@@ -345,7 +345,8 @@ impl Backend {
         let Some(a) = self.analyze(&p.uri) else {
             return Ok(Vec::new());
         };
-        Ok(a.refs
+        let mut out: Vec<ResolvedRef> = a
+            .refs
             .iter()
             .filter(|(_, res)| res.status == Status::Resolved)
             .map(|(r, res)| {
@@ -356,7 +357,27 @@ impl Backend {
                     targets: res.targets.len(),
                 }
             })
-            .collect())
+            .collect();
+
+        // Variable uses that resolve to an in-file definition are clickable too, so paint
+        // them the same way. A use with no in-file definition stays plain — same silence as
+        // go-to-definition, since it may come from inventory or a not-yet-indexed source.
+        if let Some(nodes) = a.doc.parse() {
+            let index = vars::index(&ast::build(&nodes));
+            for u in vars::uses(&nodes) {
+                let defs = index.get(&u.name);
+                if defs.is_empty() {
+                    continue;
+                }
+                let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
+                let (el, ec) = a.doc.byte_to_lsp(u.span.end);
+                out.push(ResolvedRef {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    targets: defs.len(),
+                });
+            }
+        }
+        Ok(out)
     }
 
     fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
