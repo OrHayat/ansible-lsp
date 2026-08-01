@@ -1,0 +1,29 @@
+---
+# Cross-file variable go-to-definition. Cmd+click a {{ variable }} to jump to its
+# definition even when it lives in another file:
+#   - shared_endpoint   -> vars/shared.yml            (vars_files)
+#   - provisioner_user  -> roles/provisioner/defaults/main.yml   (role defaults)
+#   - provisioner_ready -> roles/provisioner/tasks/main.yml      (role set_fact)
+#
+# Only deterministic paths are followed — the vars_files path written below, and the role
+# Ansible loads. Nothing is scanned or guessed, and inventory / -e stay out of scope.
+
+- name: Cross-file variables demo
+  hosts: localhost
+  vars_files:
+    - vars/shared.yml
+  roles:
+    - provisioner
+  tasks:
+    - name: A variable defined in vars/shared.yml
+      ansible.builtin.debug:
+        msg: "{{ shared_endpoint }} (timeout {{ shared_timeout }})"
+
+    - name: A variable from the provisioner role's defaults
+      ansible.builtin.debug:
+        msg: "connecting as {{ provisioner_user }}"
+
+    - name: A fact the provisioner role set — reachable because the role is included
+      ansible.builtin.debug:
+        msg: ready
+      when: provisioner_ready | default(false)

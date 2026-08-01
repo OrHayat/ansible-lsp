@@ -406,22 +406,40 @@ impl Backend {
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
-        let index = vars::index(&ast::build(nodes));
-        let defs = index.get(&use_.name);
+        let path = uri.to_file_path().ok()?;
+        let defs: Vec<vars::Located> = vars::definitions(&path, nodes)
+            .into_iter()
+            .filter(|d| d.name == use_.name)
+            .collect();
         if defs.is_empty() {
             return None;
         }
-        let locations: Vec<Location> = defs
-            .iter()
-            .map(|d| {
-                let (sl, sc) = doc.byte_to_lsp(d.span.start);
-                let (el, ec) = doc.byte_to_lsp(d.span.end);
-                Location {
-                    uri: uri.clone(),
-                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+        // A definition's span is in *its own* file, so map each through that file's line
+        // index. The current file uses the in-memory (possibly unsaved) text; others are
+        // read from disk once and cached.
+        let mut cache: HashMap<PathBuf, Document> = HashMap::new();
+        let mut locations = Vec::new();
+        for d in defs {
+            let target = cache.entry(d.file.clone()).or_insert_with(|| {
+                if d.file == path {
+                    Document::new(doc.text.clone())
+                } else {
+                    Document::new(std::fs::read_to_string(&d.file).unwrap_or_default())
                 }
-            })
-            .collect();
+            });
+            let (sl, sc) = target.byte_to_lsp(d.span.start);
+            let (el, ec) = target.byte_to_lsp(d.span.end);
+            let Ok(u) = Url::from_file_path(&d.file) else {
+                continue;
+            };
+            locations.push(Location {
+                uri: u,
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            });
+        }
+        if locations.is_empty() {
+            return None;
+        }
         Some(locations)
     }
 }

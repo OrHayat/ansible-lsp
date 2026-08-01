@@ -1,0 +1,5 @@
+---
+# A vars_files target. Variables here are defined at play scope for any play that lists
+# this file under vars_files:. Cmd+click a use of one of these jumps here.
+shared_endpoint: "https://api.internal:8443"
+shared_timeout: 30

@@ -58,6 +58,8 @@ pub struct Play {
     pub handlers: Vec<Stmt>,
     /// `vars:` bound at play scope.
     pub vars: Vec<VarBinding>,
+    /// `vars_files:` entries — paths, flattened across the first-match list nesting.
+    pub vars_files: Vec<(String, Span)>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
 }
@@ -179,6 +181,21 @@ fn is_looped(node: &Node) -> bool {
     })
 }
 
+/// `vars_files:` paths. An entry can be a scalar or a nested list ("use the first that
+/// exists"); flatten both so every candidate path is available.
+fn vars_files_of(value: &Node) -> Vec<(String, Span)> {
+    fn push(n: &Node, out: &mut Vec<(String, Span)>) {
+        match n {
+            Node::Scalar { value, span } => out.push((value.clone(), *span)),
+            Node::Sequence { items, .. } => items.iter().for_each(|i| push(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    push(value, &mut out);
+    out
+}
+
 /// The `name: value` bindings under a node's `vars:` mapping.
 fn vars_of(node: &Node) -> Vec<VarBinding> {
     node.get("vars")
@@ -266,6 +283,7 @@ fn build_play(node: &Node) -> Play {
         post_tasks: stmts("post_tasks"),
         handlers: stmts("handlers"),
         vars: vars_of(node),
+        vars_files: node.get("vars_files").map(vars_files_of).unwrap_or_default(),
         directives: collect_directives(node, |k| {
             keywords::is_play_directive(k) && !STRUCTURAL.contains(&k)
         }),

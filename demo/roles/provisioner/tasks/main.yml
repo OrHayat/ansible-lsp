@@ -1,0 +1,6 @@
+---
+# A role that sets a fact (precedence level 19). Because the playbook includes this role,
+# provisioner_ready is reachable from there — Cmd+click on it in the playbook jumps here.
+- name: Mark the provisioner ready
+  ansible.builtin.set_fact:
+    provisioner_ready: true
