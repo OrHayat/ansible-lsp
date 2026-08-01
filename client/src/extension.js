@@ -8,9 +8,16 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
 let client;
 
-// Teal + dotted underline, distinct from the theme's YAML value colours.
+// Teal + dotted underline for file/role/module references — distinct from the theme's
+// YAML value colours.
 const linkDecoration = vscode.window.createTextEditorDecorationType({
   color: "#00BFA5",
+  textDecoration: "underline dotted 1px",
+});
+
+// Variables get their own colour (violet) so they read as a different kind of link.
+const varDecoration = vscode.window.createTextEditorDecorationType({
+  color: "#B388FF",
   textDecoration: "underline dotted 1px",
 });
 
@@ -60,18 +67,27 @@ async function paint(editor) {
     const refs = await client.sendRequest("ansible/references", {
       uri: editor.document.uri.toString(),
     });
+    const toDeco = (r) => ({
+      range: new vscode.Range(
+        r.range.start.line,
+        r.range.start.character,
+        r.range.end.line,
+        r.range.end.character
+      ),
+      hoverMessage:
+        r.targets > 1
+          ? `${r.targets} ${r.kind === "variable" ? "definitions" : "possible targets"}`
+          : undefined,
+    });
+    // Variables and references paint from separate lists so each keeps its own colour.
+    const isVar = (r) => r.kind === "variable";
     editor.setDecorations(
       linkDecoration,
-      (refs || []).map((r) => ({
-        range: new vscode.Range(
-          r.range.start.line,
-          r.range.start.character,
-          r.range.end.line,
-          r.range.end.character
-        ),
-        hoverMessage:
-          r.targets > 1 ? `${r.targets} possible targets` : undefined,
-      }))
+      (refs || []).filter((r) => !isVar(r)).map(toDeco)
+    );
+    editor.setDecorations(
+      varDecoration,
+      (refs || []).filter(isVar).map(toDeco)
     );
   } catch {
     // Server restarting or document closed; the next edit repaints.
@@ -111,6 +127,7 @@ function activate(context) {
 
   context.subscriptions.push(
     linkDecoration,
+    varDecoration,
     // Picks up a `cargo build --release` without reloading the whole window.
     vscode.commands.registerCommand("ansibleLsp.restart", async () => {
       await client.restart();

@@ -31,6 +31,9 @@ struct ResolvedRef {
     range: Range,
     /// How many files this could reach. >1 means Cmd+click opens a picker.
     targets: usize,
+    /// `"reference"` (file/role/module) or `"variable"`, so the client can colour them
+    /// differently.
+    kind: &'static str,
 }
 
 /// User preferences that change what we volunteer, never what we report. Diagnostics are
@@ -355,6 +358,7 @@ impl Backend {
                 ResolvedRef {
                     range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
                     targets: res.targets.len(),
+                    kind: "reference",
                 }
             })
             .collect();
@@ -374,6 +378,7 @@ impl Backend {
                 out.push(ResolvedRef {
                     range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
                     targets: defs.len(),
+                    kind: "variable",
                 });
             }
         }
