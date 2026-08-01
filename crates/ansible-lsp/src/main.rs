@@ -581,6 +581,7 @@ fn source_label(s: vars::VarSource) -> &'static str {
         GroupVarsAll => "group_vars/all",
         GroupVars => "group_vars",
         HostVars => "host_vars",
+        IncludeVars => "include_vars",
     }
 }
 
@@ -591,7 +592,7 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
-        | GroupVarsAll | GroupVars | HostVars => {
+        | GroupVarsAll | GroupVars | HostVars | IncludeVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
                 return None;

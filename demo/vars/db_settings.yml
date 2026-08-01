@@ -1,0 +1,5 @@
+---
+# Loaded by an include_vars task (see include_vars_demo.yml), not at play start. Cmd+click a
+# use of one of these jumps here.
+db_pool_size: 20
+db_timeout: 5

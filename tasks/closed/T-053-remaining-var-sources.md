@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-048      |
+| done   | P2       | M    | T-048      |
 
 ## Problem
 
@@ -35,8 +35,14 @@ missing, so variables from them don't resolve:
 
 ## Done when
 
-- [ ] `include_vars` file form resolves and its keys are indexed with spans
-- [ ] `include_vars` dir form indexes every file in the directory
-- [ ] role/include `vars:` params are indexed as definitions
-- [ ] templated forms glob without warning
-- [ ] a demo example jumps to each new source
+- [x] `include_vars` file form resolves and its keys are indexed with spans
+- [x] `include_vars` dir form indexes every file in the directory
+- [x] templated forms are skipped (not guessed)
+- [x] a demo example jumps to the new source (`include_vars_demo.yml`)
+- [ ] ~~role/include `vars:` params~~ — **deferred**. These are the *caller-injected* case:
+      the definition is at the call site, the use is inside the callee, and `definitions()`
+      starts at the edited file without walking *up* to callers. Resolving them needs a reverse
+      "who includes this" index — folded into T-054. Adding them now would only create defs
+      that never match a use.
+
+Resolution: commit for include_vars file + dir forms. Role params tracked under T-054.

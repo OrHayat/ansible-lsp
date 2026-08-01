@@ -1,0 +1,21 @@
+---
+# include_vars loads a vars file (or directory) partway through a play — unlike vars_files,
+# which loads at play start. The tool resolves the explicit path and indexes its keys, so a
+# use of one of them jumps into the loaded file.
+
+- name: include_vars demo
+  hosts: localhost
+  tasks:
+    - name: Load DB settings mid-play
+      ansible.builtin.include_vars: vars/db_settings.yml
+
+    # Cmd+click db_pool_size -> jumps to vars/db_settings.yml; hover shows
+    #   include_vars · vars/db_settings.yml:4 = 20
+    - name: Use a variable that include_vars defined
+      ansible.builtin.debug:
+        msg: "pool size {{ db_pool_size }}, timeout {{ db_timeout }}"
+
+    # The block form with an explicit file parameter resolves the same way.
+    - name: Same, as a block form
+      ansible.builtin.include_vars:
+        file: vars/db_settings.yml

@@ -46,6 +46,8 @@ pub enum VarSource {
     GroupVars,
     /// A key in a playbook-adjacent `host_vars/<host>` file — applies only to that host.
     HostVars,
+    /// A key loaded by an `include_vars:` task (file or dir form).
+    IncludeVars,
 }
 
 impl VarSource {
@@ -63,6 +65,7 @@ impl VarSource {
             VarSource::RoleVars => 15,
             VarSource::BlockVars => 16,
             VarSource::TaskVars => 17,
+            VarSource::IncludeVars => 18,
             VarSource::SetFact | VarSource::Register => 19,
         }
     }
@@ -397,8 +400,8 @@ fn collect(
 
     // The enclosing role's defaults/ and vars/ — fixed locations, no search.
     if let Some(role) = &ctx.role_dir {
-        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, out);
-        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, out);
+        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out);
+        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out);
     }
 
     // Play-level vars_files — explicit paths written in the play.
@@ -410,12 +413,42 @@ fn collect(
                         continue;
                     }
                     if let Some(f) = resolve_var_path(entry, &ctx) {
-                        read_var_file(&f, VarSource::VarsFiles, out);
+                        read_var_file(&f, VarSource::VarsFiles, None, out);
                     }
                 }
             }
         }
     }
+
+    // include_vars tasks — load a file or a directory at a point in the play. The task's
+    // when: guards the load, so it carries a condition. Templated targets are skipped.
+    each_task(&tree, &mut |t| {
+        let Some(a) = &t.action else { return };
+        if short_key(&a.name) != "include_vars" {
+            return;
+        }
+        let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));
+        if let Some(dir) = a.args.get("dir").and_then(|n| n.as_str()) {
+            if !dir.contains("{{") {
+                if let Some(d) = resolve_dir_path(dir, &ctx) {
+                    read_dir_files(&d, VarSource::IncludeVars, cond, out);
+                }
+            }
+            return;
+        }
+        let file = match &a.args {
+            Node::Scalar { value, .. } => Some(value.as_str()),
+            Node::Mapping { .. } => a.args.get("file").and_then(|n| n.as_str()),
+            _ => None,
+        };
+        if let Some(f) = file {
+            if !f.contains("{{") {
+                if let Some(path) = resolve_var_path(f, &ctx) {
+                    read_var_file(&path, VarSource::IncludeVars, cond, out);
+                }
+            }
+        }
+    });
 
     // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
     // a workspace scan. The inventory-adjacent copies (next to a separate inventory file)
@@ -495,12 +528,29 @@ fn read_var_dir(dir: &Path, group: bool, out: &mut Vec<Located>) {
         } else {
             VarSource::GroupVars
         };
-        read_var_file(&p, source, out);
+        read_var_file(&p, source, None, out);
     }
 }
 
-/// Read a flat `name: value` vars file and index every top-level key.
-fn read_var_file(file: &Path, source: VarSource, out: &mut Vec<Located>) {
+/// Read every `*.yml` in a directory as one source — the `include_vars: { dir: … }` form.
+fn read_dir_files(dir: &Path, source: VarSource, condition: Option<String>, out: &mut Vec<Located>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if matches!(
+            p.extension().and_then(|s| s.to_str()),
+            Some("yml") | Some("yaml")
+        ) {
+            read_var_file(&p, source, condition.clone(), out);
+        }
+    }
+}
+
+/// Read a flat `name: value` vars file and index every top-level key. `condition` is the
+/// `when:` guarding the load, if any (only `include_vars`, a task, can carry one).
+fn read_var_file(file: &Path, source: VarSource, condition: Option<String>, out: &mut Vec<Located>) {
     let Ok(text) = std::fs::read_to_string(file) else {
         return;
     };
@@ -516,12 +566,56 @@ fn read_var_file(file: &Path, source: VarSource, out: &mut Vec<Located>) {
                         source,
                         span: v.span(),
                         file: file.to_path_buf(),
-                        condition: None,
+                        condition: condition.clone(),
                     });
                 }
             }
         }
     }
+}
+
+/// Visit every task in a parsed file, descending into blocks and plays.
+fn each_task(tree: &Ast, f: &mut impl FnMut(&Task)) {
+    fn stmt(s: &Stmt, f: &mut impl FnMut(&Task)) {
+        match s {
+            Stmt::Task(t) => f(t),
+            Stmt::Block(b) => b
+                .block
+                .iter()
+                .chain(&b.rescue)
+                .chain(&b.always)
+                .for_each(|s| stmt(s, f)),
+        }
+    }
+    match tree {
+        Ast::Playbook(items) => {
+            for it in items {
+                if let PlayItem::Play(p) = it {
+                    p.pre_tasks
+                        .iter()
+                        .chain(&p.tasks)
+                        .chain(&p.post_tasks)
+                        .chain(&p.handlers)
+                        .for_each(|s| stmt(s, f));
+                }
+            }
+        }
+        Ast::Tasks(stmts) => stmts.iter().for_each(|s| stmt(s, f)),
+        Ast::Other => {}
+    }
+}
+
+/// Resolve a directory reference for `include_vars: { dir: … }`, first that exists.
+fn resolve_dir_path(entry: &str, ctx: &FileContext) -> Option<PathBuf> {
+    let mut cands = vec![ctx.file_dir.join(entry)];
+    if let Some(role) = &ctx.role_dir {
+        cands.push(role.join(entry));
+        cands.push(role.join("vars").join(entry));
+    }
+    if let Some(root) = &ctx.project_root {
+        cands.push(root.join(entry));
+    }
+    cands.into_iter().find(|p| p.is_dir())
 }
 
 /// Resolve a `vars_files:` entry against the file dir, its `vars/`, the role `vars/` and the
@@ -716,6 +810,37 @@ mod tests {
         // Play vars bind before tasks, so position doesn't matter.
         let pv = Located { source: VarSource::PlayVars, ..sf.clone() };
         assert!(pv.in_effect_at(file, 50));
+    }
+
+    #[test]
+    fn include_vars_file_and_dir_forms_are_indexed() {
+        let d = std::env::temp_dir().join("ansible-lsp-incvars");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/db.yml", "db_pool: 20\n");
+        write(&d, "conf/a.yml", "conf_a: 1\n");
+        write(&d, "conf/b.yml", "conf_b: 2\n");
+        let play = d.join("play.yml");
+        std::fs::write(
+            &play,
+            concat!(
+                "- hosts: all\n",
+                "  tasks:\n",
+                "    - include_vars: vars/db.yml\n",
+                "    - include_vars: { dir: conf }\n",
+                "    - include_vars: \"{{ x }}.yml\"\n",
+            ),
+        )
+        .unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap())
+            .parse()
+            .unwrap();
+        let defs = definitions(&play, &nodes);
+        let src = |n: &str| defs.iter().find(|x| x.name == n).map(|x| x.source);
+        assert_eq!(src("db_pool"), Some(VarSource::IncludeVars)); // file form
+        assert_eq!(src("conf_a"), Some(VarSource::IncludeVars)); // dir form
+        assert_eq!(src("conf_b"), Some(VarSource::IncludeVars));
+        // Templated target is skipped, not guessed.
     }
 
     #[test]
