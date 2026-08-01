@@ -475,7 +475,7 @@ impl Backend {
                     std::fs::read_to_string(&d.file).unwrap_or_default()
                 }
             });
-            let loc = short_path(&d.file);
+            let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
             match def_value(d, text) {
                 Some(v) => lines.push(format!("- {} · `{loc}` = `{v}`", source_label(d.source))),
                 None => lines.push(format!("- {} · `{loc}`", source_label(d.source))),
@@ -531,6 +531,14 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
         }
         SetFact | Register => None,
     }
+}
+
+/// 1-based line number of a byte offset, for a `file:line` hover reference.
+fn line_of(text: &str, byte: usize) -> usize {
+    text.get(..byte)
+        .map(|s| s.bytes().filter(|&b| b == b'\n').count())
+        .unwrap_or(0)
+        + 1
 }
 
 /// The last few components of a path, for a compact "where it's defined" label.
