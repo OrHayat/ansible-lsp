@@ -7,3 +7,5 @@
 # host-scoped rather than pretending it's the value.
 http_port: 8080
 worker_processes: 4
+# Same var as group_vars/db.yml and host_vars/web01.yml — see multi_host_vars.yml.
+app_port: 8080

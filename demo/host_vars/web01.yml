@@ -1,0 +1,4 @@
+---
+# host_vars for the single host `web01` (precedence level 10) — outranks its group's
+# group_vars, but only for web01. web02 (also a webserver) still gets 8080; db01 gets 5432.
+app_port: 8888

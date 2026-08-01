@@ -1,0 +1,26 @@
+---
+# Multi-host precedence — where a variable genuinely has NO single value.
+#
+# This play targets ALL hosts (see inventory.ini: web01, web02, db01), and app_port is set
+# in three host-scoped places:
+#   host_vars/web01.yml       app_port = 8888   (only web01)
+#   group_vars/webservers.yml app_port = 8080   (web01, web02)
+#   group_vars/db.yml         app_port = 5432   (db01)
+#
+# The actual value depends on which host a task runs on:
+#   web01 -> 8888   (host_vars beats its group)
+#   web02 -> 8080   (webservers group)
+#   db01  -> 5432   (db group)
+#
+# So there is no one answer. Hover on app_port lists every definition as a candidate, all
+# flagged host-scoped, and marks the highest-precedence one (host_vars/web01) "effective" —
+# but that's only true for web01. The tool does NOT claim it's the value everywhere, because
+# resolving the real per-host value needs the inventory (which host is in which group), and
+# that isn't parsed. Ctrl+click still takes you to any of the real definitions.
+
+- name: Multi-host variables demo
+  hosts: all
+  tasks:
+    - name: app_port differs per host — hover shows every candidate, none universal
+      ansible.builtin.debug:
+        msg: "app listening on {{ app_port }}"

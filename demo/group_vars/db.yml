@@ -1,0 +1,5 @@
+---
+# group_vars for the `db` group (precedence level 7) — applies only to hosts in [db].
+# It sets app_port differently from the webservers group: a db host gets 5432, a webserver
+# gets 8080. Same variable name, different value depending on the host's group.
+app_port: 5432
