@@ -590,7 +590,13 @@ impl Backend {
                     std::fs::read_to_string(&d.file).unwrap_or_default()
                 }
             });
-            let loc = format!("{}:{}", short_path(&d.file), line_of(text, d.span.start));
+            let line = line_of(text, d.span.start);
+            let label = format!("{}:{line}", short_path(&d.file));
+            // Clickable link to the definition (file URI + line fragment).
+            let loc = Url::from_file_path(&d.file)
+                .ok()
+                .map(|u| format!("[{label}]({u}#L{line})"))
+                .unwrap_or_else(|| format!("`{label}`"));
             let mark = if multiple && i == 0 { "  ← effective" } else { "" };
             // A conditionally-defined var (task under a `when:`) reads as "only when …" —
             // that's how "web01 but not web02" shows up without any inventory.
@@ -601,9 +607,9 @@ impl Backend {
                 .unwrap_or_default();
             match def_value(d, text) {
                 Some(v) => {
-                    lines.push(format!("- {} · `{loc}` = `{v}`{cond}{mark}", source_label(d.source)))
+                    lines.push(format!("- {} · {loc} = `{v}`{cond}{mark}", source_label(d.source)))
                 }
-                None => lines.push(format!("- {} · `{loc}`{cond}{mark}", source_label(d.source))),
+                None => lines.push(format!("- {} · {loc}{cond}{mark}", source_label(d.source))),
             }
         }
         let header = if multiple {
