@@ -20,3 +20,18 @@
       ansible.builtin.debug:
         msg: "nginx is {{ nginx_state.stdout }}"
       when: inventory_hostname == 'web01'
+
+    # WARNING (var-uncovered-when): this uses nginx_state on web01 OR web02, but it was only
+    # registered on web01 above. On web02 the register never ran, so nginx_state is undefined
+    # there. The tool reasons about the when: conditions — no inventory needed — and flags:
+    #   "nginx_state may be undefined when inventory_hostname == 'web02'"
+    - name: Broader use than the register covers — this should warn
+      ansible.builtin.debug:
+        msg: "nginx is {{ nginx_state.stdout }}"
+      when: inventory_hostname == 'web01' or inventory_hostname == 'web02'
+
+    # To FIX it, register on web02 too (uncomment to make the warning disappear):
+    # - name: Also check nginx on web02
+    #   ansible.builtin.command: systemctl is-active nginx
+    #   register: nginx_state
+    #   when: inventory_hostname == 'web02'

@@ -2,6 +2,7 @@ pub mod ast;
 pub mod condition;
 pub mod config;
 pub mod glob;
+pub mod guard;
 pub mod install;
 pub mod keywords;
 pub mod mutation;

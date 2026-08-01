@@ -137,6 +137,9 @@ impl Backend {
         };
         let mut diagnostics = Self::diagnostics_of(&a);
         diagnostics.extend(self.mutated_condition_diagnostics(&a));
+        if let (Ok(path), Some(nodes)) = (uri.to_file_path(), a.doc.parse()) {
+            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &nodes));
+        }
         self.track(uri, &diagnostics);
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
@@ -228,6 +231,52 @@ impl Backend {
             .collect();
 
         missing.chain(broken).collect()
+    }
+
+    /// Condition-aware definedness: a variable *used* under a `when:` that its *definitions*
+    /// don't all cover. If the use can run in a case where no in-effect definition applies —
+    /// e.g. used for `web01 or web02` but only registered on `web01` — warn, naming the
+    /// uncovered case. Only fires when there IS a definition (a coverage gap, not "never
+    /// defined") and only within the use's own condition vocabulary, so it can't false-warn
+    /// on conditions it can't relate. Suppressible with `# noqa: var-uncovered-when`.
+    fn variable_coverage_diagnostics(a: &Analysis, path: &Path, nodes: &[Node]) -> Vec<Diagnostic> {
+        let defs = vars::definitions(path, nodes);
+        let mut out = Vec::new();
+        for u in vars::uses(nodes) {
+            if u.guard.is_empty() {
+                continue;
+            }
+            // Definitions of this name that are in effect at the use.
+            let def_guards: Vec<Vec<String>> = defs
+                .iter()
+                .filter(|d| d.name == u.name && d.in_effect_at(path, u.span.start))
+                .map(|d| d.condition.clone().into_iter().collect())
+                .collect();
+            if def_guards.is_empty() {
+                continue;
+            }
+            let Some(gap) = ansible_core::guard::coverage_gap(&u.guard, &def_guards) else {
+                continue;
+            };
+            if a.doc.is_suppressed(u.span.start, "var-uncovered-when") {
+                continue;
+            }
+            let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
+            let (el, ec) = a.doc.byte_to_lsp(u.span.end);
+            out.push(Diagnostic {
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String("var-uncovered-when".into())),
+                message: format!(
+                    "`{}` may be undefined when `{gap}` — used here under a broader condition \
+                     than any definition covers.",
+                    u.name
+                ),
+                ..Default::default()
+            });
+        }
+        out
     }
 
     /// A `when:` on `import_playbook` whose variable the imported playbook itself sets.

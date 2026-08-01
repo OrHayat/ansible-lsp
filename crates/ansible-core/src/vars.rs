@@ -132,6 +132,9 @@ fn short_key(key: &str) -> &str {
 pub struct VarUse {
     pub name: String,
     pub span: Span,
+    /// The `when:` clauses guarding the task this use sits in (accumulated through nesting),
+    /// so a conditional use can be checked against its definitions' conditions.
+    pub guard: Vec<String>,
 }
 
 /// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
@@ -152,6 +155,7 @@ pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
                     start: base + expr_start + s,
                     end: base + expr_start + e,
                 },
+                guard: Vec::new(),
             });
         }
         i = expr_start + close_rel + 2;
@@ -168,35 +172,60 @@ pub fn expression_uses(expr: &str, base: usize, out: &mut Vec<VarUse>) {
                 start: base + s,
                 end: base + e,
             },
+            guard: Vec::new(),
         });
     }
 }
 
 /// Every variable use in a parsed file. A `when:` value is treated as one expression; any
 /// other scalar is treated as literal text with `{{ }}` templates. Walks the raw tree so
-/// every scalar's span is exact.
+/// every scalar's span is exact, and accumulates the enclosing `when:` onto each use.
 pub fn uses(nodes: &[Node]) -> Vec<VarUse> {
     let mut out = Vec::new();
     for n in nodes {
-        walk_uses(n, false, &mut out);
+        walk_uses(n, false, &[], &mut out);
     }
     out
 }
 
-fn walk_uses(node: &Node, in_when: bool, out: &mut Vec<VarUse>) {
+/// The `when:` clauses on a mapping (a task/block), if any.
+fn when_of(node: &Node) -> Vec<String> {
+    match node.get("when") {
+        Some(Node::Sequence { items, .. }) => items
+            .iter()
+            .filter_map(|i| i.as_str().map(str::to_owned))
+            .collect(),
+        Some(other) => other.as_str().map(str::to_owned).into_iter().collect(),
+        None => Vec::new(),
+    }
+}
+
+fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>) {
     match node {
         Node::Scalar { value, span } => {
+            let before = out.len();
             if in_when {
                 expression_uses(value, span.start, out);
             } else {
                 template_uses(value, span.start, out);
             }
+            for u in &mut out[before..] {
+                u.guard = guard.to_vec();
+            }
         }
-        Node::Sequence { items, .. } => items.iter().for_each(|i| walk_uses(i, in_when, out)),
+        Node::Sequence { items, .. } => {
+            items.iter().for_each(|i| walk_uses(i, in_when, guard, out))
+        }
         Node::Mapping { entries, .. } => {
+            // This task/block's own `when:` guards the values inside it (its module args),
+            // accumulated onto whatever guard we inherited.
+            let mut inner = guard.to_vec();
+            inner.extend(when_of(node));
             for (k, v) in entries {
                 let is_when = k.as_str().map(short_key) == Some("when");
-                walk_uses(v, is_when, out);
+                // The `when:` expression itself isn't guarded by itself — use the outer guard.
+                let g: &[String] = if is_when { guard } else { &inner };
+                walk_uses(v, is_when, g, out);
             }
         }
         Node::Other { .. } => {}
@@ -624,6 +653,24 @@ mod tests {
         template_uses("{{ result.stat.exists | default(false) }}", 0, &mut out);
         let names: Vec<&str> = out.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, vec!["result"]);
+    }
+
+    #[test]
+    fn a_use_carries_its_task_when_as_its_guard() {
+        let src = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - debug: { msg: \"{{ x }}\" }\n",
+            "      when: inventory_hostname == 'web01'\n",
+            "    - debug: { msg: \"{{ y }}\" }\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let u = uses(&nodes);
+        let x = u.iter().find(|u| u.name == "x").unwrap();
+        assert_eq!(x.guard, vec!["inventory_hostname == 'web01'".to_string()]);
+        // y's task has no when:, so no guard.
+        let y = u.iter().find(|u| u.name == "y").unwrap();
+        assert!(y.guard.is_empty());
     }
 
     fn write(dir: &Path, rel: &str, body: &str) {
