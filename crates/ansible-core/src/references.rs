@@ -15,6 +15,8 @@ pub enum ReferenceKind {
     Module,
     /// `import_playbook:` — play-level, static, so never legitimately templated.
     ImportPlaybook,
+    /// `include_vars:` file target — a vars file that should exist.
+    IncludeVars,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +191,19 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
             }
         }
 
+        "include_vars" => {
+            // The file form (`x.yml` or `{ file: x.yml }`) is a file that must exist; the
+            // dir form (`{ dir: … }`) points at a directory and is left to the var indexer.
+            let target = match &a.args {
+                Node::Scalar { .. } => Some(&a.args),
+                Node::Mapping { .. } if a.args.get("dir").is_none() => a.args.get("file"),
+                _ => None,
+            };
+            if let Some(Node::Scalar { value, span }) = target {
+                out.push(Reference::new(ReferenceKind::IncludeVars, value, *span));
+            }
+        }
+
         _ => {
             // A 3-part dotted name in module position is a collection FQCN. The old walk
             // matched any 3-part *key*; the AST already knows this key is the module.
@@ -229,6 +244,18 @@ mod tests {
         let r = refs("- ansible.builtin.include_tasks: a.yml\n- import_tasks: b.yml\n");
         assert_eq!(r[0].kind, ReferenceKind::IncludeTasks);
         assert_eq!(r[1].kind, ReferenceKind::ImportTasks);
+    }
+
+    #[test]
+    fn include_vars_file_forms_are_references_dir_form_is_not() {
+        let r = of(
+            "- include_vars: a.yml\n- include_vars: { file: b.yml }\n- include_vars: { dir: vars }\n",
+            ReferenceKind::IncludeVars,
+        );
+        // Only the two file forms; the dir form is not a file reference.
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].value, "a.yml");
+        assert_eq!(r[1].value, "b.yml");
     }
 
     #[test]

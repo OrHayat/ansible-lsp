@@ -19,3 +19,12 @@
     - name: Same, as a block form
       ansible.builtin.include_vars:
         file: vars/db_settings.yml
+
+    # MISSING (missing-file): the target doesn't exist, so this warns — the include_vars
+    # path is checked for existence, just like include_tasks / import_playbook / a role.
+    - name: Load invalid file
+      ansible.builtin.include_vars: vars/not_exists.yml
+
+    # Templated target: skipped, never warned — the real path is only known at runtime.
+    - name: Templated target is not checked
+      ansible.builtin.include_vars: "{{ env }}.yml"

@@ -205,6 +205,19 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
                 .map(|b| normalise(&b.join(&r.value))),
         )),
 
+        // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
+        // project root — the places Ansible looks for a vars file.
+        ReferenceKind::IncludeVars => {
+            let mut bases = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
+            if let Some(role) = &ctx.role_dir {
+                bases.push(role.join("vars"));
+            }
+            if let Some(root) = &ctx.project_root {
+                bases.push(root.clone());
+            }
+            Resolution::from_candidates(unique(bases.iter().map(|b| normalise(&b.join(&r.value)))))
+        }
+
         ReferenceKind::Role => match role_dir(&r.value, ctx) {
             Some(dir) => {
                 let res = Resolution::from_candidates(with_ext(&dir.join("tasks"), "main"));
