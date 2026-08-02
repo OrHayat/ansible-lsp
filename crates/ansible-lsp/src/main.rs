@@ -8,7 +8,7 @@ use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Node};
 use ansible_core::references::{self, Reference, ReferenceKind};
-use ansible_core::resolve::{self, rule_id, Resolution, Status};
+use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
 use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
 
@@ -41,28 +41,42 @@ struct ResolvedRef {
 #[derive(Clone, Copy)]
 struct Settings {
     hints: bool,
+    /// Show the candidates hover on a reference that *resolved*. Off by default: the
+    /// winning target is already a Cmd+click away, so the list is noise unless asked for.
+    candidates_on_resolved: bool,
+    /// Show the candidates hover on a reference that was *not found*. On by default —
+    /// this is the "why didn't it resolve" case, where the paths tried are the answer.
+    candidates_on_missing: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hints: true }
+        Self {
+            hints: true,
+            candidates_on_resolved: false,
+            candidates_on_missing: true,
+        }
     }
 }
 
 impl Settings {
-    /// Reads `{ inlayHints: { enabled } }`. The client normalises both
-    /// `initializationOptions` and `didChangeConfiguration` to this one shape, so the
-    /// server doesn't have to know how VS Code nests things. Anything missing keeps its
-    /// default rather than silently turning a feature off.
+    /// Reads `{ inlayHints: { enabled }, hover: { candidatesOnResolved, candidatesOnMissing } }`.
+    /// The client normalises both `initializationOptions` and `didChangeConfiguration` to this
+    /// one shape, so the server doesn't have to know how VS Code nests things. Anything missing
+    /// keeps its default rather than silently turning a feature off.
     fn from_json(v: &serde_json::Value) -> Self {
         let d = Self::default();
-        let get = |key: &str, fallback: bool| {
-            v.get("inlayHints")
+        let get = |section: &str, key: &str, fallback: bool| {
+            v.get(section)
                 .and_then(|h| h.get(key))
                 .and_then(|b| b.as_bool())
                 .unwrap_or(fallback)
         };
-        Self { hints: get("enabled", d.hints) }
+        Self {
+            hints: get("inlayHints", "enabled", d.hints),
+            candidates_on_resolved: get("hover", "candidatesOnResolved", d.candidates_on_resolved),
+            candidates_on_missing: get("hover", "candidatesOnMissing", d.candidates_on_missing),
+        }
     }
 }
 
@@ -154,6 +168,7 @@ struct Backend {
 
 struct Analysis {
     doc: Document,
+    nodes: Vec<Node>,
     ctx: FileContext,
     refs: Vec<(Reference, Resolution)>,
 }
@@ -189,7 +204,7 @@ impl Backend {
                 (r, res)
             })
             .collect();
-        Some(Analysis { doc, ctx, refs })
+        Some(Analysis { doc, nodes, ctx, refs })
     }
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
@@ -206,8 +221,8 @@ impl Backend {
         };
         let mut diagnostics = Self::diagnostics_of(&a);
         diagnostics.extend(self.mutated_condition_diagnostics(&a));
-        if let (Ok(path), Some(nodes)) = (uri.to_file_path(), a.doc.parse()) {
-            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &nodes));
+        if let Ok(path) = uri.to_file_path() {
+            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
         }
         self.track(uri, &diagnostics);
         self.client
@@ -507,9 +522,10 @@ impl Backend {
         // them. A use with no reachable definition stays plain, matching go-to-definition's
         // silence (it may come from inventory or a caller). This walks includes/roles per
         // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
-        if let (Some(nodes), Ok(path)) = (a.doc.parse(), p.uri.to_file_path()) {
-            let all = cached_definitions(&path, &nodes);
-            for u in vars::uses(&nodes) {
+        if let Ok(path) = p.uri.to_file_path() {
+            let nodes = &a.nodes;
+            let all = cached_definitions(&path, nodes);
+            for u in vars::uses(nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
                 // so it's computed per use rather than once per name.
                 let n = all
@@ -585,14 +601,12 @@ impl Backend {
     /// its value and where that value is defined — so "why does this go to prod.yml" is
     /// answered in place.
     fn path_substitution_hover(
-        a: &Analysis,
+        doc: &Document,
         nodes: &[Node],
-        byte: usize,
+        r: &Reference,
+        res: &Resolution,
         path: &Path,
     ) -> Option<(String, Range)> {
-        let (r, res) = a.refs.iter().find(|(r, _)| {
-            r.value.contains("{{") && r.span.start <= byte && byte <= r.span.end
-        })?;
         let idents = template_idents(&r.value);
         if idents.is_empty() {
             return None;
@@ -607,7 +621,7 @@ impl Backend {
                 continue;
             };
             let document: &Document = if d.file == *path {
-                &a.doc
+                doc
             } else {
                 ext.entry(d.file.clone()).or_insert_with(|| {
                     Document::new(std::fs::read_to_string(&d.file).unwrap_or_default())
@@ -641,8 +655,8 @@ impl Backend {
         }
         md.push_str("Substituting:\n");
         md.push_str(&lines.join("\n"));
-        let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
-        let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+        let (sl, sc) = doc.byte_to_lsp(r.span.start);
+        let (el, ec) = doc.byte_to_lsp(r.span.end);
         Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
 
@@ -892,6 +906,40 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
         .to_string()
 }
 
+/// Hover markdown for a reference: the resolved target and every candidate tried, in
+/// order, marking the one that won. Missing references list what was tried; templated
+/// ones return `None` so the substitution hover explains the `{{ }}` instead.
+fn reference_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<String> {
+    match res.status {
+        Status::Resolved => {
+            let won = res.targets.first();
+            let mut s = String::from("**Tried:**");
+            for c in &res.candidates {
+                if Some(c) == won {
+                    s.push_str(&format!("\n- ✓ `{}` — won", shorten(c, ctx)));
+                } else {
+                    s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
+                }
+            }
+            Some(s)
+        }
+        Status::Missing => {
+            let mut s = format!("**✗ no file found for `{}`**\n\nTried:", r.value);
+            for c in &res.candidates {
+                s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
+            }
+            Some(s)
+        }
+        Status::Skipped => match res.skip_reason {
+            Some(SkipReason::Templated) => None,
+            Some(SkipReason::NotInWorkspace) => {
+                Some("**Skipped** — not in this workspace (a builtin, or installed outside it)".into())
+            }
+            None => None,
+        },
+    }
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, p: InitializeParams) -> Result<InitializeResult> {
@@ -1022,48 +1070,94 @@ impl LanguageServer for Backend {
         let settings = self.settings.lock().map(|s| *s).unwrap_or_default();
         let uri = &p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        let Some(a) = self.analyze(uri) else {
+        let Some(text) = self.text_of(uri) else {
             return Ok(None);
         };
-        let byte = a.doc.lsp_to_byte(pos.line, pos.character);
-        // `when:` hover, anchored on the reference value (the import path) — the thing you
-        // point at, already painted teal as clickable. Gated on the hints setting, like the
-        // inlay it replaced; variable hover below is always available.
-        if let Some((r, _)) = a.refs.iter().find(|(r, _)| {
-            settings.hints && !r.conditions.is_empty() && r.span.start <= byte && byte <= r.span.end
-        }) {
-            let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
-            let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+        let Ok(path) = uri.to_file_path() else {
+            return Ok(None);
+        };
+        let doc = Document::new(text);
+        let Some(nodes) = doc.parse() else {
+            return Ok(None);
+        };
+        let ctx = FileContext::discover(&path);
+        let byte = doc.lsp_to_byte(pos.line, pos.character);
+
+        // The reference under the cursor, extracted but not yet resolved. Resolving every
+        // reference in the file to answer a hover on one is the cost this path avoids:
+        // only the hovered reference is resolved, and only if a branch below needs it.
+        let mut refs = references::extract(&nodes);
+        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+            refs.extend(references::meta_dependencies(&nodes));
+        }
+        let hovered = refs
+            .into_iter()
+            .find(|r| r.span.start <= byte && byte <= r.span.end);
+
+        if let Some(r) = &hovered {
+            let (sl, sc) = doc.byte_to_lsp(r.span.start);
+            let (el, ec) = doc.byte_to_lsp(r.span.end);
+            let range = Range::new(Position::new(sl, sc), Position::new(el, ec));
+            // `when:` hover, anchored on the reference value (the import path) — the thing
+            // you point at. Gated on the hints setting, like the inlay it replaced. No
+            // resolution needed, so it never touches the disk.
+            if settings.hints && !r.conditions.is_empty() {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: when_hover(r),
+                    }),
+                    range: Some(range),
+                }));
+            }
+            // Resolve just this reference. A templated path gets the substitution hover
+            // (what the `{{ }}` expands to and where those values are defined); a literal
+            // one gets the resolved target and the candidates tried, winner marked.
+            let defs = cached_definitions(&path, &nodes);
+            let literals = vars::known_literals(&defs, &path, &doc.text);
+            let res = resolve::resolve_with(r, &ctx, &literals);
+            if r.templated {
+                if let Some((value, range)) =
+                    Self::path_substitution_hover(&doc, &nodes, r, &res, &path)
+                {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value,
+                        }),
+                        range: Some(range),
+                    }));
+                }
+            } else {
+                // Resolved refs stay quiet unless asked for (the target is a Cmd+click
+                // away); missing ones show what was tried, which is the whole point.
+                let wanted = match res.status {
+                    Status::Resolved | Status::Skipped => settings.candidates_on_resolved,
+                    Status::Missing => settings.candidates_on_missing,
+                };
+                if wanted {
+                    if let Some(value) = reference_hover(r, &res, &ctx) {
+                        return Ok(Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value,
+                            }),
+                            range: Some(range),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Variable hover: where the variable under the cursor is defined, and its value.
+        if let Some((value, range)) = Self::variable_hover_at(&doc, &nodes, byte, &path) {
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
-                    value: when_hover(r),
+                    value,
                 }),
-                range: Some(Range::new(Position::new(sl, sc), Position::new(el, ec))),
+                range: Some(range),
             }));
-        }
-        // Variable hover: where the variable under the cursor is defined, and its value.
-        if let (Ok(path), Some(nodes)) = (uri.to_file_path(), a.doc.parse()) {
-            // A templated path that resolved via known variables: explain the substitution —
-            // what it resolves to, and each variable's value and where it's defined.
-            if let Some((value, range)) = Self::path_substitution_hover(&a, &nodes, byte, &path) {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value,
-                    }),
-                    range: Some(range),
-                }));
-            }
-            if let Some((value, range)) = Self::variable_hover_at(&a.doc, &nodes, byte, &path) {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value,
-                    }),
-                    range: Some(range),
-                }));
-            }
         }
         Ok(None)
     }

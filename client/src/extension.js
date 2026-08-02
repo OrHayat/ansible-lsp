@@ -44,6 +44,10 @@ function hintSettings() {
   const c = vscode.workspace.getConfiguration("ansibleLsp");
   return {
     inlayHints: { enabled: c.get("inlayHints.enabled", true) },
+    hover: {
+      candidatesOnMissing: c.get("hover.candidatesOnMissing", true),
+      candidatesOnResolved: c.get("hover.candidatesOnResolved", false),
+    },
     ansiblePath: c.get("ansiblePath", ""),
   };
 }
@@ -136,7 +140,11 @@ function activate(context) {
     }),
     // Settings take effect immediately; the server asks VS Code to re-request hints.
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration("ansibleLsp.inlayHints")) return;
+      if (
+        !e.affectsConfiguration("ansibleLsp.inlayHints") &&
+        !e.affectsConfiguration("ansibleLsp.hover")
+      )
+        return;
       client?.sendNotification("workspace/didChangeConfiguration", {
         settings: hintSettings(),
       });
