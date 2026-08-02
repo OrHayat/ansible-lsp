@@ -32,6 +32,22 @@ message. Reporting at every node in the cycle turns one problem into N.
 Templated edges are the judgement call: a cycle that only exists through a glob candidate may
 never happen at runtime. Follow literal edges only, so this can't warn on correct code.
 
+Severity matrix, live-verified 2026-08-02:
+
+- **meta cycle → ERROR, unconditionally.** `when:` on the dependency edges does NOT help:
+  the recursion check runs at role load, before conditions exist. Proven: C1↔C2 with
+  `when: false` on both edges still dies with "A recursion loop was detected…".
+- **dynamic include cycle with a `when:` (or template) on ANY edge in the loop → silent.**
+  Guarded mutual `include_role` is valid Ansible (proven: B→A `when: 'group_1' in
+  group_names`, A→B `when: 'group_2' in group_names` runs clean, ok=3, for a host in one
+  group). Whether it loops depends on inventory we don't read — never warn.
+- **dynamic include cycle with no guard anywhere in the loop → WARNING.** Every host that
+  enters recurses to death, but entry itself may be conditional, so not ERROR.
+
+Also: the T-020 dependency is droppable for the reachable-from-open-file version — a
+path-stack during the existing walk reports the closing edge with no reverse index.
+Workspace-global detection (cycles in files nobody opens) stays with T-020.
+
 ## Done when
 
 - [ ] a fixture with a 2-file and a 3-file cycle both report
