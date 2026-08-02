@@ -354,10 +354,6 @@ pub fn effective(defs: &[Located]) -> Option<&Located> {
     })
 }
 
-/// How far to follow includes/roles when gathering set_fact/register. Matches
-/// [`crate::mutation`]'s cap; the definitions that matter are one or two hops away.
-const MAX_DEPTH: usize = 4;
-
 /// Sources whose span points at the variable's *value* (not its name), and whose value isn't
 /// host-dependent — so their literal can be read for path substitution (T-056).
 fn value_span_source(s: VarSource) -> bool {
@@ -541,7 +537,7 @@ pub fn definitions_with_deps(path: &Path, nodes: &[Node]) -> (Vec<Located>, Hash
     if let Ok(c) = path.canonicalize() {
         visited.insert(c);
     }
-    collect(path, nodes, 0, &mut out, &mut visited);
+    collect(path, nodes, &mut out, &mut visited);
     // Same var reached by two paths (e.g. a vars file two plays share) collapses.
     let mut seen = HashSet::new();
     out.retain(|d| seen.insert((d.name.clone(), d.file.clone(), d.span.start)));
@@ -551,7 +547,6 @@ pub fn definitions_with_deps(path: &Path, nodes: &[Node]) -> (Vec<Located>, Hash
 fn collect(
     path: &Path,
     nodes: &[Node],
-    depth: usize,
     out: &mut Vec<Located>,
     visited: &mut HashSet<PathBuf>,
 ) {
@@ -577,7 +572,7 @@ fn collect(
         // meta/main.yml dependencies run before this role, so their defaults/vars and
         // set_facts are in scope here — and, transitively, for whoever calls this role
         // (entering a dependency's files rediscovers *its* role context and deps).
-        if depth < MAX_DEPTH {
+        {
             let meta = role.join("meta").join("main.yml");
             if let Ok(text) = std::fs::read_to_string(&meta) {
                 if let Some(mnodes) = Document::new(text).parse() {
@@ -585,7 +580,7 @@ fn collect(
                     for dep in references::meta_dependencies(&mnodes) {
                         for target in resolve::resolve(&dep, &mctx).targets {
                             for f in role_task_files(&target) {
-                                collect_disk(&f, depth + 1, out, visited);
+                                collect_disk(&f, out, visited);
                             }
                         }
                     }
@@ -666,7 +661,7 @@ fn collect(
 
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
-    if depth < MAX_DEPTH {
+    {
         for r in references::extract(nodes) {
             if !matches!(
                 r.kind,
@@ -681,17 +676,17 @@ fn collect(
             for target in resolve::resolve(&r, &ctx).targets {
                 if r.kind == ReferenceKind::Role {
                     for f in role_task_files(&target) {
-                        collect_disk(&f, depth + 1, out, visited);
+                        collect_disk(&f, out, visited);
                     }
                 } else {
-                    collect_disk(&target, depth + 1, out, visited);
+                    collect_disk(&target, out, visited);
                 }
             }
         }
     }
 }
 
-fn collect_disk(path: &Path, depth: usize, out: &mut Vec<Located>, visited: &mut HashSet<PathBuf>) {
+fn collect_disk(path: &Path, out: &mut Vec<Located>, visited: &mut HashSet<PathBuf>) {
     let Ok(canon) = path.canonicalize() else { return };
     if !visited.insert(canon) {
         return;
@@ -702,7 +697,7 @@ fn collect_disk(path: &Path, depth: usize, out: &mut Vec<Located>, visited: &mut
     let Some(nodes) = Document::new(text).parse() else {
         return;
     };
-    collect(path, &nodes, depth, out, visited);
+    collect(path, &nodes, out, visited);
 }
 
 /// A role contributes every task file it has (`tasks_from` reaches beyond `main.yml`).
