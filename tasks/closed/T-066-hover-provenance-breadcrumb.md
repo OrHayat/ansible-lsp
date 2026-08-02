@@ -16,18 +16,23 @@ role.... meta.yaml:<line>.... yes").
 
 ## Approach
 
-- `Located` grows `via: Option<(PathBuf, Span)>` — the file and span of the *edge* that
-  pulled the defining file into scope.
-- Stamp it only where the route is non-obvious: the meta-dependency block in
-  `vars::collect`. Direct `roles:`, `include_tasks`, `vars_files` etc. stay un-stamped —
-  the user wrote those lines in the file they're hovering, the route is visible.
-- **One hop, nearest edge**: stamp entries added by each dependency's walk with that
-  dependency's line in `meta/main.yml`; on transitive chains the inner recursion stamps
-  first and outer levels don't overwrite, so a def always points at the meta edge that
-  *directly* names its role — the next file to open, not the whole chain.
-- Hover renders it as a suffix on the definition line:
-  `_(via dependency — [provisioner/meta/main.yml:7](…#L7))_`, clickable like the
-  definition link.
+- `Located` grows `via: Vec<(PathBuf, Span)>` — the chain of meta edges that pulled the
+  defining file into scope, ordered from the read file outward (mirrors Ansible's own
+  `dep_chain`). Shipped first as one-hop `Option`, upgraded to the full chain same day:
+  at depth ≥ 2 a single nearest edge points at a file that is itself invisible from the
+  hovered file, leaving the rest as detective work.
+- Stamp only where the route is non-obvious: each meta-dependency level in
+  `vars::collect` prepends its edge to everything its subtree added. Direct `roles:`,
+  `include_tasks`, `vars_files` etc. stay un-stamped — the user wrote those lines in the
+  file they're hovering, the route is visible.
+- Hover renders it as a stack trace under the definition line, innermost first, each hop
+  a clickable link (user-picked over a one-line arrow chain, which got unreadable at
+  depth ≥ 3):
+  `- required by \`chain-e\` — [chain-e/meta/main.yml:3](…#L3)`
+- **No length cap**, matching the MAX_DEPTH removal and real Ansible: chain length is
+  bounded by the visited set (once per role), cycles can't extend it.
+- Demo: `dependency_chain.yml` + `roles/chain-a..f` cover depths 0–5 in one file
+  (live-run: all six execute, deps first, `ok=12`).
 
 ## Done when
 
