@@ -19,11 +19,6 @@ use crate::references::{self, ReferenceKind};
 use crate::resolve;
 use crate::workspace::FileContext;
 
-/// How far to follow includes and roles. The bug needs the mutation to be *reachable*,
-/// and in practice it sits in a role's `tasks/main.yml` — one or two hops. A cap keeps
-/// this off the pathological end of a diamond-shaped include graph.
-const MAX_DEPTH: usize = 4;
-
 /// Variables `playbook` assigns while running, following roles and includes.
 ///
 /// Over-collecting is the safe direction for the caller: a name here only matters if it
@@ -31,14 +26,11 @@ const MAX_DEPTH: usize = 4;
 pub fn mutated_vars(playbook: &Path) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut visited = HashSet::new();
-    walk_file(playbook, 0, &mut out, &mut visited);
+    walk_file(playbook, &mut out, &mut visited);
     out
 }
 
-fn walk_file(path: &Path, depth: usize, out: &mut HashSet<String>, visited: &mut HashSet<PathBuf>) {
-    if depth > MAX_DEPTH {
-        return;
-    }
+fn walk_file(path: &Path, out: &mut HashSet<String>, visited: &mut HashSet<PathBuf>) {
     let Ok(canon) = path.canonicalize() else { return };
     if !visited.insert(canon) {
         return;
@@ -67,10 +59,10 @@ fn walk_file(path: &Path, depth: usize, out: &mut HashSet<String>, visited: &mut
                 // A role contributes every task file it has, not just main.yml —
                 // `tasks_from` reaches the others and they set facts too.
                 for f in role_task_files(&target) {
-                    walk_file(&f, depth + 1, out, visited);
+                    walk_file(&f, out, visited);
                 }
             } else {
-                walk_file(&target, depth + 1, out, visited);
+                walk_file(&target, out, visited);
             }
         }
     }
