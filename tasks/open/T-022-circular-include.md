@@ -19,6 +19,13 @@ Cycle detection over T-020's graph, following only edges that actually recurse a
 `include_tasks`, `import_tasks`, `include_role`/`import_role` and `meta` dependencies.
 `import_playbook` too, since a playbook importing itself is a hard error.
 
+Verified 2026-08-02 (2.21.2, `playbook/role/__init__.py:232`): a **meta-dependency cycle
+is a load-time hard error** — "A recursion loop was detected with the roles specified" —
+so that case is a provable failure and can be ERROR severity, quoting Ansible's message.
+The definitions walk (T-018) tolerates such cycles silently by design; this diagnostic is
+where they get reported. Ansible caps no walk by depth anywhere — cycle detection only —
+which is also the convention this codebase follows since the MAX_DEPTH removals.
+
 Report once per cycle, anchored at the reference that closes it, with the full path in the
 message. Reporting at every node in the cycle turns one problem into N.
 
