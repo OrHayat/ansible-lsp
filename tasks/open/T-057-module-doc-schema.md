@@ -75,6 +75,20 @@ does this merge; a faithful parser must too, or common options (e.g. connection 
   - **task args**: hover/completion for parameters; soft hint on an unknown parameter.
   - **register output**: attach the output tree to that `VarSource::Register` def so `X.field`
     can hover/complete, and `X.<not-a-field>` is a soft hint (walk `contains:` for nesting).
+    The typo case this exists for: `loaded.ansible_factsss` after
+    `include_vars: … register: loaded`.
+
+**The allow-list that keeps it honest:** the engine injects the [common return values]
+(https://docs.ansible.com/ansible/latest/reference_appendices/common_return_values.html) —
+`failed`, `changed`, `msg`, `skipped`, `results`, `rc`, `stdout`/`stderr`(+`_lines`), … —
+into registered results regardless of what the module's `RETURN` documents. `when: x.failed`
+is idiomatic on a module whose `RETURN` never mentions `failed`. These names are never
+flagged; only unknowns outside both the module schema *and* this set get the soft hint.
+
+Noted, explicitly out of scope: `RETURN` records the condition each field appears under
+(`returned: success` / `always` / …), so "reads a failure-only field on a task that cannot
+fail here (no `ignore_errors`, not in `rescue`)" is expressible. Not expected usage — do not
+build it, just don't lose that `returned:` carries this.
 
 ## Traps / limits
 
@@ -91,6 +105,9 @@ does this merge; a faithful parser must too, or common options (e.g. connection 
 - [ ] `extends_documentation_fragment` is merged for inputs
 - [ ] task parameters hover/complete from `DOCUMENTATION`; unknown param → soft hint
 - [ ] a registered var's sub-keys (`result.stdout`) hover/complete from `RETURN`, nesting via `contains:`
+- [ ] `loaded.ansible_factsss` (typo'd sub-key) gets a soft hint — pinned test
+- [ ] engine-injected common keys (`failed`, `changed`, `msg`, …) are never flagged, even when
+      absent from the module's `RETURN` — pinned test
 - [ ] schemas are cached per module file (rarely change), not re-parsed per request
 - [ ] modules missing the docstrings degrade to nothing (→ T-058), never a false error
 
