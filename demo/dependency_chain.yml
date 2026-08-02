@@ -44,3 +44,10 @@
     - name: depth 5 — from chain-f, five meta files away
       ansible.builtin.debug:
         msg: "{{ chain_depth5 }}"
+
+    # include_vars THROUGH the chain: chain-c's tasks load vars/settings.yml at runtime.
+    # Hover shows both facts at once — the mechanism (include_vars · settings.yml) on the
+    # definition line, and the route (required by chain-b, required by chain-a) underneath.
+    - name: depth 2, but loaded by an include_vars task inside chain-c
+      ansible.builtin.debug:
+        msg: "{{ chain_included }}"

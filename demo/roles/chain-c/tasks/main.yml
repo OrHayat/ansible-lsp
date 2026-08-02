@@ -1,2 +1,5 @@
 - ansible.builtin.debug:
     msg: "chain-c ran"
+
+- name: Load extra vars from this role's vars/ dir
+  ansible.builtin.include_vars: settings.yml

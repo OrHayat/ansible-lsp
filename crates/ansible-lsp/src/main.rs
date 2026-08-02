@@ -1262,6 +1262,16 @@ mod tests {
                 );
             }
         }
+
+        // include_vars through the chain: mechanism on the def line, route underneath.
+        let byte = text.find("{{ chain_included }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+            .expect("hover expected");
+        println!("--- chain_included ---\n{md}\n");
+        assert!(md.contains("include_vars"), "wrong source:\n{md}");
+        assert!(md.contains("chain-c/vars/settings.yml"), "wrong file:\n{md}");
+        assert!(md.contains("required by `chain-b`"), "missing inner hop:\n{md}");
+        assert!(md.contains("required by `chain-a`"), "missing outer hop:\n{md}");
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a
