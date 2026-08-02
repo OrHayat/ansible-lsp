@@ -29,16 +29,17 @@ Interim, honest bar until reachability catches up: flag a use only when its name
   definitions cache.
 - `undefined_uses` consults it as one more exemption, after the existing list.
 
-Costs, accepted deliberately:
+Costs — **proposed, not yet user-approved**, and possibly avoidable:
 
-- Weaker: a name defined in one unrelated corner shields a genuinely-missing use
-  elsewhere. That precision returns where it's decidable — T-059 (call sites), T-062
-  (inventory sources), T-060 (guarded near-miss).
-- The demo's `env` in `playbook.yml` goes silent (defined in a sibling playbook) — its
-  comment must be updated; `region` and `from_inventory` keep firing (defined nowhere).
-
-When T-062 lands, revisit: with inventory-adjacent sources indexed, the reachability bar
-may become tenable again — measure, don't assume.
+- Weaker: a name defined in one unrelated corner shields a *runtime-true* undefined use
+  elsewhere. The demo's `env` in `playbook.yml` is exactly that: defined only in a
+  sibling playbook's play vars, genuinely undefined when `playbook.yml` runs — today's
+  check warns correctly; this bar would silence it.
+- **Try T-062 first.** The 656 are dominated by the inventory-adjacent `group_vars` gap;
+  indexing those keeps the reachability bar (so `env` keeps its true warning) and
+  silences the false positives for the right reason. If the residual count after T-062
+  is small, this ticket closes unimplemented. Only if it stays high does the blunt bar —
+  and its precision cost — get decided, by the user, on the measured numbers.
 
 ## Done when
 
