@@ -1,0 +1,4 @@
+---
+# Read whenever network-base runs — including when it runs as a meta dependency of
+# another role. See roles/provisioner/meta/main.yml.
+network_mtu: 1500

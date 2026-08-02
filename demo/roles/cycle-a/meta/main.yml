@@ -1,0 +1,7 @@
+---
+# BROKEN, deliberately: cycle-a and cycle-b depend on each other. Ansible refuses this at
+# load time — "A recursion loop was detected with the roles specified" — before any task
+# runs. No diagnostic here yet (T-022 will make it an ERROR quoting that message); today
+# each edge still navigates, and the variable walk tolerates the loop (visited-set guard).
+dependencies:
+  - cycle-b

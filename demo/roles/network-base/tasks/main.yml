@@ -2,4 +2,10 @@
 # Exists only to be depended on — see roles/provisioner/meta/main.yml.
 - name: Bring up the demo network
   ansible.builtin.debug:
-    msg: "network up"
+    msg: "network up (mtu {{ network_mtu }})"
+
+# A fact set by the dependency: because network-base runs BEFORE provisioner, this is
+# already defined when provisioner's own tasks (and its caller's later tasks) run.
+- name: Mark the network ready
+  ansible.builtin.set_fact:
+    network_ready: true

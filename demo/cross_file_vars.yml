@@ -48,3 +48,11 @@
     - name: A group-scoped variable — only for hosts in the webservers group
       ansible.builtin.debug:
         msg: "listening on {{ http_port }}"
+
+    # TWO HOPS via a meta dependency: this playbook names only `provisioner`, whose
+    # meta/main.yml depends on network-base — which runs first and defines these. The walk
+    # follows playbook -> provisioner -> (meta dependency) -> network-base, so Cmd+click
+    # lands in the dependency and `var-undefined` correctly stays quiet here.
+    - name: A default from a role this playbook never names
+      ansible.builtin.debug:
+        msg: "mtu {{ network_mtu }}, ready: {{ network_ready | default(false) }}"

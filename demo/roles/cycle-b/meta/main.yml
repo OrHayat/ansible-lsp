@@ -1,0 +1,4 @@
+---
+# The other half of the deliberate cycle — see roles/cycle-a/meta/main.yml.
+dependencies:
+  - cycle-a

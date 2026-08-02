@@ -1,0 +1,4 @@
+---
+# Half of the deliberate dependency cycle; see meta/main.yml.
+- name: cycle-a task
+  ansible.builtin.debug: { msg: a }

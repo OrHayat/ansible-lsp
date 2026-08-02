@@ -4,3 +4,15 @@
 - name: Mark the provisioner ready
   ansible.builtin.set_fact:
     provisioner_ready: true
+
+# DEPENDENCY SCOPE: this role's meta/main.yml depends on network-base, which therefore
+# runs first — so its variables are already defined here. Cmd+click jumps INTO the
+# dependency; without the meta edge these would read as undefined.
+
+- name: Use a DEFAULT defined by the dependency (network-base/defaults/main.yml)
+  ansible.builtin.debug:
+    msg: "mtu is {{ network_mtu }}"
+
+- name: Use a FACT the dependency set (network-base/tasks/main.yml set_fact)
+  ansible.builtin.debug:
+    msg: "network ready: {{ network_ready }}"
