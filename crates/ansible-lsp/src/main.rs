@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::condition;
 use ansible_core::mutation;
@@ -74,6 +74,67 @@ impl tower_lsp::lsp_types::notification::Notification for AnsibleStatus {
     const METHOD: &'static str = "ansible/status";
 }
 
+// ---------------------------------------------------------- variable cache (T-055)
+// `vars::definitions` walks the filesystem (reads and parses every included file, role
+// vars, group_vars…) and is called from several per-keystroke paths. Cache each file's
+// result together with the set of files it read, and keep a reverse map file -> dependents,
+// so an edit invalidates exactly the entries that read the changed file — and nothing else.
+#[derive(Default)]
+struct VarCache {
+    entries: HashMap<PathBuf, Arc<Vec<vars::Located>>>,
+    deps: HashMap<PathBuf, HashSet<PathBuf>>,
+    reverse: HashMap<PathBuf, HashSet<PathBuf>>,
+}
+
+fn var_cache() -> &'static Mutex<VarCache> {
+    static C: OnceLock<Mutex<VarCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(VarCache::default()))
+}
+
+fn canon(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Cached `vars::definitions`. On a miss, compute it and record its dependency files in the
+/// reverse map so later invalidation is precise.
+fn cached_definitions(path: &Path, nodes: &[Node]) -> Arc<Vec<vars::Located>> {
+    let key = canon(path);
+    if let Some(hit) = var_cache().lock().ok().and_then(|c| c.entries.get(&key).cloned()) {
+        return hit;
+    }
+    let (result, deps) = vars::definitions_with_deps(path, nodes);
+    let arc = Arc::new(result);
+    if let Ok(mut cache) = var_cache().lock() {
+        for f in &deps {
+            cache.reverse.entry(f.clone()).or_default().insert(key.clone());
+        }
+        cache.deps.insert(key.clone(), deps);
+        cache.entries.insert(key, arc.clone());
+    }
+    arc
+}
+
+/// Drop every cache entry that read `file` (via the reverse map), plus one keyed by `file`
+/// itself — so editing a playbook OR any file it includes recomputes precisely.
+fn invalidate_var_cache(file: &Path) {
+    let f = canon(file);
+    let Ok(mut cache) = var_cache().lock() else {
+        return;
+    };
+    let mut keys: HashSet<PathBuf> = cache.reverse.get(&f).cloned().unwrap_or_default();
+    keys.insert(f);
+    for key in keys {
+        if let Some(dep_set) = cache.deps.remove(&key) {
+            for d in dep_set {
+                if let Some(r) = cache.reverse.get_mut(&d) {
+                    r.remove(&key);
+                }
+            }
+        }
+        cache.entries.remove(&key);
+    }
+}
+
 struct Backend {
     client: Client,
     docs: Mutex<HashMap<Url, String>>,
@@ -115,7 +176,8 @@ impl Backend {
         let ctx = FileContext::discover(path);
         // Variable values that are statically knowable, so a `{{ var }}` in a path can be
         // navigated to its real target (T-056). Navigation only — resolve_with never warns.
-        let literals = vars::known_literals(path, &doc.text, &nodes);
+        let defs = cached_definitions(path, &nodes);
+        let literals = vars::known_literals(&defs, path, &doc.text);
         let refs = references::extract(&nodes)
             .into_iter()
             .map(|r| {
@@ -243,7 +305,7 @@ impl Backend {
     /// defined") and only within the use's own condition vocabulary, so it can't false-warn
     /// on conditions it can't relate. Suppressible with `# noqa: var-uncovered-when`.
     fn variable_coverage_diagnostics(a: &Analysis, path: &Path, nodes: &[Node]) -> Vec<Diagnostic> {
-        let defs = vars::definitions(path, nodes);
+        let defs = cached_definitions(path, nodes);
         let mut out = Vec::new();
         for u in vars::uses(nodes) {
             if u.guard.is_empty() {
@@ -420,7 +482,7 @@ impl Backend {
         // silence (it may come from inventory or a caller). This walks includes/roles per
         // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
         if let (Some(nodes), Ok(path)) = (a.doc.parse(), p.uri.to_file_path()) {
-            let all = vars::definitions(&path, &nodes);
+            let all = cached_definitions(&path, &nodes);
             for u in vars::uses(&nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
                 // so it's computed per use rather than once per name.
@@ -465,9 +527,10 @@ impl Backend {
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
-        let defs: Vec<vars::Located> = vars::definitions(&path, nodes)
-            .into_iter()
+        let defs: Vec<vars::Located> = cached_definitions(&path, nodes)
+            .iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(&path, use_.span.start))
+            .cloned()
             .collect();
         // Jump to the definition that actually applies here — highest precedence, latest on a
         // tie — rather than a picker of every assignment. (hover lists them all, ranked.)
@@ -508,7 +571,7 @@ impl Backend {
         if idents.is_empty() {
             return None;
         }
-        let defs = vars::definitions(path, nodes);
+        let defs = cached_definitions(path, nodes);
         let mut texts: HashMap<PathBuf, String> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
@@ -565,9 +628,10 @@ impl Backend {
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
-        let mut defs: Vec<vars::Located> = vars::definitions(path, nodes)
-            .into_iter()
+        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes)
+            .iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
+            .cloned()
             .collect();
         if defs.is_empty() {
             return None;
@@ -955,6 +1019,9 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
         let uri = p.text_document.uri;
+        if let Ok(path) = uri.to_file_path() {
+            invalidate_var_cache(&path);
+        }
         if let Ok(mut d) = self.docs.lock() {
             d.insert(uri.clone(), p.text_document.text);
         }
@@ -967,6 +1034,11 @@ impl LanguageServer for Backend {
             return;
         };
         let uri = p.text_document.uri;
+        // This file changed — drop cached variable results that read it (and any that
+        // include it), so the next analyse recomputes with the new content.
+        if let Ok(path) = uri.to_file_path() {
+            invalidate_var_cache(&path);
+        }
         if let Ok(mut d) = self.docs.lock() {
             d.insert(uri.clone(), change.text);
         }

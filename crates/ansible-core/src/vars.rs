@@ -377,14 +377,14 @@ fn value_span_source(s: VarSource) -> bool {
 /// or a value that is itself templated. `text` is the in-memory source of `path`, so
 /// same-file spans slice correctly; other files are read from disk.
 pub fn known_literals(
+    defs: &[Located],
     path: &Path,
     text: &str,
-    nodes: &[Node],
 ) -> std::collections::HashMap<String, Vec<String>> {
     use std::collections::HashMap;
     let mut disk: HashMap<PathBuf, String> = HashMap::new();
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    for d in definitions(path, nodes) {
+    for d in defs {
         if !value_span_source(d.source) {
             continue;
         }
@@ -400,7 +400,7 @@ pub fn known_literals(
         if value.is_empty() || value.contains("{{") {
             continue;
         }
-        let vals = out.entry(d.name).or_default();
+        let vals = out.entry(d.name.clone()).or_default();
         if !vals.contains(&value) {
             vals.push(value);
         }
@@ -418,7 +418,14 @@ pub fn known_literals(
 /// passes vars), plus inventory and `-e`, aren't visible here — so absence is not proof a
 /// variable is undefined.
 pub fn definitions(path: &Path, nodes: &[Node]) -> Vec<Located> {
+    definitions_with_deps(path, nodes).0
+}
+
+/// [`definitions`] plus the set of files it read (canonicalised) — its dependencies, so a
+/// cache can invalidate this result precisely when any of them changes.
+pub fn definitions_with_deps(path: &Path, nodes: &[Node]) -> (Vec<Located>, HashSet<PathBuf>) {
     let mut out = Vec::new();
+    // `visited` doubles as the dependency set: every file the walk reads is recorded here.
     let mut visited = HashSet::new();
     if let Ok(c) = path.canonicalize() {
         visited.insert(c);
@@ -427,7 +434,7 @@ pub fn definitions(path: &Path, nodes: &[Node]) -> Vec<Located> {
     // Same var reached by two paths (e.g. a vars file two plays share) collapses.
     let mut seen = HashSet::new();
     out.retain(|d| seen.insert((d.name.clone(), d.file.clone(), d.span.start)));
-    out
+    (out, visited)
 }
 
 fn collect(
@@ -453,8 +460,8 @@ fn collect(
 
     // The enclosing role's defaults/ and vars/ — fixed locations, no search.
     if let Some(role) = &ctx.role_dir {
-        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out);
-        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out);
+        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, visited, out);
+        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, visited, out);
     }
 
     // Play-level vars_files — explicit paths written in the play.
@@ -466,7 +473,7 @@ fn collect(
                         continue;
                     }
                     if let Some(f) = resolve_var_path(entry, &ctx) {
-                        read_var_file(&f, VarSource::VarsFiles, None, out);
+                        read_var_file(&f, VarSource::VarsFiles, None, visited, out);
                     }
                 }
             }
@@ -484,7 +491,7 @@ fn collect(
         if let Some(dir) = a.args.get("dir").and_then(|n| n.as_str()) {
             if !dir.contains("{{") {
                 if let Some(d) = resolve_dir_path(dir, &ctx) {
-                    read_dir_files(&d, VarSource::IncludeVars, cond, out);
+                    read_dir_files(&d, VarSource::IncludeVars, cond, visited, out);
                 }
             }
             return;
@@ -497,7 +504,7 @@ fn collect(
         if let Some(f) = file {
             if !f.contains("{{") {
                 if let Some(path) = resolve_var_path(f, &ctx) {
-                    read_var_file(&path, VarSource::IncludeVars, cond, out);
+                    read_var_file(&path, VarSource::IncludeVars, cond, visited, out);
                 }
             }
         }
@@ -506,8 +513,8 @@ fn collect(
     // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
     // a workspace scan. The inventory-adjacent copies (next to a separate inventory file)
     // need the inventory's location, which we don't guess, so those stay unindexed.
-    read_var_dir(&ctx.file_dir.join("group_vars"), true, out);
-    read_var_dir(&ctx.file_dir.join("host_vars"), false, out);
+    read_var_dir(&ctx.file_dir.join("group_vars"), true, visited, out);
+    read_var_dir(&ctx.file_dir.join("host_vars"), false, visited, out);
 
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
@@ -561,7 +568,7 @@ fn role_task_files(role_main: &Path) -> Vec<PathBuf> {
 /// Read every `*.yml` in a playbook-adjacent `group_vars/` or `host_vars/` directory. The
 /// source is derived from the file name: `group_vars/all` applies to all hosts, any other
 /// name is group- or host-scoped.
-fn read_var_dir(dir: &Path, group: bool, out: &mut Vec<Located>) {
+fn read_var_dir(dir: &Path, group: bool, visited: &mut HashSet<PathBuf>, out: &mut Vec<Located>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -581,12 +588,18 @@ fn read_var_dir(dir: &Path, group: bool, out: &mut Vec<Located>) {
         } else {
             VarSource::GroupVars
         };
-        read_var_file(&p, source, None, out);
+        read_var_file(&p, source, None, visited, out);
     }
 }
 
 /// Read every `*.yml` in a directory as one source — the `include_vars: { dir: … }` form.
-fn read_dir_files(dir: &Path, source: VarSource, condition: Option<String>, out: &mut Vec<Located>) {
+fn read_dir_files(
+    dir: &Path,
+    source: VarSource,
+    condition: Option<String>,
+    visited: &mut HashSet<PathBuf>,
+    out: &mut Vec<Located>,
+) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -596,17 +609,27 @@ fn read_dir_files(dir: &Path, source: VarSource, condition: Option<String>, out:
             p.extension().and_then(|s| s.to_str()),
             Some("yml") | Some("yaml")
         ) {
-            read_var_file(&p, source, condition.clone(), out);
+            read_var_file(&p, source, condition.clone(), visited, out);
         }
     }
 }
 
 /// Read a flat `name: value` vars file and index every top-level key. `condition` is the
-/// `when:` guarding the load, if any (only `include_vars`, a task, can carry one).
-fn read_var_file(file: &Path, source: VarSource, condition: Option<String>, out: &mut Vec<Located>) {
+/// `when:` guarding the load, if any (only `include_vars`, a task, can carry one). Records
+/// the file (canonicalised) in `visited` as a dependency.
+fn read_var_file(
+    file: &Path,
+    source: VarSource,
+    condition: Option<String>,
+    visited: &mut HashSet<PathBuf>,
+    out: &mut Vec<Located>,
+) {
     let Ok(text) = std::fs::read_to_string(file) else {
         return;
     };
+    if let Ok(c) = file.canonicalize() {
+        visited.insert(c);
+    }
     let Some(nodes) = Document::new(text).parse() else {
         return;
     };
@@ -866,6 +889,33 @@ mod tests {
     }
 
     #[test]
+    fn deps_include_the_files_the_walk_read() {
+        let d = std::env::temp_dir().join("ansible-lsp-deps");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/shared.yml", "x: 1\n");
+        write(&d, "roles/r/tasks/main.yml", "- set_fact: { y: 2 }\n");
+        let play = d.join("play.yml");
+        std::fs::write(
+            &play,
+            "- hosts: all\n  vars_files: [vars/shared.yml]\n  roles: [r]\n",
+        )
+        .unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap())
+            .parse()
+            .unwrap();
+        let (_defs, deps) = definitions_with_deps(&play, &nodes);
+        // A change to any of these must be able to invalidate this file's cached result.
+        let has = |rel: &str| {
+            let want = d.join(rel).canonicalize().unwrap();
+            deps.iter().any(|p| *p == want)
+        };
+        assert!(has("play.yml"), "the root itself");
+        assert!(has("vars/shared.yml"), "the vars_files target");
+        assert!(has("roles/r/tasks/main.yml"), "the included role task file");
+    }
+
+    #[test]
     fn known_literals_takes_value_span_sources_only() {
         let d = std::env::temp_dir().join("ansible-lsp-lits");
         let _ = std::fs::remove_dir_all(&d);
@@ -883,7 +933,8 @@ mod tests {
         let nodes = Document::new(std::fs::read_to_string(&play).unwrap())
             .parse()
             .unwrap();
-        let lits = known_literals(&play, src, &nodes);
+        let defs = definitions(&play, &nodes);
+        let lits = known_literals(&defs, &play, src);
         assert_eq!(lits.get("env"), Some(&vec!["prod".to_string()])); // play var value
         assert!(!lits.contains_key("built")); // set_fact span is the name, excluded
         assert!(!lits.contains_key("region")); // host_vars is host-dependent, excluded
