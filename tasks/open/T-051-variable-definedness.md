@@ -67,6 +67,7 @@ own expression or guard handles undefinedness (`default(…)`, `is defined`). Di
       (playbooks only, pinned)
 - [x] corpus gate: zero hits on `~/app/ansible`; the demo's three are deliberate and
       labelled in their comments
-- [ ] supersedes T-033 (the `when:`-only version), or explicitly narrows to it — the base
-      case covers `when:` names too (uses() walks them, with the definedness softening);
-      T-033's fate needs its ticket read before closing
+- [x] supersedes T-033 (the `when:`-only version), or explicitly narrows to it — resolved
+      by splitting T-033: its playbook-level unguarded class is absorbed here; the
+      near-miss rule (T-060), `-e` contract (T-061), and inventory indexing (T-062) are
+      their own tickets, with caller-level checking opened as T-059

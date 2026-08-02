@@ -2,7 +2,13 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P1       | L    | —          |
+| closed | —        | L    | —          |
+
+**Split 2026-08-02.** The playbook-level unguarded class shipped as T-051's
+`var-undefined`; the rest became per-feature tickets: **T-060** (`suspicious-var`
+near-miss, the SILENT class), **T-061** (`undeclared-var` `-e` contract, the LOUD class),
+**T-062** (ini inventories / extension-less group_vars — the index gap that inflated the
+counts here). The corpus research below is preserved as the source data for those three.
 
 ## Problem
 
