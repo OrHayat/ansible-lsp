@@ -322,11 +322,12 @@ pub struct Located {
     pub file: PathBuf,
     /// The `when:` guarding the defining task, if any (see [`VarDef::condition`]).
     pub condition: Option<String>,
-    /// The edge that pulled the defining file into scope, when that route isn't written in
-    /// the file being read — today only `meta/main.yml` dependencies (T-066). The span is
-    /// the dependency entry inside the meta file. Nearest edge on transitive chains: a def
-    /// points at the meta file that directly names its role.
-    pub via: Option<(PathBuf, Span)>,
+    /// The chain of edges that pulled the defining file into scope, when that route isn't
+    /// written in the file being read — today only `meta/main.yml` dependencies (T-066).
+    /// Each element is (meta file, span of the dependency entry), ordered from the read
+    /// file outward — the order you'd follow the links. Empty when the route is visible
+    /// (in-file, direct role, include). Mirrors Ansible's own `dep_chain`.
+    pub via: Vec<(PathBuf, Span)>,
 }
 
 impl Located {
@@ -566,7 +567,7 @@ fn collect(
             span: d.span,
             file: path.to_path_buf(),
             condition: d.condition.clone(),
-            via: None,
+            via: Vec::new(),
         });
     }
 
@@ -590,10 +591,11 @@ fn collect(
                                 collect_disk(&f, out, visited);
                             }
                         }
-                        // Provenance breadcrumb (T-066): everything this dependency's walk
-                        // added arrived through an edge invisible from the hovered file.
-                        // Deeper recursion has already stamped its own entries, so skipping
-                        // Some leaves each def pointing at its nearest meta edge.
+                        // Provenance chain (T-066): everything this dependency's walk added
+                        // arrived through an edge invisible from the hovered file. Deeper
+                        // recursion has already stamped its own edges, so prepending here
+                        // builds each def's chain outermost-first — the order a reader
+                        // follows the links from where they're hovering.
                         //
                         // When a role is reachable both here and directly, whichever route
                         // the walk (document order, deps-first) reaches first claims its
@@ -602,9 +604,7 @@ fn collect(
                         // "role has already run", allow_duplicates false by default for
                         // roles:/deps), so the first route IS the one that executes.
                         for d in &mut out[start..] {
-                            if d.via.is_none() {
-                                d.via = Some((meta.clone(), dep.span));
-                            }
+                            d.via.insert(0, (meta.clone(), dep.span));
                         }
                     }
                 }
@@ -787,7 +787,7 @@ fn read_var_file(
                         span: v.span(),
                         file: file.to_path_buf(),
                         condition: condition.clone(),
-                        via: None,
+                        via: Vec::new(),
                     });
                 }
             }
@@ -948,8 +948,8 @@ mod tests {
 
         // T-066: base's defs arrived through app's meta edge, and carry it as provenance.
         let mtu = defs.iter().find(|x| x.name == "base_mtu").unwrap();
-        let (via_file, _) = mtu.via.as_ref().unwrap();
-        assert!(via_file.ends_with("roles/app/meta/main.yml"));
+        assert_eq!(mtu.via.len(), 1);
+        assert!(mtu.via[0].0.ends_with("roles/app/meta/main.yml"));
     }
 
     /// T-066: a role the playbook names directly needs no breadcrumb — the route is the
@@ -966,7 +966,7 @@ mod tests {
 
         let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
         let defs = definitions(&play, &nodes);
-        assert!(defs.iter().find(|x| x.name == "app_port").unwrap().via.is_none());
+        assert!(defs.iter().find(|x| x.name == "app_port").unwrap().via.is_empty());
     }
 
     /// T-066: a role reachable both directly and as a meta dependency gets its breadcrumb
@@ -993,15 +993,17 @@ mod tests {
         // [app, base]: base executes as app's dependency; the direct listing is the
         // skipped copy — breadcrumb present.
         let via = via_of("[app, base]");
-        assert!(via.as_ref().unwrap().0.ends_with("roles/app/meta/main.yml"));
+        assert_eq!(via.len(), 1);
+        assert!(via[0].0.ends_with("roles/app/meta/main.yml"));
         // [base, app]: base executes directly; the dep copy is skipped — no breadcrumb.
-        assert!(via_of("[base, app]").is_none());
+        assert!(via_of("[base, app]").is_empty());
     }
 
-    /// T-066: on a transitive chain a -> b -> c, c's defs point at b's meta — the edge that
-    /// directly names c, i.e. the next file to open — not a's.
+    /// T-066: on a transitive chain a -> b -> c, c's defs carry the full chain outermost
+    /// first — a's meta (naming b), then b's meta (naming c) — the order a reader follows
+    /// the links from the playbook.
     #[test]
-    fn transitive_dep_via_points_at_nearest_meta_edge() {
+    fn transitive_dep_via_carries_the_full_chain_in_reading_order() {
         let d = std::env::temp_dir().join("ansible-lsp-t066-chain");
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -1017,8 +1019,9 @@ mod tests {
         let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
         let defs = definitions(&play, &nodes);
         let c = defs.iter().find(|x| x.name == "c_var").unwrap();
-        let (via_file, _) = c.via.as_ref().unwrap();
-        assert!(via_file.ends_with("roles/b/meta/main.yml"), "got {}", via_file.display());
+        assert_eq!(c.via.len(), 2);
+        assert!(c.via[0].0.ends_with("roles/a/meta/main.yml"), "got {}", c.via[0].0.display());
+        assert!(c.via[1].0.ends_with("roles/b/meta/main.yml"), "got {}", c.via[1].0.display());
     }
 
     /// A dependency cycle (a <-> b) must terminate — the walk's visited set is the guard,
@@ -1192,7 +1195,7 @@ mod tests {
             span: Span { start, end: start + 1 },
             file: PathBuf::from("f.yml"),
             condition: None,
-            via: None,
+            via: Vec::new(),
         };
         // set_fact (19) beats a play var (12) regardless of position.
         let defs = vec![mk(VarSource::PlayVars, 10), mk(VarSource::SetFact, 5)];
@@ -1212,7 +1215,7 @@ mod tests {
             span: Span { start: 100, end: 110 },
             file: file.to_path_buf(),
             condition: None,
-            via: None,
+            via: Vec::new(),
         };
         // A use before the set_fact: not yet defined by it.
         assert!(!sf.in_effect_at(file, 50));

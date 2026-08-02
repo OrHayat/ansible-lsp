@@ -674,24 +674,29 @@ impl Backend {
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for (i, d) in defs.iter().enumerate() {
-            // Provenance breadcrumb (T-066): how a def from a role never named in this
-            // file got into scope — the meta/main.yml dependency line, clickable. Only
-            // non-obvious routes carry `via`; direct roles/includes stay bare.
-            let via = d
-                .via
-                .as_ref()
-                .map(|(vf, vs)| {
-                    let vdoc = ext.entry(vf.clone()).or_insert_with(|| {
-                        Document::new(std::fs::read_to_string(vf).unwrap_or_default())
-                    });
-                    let vline = vdoc.line_of(vs.start);
-                    let vlabel = format!("{}:{vline}", short_path(vf));
-                    match Url::from_file_path(vf) {
-                        Ok(u) => format!(" _(via dependency — [{vlabel}]({u}#L{vline}))_"),
-                        Err(()) => format!(" _(via dependency — `{vlabel}`)_"),
-                    }
-                })
-                .unwrap_or_default();
+            // Provenance chain (T-066): how a def from a role never named in this file got
+            // into scope — each meta/main.yml dependency hop, outermost first, clickable.
+            // Only non-obvious routes carry `via`; direct roles/includes stay bare.
+            let via = if d.via.is_empty() {
+                String::new()
+            } else {
+                let hops: Vec<String> = d
+                    .via
+                    .iter()
+                    .map(|(vf, vs)| {
+                        let vdoc = ext.entry(vf.clone()).or_insert_with(|| {
+                            Document::new(std::fs::read_to_string(vf).unwrap_or_default())
+                        });
+                        let vline = vdoc.line_of(vs.start);
+                        let vlabel = format!("{}:{vline}", short_path(vf));
+                        match Url::from_file_path(vf) {
+                            Ok(u) => format!("[{vlabel}]({u}#L{vline})"),
+                            Err(()) => format!("`{vlabel}`"),
+                        }
+                    })
+                    .collect();
+                format!(" _(via dependency — {})_", hops.join(" → "))
+            };
             let document: &Document = if d.file == *path {
                 doc
             } else {
@@ -1219,6 +1224,39 @@ mod tests {
         assert!(mtu.contains("via dependency"), "no breadcrumb in: {mtu}");
         assert!(mtu.contains("provisioner/meta/main.yml"), "wrong edge in: {mtu}");
         assert!(!hover("provisioner_user").contains("via dependency"));
+    }
+
+    /// T-066 chain rendering against demo/dependency_chain.yml: depth N shows exactly the
+    /// N meta hops, outermost first (chain-a/meta → … ), depth 0 none.
+    #[test]
+    fn hover_renders_the_full_dependency_chain_per_depth() {
+        let path = std::path::Path::new("../../demo/dependency_chain.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+
+        for depth in 0..=5usize {
+            let name = format!("chain_depth{depth}");
+            let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
+            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+                .expect("hover expected");
+            println!("--- {name} ---\n{md}\n");
+            // Each hop is one markdown link; hops are joined with " → ".
+            let hops = if md.contains("via dependency") { md.matches(" → ").count() + 1 } else { 0 };
+            assert_eq!(hops, depth, "depth {depth} should render {depth} hops:\n{md}");
+            // Outermost hop first: every chain starts at the role this playbook names.
+            if depth > 0 {
+                assert!(md.contains("chain-a/meta/main.yml"), "chain must start at chain-a:\n{md}");
+                assert!(
+                    md.contains(&format!("chain-{}/meta/main.yml", (b'a' + depth as u8 - 1) as char)),
+                    "chain must end at the meta naming the defining role:\n{md}"
+                );
+            } else {
+                assert!(!md.contains("via dependency"), "depth 0 must have no breadcrumb:\n{md}");
+            }
+        }
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a

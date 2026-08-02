@@ -1,0 +1,43 @@
+---
+# Hover provenance chains (T-066). This playbook names ONE role, chain-a — but its
+# meta/main.yml pulls in chain-b, whose meta pulls in chain-c, and so on to chain-f.
+# All six roles run (dependencies first: f, e, d, c, b, a), so all six variables below
+# are defined. Hover each {{ chain_depthN }}: the definition line ends with a clickable
+# breadcrumb of every meta/main.yml hop you'd follow to see why the role is in scope —
+# none for depth 0 (the role is named right here), five hops for depth 5.
+#
+#   chain_depth0  (no breadcrumb — chain-a is written in this file)
+#   chain_depth1  via chain-a/meta/main.yml
+#   chain_depth2  via chain-a/meta → chain-b/meta
+#   chain_depth5  via chain-a/meta → chain-b/meta → chain-c/meta → chain-d/meta → chain-e/meta
+
+- name: Dependency-chain provenance demo
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - chain-a
+
+  tasks:
+    - name: depth 0 — from chain-a, named directly above
+      ansible.builtin.debug:
+        msg: "{{ chain_depth0 }}"
+
+    - name: depth 1 — from chain-b, a's dependency
+      ansible.builtin.debug:
+        msg: "{{ chain_depth1 }}"
+
+    - name: depth 2 — from chain-c
+      ansible.builtin.debug:
+        msg: "{{ chain_depth2 }}"
+
+    - name: depth 3 — from chain-d
+      ansible.builtin.debug:
+        msg: "{{ chain_depth3 }}"
+
+    - name: depth 4 — from chain-e
+      ansible.builtin.debug:
+        msg: "{{ chain_depth4 }}"
+
+    - name: depth 5 — from chain-f, five meta files away
+      ansible.builtin.debug:
+        msg: "{{ chain_depth5 }}"
