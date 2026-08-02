@@ -594,6 +594,13 @@ fn collect(
                         // added arrived through an edge invisible from the hovered file.
                         // Deeper recursion has already stamped its own entries, so skipping
                         // Some leaves each def pointing at its nearest meta edge.
+                        //
+                        // When a role is reachable both here and directly, whichever route
+                        // the walk (document order, deps-first) reaches first claims its
+                        // files via `visited` — deliberately: Ansible compiles both copies
+                        // and skips the second at runtime per host (play_iterator.py
+                        // "role has already run", allow_duplicates false by default for
+                        // roles:/deps), so the first route IS the one that executes.
                         for d in &mut out[start..] {
                             if d.via.is_none() {
                                 d.via = Some((meta.clone(), dep.span));

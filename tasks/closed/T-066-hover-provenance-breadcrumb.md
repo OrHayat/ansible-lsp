@@ -40,3 +40,17 @@ role.... meta.yaml:<line>.... yes").
       `transitive_dep_via_points_at_nearest_meta_edge`)
 - [x] cycle fixture still terminates with `via` stamping on
       (`mutual_meta_dependencies_terminate_and_both_contribute` still green)
+
+## Note — first-route-wins is deliberate (verified 2026-08-02)
+
+A role reachable both directly and as a meta dependency gets its breadcrumb (or lack of
+one) from whichever route the walk reaches first. That looked like an order-dependence
+bug and a "strip via when also directly named" post-pass was almost added — then killed
+by source verification: Ansible compiles *both* copies of the role's tasks
+(`Role.compile`, deps-first) and skips the later copy per host at iteration time
+(`play_iterator.py` "role has already run"; `allow_duplicates` defaults false for
+`roles:`/deps, identity = name+path+params+when+tags via `Role.__eq__`). So the first
+route in listed order is the one that actually executes, and the walk's stamping matches
+runtime truth in both orders. `include_role`/`import_role` are exempt from the dedup
+(task-level `allow_duplicates` defaults **true** and overwrites the role's meta,
+`role_include.py:51,88`) — irrelevant here since only meta edges get breadcrumbs.
