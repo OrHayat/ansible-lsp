@@ -28,13 +28,13 @@ role.... meta.yaml:<line>.... yes").
 - Hover renders it as a stack trace under the definition line, innermost first, each hop
   a clickable link (user-picked over a one-line arrow chain, which got unreadable at
   depth ≥ 3):
-  `- required by \`chain-e\` — [chain-e/meta/main.yml:3](…#L3)`
+  `- dependency of \`chain-e\` — [chain-e/meta/main.yml:3](…#L3)`
 - **No length cap**, matching the MAX_DEPTH removal and real Ansible: chain length is
   bounded by the visited set (once per role), cycles can't extend it.
 - Demo: `dependency_chain.yml` + `roles/chain-a..f` cover depths 0–5 in one file
   (live-run: all six execute, deps first), plus `chain_included` — a var loaded by an
   `include_vars` task inside chain-c, showing mechanism on the def line and the
-  required-by route underneath (live-run verified, pinned in the chain hover test).
+  dependency-of route underneath (live-run verified, pinned in the chain hover test).
 
 ## Done when
 

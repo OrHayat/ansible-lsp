@@ -3,16 +3,16 @@
 # meta/main.yml pulls in chain-b, whose meta pulls in chain-c, and so on to chain-f.
 # All six roles run (dependencies first: f, e, d, c, b, a), so all six variables below
 # are defined. Hover each {{ chain_depthN }}: under the definition line, a stack trace of
-# "required by" hops — innermost first, each a clickable meta/main.yml link — shows why
+# "dependency of" hops — innermost first, each a clickable meta/main.yml link — shows why
 # the defining role is in scope. None for depth 0 (chain-a is named right here); five
 # lines for depth 5:
 #
 #   - role default · chain-f/defaults/main.yml:1 = "defined in chain-f"
-#     - required by chain-e — chain-e/meta/main.yml:3
-#     - required by chain-d — chain-d/meta/main.yml:3
-#     - required by chain-c — chain-c/meta/main.yml:3
-#     - required by chain-b — chain-b/meta/main.yml:3
-#     - required by chain-a — chain-a/meta/main.yml:3   (the role this playbook names)
+#     - dependency of chain-e — chain-e/meta/main.yml:3
+#     - dependency of chain-d — chain-d/meta/main.yml:3
+#     - dependency of chain-c — chain-c/meta/main.yml:3
+#     - dependency of chain-b — chain-b/meta/main.yml:3
+#     - dependency of chain-a — chain-a/meta/main.yml:3   (the role this playbook names)
 
 - name: Dependency-chain provenance demo
   hosts: localhost
@@ -47,7 +47,7 @@
 
     # include_vars THROUGH the chain: chain-c's tasks load vars/settings.yml at runtime.
     # Hover shows both facts at once — the mechanism (include_vars · settings.yml) on the
-    # definition line, and the route (required by chain-b, required by chain-a) underneath.
+    # definition line, and the route (dependency of chain-b, dependency of chain-a) underneath.
     - name: depth 2, but loaded by an include_vars task inside chain-c
       ansible.builtin.debug:
         msg: "{{ chain_included }}"

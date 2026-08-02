@@ -700,7 +700,7 @@ impl Backend {
                         Ok(u) => format!("[{vlabel}]({u}#L{vline})"),
                         Err(()) => format!("`{vlabel}`"),
                     };
-                    format!("  - required by `{role}` — {link}")
+                    format!("  - dependency of `{role}` — {link}")
                 })
                 .collect();
             let document: &Document = if d.file == *path {
@@ -1226,9 +1226,9 @@ mod tests {
                 .0
         };
         let mtu = hover("network_mtu");
-        assert!(mtu.contains("required by `provisioner`"), "no breadcrumb in: {mtu}");
+        assert!(mtu.contains("dependency of `provisioner`"), "no breadcrumb in: {mtu}");
         assert!(mtu.contains("provisioner/meta/main.yml"), "wrong edge in: {mtu}");
-        assert!(!hover("provisioner_user").contains("required by"));
+        assert!(!hover("provisioner_user").contains("dependency of"));
     }
 
     /// T-066 chain rendering against demo/dependency_chain.yml: depth N shows exactly the
@@ -1248,8 +1248,8 @@ mod tests {
             let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
-            // One nested "required by" line per hop.
-            let hops = md.matches("required by").count();
+            // One nested "dependency of" line per hop.
+            let hops = md.matches("dependency of").count();
             assert_eq!(hops, depth, "depth {depth} should render {depth} hops:\n{md}");
             // Innermost first: the requirer of the defining role at the top, the role this
             // playbook names (chain-a) at the bottom.
@@ -1270,8 +1270,8 @@ mod tests {
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
         assert!(md.contains("chain-c/vars/settings.yml"), "wrong file:\n{md}");
-        assert!(md.contains("required by `chain-b`"), "missing inner hop:\n{md}");
-        assert!(md.contains("required by `chain-a`"), "missing outer hop:\n{md}");
+        assert!(md.contains("dependency of `chain-b`"), "missing inner hop:\n{md}");
+        assert!(md.contains("dependency of `chain-a`"), "missing outer hop:\n{md}");
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a

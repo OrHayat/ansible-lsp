@@ -54,7 +54,7 @@
     # follows playbook -> provisioner -> (meta dependency) -> network-base, so Cmd+click
     # lands in the dependency and `var-undefined` correctly stays quiet here. Since the
     # route is invisible from this file, hover adds a stack-trace line under the definition:
-    # "required by provisioner — provisioner/meta/main.yml:<line>" (clickable); roles named
+    # "dependency of provisioner — provisioner/meta/main.yml:<line>" (clickable); roles named
     # directly in this file get none. See dependency_chain.yml for depths 0-5.
     - name: A default from a role this playbook never names
       ansible.builtin.debug:
