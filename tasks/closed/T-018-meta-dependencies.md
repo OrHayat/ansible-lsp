@@ -48,8 +48,12 @@ Empty lists must produce no references and no diagnostics — 22 roles have them
 
 ## Done when
 
-- [ ] the 3 real dependency entries resolve and navigate
-- [ ] `dependencies: []` produces nothing
-- [ ] both bare-string and `role:` dict forms work (only bare appears in this repo, so the
-      dict form needs a fixture)
-- [ ] dependency edges are in the reference graph, so T-021 counts them as uses
+- [x] the 3 real dependency entries resolve and navigate (corpus role count 381 -> 384)
+- [x] `dependencies: []` produces nothing (pinned, with the galaxy_info-only case)
+- [x] both bare-string and `role:` dict forms work (`name:` accepted too; demo fixture has
+      the dict form)
+- [x] dependency edges are in the reference graph, so T-021 counts them as uses
+- [x] **grown mid-flight, correctly:** a dependency's defaults/vars/set_facts are in scope
+      for the depending role *and its callers* — the definitions walk follows meta deps
+      transitively (cycle-guarded by the visited set), pinned by a two-hop test. Without
+      this, `var-undefined` would false-flag vars a dependency provides.

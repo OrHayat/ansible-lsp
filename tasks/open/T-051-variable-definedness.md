@@ -52,8 +52,18 @@ playbooks only (a tasks/role file can receive vars from any caller), exempting m
 `ansible_*`, `loop_var`/`vars_prompt`/`{% set %}` declarations, any reachable definition
 (even a later one — ordering stays the uncovered-`when` check's business), and uses whose
 own expression or guard handles undefinedness (`default(…)`, `is defined`). Diagnostic
-`var-undefined`, noqa-suppressible, also reported by `scan`. Gate: **zero** hits on
-`~/app/ansible` (731 files); the demo's three hits are deliberate showcases.
+`var-undefined`, noqa-suppressible, also reported by `scan`.
+
+**Gate correction (same day):** the "zero corpus hits" first reported was an artifact — the
+scan run had panicked mid-corpus (byte-boundary slice in `softened()` on a block-scalar
+file; spans are value-relative and shift off char boundaries; fixed and pinned). The real
+count is **656**, dominated by playbooks stored inside role dirs (vars live in that role's
+defaults, unreachable from a standalone playbook) and `docs/examples/` copies. Per this
+ticket's own rule, the rule doesn't ship at that count. Fix direction: require **defined
+nowhere in the whole workspace** (T-033's original measure) instead of "unreachable from
+this file" — reachability precision returns via T-059/T-062. Also noted: the walk's
+`MAX_DEPTH` truncation can hide real definitions; when that matters, suppress
+`var-undefined` on truncated walks rather than report from partial knowledge.
 
 ## Done when
 
@@ -65,8 +75,8 @@ own expression or guard handles undefinedness (`default(…)`, `is defined`). Di
       — each pinned by a test
 - [x] role/task files that legitimately receive vars from a caller are not false-flagged
       (playbooks only, pinned)
-- [x] corpus gate: zero hits on `~/app/ansible`; the demo's three are deliberate and
-      labelled in their comments
+- [ ] corpus gate: ~~zero hits~~ **656 real hits** once the panicked run was fixed — the
+      workspace-wide-absence tightening above must land and re-gate before this ticks
 - [x] supersedes T-033 (the `when:`-only version), or explicitly narrows to it — resolved
       by splitting T-033: its playbook-level unguarded class is absorbed here; the
       near-miss rule (T-060), `-e` contract (T-061), and inventory indexing (T-062) are

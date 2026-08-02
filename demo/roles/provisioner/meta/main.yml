@@ -1,0 +1,14 @@
+---
+# meta/main.yml `dependencies:` — roles that run BEFORE this role's tasks/main.yml,
+# automatically, once per play. Each entry is a role reference: Ctrl+click navigates.
+
+dependencies:
+  # GOOD — bare form: resolves to roles/network-base, which runs first.
+  - network-base
+
+  # MISSING (missing-file): dict form, with vars passed to the dependency. No role
+  # `podman-net` exists anywhere on roles_path, so this warns — a dependency that can't
+  # resolve fails the play at role-load time, before a single task runs.
+  - role: podman-net
+    vars:
+      subnet: 10.0.0.0/24

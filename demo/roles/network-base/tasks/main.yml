@@ -1,0 +1,5 @@
+---
+# Exists only to be depended on — see roles/provisioner/meta/main.yml.
+- name: Bring up the demo network
+  ansible.builtin.debug:
+    msg: "network up"

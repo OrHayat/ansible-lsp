@@ -512,6 +512,13 @@ fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
 /// `default(` or an `is (not) defined` test. Text-level and deliberately loose — a false
 /// "handled" is silence, the safe direction.
 fn softened(text: &str, at: usize) -> bool {
+    // Use spans are value-relative offsets rebased onto the source; block and escaped
+    // scalars shift them, so `at` can land mid-character. Clamp to a boundary — the
+    // check is a text heuristic anyway.
+    let mut at = at.min(text.len());
+    while at > 0 && !text.is_char_boundary(at) {
+        at -= 1;
+    }
     let (start, end) = match text[..at].rfind("{{") {
         Some(open) if !text[open..at].contains("}}") => {
             (open, text[at..].find("}}").map_or(text.len(), |c| at + c))
@@ -566,6 +573,25 @@ fn collect(
     if let Some(role) = &ctx.role_dir {
         read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, visited, out);
         read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, visited, out);
+
+        // meta/main.yml dependencies run before this role, so their defaults/vars and
+        // set_facts are in scope here — and, transitively, for whoever calls this role
+        // (entering a dependency's files rediscovers *its* role context and deps).
+        if depth < MAX_DEPTH {
+            let meta = role.join("meta").join("main.yml");
+            if let Ok(text) = std::fs::read_to_string(&meta) {
+                if let Some(mnodes) = Document::new(text).parse() {
+                    let mctx = FileContext::discover(&meta);
+                    for dep in references::meta_dependencies(&mnodes) {
+                        for target in resolve::resolve(&dep, &mctx).targets {
+                            for f in role_task_files(&target) {
+                                collect_disk(&f, depth + 1, out, visited);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Play-level vars_files — explicit paths written in the play.
@@ -873,6 +899,64 @@ mod tests {
     #[test]
     fn task_files_are_never_flagged() {
         assert!(undef("- debug: { msg: \"{{ from_caller }}\" }\n").is_empty());
+    }
+
+    /// A meta/main.yml dependency runs first, so its defaults and set_facts are in scope
+    /// for the depending role AND for the playbook that calls it — transitively.
+    #[test]
+    fn meta_dependency_vars_reach_the_role_and_its_caller() {
+        let d = std::env::temp_dir().join("ansible-lsp-t018-scope");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/base/defaults/main.yml", "base_mtu: 1500\n");
+        write(&d, "roles/base/tasks/main.yml", "- set_fact:\n    base_up: true\n");
+        write(&d, "roles/app/meta/main.yml", "dependencies:\n  - base\n");
+        write(&d, "roles/app/tasks/main.yml", "- debug: { msg: \"{{ base_mtu }}\" }\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  roles: [app]\n").unwrap();
+
+        // From inside the depending role's own tasks file:
+        let tasks = d.join("roles/app/tasks/main.yml");
+        let nodes = Document::new(std::fs::read_to_string(&tasks).unwrap()).parse().unwrap();
+        let defs = definitions(&tasks, &nodes);
+        assert!(defs.iter().any(|x| x.name == "base_mtu"));
+
+        // And from the playbook that calls the role — two hops away:
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().any(|x| x.name == "base_mtu"));
+        assert!(defs.iter().any(|x| x.name == "base_up"));
+    }
+
+    /// A dependency cycle (a <-> b) must terminate — the walk's visited set is the guard,
+    /// and both sides' vars still land. Termination IS the assertion: without the guard
+    /// this test would recurse forever, not fail.
+    #[test]
+    fn mutual_meta_dependencies_terminate_and_both_contribute() {
+        let d = std::env::temp_dir().join("ansible-lsp-t018-cycle");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/a/meta/main.yml", "dependencies:\n  - b\n");
+        write(&d, "roles/b/meta/main.yml", "dependencies:\n  - a\n");
+        write(&d, "roles/a/defaults/main.yml", "a_var: 1\n");
+        write(&d, "roles/b/defaults/main.yml", "b_var: 2\n");
+        write(&d, "roles/a/tasks/main.yml", "- debug: { msg: hi }\n");
+        write(&d, "roles/b/tasks/main.yml", "- debug: { msg: hi }\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  roles: [a]\n").unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().any(|x| x.name == "a_var"));
+        assert!(defs.iter().any(|x| x.name == "b_var"));
+    }
+
+    /// Block scalars shift value-relative spans off source char boundaries — the
+    /// corpus file that panicked the first gate run, minimised.
+    #[test]
+    fn undefined_check_survives_misaligned_spans_in_block_scalars() {
+        let src = "- hosts: all\n  tasks:\n    - debug:\n        msg: |\n          aa\n          ═══{{ zzz_und }}\n";
+        let _ = undef(src); // must not panic; the verdict is not the point
     }
 
     #[test]

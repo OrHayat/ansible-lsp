@@ -61,7 +61,11 @@ fn main() {
             continue;
         };
         let ctx = FileContext::discover(path);
-        for r in extract(&nodes) {
+        let mut refs = extract(&nodes);
+        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+            refs.extend(ansible_core::references::meta_dependencies(&nodes));
+        }
+        for r in refs {
             let res = resolve(&r, &ctx);
 
             // Conditions that cannot work at all, and the cross-file one.

@@ -75,6 +75,26 @@ fn short_key(key: &str) -> &str {
     key.rsplit('.').next().unwrap_or(key)
 }
 
+/// `roles/<x>/meta/main.yml`: each `dependencies:` entry names a role that runs before
+/// this one, so each is a Role reference. Callers gate by path — a `dependencies:` key in
+/// a random vars file is data, not dependencies (`roles/sync-state/vars/main.yml` has one).
+pub fn meta_dependencies(nodes: &[Node]) -> Vec<Reference> {
+    let mut out = Vec::new();
+    for n in nodes {
+        for item in n.get("dependencies").map(Node::items).unwrap_or_default() {
+            let target = match item {
+                Node::Scalar { .. } => Some(item),
+                Node::Mapping { .. } => item.get("role").or_else(|| item.get("name")),
+                _ => None,
+            };
+            if let Some(Node::Scalar { value, span }) = target {
+                out.push(Reference::new(ReferenceKind::Role, value, *span));
+            }
+        }
+    }
+    out
+}
+
 /// Every cross-file reference in a parsed file. Walks the semantic model
 /// ([`crate::ast`]) rather than the raw tree, so a task's module and its `when:`/`loop:`
 /// context are read from structure instead of re-detected key by key.
@@ -290,6 +310,24 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].value, "a.yml");
         assert_eq!(r[1].value, "b.yml");
+    }
+
+    #[test]
+    fn meta_dependencies_both_forms_empty_and_unrelated_keys() {
+        let deps = |src: &str| {
+            meta_dependencies(&Document::new(src.to_string()).parse().unwrap())
+        };
+        let r = deps(
+            "dependencies:\n  - docker-network\n  - role: podman\n    vars: { rootless: true }\n  - name: legacy\n",
+        );
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].value, "docker-network");
+        assert_eq!(r[1].value, "podman");
+        assert_eq!(r[2].value, "legacy");
+        assert!(r.iter().all(|x| x.kind == ReferenceKind::Role));
+        // The 22-roles-of-boilerplate case, and galaxy_info-only files: nothing.
+        assert!(deps("dependencies: []\n").is_empty());
+        assert!(deps("galaxy_info:\n  author: x\n").is_empty());
     }
 
     #[test]

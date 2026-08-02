@@ -178,7 +178,11 @@ impl Backend {
         // navigated to its real target (T-056). Navigation only — resolve_with never warns.
         let defs = cached_definitions(path, &nodes);
         let literals = vars::known_literals(&defs, path, &doc.text);
-        let refs = references::extract(&nodes)
+        let mut extracted = references::extract(&nodes);
+        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+            extracted.extend(references::meta_dependencies(&nodes));
+        }
+        let refs = extracted
             .into_iter()
             .map(|r| {
                 let res = resolve::resolve_with(&r, &ctx, &literals);
