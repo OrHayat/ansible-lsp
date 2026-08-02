@@ -969,6 +969,35 @@ mod tests {
         assert!(defs.iter().find(|x| x.name == "app_port").unwrap().via.is_none());
     }
 
+    /// T-066: a role reachable both directly and as a meta dependency gets its breadcrumb
+    /// from whichever route comes first in listed order — because that's the copy Ansible
+    /// actually executes (the later copy is skipped per host: play_iterator.py "role has
+    /// already run"; live-proven 2026-08-02, ok=2 with the direct copy dead).
+    #[test]
+    fn dual_route_via_follows_listed_order_like_ansible_dedup() {
+        let d = std::env::temp_dir().join("ansible-lsp-t066-dual");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/app/meta/main.yml", "dependencies:\n  - base\n");
+        write(&d, "roles/app/tasks/main.yml", "- debug: { msg: hi }\n");
+        write(&d, "roles/base/defaults/main.yml", "base_mtu: 1500\n");
+        write(&d, "roles/base/tasks/main.yml", "- debug: { msg: hi }\n");
+
+        let via_of = |roles: &str| {
+            let play = d.join("play.yml");
+            std::fs::write(&play, format!("- hosts: all\n  roles: {roles}\n")).unwrap();
+            let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+            let defs = definitions(&play, &nodes);
+            defs.iter().find(|x| x.name == "base_mtu").unwrap().via.clone()
+        };
+        // [app, base]: base executes as app's dependency; the direct listing is the
+        // skipped copy — breadcrumb present.
+        let via = via_of("[app, base]");
+        assert!(via.as_ref().unwrap().0.ends_with("roles/app/meta/main.yml"));
+        // [base, app]: base executes directly; the dep copy is skipped — no breadcrumb.
+        assert!(via_of("[base, app]").is_none());
+    }
+
     /// T-066: on a transitive chain a -> b -> c, c's defs point at b's meta — the edge that
     /// directly names c, i.e. the next file to open — not a's.
     #[test]
