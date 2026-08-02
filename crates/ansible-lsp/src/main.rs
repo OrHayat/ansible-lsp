@@ -674,6 +674,24 @@ impl Backend {
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for (i, d) in defs.iter().enumerate() {
+            // Provenance breadcrumb (T-066): how a def from a role never named in this
+            // file got into scope — the meta/main.yml dependency line, clickable. Only
+            // non-obvious routes carry `via`; direct roles/includes stay bare.
+            let via = d
+                .via
+                .as_ref()
+                .map(|(vf, vs)| {
+                    let vdoc = ext.entry(vf.clone()).or_insert_with(|| {
+                        Document::new(std::fs::read_to_string(vf).unwrap_or_default())
+                    });
+                    let vline = vdoc.line_of(vs.start);
+                    let vlabel = format!("{}:{vline}", short_path(vf));
+                    match Url::from_file_path(vf) {
+                        Ok(u) => format!(" _(via dependency — [{vlabel}]({u}#L{vline}))_"),
+                        Err(()) => format!(" _(via dependency — `{vlabel}`)_"),
+                    }
+                })
+                .unwrap_or_default();
             let document: &Document = if d.file == *path {
                 doc
             } else {
@@ -698,10 +716,13 @@ impl Backend {
                 .map(|c| format!(" _(only when `{}`)_", c.trim()))
                 .unwrap_or_default();
             match def_value(d, text) {
-                Some(v) => {
-                    lines.push(format!("- {} · {loc} = `{v}`{cond}{mark}", source_label(d.source)))
+                Some(v) => lines.push(format!(
+                    "- {} · {loc} = `{v}`{cond}{via}{mark}",
+                    source_label(d.source)
+                )),
+                None => {
+                    lines.push(format!("- {} · {loc}{cond}{via}{mark}", source_label(d.source)))
                 }
-                None => lines.push(format!("- {} · {loc}{cond}{mark}", source_label(d.source))),
             }
         }
         let header = if multiple {
@@ -1174,6 +1195,31 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    /// T-066 against the real demo: `network_mtu` reaches the playbook only through
+    /// provisioner's meta dependency on network-base, so its hover line carries the
+    /// breadcrumb; `provisioner_user` comes from a role the playbook names directly, so
+    /// its hover stays bare.
+    #[test]
+    fn hover_breadcrumbs_meta_dependency_routes_only() {
+        let path = std::path::Path::new("../../demo/cross_file_vars.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+
+        let hover = |name: &str| {
+            let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+                .expect("hover expected")
+                .0
+        };
+        let mtu = hover("network_mtu");
+        assert!(mtu.contains("via dependency"), "no breadcrumb in: {mtu}");
+        assert!(mtu.contains("provisioner/meta/main.yml"), "wrong edge in: {mtu}");
+        assert!(!hover("provisioner_user").contains("via dependency"));
+    }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a
     /// client sent an unexpected shape would look like the feature is broken.
