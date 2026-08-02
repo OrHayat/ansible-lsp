@@ -33,9 +33,11 @@
     - name: Templated but knowable — navigates to vars/prod.yml
       ansible.builtin.include_vars: "vars/{{ env }}.yml"
 
-    # Genuinely unknown: nothing defines `region`, so this stays runtime — globbed, not
-    # navigable, never warned.
-    - name: Templated and unknown — stays runtime
+    # UNDEFINED (var-undefined): nothing reachable defines `region`, so the *variable*
+    # warns — on the `{{ region }}` token, wording conceding inventory/facts/-e. The
+    # *path* still never warns: which file it names is unknowable. `# noqa: var-undefined`
+    # silences it for vars that genuinely arrive at runtime.
+    - name: Templated and unknown — the variable warns, the path stays quiet
       ansible.builtin.include_vars: "vars/{{ region }}.yml"
 
     # DIR form: loads every vars file under the directory, recursively. Ansible computes

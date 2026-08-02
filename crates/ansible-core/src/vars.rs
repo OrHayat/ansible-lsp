@@ -424,6 +424,107 @@ pub fn definitions(path: &Path, nodes: &[Node]) -> Vec<Located> {
     definitions_with_deps(path, nodes).0
 }
 
+/// T-051's base case: variable uses with **no reachable definition at all**. The most
+/// dangerous diagnostic in the tool — a false "undefined" trains people to ignore the
+/// squiggle — so it is conservative to the point of near-silence:
+///
+/// - playbooks only: a tasks/role file can receive vars from any caller
+/// - a definition anywhere reachable exempts, even one that runs later (ordering is the
+///   uncovered-`when` check's business, not this one's)
+/// - magic vars, `ansible_*` facts, `loop_var`/`vars_prompt`/`{% set %}` declarations
+///   are never flagged
+/// - a use whose own expression or guard handles undefinedness (`default(…)`,
+///   `is defined`) is the author saying "I know" — silent
+///
+/// The caller owns the message; it must concede inventory, facts and `-e`, which are
+/// invisible here.
+pub fn undefined_uses(path: &Path, nodes: &[Node], text: &str) -> Vec<VarUse> {
+    let tree = ast::build(nodes);
+    if !matches!(tree, Ast::Playbook(_)) {
+        return Vec::new();
+    }
+    let defined: HashSet<String> = definitions(path, nodes).into_iter().map(|d| d.name).collect();
+    let declared = declared_names(nodes, text);
+    uses(nodes)
+        .into_iter()
+        .filter(|u| {
+            !defined.contains(&u.name)
+                && !condition::is_magic(&u.name)
+                && !u.name.starts_with("ansible_")
+                && !declared.contains(&u.name)
+                && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
+                && !softened(text, u.span.start)
+        })
+        .collect()
+}
+
+/// Names declared by constructs the definition index doesn't model: `loop_control:
+/// loop_var`, `vars_prompt:`, and `{% set %}`. Collected file-wide — broader than their
+/// real scope, which errs toward silence.
+fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
+    fn walk(n: &Node, out: &mut HashSet<String>) {
+        match n {
+            Node::Mapping { entries, .. } => {
+                for (k, v) in entries {
+                    match k.as_str() {
+                        Some("loop_control") => {
+                            if let Some(lv) = v.get("loop_var").and_then(|x| x.as_str()) {
+                                out.insert(lv.to_string());
+                            }
+                        }
+                        Some("vars_prompt") => {
+                            for item in v.items() {
+                                if let Some(nm) = item.get("name").and_then(|x| x.as_str()) {
+                                    out.insert(nm.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    walk(v, out);
+                }
+            }
+            Node::Sequence { .. } => n.items().iter().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = HashSet::new();
+    nodes.iter().for_each(|n| walk(n, &mut out));
+    let mut rest = text;
+    while let Some(i) = rest.find("{%") {
+        rest = &rest[i + 2..];
+        if let Some(after) = rest.trim_start().strip_prefix("set ") {
+            let name: String = after
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        }
+    }
+    out
+}
+
+/// Does the expression around byte `at` handle undefinedness itself? Looks at the
+/// enclosing `{{ … }}`, or the enclosing line for a bare `when:` expression, for
+/// `default(` or an `is (not) defined` test. Text-level and deliberately loose — a false
+/// "handled" is silence, the safe direction.
+fn softened(text: &str, at: usize) -> bool {
+    let (start, end) = match text[..at].rfind("{{") {
+        Some(open) if !text[open..at].contains("}}") => {
+            (open, text[at..].find("}}").map_or(text.len(), |c| at + c))
+        }
+        _ => (
+            text[..at].rfind('\n').map_or(0, |i| i + 1),
+            text[at..].find('\n').map_or(text.len(), |i| at + i),
+        ),
+    };
+    let expr = &text[start..end];
+    expr.contains("default(") || expr.contains("defined")
+}
+
 /// [`definitions`] plus the set of files it read (canonicalised) — its dependencies, so a
 /// cache can invalidate this result precisely when any of them changes.
 pub fn definitions_with_deps(path: &Path, nodes: &[Node]) -> (Vec<Located>, HashSet<PathBuf>) {
@@ -701,6 +802,77 @@ mod tests {
 
     fn idx(src: &str) -> VarIndex {
         index(&ast::build(&Document::new(src.to_string()).parse().expect("valid yaml")))
+    }
+
+    /// Names `undefined_uses` flags for a source, with cross-file reads landing nowhere.
+    fn undef(src: &str) -> Vec<String> {
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        let path = Path::new("/nonexistent-t051/play.yml");
+        let mut names: Vec<String> = undefined_uses(path, &nodes, src)
+            .into_iter()
+            .map(|u| u.name)
+            .collect();
+        names.dedup();
+        names
+    }
+
+    #[test]
+    fn undefined_use_in_a_playbook_is_flagged() {
+        // The demo's region case: templated include_vars path, nothing defines the var.
+        let src = "- hosts: all\n  tasks:\n    - include_vars: \"vars/{{ region }}.yml\"\n";
+        assert_eq!(undef(src), ["region"]);
+    }
+
+    #[test]
+    fn any_reachable_definition_exempts_even_a_later_one() {
+        let src = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ later }}\" }\n",
+            "    - set_fact: { later: 1 }\n",
+        );
+        assert!(undef(src).is_empty());
+    }
+
+    #[test]
+    fn magic_facts_and_loop_names_stay_silent() {
+        let src = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ playbook_dir }} {{ ansible_os_family }} {{ item }}\" }\n",
+            "      loop: [1]\n",
+            "    - debug: { msg: \"{{ my_row }}\" }\n",
+            "      loop: [1]\n",
+            "      loop_control: { loop_var: my_row }\n",
+        );
+        assert!(undef(src).is_empty());
+    }
+
+    #[test]
+    fn handled_undefinedness_stays_silent() {
+        let src = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ maybe | default('x') }}\" }\n",
+            "    - debug: { msg: \"{{ gated }}\" }\n",
+            "      when: gated is defined\n",
+        );
+        assert!(undef(src).is_empty());
+    }
+
+    #[test]
+    fn vars_prompt_and_jinja_set_names_stay_silent() {
+        let src = concat!(
+            "- hosts: all\n",
+            "  vars_prompt:\n",
+            "    - name: password\n",
+            "  tasks:\n",
+            "    - debug: { msg: \"{{ password }} {% set tmp = 1 %}{{ tmp }}\" }\n",
+        );
+        assert!(undef(src).is_empty());
+    }
+
+    /// A tasks/role file can receive vars from any caller — never diagnosable.
+    #[test]
+    fn task_files_are_never_flagged() {
+        assert!(undef("- debug: { msg: \"{{ from_caller }}\" }\n").is_empty());
     }
 
     #[test]

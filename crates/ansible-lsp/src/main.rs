@@ -341,6 +341,28 @@ impl Backend {
                 ..Default::default()
             });
         }
+
+        // T-051 base case: no reachable definition at all. The message concedes the
+        // sources we cannot see. Suppressible with `# noqa: var-undefined`.
+        for u in vars::undefined_uses(path, nodes, &a.doc.text) {
+            if a.doc.is_suppressed(u.span.start, "var-undefined") {
+                continue;
+            }
+            let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
+            let (el, ec) = a.doc.byte_to_lsp(u.span.end);
+            out.push(Diagnostic {
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String("var-undefined".into())),
+                message: format!(
+                    "`{}` is never defined in any file reachable from this playbook — it may \
+                     still come from inventory, facts, or extra-vars (-e).",
+                    u.name
+                ),
+                ..Default::default()
+            });
+        }
         out
     }
 

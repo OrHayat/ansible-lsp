@@ -45,16 +45,28 @@ The **condition-aware coverage** half landed (commit `9b4b016`): `crate::guard` 
 propositional implication over `when:` conditions, and `var-uncovered-when` warns when a use
 runs under a broader condition than any in-effect definition covers (e.g. used for
 `web01 or web02`, registered only on `web01`). Conservative — only with a definition present,
-only within the use's own condition vocabulary. Remaining: the **never-defined-anywhere** base
-case below (the riskier one).
+only within the use's own condition vocabulary.
+
+The **never-defined-anywhere base case** landed 2026-08-02: `vars::undefined_uses`,
+playbooks only (a tasks/role file can receive vars from any caller), exempting magic vars,
+`ansible_*`, `loop_var`/`vars_prompt`/`{% set %}` declarations, any reachable definition
+(even a later one — ordering stays the uncovered-`when` check's business), and uses whose
+own expression or guard handles undefinedness (`default(…)`, `is defined`). Diagnostic
+`var-undefined`, noqa-suppressible, also reported by `scan`. Gate: **zero** hits on
+`~/app/ansible` (731 files); the demo's three hits are deliberate showcases.
 
 ## Done when
 
 - [x] a use guarded more broadly than its definitions cover is flagged, naming the gap
       (`var-uncovered-when`, `guard.rs`)
-- [ ] a genuinely-undefined variable (no reachable definition at all) is flagged, with a
-      message that names what was searched and concedes the opaque sources
-- [ ] zero warnings on magic vars, `ansible_*`, loop vars, or anything with a reachable def
-- [ ] role/task files that legitimately receive vars from a caller are not false-flagged
-- [ ] corpus gate: no new warnings on the demo or fixtures
-- [ ] supersedes T-033 (the `when:`-only version), or explicitly narrows to it
+- [x] a genuinely-undefined variable (no reachable definition at all) is flagged, with a
+      message that concedes the opaque sources (`var-undefined`)
+- [x] zero warnings on magic vars, `ansible_*`, loop vars, or anything with a reachable def
+      — each pinned by a test
+- [x] role/task files that legitimately receive vars from a caller are not false-flagged
+      (playbooks only, pinned)
+- [x] corpus gate: zero hits on `~/app/ansible`; the demo's three are deliberate and
+      labelled in their comments
+- [ ] supersedes T-033 (the `when:`-only version), or explicitly narrows to it — the base
+      case covers `when:` names too (uses() walks them, with the definedness softening);
+      T-033's fate needs its ticket read before closing

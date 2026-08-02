@@ -4,6 +4,7 @@
 
 use ansible_core::condition;
 use ansible_core::mutation;
+use ansible_core::vars;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
 use ansible_core::resolve::{resolve, rule_id, SkipReason, Status};
@@ -38,6 +39,7 @@ fn main() {
     let mut unparseable: Vec<String> = Vec::new();
     let mut mutated: Vec<String> = Vec::new();
     let mut empty_glob: Vec<String> = Vec::new();
+    let mut undefined_vars: Vec<String> = Vec::new();
     let mut tmpl_vars: BTreeMap<String, usize> = BTreeMap::new();
     let mut broken_when: Vec<String> = Vec::new();
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
@@ -157,6 +159,21 @@ fn main() {
                 }
             }
         }
+
+        // T-051 base case: a warning, never part of the exit code — inventory and `-e`
+        // are invisible here, so this can only ever say "not found where we can see".
+        for u in vars::undefined_uses(path, &nodes, &doc.text) {
+            if doc.is_suppressed(u.span.start, "var-undefined") {
+                continue;
+            }
+            let (l, _) = doc.byte_to_lsp(u.span.start);
+            undefined_vars.push(format!(
+                "  {}:{}  {}",
+                path.strip_prefix(&root).unwrap_or(path).display(),
+                l + 1,
+                u.name
+            ));
+        }
     }
 
     println!("{} files, {} unparseable\n", files.len(), unparseable.len());
@@ -191,6 +208,13 @@ fn main() {
         println!("\nVARIABLES USED IN TEMPLATED PATHS ({}):", v.len());
         for (name, n) in v {
             println!("  {n:4}  {name}");
+        }
+    }
+
+    if !undefined_vars.is_empty() {
+        println!("\nUNDEFINED VARIABLES ({}):", undefined_vars.len());
+        for u in &undefined_vars {
+            println!("{u}");
         }
     }
 

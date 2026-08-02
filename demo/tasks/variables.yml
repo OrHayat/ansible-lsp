@@ -63,6 +63,9 @@
       ansible.builtin.debug:
         msg: "{{ base_url }}"
 
-    - name: Undefined in this file — no jump, and no warning (it may come from inventory)
+    # UNDEFINED (var-undefined): this file is a playbook, so no caller can inject vars —
+    # a name with zero reachable definitions warns, with the message conceding what we
+    # can't see (inventory, facts, -e). In a tasks/role file the same use stays silent.
+    - name: Undefined anywhere reachable — warns, conceding inventory
       ansible.builtin.debug:
         msg: "{{ from_inventory }}"

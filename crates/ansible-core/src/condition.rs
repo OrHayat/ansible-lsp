@@ -34,6 +34,12 @@ const MAGIC: &[&str] = &[
     "inventory_hostname_short", "ansible_check_mode", "ansible_verbosity", "vars",
 ];
 
+/// Shared with the definedness diagnostic (T-051): a magic name must never be
+/// flagged as undefined.
+pub fn is_magic(name: &str) -> bool {
+    MAGIC.contains(&name)
+}
+
 /// Strip one balanced enclosing pair of parens, if the whole string is wrapped.
 ///
 /// `trim_end_matches(')')` cannot be used here — it eats the closing paren of a trailing
