@@ -2,14 +2,17 @@
 # Hover provenance chains (T-066). This playbook names ONE role, chain-a — but its
 # meta/main.yml pulls in chain-b, whose meta pulls in chain-c, and so on to chain-f.
 # All six roles run (dependencies first: f, e, d, c, b, a), so all six variables below
-# are defined. Hover each {{ chain_depthN }}: the definition line ends with a clickable
-# breadcrumb of every meta/main.yml hop you'd follow to see why the role is in scope —
-# none for depth 0 (the role is named right here), five hops for depth 5.
+# are defined. Hover each {{ chain_depthN }}: under the definition line, a stack trace of
+# "required by" hops — innermost first, each a clickable meta/main.yml link — shows why
+# the defining role is in scope. None for depth 0 (chain-a is named right here); five
+# lines for depth 5:
 #
-#   chain_depth0  (no breadcrumb — chain-a is written in this file)
-#   chain_depth1  via chain-a/meta/main.yml
-#   chain_depth2  via chain-a/meta → chain-b/meta
-#   chain_depth5  via chain-a/meta → chain-b/meta → chain-c/meta → chain-d/meta → chain-e/meta
+#   - role default · chain-f/defaults/main.yml:1 = "defined in chain-f"
+#     - required by chain-e — chain-e/meta/main.yml:3
+#     - required by chain-d — chain-d/meta/main.yml:3
+#     - required by chain-c — chain-c/meta/main.yml:3
+#     - required by chain-b — chain-b/meta/main.yml:3
+#     - required by chain-a — chain-a/meta/main.yml:3   (the role this playbook names)
 
 - name: Dependency-chain provenance demo
   hosts: localhost

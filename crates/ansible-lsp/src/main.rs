@@ -675,28 +675,34 @@ impl Backend {
         let mut lines = Vec::new();
         for (i, d) in defs.iter().enumerate() {
             // Provenance chain (T-066): how a def from a role never named in this file got
-            // into scope — each meta/main.yml dependency hop, outermost first, clickable.
-            // Only non-obvious routes carry `via`; direct roles/includes stay bare.
-            let via = if d.via.is_empty() {
-                String::new()
-            } else {
-                let hops: Vec<String> = d
-                    .via
-                    .iter()
-                    .map(|(vf, vs)| {
-                        let vdoc = ext.entry(vf.clone()).or_insert_with(|| {
-                            Document::new(std::fs::read_to_string(vf).unwrap_or_default())
-                        });
-                        let vline = vdoc.line_of(vs.start);
-                        let vlabel = format!("{}:{vline}", short_path(vf));
-                        match Url::from_file_path(vf) {
-                            Ok(u) => format!("[{vlabel}]({u}#L{vline})"),
-                            Err(()) => format!("`{vlabel}`"),
-                        }
-                    })
-                    .collect();
-                format!(" _(via dependency — {})_", hops.join(" → "))
-            };
+            // into scope — one nested line per meta/main.yml dependency hop, innermost
+            // first like a stack trace (the defining role's requirer at the top). Only
+            // non-obvious routes carry `via`; direct roles/includes stay bare. Unbounded
+            // like Ansible's own dep_chain — length is capped by the visited set.
+            let via_lines: Vec<String> = d
+                .via
+                .iter()
+                .rev()
+                .map(|(vf, vs)| {
+                    let vdoc = ext.entry(vf.clone()).or_insert_with(|| {
+                        Document::new(std::fs::read_to_string(vf).unwrap_or_default())
+                    });
+                    let vline = vdoc.line_of(vs.start);
+                    // The requirer is the role owning the meta file: roles/<role>/meta/…
+                    let role = vf
+                        .parent()
+                        .and_then(|m| m.parent())
+                        .and_then(|r| r.file_name())
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?");
+                    let vlabel = format!("{}:{vline}", short_path(vf));
+                    let link = match Url::from_file_path(vf) {
+                        Ok(u) => format!("[{vlabel}]({u}#L{vline})"),
+                        Err(()) => format!("`{vlabel}`"),
+                    };
+                    format!("  - required by `{role}` — {link}")
+                })
+                .collect();
             let document: &Document = if d.file == *path {
                 doc
             } else {
@@ -722,13 +728,12 @@ impl Backend {
                 .unwrap_or_default();
             match def_value(d, text) {
                 Some(v) => lines.push(format!(
-                    "- {} · {loc} = `{v}`{cond}{via}{mark}",
+                    "- {} · {loc} = `{v}`{cond}{mark}",
                     source_label(d.source)
                 )),
-                None => {
-                    lines.push(format!("- {} · {loc}{cond}{via}{mark}", source_label(d.source)))
-                }
+                None => lines.push(format!("- {} · {loc}{cond}{mark}", source_label(d.source))),
             }
+            lines.extend(via_lines);
         }
         let header = if multiple {
             format!("**`{}`** — {} definitions", use_.name, defs.len())
@@ -1221,9 +1226,9 @@ mod tests {
                 .0
         };
         let mtu = hover("network_mtu");
-        assert!(mtu.contains("via dependency"), "no breadcrumb in: {mtu}");
+        assert!(mtu.contains("required by `provisioner`"), "no breadcrumb in: {mtu}");
         assert!(mtu.contains("provisioner/meta/main.yml"), "wrong edge in: {mtu}");
-        assert!(!hover("provisioner_user").contains("via dependency"));
+        assert!(!hover("provisioner_user").contains("required by"));
     }
 
     /// T-066 chain rendering against demo/dependency_chain.yml: depth N shows exactly the
@@ -1243,18 +1248,18 @@ mod tests {
             let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
-            // Each hop is one markdown link; hops are joined with " → ".
-            let hops = if md.contains("via dependency") { md.matches(" → ").count() + 1 } else { 0 };
+            // One nested "required by" line per hop.
+            let hops = md.matches("required by").count();
             assert_eq!(hops, depth, "depth {depth} should render {depth} hops:\n{md}");
-            // Outermost hop first: every chain starts at the role this playbook names.
+            // Innermost first: the requirer of the defining role at the top, the role this
+            // playbook names (chain-a) at the bottom.
             if depth > 0 {
-                assert!(md.contains("chain-a/meta/main.yml"), "chain must start at chain-a:\n{md}");
+                let innermost = format!("chain-{}/meta/main.yml", (b'a' + depth as u8 - 1) as char);
                 assert!(
-                    md.contains(&format!("chain-{}/meta/main.yml", (b'a' + depth as u8 - 1) as char)),
-                    "chain must end at the meta naming the defining role:\n{md}"
+                    md.find(&innermost).unwrap() < md.find("chain-a/meta/main.yml").unwrap()
+                        || depth == 1,
+                    "stack must read innermost-first:\n{md}"
                 );
-            } else {
-                assert!(!md.contains("via dependency"), "depth 0 must have no breadcrumb:\n{md}");
             }
         }
     }
