@@ -49,13 +49,17 @@ captured by `TaskContext` and needs nothing new.
 
 ## Done when
 
-- [ ] bare, `file:` and `dir:` forms all handled distinctly
-- [ ] `dir:` checks directory existence only, and navigates to **the files it loads**
-- [ ] navigation targets filtered to the default extensions (`yaml`/`yml`/`json`)
-- [ ] templated forms glob without warning
-- [ ] the `dir:` base path follows `_set_root_dir` — one computed path, not a search list
-- [ ] the in-role `vars/`-prefixed missing case warns about the cwd fallback — pinned by test
-- [ ] corpus gate: zero new warnings, on a reference count known to be non-zero
+- [x] bare, `file:` and `dir:` forms all handled distinctly (incl. free-form `dir=` k=v)
+- [x] `dir:` checks directory existence only, and navigates to **the files it loads**
+- [x] navigation targets filtered by the module's real semantics (extensions & friends)
+- [ ] templated forms glob without warning — no warning today, but templated `dir:` is
+      skipped with no navigation candidates; the deduped glob-for-navigation is still to do
+- [x] the `dir:` base path follows `_set_root_dir` — one computed path, not a search list
+- [ ] the in-role `vars/`-prefixed missing case warns about the cwd fallback — resolution
+      pinned by test (Missing + the role-relative candidate); the *message* still says plain
+      missing-dir, the fallback wording needs the diagnostic layer
+- [x] corpus gate: zero new warnings (byte-identical scan), non-zero `dir:` count from the
+      demo and tests — the corpus itself has no `dir:` forms (Findings, 3)
 
 ## Findings — 2026-08-02, read against ansible-core 2.21.2
 
@@ -88,17 +92,20 @@ Ctrl+click. Point `targets` at the files the directory loads; that is already th
 multi-candidate/picker idiom used for templated paths. Keep `status` as the *directory's*
 verdict so an empty directory still resolves — an empty one is legal.
 
-**3. The corpus gate passed vacuously.** `scan ~/app/ansible` reported **zero**
-`include_vars_dir` references, but the repo does contain `dir:` forms. So the gate proved
-nothing and the extractor is dropping them. Find that first — it may change the design, and
-until it's fixed no corpus number for this ticket means anything.
+**3. ~~The corpus gate passed vacuously.~~ Disproven 2026-08-02: the corpus has no `dir:`
+forms at all.** `grep -rn include_vars -A3 | grep dir:` over `~/app/ansible` finds
+nothing — the extractor never dropped anything; there was nothing to extract. The non-zero
+reference count for the gate comes from the demo (`include_vars_demo.yml`: two resolving
+`dir:` tasks, one deliberately missing) and the unit tests instead.
 
-## Options — decided 2026-08-02
+## Options — decided 2026-08-02 (superseded same day: full support landed)
 
-Only the **default** extension filter (`yaml`/`yml`/`json`) is honoured, and only to pick
-navigation targets. `extensions`, `depth`, `files_matching`, `ignore_files` stay unread, and
-nothing ever *warns* based on any of them. Full support needs the options plumbed from the
-call site to the resolver plus `regex` as a dependency — not worth it until someone hits it.
+~~Only the default extension filter is honoured.~~ The user directed a full port instead:
+`include_vars.rs` implements the whole loading semantics — `extensions`, `depth`,
+`files_matching`, `ignore_files` (real regex semantics, `regex` dep added), `name`, the
+free-form k=v line — as a pure function over an `Fs` trait, pinned by in-memory tests, five
+live `ansible-playbook` runs, and Ansible's own splitter test table. Extraction and the
+resolver call it; nothing *warns* based on the filter options, they only pick targets.
 
 Real semantics, for whoever does: `extensions` defaults to `['yaml','yml','json']` and is a
 *validation* — an unlisted extension **fails the task** unless `ignore_unknown_extensions:

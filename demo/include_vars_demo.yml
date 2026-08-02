@@ -37,3 +37,22 @@
     # navigable, never warned.
     - name: Templated and unknown — stays runtime
       ansible.builtin.include_vars: "vars/{{ region }}.yml"
+
+    # DIR form: loads every vars file under the directory, recursively. Ansible computes
+    # exactly ONE path (`_set_root_dir`) — outside a role, this file's dir + `vars` —
+    # never a search list. Ctrl+click offers the files the directory loads (an editor
+    # can't open a directory); an empty directory is legal and stays quiet.
+    - name: Load a whole directory of vars
+      ansible.builtin.include_vars:
+        dir: vars
+
+    # The free-form line is parsed like Ansible parses it: `=` tokens are options, so
+    # this is the dir form too, namespaced under `db`.
+    - name: Same, k=v style with a namespace
+      ansible.builtin.include_vars: dir=vars name=db
+
+    # MISSING (missing-dir): the one computed path doesn't exist, so this warns — the
+    # dir form is existence-checked at the exact path Ansible would walk.
+    - name: Load a directory that doesn't exist
+      ansible.builtin.include_vars:
+        dir: no_such_vars

@@ -201,21 +201,8 @@ fn load_dir(dir: &str, params: &Params, depth_kv: Option<&str>, ctx: &Ctx, fs: &
         }
     }
 
-    // `_set_root_dir`: one computed path, never a search.
-    let root = match ctx.role_path {
-        Some(role) => {
-            if dir.split('/').next() == Some("vars") {
-                let candidate = role.join(dir);
-                if fs.exists(&candidate) {
-                    candidate
-                } else {
-                    return Outcome::CwdFallback { relative: dir.to_string() };
-                }
-            } else {
-                role.join("vars").join(dir)
-            }
-        }
-        None => ctx.task_dir.join(dir),
+    let Some(root) = dir_root(dir, ctx, fs) else {
+        return Outcome::CwdFallback { relative: dir.to_string() };
     };
 
     if !fs.exists(&root) {
@@ -282,6 +269,73 @@ fn load_dir(dir: &str, params: &Params, depth_kv: Option<&str>, ctx: &Ctx, fs: &
         vars = vec![name.clone()];
     }
     Outcome::Loaded(Loaded { dir: Some(root), files, vars })
+}
+
+/// `_set_root_dir`: the one computed path a `dir:` value means, or `None` for the in-role
+/// `vars/`-prefixed miss whose runtime meaning is cwd-relative. Public so the resolver can
+/// name the path in diagnostics without re-deriving it.
+pub fn dir_root(dir: &str, ctx: &Ctx, fs: &dyn Fs) -> Option<PathBuf> {
+    match ctx.role_path {
+        Some(role) => {
+            if dir.split('/').next() == Some("vars") {
+                let candidate = role.join(dir);
+                fs.exists(&candidate).then_some(candidate)
+            } else {
+                Some(role.join("vars").join(dir))
+            }
+        }
+        None => Some(ctx.task_dir.join(dir)),
+    }
+}
+
+/// [`Params`] from a task's args node: a bare scalar is the free-form line
+/// (`raw_params`), a mapping fills the typed fields. `None` for anything else.
+pub fn params_from_args(args: &Node) -> Option<Params> {
+    let scalar = |k: &str| args.get(k).and_then(|n| n.as_str()).map(str::to_string);
+    match args {
+        Node::Scalar { value, .. } => {
+            Some(Params { raw_params: Some(value.clone()), ..Params::default() })
+        }
+        Node::Mapping { .. } => {
+            let mut p = Params {
+                file: scalar("file"),
+                dir: scalar("dir"),
+                name: scalar("name"),
+                files_matching: scalar("files_matching"),
+                ..Params::default()
+            };
+            // YAML ints reach our Node as scalar text. A quoted "1" crashes at runtime
+            // (no coercion in the plugin) — the provable-failure lint's problem, not ours.
+            p.depth = scalar("depth").and_then(|d| d.parse().ok()).unwrap_or(0);
+            if let Some(v) = scalar("ignore_unknown_extensions") {
+                p.ignore_unknown_extensions = matches!(v.as_str(), "true" | "True" | "yes" | "on");
+            }
+            if let Some(n) = args.get("ignore_files") {
+                p.ignore_files = string_list(n);
+            }
+            if let Some(n) = args.get("extensions") {
+                let list = string_list(n);
+                if !list.is_empty() {
+                    p.extensions = list;
+                }
+            }
+            Some(p)
+        }
+        _ => None,
+    }
+}
+
+/// A list-typed option: a sequence of scalars, or the deprecated whitespace-split string.
+fn string_list(n: &Node) -> Vec<String> {
+    match n {
+        Node::Sequence { .. } => n
+            .items()
+            .iter()
+            .filter_map(|i| i.as_str().map(str::to_string))
+            .collect(),
+        Node::Scalar { value, .. } => value.split_whitespace().map(String::from).collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn load_file(file: &str, params: &Params, fs: &dyn Fs) -> Outcome {

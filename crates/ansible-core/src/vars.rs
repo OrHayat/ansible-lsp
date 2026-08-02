@@ -3,17 +3,20 @@
 //!
 //! [`index`] covers one parsed file: play/block/task `vars:`, `set_fact:`, `register:`.
 //! [`definitions`] extends that across files by deterministic paths only — role
-//! `defaults/`/`vars/`, `vars_files:`, playbook-adjacent `group_vars/`/`host_vars/`, and the
-//! `set_fact`/`register` in included task files and roles. Still not covered: `include_vars:`,
-//! group_vars/host_vars kept beside a *separate inventory file* (needs the inventory's path,
-//! not guessed), variables injected by a caller, and the opaque runtime sources (inventory
-//! host-matching, `-e`). So a name absent here is *not* proof it's undefined.
+//! `defaults/`/`vars/`, `vars_files:`, `include_vars:` (file and dir forms, via the ported
+//! module semantics in [`crate::include_vars`]), playbook-adjacent
+//! `group_vars/`/`host_vars/`, and the `set_fact`/`register` in included task files and
+//! roles. Still not covered: group_vars/host_vars kept beside a *separate inventory file*
+//! (needs the inventory's path, not guessed), variables injected by a caller, and the
+//! opaque runtime sources (inventory host-matching, `-e`). So a name absent here is *not*
+//! proof it's undefined.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{self, Ast, Block, Play, PlayItem, Stmt, Task};
 use crate::condition;
+use crate::include_vars;
 use crate::parse::{Document, Node, Span};
 use crate::references::{self, ReferenceKind};
 use crate::resolve;
@@ -488,10 +491,28 @@ fn collect(
             return;
         }
         let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));
-        if let Some(dir) = a.args.get("dir").and_then(|n| n.as_str()) {
+        let Some(params) = include_vars::params_from_args(&a.args) else { return };
+        // The dir form runs the ported plugin semantics — one computed root, the real
+        // filters — and indexes exactly the files Ansible would load, in load order.
+        let dir = params.dir.clone().or_else(|| {
+            params.raw_params.as_deref().and_then(|raw| {
+                crate::splitter::parse_kv(raw, false)
+                    .ok()
+                    .and_then(|kv| kv.get("dir").map(str::to_string))
+            })
+        });
+        if let Some(dir) = dir {
             if !dir.contains("{{") {
-                if let Some(d) = resolve_dir_path(dir, &ctx) {
-                    read_dir_files(&d, VarSource::IncludeVars, cond, visited, out);
+                let ictx = include_vars::Ctx {
+                    role_path: ctx.role_dir.as_deref(),
+                    task_dir: &ctx.file_dir,
+                };
+                if let include_vars::Outcome::Loaded(l) =
+                    include_vars::load(&params, &ictx, &include_vars::StdFs)
+                {
+                    for f in &l.files {
+                        read_var_file(f, VarSource::IncludeVars, cond.clone(), visited, out);
+                    }
                 }
             }
             return;
@@ -592,28 +613,6 @@ fn read_var_dir(dir: &Path, group: bool, visited: &mut HashSet<PathBuf>, out: &m
     }
 }
 
-/// Read every `*.yml` in a directory as one source — the `include_vars: { dir: … }` form.
-fn read_dir_files(
-    dir: &Path,
-    source: VarSource,
-    condition: Option<String>,
-    visited: &mut HashSet<PathBuf>,
-    out: &mut Vec<Located>,
-) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if matches!(
-            p.extension().and_then(|s| s.to_str()),
-            Some("yml") | Some("yaml")
-        ) {
-            read_var_file(&p, source, condition.clone(), visited, out);
-        }
-    }
-}
-
 /// Read a flat `name: value` vars file and index every top-level key. `condition` is the
 /// `when:` guarding the load, if any (only `include_vars`, a task, can carry one). Records
 /// the file (canonicalised) in `visited` as a dependency.
@@ -679,19 +678,6 @@ fn each_task(tree: &Ast, f: &mut impl FnMut(&Task)) {
         Ast::Tasks(stmts) => stmts.iter().for_each(|s| stmt(s, f)),
         Ast::Other => {}
     }
-}
-
-/// Resolve a directory reference for `include_vars: { dir: … }`, first that exists.
-fn resolve_dir_path(entry: &str, ctx: &FileContext) -> Option<PathBuf> {
-    let mut cands = vec![ctx.file_dir.join(entry)];
-    if let Some(role) = &ctx.role_dir {
-        cands.push(role.join(entry));
-        cands.push(role.join("vars").join(entry));
-    }
-    if let Some(root) = &ctx.project_root {
-        cands.push(root.join(entry));
-    }
-    cands.into_iter().find(|p| p.is_dir())
 }
 
 /// Resolve a `vars_files:` entry against the file dir, its `vars/`, the role `vars/` and the

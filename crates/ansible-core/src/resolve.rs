@@ -1,5 +1,6 @@
 //! Reference -> file on disk, following Ansible's own search order.
 
+use crate::include_vars;
 use crate::install::AnsibleInstall;
 use crate::references::{Reference, ReferenceKind};
 use crate::workspace::FileContext;
@@ -66,6 +67,7 @@ impl Resolution {
 pub fn rule_id(r: &Reference) -> &'static str {
     match (r.kind, r.templated) {
         (ReferenceKind::ImportPlaybook, true) => "templated-import",
+        (ReferenceKind::IncludeVarsDir, _) => "missing-dir",
         _ => "missing-file",
     }
 }
@@ -312,6 +314,54 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
                 bases.push(root.clone());
             }
             Resolution::from_candidates(unique(bases.iter().map(|b| normalise(&b.join(&r.value)))))
+        }
+
+        // The dir form runs the ported action-plugin semantics: one computed root
+        // (`_set_root_dir`), then the walk with the module's own filters. Targets are the
+        // files the directory loads — an editor can't open a directory — while `status`
+        // stays the directory's verdict, so an empty (legal) dir still resolves.
+        ReferenceKind::IncludeVarsDir => {
+            let params = match &r.include_vars {
+                Some(p) => (**p).clone(),
+                None => include_vars::Params {
+                    dir: Some(r.value.clone()),
+                    ..include_vars::Params::default()
+                },
+            };
+            let ictx = include_vars::Ctx {
+                role_path: ctx.role_dir.as_deref(),
+                task_dir: &ctx.file_dir,
+            };
+            let fs = include_vars::StdFs;
+            match include_vars::load(&params, &ictx, &fs) {
+                include_vars::Outcome::Loaded(l) => Resolution {
+                    status: Status::Resolved,
+                    targets: l.files,
+                    candidates: l.dir.into_iter().collect(),
+                    skip_reason: None,
+                },
+                // Provably absent at the role path; at runtime the value decays to
+                // cwd-relative, which no static verdict can cover.
+                include_vars::Outcome::CwdFallback { relative } => Resolution {
+                    status: Status::Missing,
+                    targets: Vec::new(),
+                    candidates: ctx.role_dir.iter().map(|d| d.join(&relative)).collect(),
+                    skip_reason: None,
+                },
+                include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
+                    Resolution {
+                        status: Status::Missing,
+                        targets: Vec::new(),
+                        candidates: params
+                            .dir
+                            .as_deref()
+                            .and_then(|d| include_vars::dir_root(d, &ictx, &fs))
+                            .into_iter()
+                            .collect(),
+                        skip_reason: None,
+                    }
+                }
+            }
         }
 
         ReferenceKind::Role => match role_dir(&r.value, ctx) {
@@ -633,6 +683,67 @@ mod tests {
 
     /// Templated values may resolve to several files or none — either way they must
     /// never produce a warning.
+    #[test]
+    fn include_vars_dir_targets_the_loaded_files_not_the_directory() {
+        let d = std::env::temp_dir().join("ansible-lsp-t017-dir");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/db/tasks")).unwrap();
+        std::fs::create_dir_all(d.join("roles/db/vars/prod/sub")).unwrap();
+        std::fs::create_dir_all(d.join("roles/db/vars/empty")).unwrap();
+        std::fs::write(d.join("roles/db/vars/prod/a.yml"), "x: 1\n").unwrap();
+        std::fs::write(d.join("roles/db/vars/prod/sub/b.json"), "{\"y\": 2}\n").unwrap();
+        std::fs::write(d.join("roles/db/vars/prod/notes.txt"), "").unwrap();
+        let file = d.join("roles/db/tasks/main.yml");
+        std::fs::write(&file, "").unwrap();
+
+        // Unprefixed value resolves under the role's vars/; targets are the files the
+        // walk loads (recursive, json included), never the directory itself. The .txt
+        // would fail the task, and ignore_unknown_extensions=true skips it instead.
+        let out = resolve_src(&file, "- include_vars: { dir: prod, ignore_unknown_extensions: true }\n");
+        let res = first(&out, ReferenceKind::IncludeVarsDir);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(
+            res.targets,
+            vec![
+                d.join("roles/db/vars/prod/a.yml"),
+                d.join("roles/db/vars/prod/sub/b.json"),
+            ]
+        );
+
+        // An empty directory is legal and resolves — with nothing to navigate to.
+        let res = resolve_src(&file, "- include_vars: { dir: empty }\n");
+        let res = first(&res, ReferenceKind::IncludeVarsDir);
+        assert_eq!(res.status, Status::Resolved);
+        assert!(res.targets.is_empty());
+
+        // In-role `vars/`-prefixed miss: provably absent at the role path; runtime decays
+        // to cwd. Missing, with the one role-relative candidate named.
+        let res = resolve_src(&file, "- include_vars: { dir: vars/nope }\n");
+        let res = first(&res, ReferenceKind::IncludeVarsDir);
+        assert_eq!(res.status, Status::Missing);
+        assert_eq!(res.candidates, vec![d.join("roles/db/vars/nope")]);
+
+        // Templated dir: unknowable, skipped, never warned.
+        let res = resolve_src(&file, "- include_vars: { dir: \"{{ env }}\" }\n");
+        let res = first(&res, ReferenceKind::IncludeVarsDir);
+        assert_eq!(res.status, Status::Skipped);
+    }
+
+    #[test]
+    fn include_vars_dir_outside_a_role_uses_the_task_files_dir() {
+        let d = std::env::temp_dir().join("ansible-lsp-t017-dir-norole");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("playbooks/setup/settings")).unwrap();
+        std::fs::write(d.join("playbooks/setup/settings/c.yml"), "z: 3\n").unwrap();
+        let file = d.join("playbooks/setup/tasks.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(&file, "- include_vars: { dir: settings }\n");
+        let res = first(&out, ReferenceKind::IncludeVarsDir);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.targets, vec![d.join("playbooks/setup/settings/c.yml")]);
+    }
+
     #[test]
     fn templated_paths_never_warn() {
         let Some(root) = repo() else { return };

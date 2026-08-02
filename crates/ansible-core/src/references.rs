@@ -17,6 +17,9 @@ pub enum ReferenceKind {
     ImportPlaybook,
     /// `include_vars:` file target — a vars file that should exist.
     IncludeVars,
+    /// `include_vars:` `dir:` target — a directory, resolved by `_set_root_dir` to one
+    /// computed path; navigation targets are the files it loads.
+    IncludeVarsDir,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +46,9 @@ pub struct Reference {
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
     pub task_name: Option<String>,
+    /// For the `IncludeVarsDir` kind: the full module args, so the resolver can run the
+    /// real loading semantics (extensions, depth, filters) instead of re-parsing.
+    pub include_vars: Option<Box<crate::include_vars::Params>>,
 }
 
 impl Reference {
@@ -59,6 +65,7 @@ impl Reference {
             condition_span: None,
             repeated: false,
             task_name: None,
+            include_vars: None,
         }
     }
 }
@@ -192,15 +199,42 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
         }
 
         "include_vars" => {
-            // The file form (`x.yml` or `{ file: x.yml }`) is a file that must exist; the
-            // dir form (`{ dir: … }`) points at a directory and is left to the var indexer.
-            let target = match &a.args {
-                Node::Scalar { .. } => Some(&a.args),
-                Node::Mapping { .. } if a.args.get("dir").is_none() => a.args.get("file"),
-                _ => None,
-            };
-            if let Some(Node::Scalar { value, span }) = target {
-                out.push(Reference::new(ReferenceKind::IncludeVars, value, *span));
+            match &a.args {
+                // The bare scalar is a k=v line, not a path: `=` tokens are options
+                // (`dir=` even flips the kind), the non-`=` remainder is the file.
+                Node::Scalar { value, span } => {
+                    match crate::splitter::parse_kv(value, false) {
+                        Ok(kv) => {
+                            if let Some(d) = kv.get("dir") {
+                                let mut r =
+                                    Reference::new(ReferenceKind::IncludeVarsDir, d, *span);
+                                r.include_vars =
+                                    crate::include_vars::params_from_args(&a.args).map(Box::new);
+                                out.push(r);
+                            } else if let Some(f) = kv.get("file").or(kv.raw_params.as_deref()) {
+                                out.push(Reference::new(ReferenceKind::IncludeVars, f, *span));
+                            }
+                            // Options only, or a path split by its own `=`: no reference —
+                            // that's a provable task failure, the lint's territory.
+                        }
+                        // Unbalanced quotes/jinja: Ansible fails this at parse time; keep
+                        // the old whole-value reference rather than dropping it silently.
+                        Err(_) => {
+                            out.push(Reference::new(ReferenceKind::IncludeVars, value, *span))
+                        }
+                    }
+                }
+                Node::Mapping { .. } => {
+                    if let Some(Node::Scalar { value: d, span }) = a.args.get("dir") {
+                        let mut r = Reference::new(ReferenceKind::IncludeVarsDir, d, *span);
+                        r.include_vars =
+                            crate::include_vars::params_from_args(&a.args).map(Box::new);
+                        out.push(r);
+                    } else if let Some(Node::Scalar { value, span }) = a.args.get("file") {
+                        out.push(Reference::new(ReferenceKind::IncludeVars, value, *span));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -256,6 +290,42 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].value, "a.yml");
         assert_eq!(r[1].value, "b.yml");
+    }
+
+    #[test]
+    fn include_vars_dir_forms_get_their_own_kind() {
+        let r = of(
+            "- include_vars: { dir: vars/prod }\n- include_vars: dir=prod name=db\n",
+            ReferenceKind::IncludeVarsDir,
+        );
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].value, "vars/prod");
+        assert_eq!(r[1].value, "prod");
+        assert!(r[0].include_vars.is_some());
+    }
+
+    #[test]
+    fn include_vars_dir_params_are_carried() {
+        let r = of(
+            "- include_vars:\n    dir: prod\n    extensions: [yml]\n    depth: 1\n",
+            ReferenceKind::IncludeVarsDir,
+        );
+        let p = r[0].include_vars.as_deref().unwrap();
+        assert_eq!(p.extensions, ["yml"]);
+        assert_eq!(p.depth, 1);
+    }
+
+    #[test]
+    fn include_vars_free_form_kv_remainder_is_the_file() {
+        let r = of("- include_vars: x.yml name=db\n", ReferenceKind::IncludeVars);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].value, "x.yml");
+    }
+
+    /// A path split by its own `=` is a provable task failure, not a path reference.
+    #[test]
+    fn include_vars_options_only_yields_no_reference() {
+        assert!(refs("- include_vars: vars/we=ird.yml\n").is_empty());
     }
 
     #[test]
