@@ -572,7 +572,7 @@ impl Backend {
             return None;
         }
         let defs = cached_definitions(path, nodes);
-        let mut texts: HashMap<PathBuf, String> = HashMap::new();
+        let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
             let cands: Vec<vars::Located> =
@@ -580,17 +580,18 @@ impl Backend {
             let Some(d) = vars::effective(&cands) else {
                 continue;
             };
-            let text = texts.entry(d.file.clone()).or_insert_with(|| {
-                if d.file == *path {
-                    a.doc.text.clone()
-                } else {
-                    std::fs::read_to_string(&d.file).unwrap_or_default()
-                }
-            });
+            let document: &Document = if d.file == *path {
+                &a.doc
+            } else {
+                ext.entry(d.file.clone()).or_insert_with(|| {
+                    Document::new(std::fs::read_to_string(&d.file).unwrap_or_default())
+                })
+            };
+            let text = document.text.as_str();
             let Some(v) = def_value(d, text) else {
                 continue;
             };
-            let line = line_of(text, d.span.start);
+            let line = document.line_of(d.span.start);
             let label = format!("{}:{line}", short_path(&d.file));
             // A clickable link to the definition — file URI with a line fragment.
             let loc = Url::from_file_path(&d.file)
@@ -644,17 +645,18 @@ impl Backend {
                 .then(b.span.start.cmp(&a.span.start))
         });
         let multiple = defs.len() > 1;
-        let mut texts: HashMap<PathBuf, String> = HashMap::new();
+        let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for (i, d) in defs.iter().enumerate() {
-            let text = texts.entry(d.file.clone()).or_insert_with(|| {
-                if d.file == *path {
-                    doc.text.clone()
-                } else {
-                    std::fs::read_to_string(&d.file).unwrap_or_default()
-                }
-            });
-            let line = line_of(text, d.span.start);
+            let document: &Document = if d.file == *path {
+                doc
+            } else {
+                ext.entry(d.file.clone()).or_insert_with(|| {
+                    Document::new(std::fs::read_to_string(&d.file).unwrap_or_default())
+                })
+            };
+            let text = document.text.as_str();
+            let line = document.line_of(d.span.start);
             let label = format!("{}:{line}", short_path(&d.file));
             // Clickable link to the definition (file URI + line fragment).
             let loc = Url::from_file_path(&d.file)
@@ -760,14 +762,6 @@ fn template_idents(value: &str) -> Vec<String> {
         rest = &after[c + 2..];
     }
     out
-}
-
-/// 1-based line number of a byte offset, for a `file:line` hover reference.
-fn line_of(text: &str, byte: usize) -> usize {
-    text.get(..byte)
-        .map(|s| s.bytes().filter(|&b| b == b'\n').count())
-        .unwrap_or(0)
-        + 1
 }
 
 /// The last few components of a path, for a compact "where it's defined" label.

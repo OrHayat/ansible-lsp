@@ -103,6 +103,11 @@ impl Document {
         (line as u32, prefix.encode_utf16().count() as u32)
     }
 
+    /// 1-based line number of a byte offset, via the precomputed line index.
+    pub fn line_of(&self, byte: usize) -> usize {
+        self.line_starts.partition_point(|&start| start <= byte)
+    }
+
     /// Inverse of [`Self::byte_to_lsp`], for turning a cursor position into an offset.
     pub fn lsp_to_byte(&self, line: u32, utf16_col: u32) -> usize {
         let idx = line as usize;

@@ -5,10 +5,6 @@ short list of what's next, most actionable first.
 
 ## Variable model — leftovers
 
-- [ ] **T-055 — line-index fix.** The cache/reverse-map is done; `line_of` still rescans a
-      file from the start on every hover (O(file length) per definition shown). Replace it
-      with a per-file line index — ideally wrap each read file in a `Document` and reuse
-      `byte_to_lsp`, dropping `line_of`.
 - [ ] **Cache eviction.** The variable cache (main.rs) never shrinks — fine for a session,
       unbounded over a long-lived server. Add a size/LRU bound if it ever matters.
 - [ ] **T-051 — never-defined diagnostic.** The other half of definedness: warn when a

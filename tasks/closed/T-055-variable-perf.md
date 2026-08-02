@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-048, T-050, T-052 |
+| done   | P2       | M    | T-048, T-050, T-052 |
 
 ## Problem
 
@@ -47,12 +47,16 @@ The variable features are correct but recompute too much:
 
 The **dependency-tracked cache** landed (commit `389f5dc`): `vars::definitions_with_deps`
 returns the files a walk read; the LSP caches per path with a reverse map `file -> dependents`
-and invalidates precisely on `did_open`/`did_change`. The `line_of` line-index fix is the one
-remaining item.
+and invalidates precisely on `did_open`/`did_change`.
+
+The **line-index fix** landed too: `Document::line_of` now does a `partition_point` over the
+precomputed `line_starts` (O(log lines)), replacing the O(file-length) `line_of` free function.
+Both hover paths (`variable_hover_at`, `path_substitution_hover`) cache external files as
+`Document`s and reuse their index across every definition shown. Ticket complete.
 
 ## Done when
 
 - [x] `definitions` results are memoised so a repaint doesn't re-walk unchanged files
 - [x] editing an included var file refreshes dependent files' variable links (reverse map)
-- [ ] `line_of`-style per-call rescans replaced by a per-file line index
+- [x] `line_of`-style per-call rescans replaced by a per-file line index
 - [x] no behaviour change — same links, hovers and jumps, just fewer file reads
