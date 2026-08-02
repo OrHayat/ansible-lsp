@@ -57,11 +57,12 @@ own expression or guard handles undefinedness (`default(…)`, `is defined`). Di
 **Gate correction (same day):** the "zero corpus hits" first reported was an artifact — the
 scan run had panicked mid-corpus (byte-boundary slice in `softened()` on a block-scalar
 file; spans are value-relative and shift off char boundaries; fixed and pinned). The real
-count is **656**, dominated by playbooks stored inside role dirs (vars live in that role's
-defaults, unreachable from a standalone playbook) and `docs/examples/` copies. Per this
-ticket's own rule, the rule doesn't ship at that count. Fix direction: require **defined
-nowhere in the whole workspace** (T-033's original measure) instead of "unreachable from
-this file" — reachability precision returns via T-059/T-062. Also noted: the walk's
+count is **656**. Grep-verified diagnosis (correcting an earlier guess about role
+defaults): the names are mostly defined in the corpus's project-root `group_vars/all.yml`
+— an **inventory-adjacent** file our walk never reads, i.e. the T-062 gap. Per this
+ticket's own rule, the rule doesn't ship at that count. Interim fix is **T-065**: require
+"defined nowhere in the whole workspace"; T-062 is the real repair for this class, after
+which the reachability bar gets re-measured. Also noted: the walk's
 `MAX_DEPTH` truncation can hide real definitions; when that matters, suppress
 `var-undefined` on truncated walks rather than report from partial knowledge.
 
