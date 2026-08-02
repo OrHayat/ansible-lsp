@@ -43,9 +43,16 @@ The variable features are correct but recompute too much:
 - Don't cache across a workspace scan that already invalidates wholesale (see how `mutations`
   is cleared).
 
+## Progress
+
+The **dependency-tracked cache** landed (commit `389f5dc`): `vars::definitions_with_deps`
+returns the files a walk read; the LSP caches per path with a reverse map `file -> dependents`
+and invalidates precisely on `did_open`/`did_change`. The `line_of` line-index fix is the one
+remaining item.
+
 ## Done when
 
-- [ ] `definitions` results are memoised so a repaint doesn't re-walk unchanged files
-- [ ] editing an included var file refreshes dependent files' variable links
+- [x] `definitions` results are memoised so a repaint doesn't re-walk unchanged files
+- [x] editing an included var file refreshes dependent files' variable links (reverse map)
 - [ ] `line_of`-style per-call rescans replaced by a per-file line index
-- [ ] no behaviour change — same links, hovers and jumps, just fewer file reads
+- [x] no behaviour change — same links, hovers and jumps, just fewer file reads
