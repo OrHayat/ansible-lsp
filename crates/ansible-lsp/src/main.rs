@@ -996,8 +996,10 @@ fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
         }
     }
     let s = p.to_string_lossy();
+    // The leading `…/` marks a truncated absolute path — without it the tail reads
+    // like a workspace-relative one (the repo really has collections/ansible_collections/).
     if let Some(i) = s.find("/site-packages/") {
-        return s[i + "/site-packages/".len()..].to_string();
+        return format!("…/{}", &s[i + "/site-packages/".len()..]);
     }
     if let Ok(home) = std::env::var("HOME") {
         if let Some(rest) = s.strip_prefix(home.as_str()) {
@@ -1609,8 +1611,8 @@ mod tests {
             "the file that runs is listed first: {md}"
         );
         assert!(
-            md.contains("[ansible/plugins/action/debug.py]("),
-            "install path cut to its site-packages tail: {md}"
+            md.contains("[…/ansible/plugins/action/debug.py]("),
+            "install path cut to its site-packages tail, truncation marked: {md}"
         );
         assert!(!md.contains("**Tried:**"), "no path dump without the setting: {md}");
 
