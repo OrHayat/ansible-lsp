@@ -126,6 +126,7 @@ navigation win.
 | T-013 | [Unparseable files flagged as errors](closed/T-013-unparseable-hint.md) | done |
 | T-036 | [libyaml parser, matches Ansible](closed/T-036-parse-what-ansible-parses.md) | done |
 | T-043 | [Docs stale after the parser swap](closed/T-043-docs-stale-after-parser-swap.md) | done |
+| T-074 | [Startup scan metrics](closed/T-074-startup-scan-metrics.md)   | done     |
 
 ## Settled — don't re-derive these
 

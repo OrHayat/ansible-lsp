@@ -171,6 +171,19 @@ struct Analysis {
     refs: Vec<(Reference, Resolution)>,
 }
 
+/// Per-phase time accumulated across a workspace scan (T-074). Sums, not per-file — the
+/// startup log reports where the scan spends its time so the perf follow-ups target the
+/// real cost instead of a guess. The phases don't add up to the wall clock: file walking,
+/// reads, diagnostics and publishing live in the gap.
+#[derive(Default)]
+struct ScanTimings {
+    parse: std::time::Duration,
+    context: std::time::Duration,
+    var_index: std::time::Duration,
+    resolve: std::time::Duration,
+    files: usize,
+}
+
 impl Backend {
     fn text_of(&self, uri: &Url) -> Option<String> {
         self.docs.lock().ok()?.get(uri).cloned()
@@ -184,13 +197,31 @@ impl Backend {
     }
 
     fn analyze_text(text: String, path: &Path) -> Option<Analysis> {
+        Self::analyze_text_measured(text, path, &mut ScanTimings::default())
+    }
+
+    /// The body of `analyze_text`, wrapping each phase with a timer that accumulates into
+    /// `t`. The un-instrumented `analyze_text` passes a throwaway accumulator, so the logic
+    /// lives in exactly one place.
+    fn analyze_text_measured(text: String, path: &Path, t: &mut ScanTimings) -> Option<Analysis> {
+        use std::time::Instant;
+        let s = Instant::now();
         let doc = Document::new(text);
         let nodes = doc.parse()?;
+        t.parse += s.elapsed();
+
+        let s = Instant::now();
         let ctx = FileContext::discover(path);
+        t.context += s.elapsed();
+
         // Variable values that are statically knowable, so a `{{ var }}` in a path can be
         // navigated to its real target (T-056). Navigation only — resolve_with never warns.
+        let s = Instant::now();
         let defs = cached_definitions(path, &nodes);
         let literals = vars::known_literals(&defs, path, &doc.text);
+        t.var_index += s.elapsed();
+
+        let s = Instant::now();
         let mut extracted = references::extract(&nodes);
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             extracted.extend(references::meta_dependencies(&nodes));
@@ -202,6 +233,8 @@ impl Backend {
                 (r, res)
             })
             .collect();
+        t.resolve += s.elapsed();
+
         Some(Analysis { doc, nodes, ctx, refs })
     }
 
@@ -463,19 +496,24 @@ impl Backend {
     /// I/O bound (~3.5 s over 731 files) so it runs detached and publishes as it
     /// goes — the Problems panel fills progressively instead of appearing at the end.
     async fn scan_workspace(&self) {
+        let scan_start = std::time::Instant::now();
         let roots = self.roots.lock().map(|r| r.clone()).unwrap_or_default();
         let stale: HashSet<Url> = self.flagged.lock().map(|f| f.clone()).unwrap_or_default();
         let mut still_flagged = HashSet::new();
+        let mut t = ScanTimings::default();
+        let mut seen = 0usize;
 
         for root in roots {
             for path in yaml_files(&root) {
+                seen += 1;
                 // An open buffer is authoritative over what's on disk.
                 let Ok(uri) = Url::from_file_path(&path) else { continue };
                 if self.text_of(&uri).is_some() {
                     continue;
                 }
                 let Ok(text) = std::fs::read_to_string(&path) else { continue };
-                let Some(a) = Self::analyze_text(text, &path) else { continue };
+                let Some(a) = Self::analyze_text_measured(text, &path, &mut t) else { continue };
+                t.files += 1;
                 let mut diagnostics = Self::diagnostics_of(&a);
                 diagnostics.extend(self.mutated_condition_diagnostics(&a));
                 if diagnostics.is_empty() {
@@ -493,6 +531,26 @@ impl Backend {
         if let Ok(mut f) = self.flagged.lock() {
             *f = still_flagged;
         }
+
+        // Startup perf metrics (T-074), to the *Ansible LSP* output channel. Phases are
+        // sums across all analysed files; the wall clock also covers the file walk, reads,
+        // diagnostics and publishing, so total > parse+context+var-index+resolve.
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "ansible-lsp scan: {} files analysed of {seen} seen in {:.0} ms \
+                     (parse {:.0}, context {:.0}, var-index {:.0}, resolve {:.0})",
+                    t.files,
+                    ms(scan_start.elapsed()),
+                    ms(t.parse),
+                    ms(t.context),
+                    ms(t.var_index),
+                    ms(t.resolve),
+                ),
+            )
+            .await;
     }
 
     /// Every resolvable reference and how many files it reaches.
