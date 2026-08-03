@@ -61,6 +61,13 @@ Also: the T-020 dependency is droppable for the reachable-from-open-file version
 path-stack during the existing walk reports the closing edge with no reverse index.
 Workspace-global detection (cycles in files nobody opens) stays with T-020.
 
+Scope check (source-verified 2026-08-03): `meta/runtime.yml` routing is NOT needed —
+`plugin_routing` has no `role` type, and `_get_collection_role_path`
+(`_collection_finder.py:1121`) resolves role names by pure path lookup, no redirects.
+The real reach limit is collection-hosted roles (T-042 gap 2): an `include_role:
+ns.coll.role` edge resolves to nothing today, so a cycle through one is *missed* —
+never falsely reported. In-repo cycles are fully covered.
+
 ## Done when
 
 - [ ] a fixture with a 2-file and a 3-file cycle both report
