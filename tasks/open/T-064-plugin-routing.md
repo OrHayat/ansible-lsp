@@ -57,7 +57,10 @@ we're leaving on the table.
 
 - [ ] `community.general.docker` (pure redirect) resolves, navigates to the real file, and
       is not warned unknown — pinned
-- [ ] a chained redirect resolves; a redirect cycle doesn't hang — pinned
+- [ ] a chained redirect resolves; a redirect cycle doesn't hang — pinned. Live-verified
+      2026-08-03: Ansible errors with "plugin redirect loop resolving <name> (path:
+      [...])" — report the same, ERROR severity, path in the message. (Roles cannot be
+      routed at all — proven in T-022's scope check — so this is modules/plugins only.)
 - [ ] deprecated names get a WARNING with the `warning_text`; tombstoned names an ERROR
 - [ ] code action rewrites the old name to the redirect target
 - [ ] legacy bare names route through `ansible_builtin_runtime.yml`
