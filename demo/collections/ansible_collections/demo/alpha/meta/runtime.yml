@@ -1,0 +1,9 @@
+# A collection's own rename table. `demo.alpha.relay` has no file here — it moved to
+# demo.beta (which moved it again). `loop_a`/`loop_b` form a deliberate redirect cycle
+# with demo.beta, pinning the visited-set guard: resolution must give up, not hang.
+plugin_routing:
+  modules:
+    relay:
+      redirect: demo.beta.relay
+    loop_a:
+      redirect: demo.beta.loop_b

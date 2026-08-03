@@ -1,0 +1,8 @@
+# Second hop of the demo.alpha.relay chain — and the second half of the loop_a/loop_b
+# redirect cycle.
+plugin_routing:
+  modules:
+    relay:
+      redirect: demo.charlie.relay
+    loop_b:
+      redirect: demo.alpha.loop_a

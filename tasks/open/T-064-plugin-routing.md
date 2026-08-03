@@ -53,15 +53,29 @@ we're leaving on the table.
 - Tombstoned-at-runtime differs by installed core version; we report against the installed
   tree, same as all module resolution.
 
+## Progress
+
+Redirect *resolution* landed with the T-042 bare-name work: core's table and per-collection
+`meta/runtime.yml` tables are read (`install::module_redirect`, cached per file), and
+`resolve_module` chases chains with a visited-set cycle guard — the loader's
+`while`/`redirect_list` loop transcribed. Demo fixtures pin it: `demo.alpha.relay` resolves
+through two hops to `demo/charlie/plugins/modules/relay.py`; `loop_a ↔ loop_b` terminates
+quietly. Hover marks the rename: `` `demo.alpha.relay` → redirected to `demo.charlie.relay` ``.
+Still open here: deprecation/tombstone diagnostics, the rename code action, and the
+`action_plugin` key. (The original example `community.general.docker` redirects to
+`community.docker.docker`, which that collection has since tombstoned — so it skips
+quietly today; the pure-redirect box is pinned by the demo fixture instead.)
+
 ## Done when
 
-- [ ] `community.general.docker` (pure redirect) resolves, navigates to the real file, and
-      is not warned unknown — pinned
-- [ ] a chained redirect resolves; a redirect cycle doesn't hang — pinned. Live-verified
+- [x] a pure redirect resolves, navigates to the real file, and is not warned unknown —
+      pinned by `chained_module_redirects_resolve_and_cycles_terminate`
+- [x] a chained redirect resolves; a redirect cycle doesn't hang — pinned by the same test. Live-verified
       2026-08-03: Ansible errors with "plugin redirect loop resolving <name> (path:
       [...])" — report the same, ERROR severity, path in the message. (Roles cannot be
       routed at all — proven in T-022's scope check — so this is modules/plugins only.)
 - [ ] deprecated names get a WARNING with the `warning_text`; tombstoned names an ERROR
 - [ ] code action rewrites the old name to the redirect target
-- [ ] legacy bare names route through `ansible_builtin_runtime.yml`
+- [x] legacy bare names route through `ansible_builtin_runtime.yml` (landed in T-042's
+      bare-name resolution)
 - [ ] corpus gate: zero new warnings on `~/app/ansible`
