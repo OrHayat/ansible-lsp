@@ -911,6 +911,20 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
 /// ones return `None` so the substitution hover explains the `{{ }}` instead.
 fn reference_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<String> {
     match res.status {
+        // A templated pattern that glob-matched: every target is equally possible until
+        // runtime, so there is no winner to mark — list them all.
+        Status::Resolved if res.skip_reason == Some(SkipReason::Templated) => {
+            let n = res.targets.len();
+            let mut s = format!(
+                "**{n} possible target{}** for `{}`:",
+                if n == 1 { "" } else { "s" },
+                r.value
+            );
+            for t in &res.targets {
+                s.push_str(&format!("\n- `{}`", shorten(t, ctx)));
+            }
+            Some(s)
+        }
         Status::Resolved => {
             let won = res.targets.first();
             let mut s = String::from("**Tried:**");
@@ -931,6 +945,14 @@ fn reference_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option
             Some(s)
         }
         Status::Skipped => match res.skip_reason {
+            // No candidates means no known-value substitution happened either — nothing
+            // else will hover this, so say why it goes nowhere. With candidates, the
+            // substitution hover already explains the `{{ }}`.
+            Some(SkipReason::Templated) if res.candidates.is_empty() => Some(format!(
+                "**Skipped** — `{}` depends on a runtime value and nothing on disk \
+                 matches the pattern (never warned; absence proves nothing)",
+                r.value
+            )),
             Some(SkipReason::Templated) => None,
             Some(SkipReason::NotInWorkspace) => {
                 Some("**Skipped** — not in this workspace (a builtin, or installed outside it)".into())
@@ -1128,23 +1150,26 @@ impl LanguageServer for Backend {
                         range: Some(range),
                     }));
                 }
-            } else {
-                // Resolved refs stay quiet unless asked for (the target is a Cmd+click
-                // away); missing ones show what was tried, which is the whole point.
-                let wanted = match res.status {
-                    Status::Resolved | Status::Skipped => settings.candidates_on_resolved,
-                    Status::Missing => settings.candidates_on_missing,
-                };
-                if wanted {
-                    if let Some(value) = reference_hover(r, &res, &ctx) {
-                        return Ok(Some(Hover {
-                            contents: HoverContents::Markup(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value,
-                            }),
-                            range: Some(range),
-                        }));
-                    }
+            }
+            // Resolved refs stay quiet unless asked for (the target is a Cmd+click
+            // away); missing ones show what was tried, which is the whole point. An
+            // ambiguous ref — several targets — shows its list regardless: no single
+            // target is a click away, and the decoration only gives the count.
+            let wanted = match res.status {
+                Status::Resolved | Status::Skipped => {
+                    res.targets.len() > 1 || settings.candidates_on_resolved
+                }
+                Status::Missing => settings.candidates_on_missing,
+            };
+            if wanted {
+                if let Some(value) = reference_hover(r, &res, &ctx) {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value,
+                        }),
+                        range: Some(range),
+                    }));
                 }
             }
         }
@@ -1366,6 +1391,41 @@ mod tests {
         assert!(md.contains("chain-c/vars/settings.yml"), "wrong file:\n{md}");
         assert!(md.contains("dependency of `chain-b`"), "missing inner hop:\n{md}");
         assert!(md.contains("dependency of `chain-a`"), "missing outer hop:\n{md}");
+    }
+
+    /// T-029 against the real demo: a templated path whose variables have no known value
+    /// still hovers — the glob-matched targets, listed without a winner — and one that
+    /// matches nothing says why it goes nowhere instead of staying silent.
+    #[test]
+    fn hover_lists_glob_targets_for_unknown_value_templated_paths() {
+        let path = std::path::Path::new("../../demo/tasks/main.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text);
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let hover = |value: &str| {
+            let r = refs.iter().find(|r| r.value == value).expect("ref in demo");
+            let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+            super::reference_hover(r, &res, &ctx)
+        };
+
+        let md = hover("{{ protocol }}_target/check.yml").expect("hover expected");
+        assert!(md.contains("2 possible targets"), "count in: {md}");
+        assert!(
+            md.contains("http_target/check.yml") && md.contains("ftp_target/check.yml"),
+            "both targets in: {md}"
+        );
+        assert!(!md.contains("won"), "no winner to mark in: {md}");
+
+        // Zero glob matches, and the anchor-less pattern that deliberately offers none:
+        // both must explain themselves rather than hover nothing.
+        for value in ["{{ protocol }}_target/nope.yml", "{{ anything }}.yml"] {
+            let md = hover(value).expect("hover expected");
+            assert!(md.contains("Skipped"), "skip reason for {value} in: {md}");
+        }
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a
