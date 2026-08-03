@@ -38,10 +38,26 @@ extension order, dir forms, and hard-error semantics. The full include_role para
 surface (these three included) is now **T-063**; this ticket keeps only the two verify
 items above.
 
+### 4. Module name shapes, live-verified 2026-08-03 (2.21)
+
+- `debug` → **works** (implicit `ansible.legacy.debug`, falls through to builtin via the
+  routing table — the bare-name box in T-064)
+- `builtin.debug` → **fails**: "Cannot resolve 'builtin.debug' to an action or module."
+- `ansible.builtin.debug` → works
+
+The resolver (`resolve.rs:400-403`) skips everything that isn't 3 parts, so: bare names —
+valid Ansible — get no color and a wrong "not in this workspace" hover; and 2-part names —
+a *statically provable* runtime failure, since module names can't contain dots so only 1
+or 3 parts are possible — stay silent where an ERROR quoting Ansible's message is safe.
+
 ## Done when
 
 - [ ] a short module name resolves through an in-scope `collections:` list (or a test proves it
       already does)
 - [ ] `ns.coll.role` resolves from `collections_path` (or a test proves it already does)
+- [ ] a bare builtin name (`debug:`) resolves and hovers like its FQCN (with T-064's
+      routing for the general case)
+- [ ] a 2-part name (`builtin.debug`) gets an ERROR quoting "Cannot resolve … to an
+      action or module", pinned by fixture
 
 Docs: https://docs.ansible.com/ansible/latest/collections_guide/collections_using_playbooks.html
