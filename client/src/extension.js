@@ -116,7 +116,9 @@ function activate(context) {
         { scheme: "file", language: "ansible" },
         { scheme: "file", language: "yaml" },
       ],
-      initializationOptions: hintSettings(),
+      // A function, not a value: evaluated on every (re)start, so `ansibleLsp.restart`
+      // picks up current settings instead of replaying the activation-time snapshot.
+      initializationOptions: hintSettings,
     }
   );
 

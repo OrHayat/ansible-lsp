@@ -1200,8 +1200,8 @@ impl LanguageServer for Backend {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "settings changed — received: {} | effective: enabled={}",
-                    p.settings, s.hints
+                    "settings changed — received: {} | effective: hints={} candidatesOnResolved={}",
+                    p.settings, s.hints, s.candidates_on_resolved
                 ),
             )
             .await;
@@ -1285,9 +1285,12 @@ impl LanguageServer for Backend {
             // where no single one is a click away and the decoration only gives the
             // count — and modules, whose provenance line states facts a click doesn't
             // (clicking opens the file; it doesn't say what its location means).
-            // Missing refs never hover: their diagnostic already lists what was tried.
+            // Skip reasons always show: one line answering "why isn't this coloured" —
+            // the setting gates the verbose path dump, not explanations. Missing refs
+            // never hover: their diagnostic already lists what was tried.
             let wanted = match res.status {
-                Status::Resolved | Status::Skipped => {
+                Status::Skipped => true,
+                Status::Resolved => {
                     res.targets.len() > 1
                         || r.kind == ReferenceKind::Module
                         || settings.candidates_on_resolved
@@ -1415,6 +1418,11 @@ impl LanguageServer for Backend {
             // provider on Cmd+click, so emitting one for a multi-candidate templated
             // path would silently drop the other candidates.
             .filter(|(_, res)| res.targets.len() == 1)
+            // No links for modules: their provenance hover already carries labelled
+            // links to both files, and VS Code renders a link's tooltip as an extra
+            // hover line — the same path twice. Cmd+click still works via the
+            // definition provider.
+            .filter(|(r, _)| r.kind != ReferenceKind::Module)
             .filter_map(|(r, res)| {
                 let target = res.targets.first()?;
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
