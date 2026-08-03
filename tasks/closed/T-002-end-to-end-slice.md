@@ -23,7 +23,7 @@ directory are pinned as regression tests — a naive check ships with 4 false po
 
 | Site                                                   | Target                                            |
 | ------------------------------------------------------ | ------------------------------------------------- |
-| `roles/lustre-snapshot/tasks/query/timestamp.yml:21`     | `query/exists.yml`                                |
+| `roles/lustre-snapshot/tasks/query/timestamp.yml:21`   | `query/exists.yml`                                |
 | `roles/ad/tasks/join.yml:28`                           | `../../playbooks/tasks/select-available-node.yml` |
 | `roles/dashboard-docker/tasks/sanity-tests/main.yml:23` | `sanity-tests/database-tests.yml`                 |
 | `roles/dashboard-docker/tasks/sanity-tests/main.yml:33` | `sanity-tests/celery-tests.yml`                   |
