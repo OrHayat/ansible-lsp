@@ -74,7 +74,7 @@
   when: true
 
 - name: "NO HINT — real logic, so it stays silent rather than guessing"
-  # 56% of this repo's 3466 conditions look like this. Refusing to answer is the
+  # Most real-world conditions look like this. Refusing to answer is the
   # feature; a tree that guesses is the thing that got the call-hierarchy version
   # scrapped.
   import_playbook: imported.yml

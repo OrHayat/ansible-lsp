@@ -493,7 +493,7 @@ impl Backend {
 
     /// Resolve every YAML file in the workspace and publish what's broken.
     ///
-    /// I/O bound (~3.5 s over 731 files) so it runs detached and publishes as it
+    /// I/O bound (~3.5 s over a large workspace) so it runs detached and publishes as it
     /// goes — the Problems panel fills progressively instead of appearing at the end.
     async fn scan_workspace(&self) {
         let scan_start = std::time::Instant::now();

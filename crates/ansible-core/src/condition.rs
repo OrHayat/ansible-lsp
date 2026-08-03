@@ -1,7 +1,7 @@
 //! What a `when:` says about a default run, and what's provably wrong with it.
 //!
 //! Not an evaluator — a matcher over a closed set of shapes, plus a variable extractor.
-//! Of this repo's 3466 conditions a large fraction match no shape here and must stay
+//! Of a real repo's thousands of conditions a large fraction match no shape here and must stay
 //! [`Verdict::Unknown`]; the moment this guesses, anything built on it becomes
 //! untrustworthy, which is what got the call-hierarchy tree scrapped.
 //!

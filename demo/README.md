@@ -1,6 +1,6 @@
 # Demo
 
-Everything the server does, labelled, so you don't have to hunt through 731 real files.
+Everything the server does, labelled, so you don't have to hunt through hundreds of real files.
 Open the folder in the Extension Development Host (**Run -> Start Debugging** — F5 is the
 mic key on this Mac).
 
@@ -67,7 +67,7 @@ if it warned:
   role's dir, not the folder's, until T-068; the second is per-host from inventory
   sources, until T-070.)
 - **a role with no `tasks/main.yml` but a `tasks_from:`** — legal. `roles/cib-batch` in the
-  real repo is exactly this and 16 working references depend on it.
+  real repo is exactly this and real working references depend on it.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.
 - **61% of `when:` conditions** — real boolean logic, unguarded comparisons, unknown filters.
   Guessing would make the analysis untrustworthy.

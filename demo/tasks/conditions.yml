@@ -14,7 +14,7 @@
 # only tells us the value when X is UNSET. Whether it's set in group_vars, inventory or
 # -e is not knowable from the condition, so claiming "by default" would overstate it.
 
-- name: "UnlessSet — the skip-flag pattern, 289 conditions in the real repo"
+- name: "UnlessSet — the skip-flag pattern, common in real repos"
   ansible.builtin.include_tasks: sibling.yml
   when: not (skip_demo | default(false) | bool)
 
@@ -77,7 +77,7 @@
   when: false
 
 # ============================================================= NO HINT — declining to answer
-# 61% of the real repo's 2669 conditions land here. Refusing to answer is the feature:
+# Most real-world conditions land here. Refusing to answer is the feature:
 # a guess in an execution tree is what got the call-hierarchy version scrapped.
 
 - name: "NO HINT — real boolean logic"

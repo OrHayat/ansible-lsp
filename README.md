@@ -78,7 +78,7 @@ These never warn, each for a reason a test pins down:
 
 - **templated paths** — the target depends on runtime variables, so absence proves nothing
 - **a role with no `tasks/main.yml` but a `tasks_from`** — legal; `roles/cib-batch` in the
-  real repo is exactly this, and 16 working references depend on it
+  real repo is exactly this, and real working references depend on it
 - **modules from collections that aren't installed** — an uninstalled dependency, not a typo
 
 (A file that fails to parse is *not* in this list anymore: the parser matches Ansible's, so a

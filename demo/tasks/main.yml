@@ -66,7 +66,7 @@
 
 - name: Role with no tasks/main.yml — silent, because tasks_from supplies the file
   # roles/cib-batch in the real repo is exactly this: begin/commit/abort.yml and
-  # no main.yml. 16 working references depend on this not warning.
+  # no main.yml. Real working references depend on this not warning.
   ansible.builtin.include_role: { name: demo, tasks_from: sibling }
 
 - name: "The roles: list form lives in demo/playbook.yml"

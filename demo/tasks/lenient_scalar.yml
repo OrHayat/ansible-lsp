@@ -3,7 +3,7 @@
 # multi-line double-quoted scalar whose closing `}}"` sits at the KEY's indent, not deeper
 # than it. YAML 1.2 requires continuation lines to be indented past the key, so a strict
 # parser errors on that closing line; libyaml/PyYAML don't enforce it, so real playbooks are
-# full of this. Anonymized from a role's `_run.yml` in a real repo.
+# full of this.
 - name: "Build beacon_setup.py argv ({{ _beacon_mode }})"
   ansible.builtin.set_fact:
     # This block is fine even for strict YAML 1.2 — its closing `}}"` (below) is indented
