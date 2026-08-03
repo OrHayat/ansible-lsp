@@ -92,18 +92,17 @@
   ansible.builtin.include_tasks: "{{ anything }}.yml"
 
 # ------------------------------------------- MAGIC VARIABLES (look templated, aren't)
-# `{{ role_path }}` reads like a runtime unknown and isn't: Ansible defines it as the
-# directory of the role containing the task, which is exactly what FileContext already
-# knows.
-- name: GOOD — role_path expands to this role's own directory
+# `{{ role_path }}` expansion is DISABLED for now: Ansible sets it from whichever role
+# *invoked* the task (it can be undefined, or a different role's dir), while we guessed it
+# from folder shape — so the warning below could lie. Until T-068 derives it from
+# invocation chains (search-order half: T-067), these are globbed like any templated path.
+- name: QUIET — role_path is no longer guessed, so this globs instead of resolving
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/sibling.yml"
 
-- name: GOOD — and `..` collapses across the expansion
+- name: QUIET — same, `..` collapse only mattered under expansion
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/nested/../sibling.yml"
 
-- name: BAD — expands to a literal path that doesn't exist, so it WARNS
-  # This is the payoff: a `{{ }}` path that we can actually check gets checked, instead
-  # of being waved through as "templated, absence proves nothing".
+- name: QUIET — used to WARN off the guessed value; returns chain-verified in T-068
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/no_such_file.yml"
 
 - name: "GOOD — playbook_dir is ambiguous, so every plausible location is tried"

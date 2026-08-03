@@ -77,10 +77,15 @@ pub fn rule_id(r: &Reference) -> &'static str {
 /// Returns `(expansions, still_templated)`. `still_templated` means at least one `{{ }}`
 /// survived, so the caller must glob rather than diagnose.
 ///
-/// `role_path` is not a runtime unknown — Ansible defines it as the directory of the role
-/// containing the task, which is exactly `FileContext::role_dir`. Treating it as opaque
-/// left 4 real references in `~/app/ansible` unnavigable, all pointing at files that
-/// exist.
+/// `role_path` is NOT expanded here anymore. The old claim — "Ansible defines it as the
+/// directory of the role containing the task, which is exactly `FileContext::role_dir`" —
+/// is wrong: Ansible injects it per task from whichever role *invoked* the task
+/// (`vars/manager.py:478-481`), so it can be undefined (no role chain → runtime crash) or
+/// a different role's dir (cross-role include). `role_dir` is a folder-shape guess, and
+/// warnings built on it can lie. Disabled until T-068 derives the value from invocation
+/// chains (needs T-020); the search-order half of the problem is T-067. Cost, accepted
+/// knowingly: the 4 `~/app/ansible` references that expansion made navigable fall back
+/// to globbing, and `{{ role_path }}` misses no longer warn.
 ///
 /// `playbook_dir` is different and taught the lesson the hard way: substituting it with
 /// the project root produced 4 false "missing file" warnings, because the playbooks live
@@ -123,12 +128,8 @@ fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
         *out = expanded;
     };
 
-    // Exactly one possible value: the role this file belongs to.
-    apply(
-        "role_path",
-        ctx.role_dir.iter().cloned().collect(),
-        &mut out,
-    );
+    // `role_path` deliberately not substituted — see the doc comment above (T-067/T-068).
+    // Left templated, it falls through to the glob path and can never produce a warning.
 
     // Ambiguous. The project root covers a top-level playbook; `<root>/playbooks` covers
     // the convention this repo actually uses.
@@ -619,6 +620,7 @@ mod tests {
     /// `role_path` is the role's own directory, known at parse time. Four real
     /// references in `~/app/ansible` were unnavigable until this landed.
     #[test]
+    #[ignore = "role_path expansion disabled pending chain-derived values — T-067/T-068"]
     fn role_path_expands_to_the_containing_role() {
         let Some(root) = repo() else { return };
         let res = resolve_in(
@@ -652,6 +654,7 @@ mod tests {
 
     /// Substituted-to-literal means fully diagnosable — the point of substituting at all.
     #[test]
+    #[ignore = "role_path expansion disabled pending chain-derived values — T-067/T-068"]
     fn an_expanded_path_that_is_missing_still_warns() {
         let Some(root) = repo() else { return };
         let res = resolve_in(
