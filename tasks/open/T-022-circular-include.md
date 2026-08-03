@@ -67,8 +67,13 @@ NOT needed — `plugin_routing` has no `role` type, and `_get_collection_role_pa
 Live: in a test collection, a `modules:` redirect works (control) while `role:`/`roles:`
 routing entries are ignored under both `include_role` and the `roles:` section — "role
 was not found" every time. A role name can never silently become another role, so a
-cycle can't hide behind routing. (Module redirect *chains* can be circular — that's
-T-064's problem, not this ticket's.)
+cycle can't hide behind routing. Strongest variant also killed: redirecting a module
+name to `ansible.builtin.include_role` does NOT create a disguised include — include
+keywords are matched by their literal written name at parse time, before routing, so
+the aliased task hard-fails as a broken remote module ("missing interpreter line")
+instead of including anything. The include graph is exactly the literally-written
+keywords our extractor already sees. (Module redirect *chains* can be circular —
+that's T-064's problem, not this ticket's.)
 The real reach limit is collection-hosted roles (T-042 gap 2): an `include_role:
 ns.coll.role` edge resolves to nothing today, so a cycle through one is *missed* —
 never falsely reported. In-repo cycles are fully covered.
