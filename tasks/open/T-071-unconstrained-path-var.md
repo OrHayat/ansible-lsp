@@ -33,9 +33,34 @@ Zero matches stays silent (that's T-007's never-warn case, not a contract). All-
 patterns (`{{ anything }}.yml`) offer no candidates and therefore no hint. `# noqa:
 unconstrained-path-var` to silence.
 
-**Later, once a constraint is readable** (T-032 static `when:`, T-041 `choices:`): the hint
-gains a mismatch mode — constraint allows `iscsi` but no `iscsi_target/` exists. Both sides
-written down makes that closer to warning-worthy; severity decided when it lands.
+**Caveat on the derived set:** the glob expands `{{ x }}` within a single path component,
+but at runtime the value may contain separators (`../../http/foo`), reaching files the
+search never saw. So "must be one of http, ftp" is really "one of http, ftp, or any
+path-shaped value that happens to land on a file" — an under-approximation. One more
+independent reason this hint can never be a warning on its own.
+
+**Later, once a constraint is readable** (T-032 static `when:`, T-041 `choices:`) and the
+domain is **closed** with plain-name values, the glob is replaced by exact substitution of
+each allowed value, and a severity ladder falls out:
+
+- every value misses → the include fails for every permitted input. Equivalent to a
+  literal missing path, which already warns — so **WARNING**, same rule, `# noqa` for the
+  generated-at-runtime escape, listing the paths checked per value.
+- some values miss → broken for some inputs: the mismatch case, naming the failing values.
+  Severity decided when it lands.
+- an open constraint (`!=`, a regex) or a domain value containing `/` reopens the
+  unbounded set → back to offer-only, INFO at most.
+
+**Constraint scope:** only a constraint that dominates *this* include counts — a `when:`
+on the include itself, an enclosing block/play, or `argument_specs` `choices:` on the role
+being entered. A same-named guard on unrelated tasks proves nothing about the value here.
+
+**Strict mode (via T-025):** "every path variable must be constrained, declared, or
+noqa'd" is a legitimate per-project discipline, but not the default — inside a role,
+"unconstrained" is indistinguishable from "this role's input parameter," so a default
+warning would flag every parameterized include everywhere. This rule is a designated
+candidate for T-025 severity promotion: a committed project config sets
+`unconstrained-path-var: warning` and gets the strict regime where it was chosen.
 
 ## Done when
 
