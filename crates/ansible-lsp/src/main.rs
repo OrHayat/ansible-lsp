@@ -41,12 +41,12 @@ struct ResolvedRef {
 #[derive(Clone, Copy)]
 struct Settings {
     hints: bool,
-    /// Show the candidates hover on a reference that *resolved*. Off by default: the
-    /// winning target is already a Cmd+click away, so the list is noise unless asked for.
+    /// Show the candidates hover on a reference that *resolved* to a single target. Off by
+    /// default: the winning target is already a Cmd+click away, so the list is noise unless
+    /// asked for. (A retired `candidatesOnMissing` key once gated a hover on missing refs;
+    /// that hover duplicated the diagnostic message VS Code already renders in the same
+    /// tooltip, so both the hover and the key are gone.)
     candidates_on_resolved: bool,
-    /// Show the candidates hover on a reference that was *not found*. On by default —
-    /// this is the "why didn't it resolve" case, where the paths tried are the answer.
-    candidates_on_missing: bool,
 }
 
 impl Default for Settings {
@@ -54,13 +54,12 @@ impl Default for Settings {
         Self {
             hints: true,
             candidates_on_resolved: false,
-            candidates_on_missing: true,
         }
     }
 }
 
 impl Settings {
-    /// Reads `{ inlayHints: { enabled }, hover: { candidatesOnResolved, candidatesOnMissing } }`.
+    /// Reads `{ inlayHints: { enabled }, hover: { candidatesOnResolved } }`.
     /// The client normalises both `initializationOptions` and `didChangeConfiguration` to this
     /// one shape, so the server doesn't have to know how VS Code nests things. Anything missing
     /// keeps its default rather than silently turning a feature off.
@@ -75,7 +74,6 @@ impl Settings {
         Self {
             hints: get("inlayHints", "enabled", d.hints),
             candidates_on_resolved: get("hover", "candidatesOnResolved", d.candidates_on_resolved),
-            candidates_on_missing: get("hover", "candidatesOnMissing", d.candidates_on_missing),
         }
     }
 }
@@ -906,53 +904,161 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
         .to_string()
 }
 
+/// One line of provenance for a resolved module, derived from the winning path's shape:
+/// which collection, where it lives (this workspace, an installed collection, or the
+/// Ansible install itself), and whether the name hit `plugins/modules/` (ships to the
+/// target host) or `plugins/action/` (runs on the controller). The raw path dump the
+/// generic hover would show forces reading several 100-char paths to learn these facts.
+fn module_hover(res: &Resolution, ctx: &FileContext) -> Option<String> {
+    let won = res.targets.first()?;
+    let s = won.to_string_lossy().replace('\\', "/");
+    let in_workspace = ctx.project_root.as_ref().is_some_and(|r| won.starts_with(r));
+    let (collection, origin) = match s.find("/ansible_collections/") {
+        Some(i) => {
+            let mut tail = s[i + "/ansible_collections/".len()..].split('/');
+            let coll = format!("{}.{}", tail.next()?, tail.next()?);
+            let origin = if in_workspace { "this workspace" } else { "an installed collection" };
+            (coll, origin)
+        }
+        // No collection tree: the core layout, `.../site-packages/ansible/modules/<m>.py`.
+        None => ("ansible.builtin".into(), "the Ansible install"),
+    };
+    let is_action = s.contains("/plugins/action/");
+    let twin = plugin_twin(won, is_action).filter(|p| p.is_file());
+    // One line per file, label first, the path as the link text — which file each link
+    // opens must be readable without clicking.
+    let entry = |label: &str, p: &Path| {
+        let shown = short_plugin_path(p, ctx);
+        let link = Url::from_file_path(p)
+            .ok()
+            .map(|u| format!("[{shown}]({u})"))
+            .unwrap_or_else(|| format!("`{shown}`"));
+        format!("\n- {label}: {link}")
+    };
+    // Lead with the fact that matters: where this task's code runs. An action plugin —
+    // the winner itself or a same-name twin — executes on the controller; otherwise the
+    // `normal` handler ships the module to the target host.
+    let mut md = format!(
+        "`{collection}` — from {origin} · {}",
+        if is_action || twin.is_some() {
+            "runs on the controller (action plugin)"
+        } else {
+            "runs on the target host"
+        }
+    );
+    // The file that runs is listed first.
+    match (is_action, &twin) {
+        (true, t) => {
+            md.push_str(&entry("action plugin", won));
+            if let Some(t) = t {
+                md.push_str(&entry("module", t));
+            }
+        }
+        (false, Some(t)) => {
+            md.push_str(&entry("action plugin", t));
+            md.push_str(&entry("module", won));
+        }
+        (false, None) => md.push_str(&entry("module", won)),
+    }
+    Some(md)
+}
+
+/// A module path cut to its meaningful tail: project-relative inside the workspace,
+/// after `site-packages/` for an install, `~`-relative under the home dir. The full
+/// path stays one click away in the link itself.
+fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
+    if let Some(root) = &ctx.project_root {
+        if let Ok(rel) = p.strip_prefix(root) {
+            return rel.display().to_string();
+        }
+    }
+    let s = p.to_string_lossy();
+    if let Some(i) = s.find("/site-packages/") {
+        return s[i + "/site-packages/".len()..].to_string();
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(rest) = s.strip_prefix(home.as_str()) {
+            return format!("~{rest}");
+        }
+    }
+    s.into_owned()
+}
+
+/// The sibling of a winning module path: its `plugins/action/` twin, or for an action
+/// winner the `plugins/modules/` file, in either layout.
+fn plugin_twin(won: &Path, is_action: bool) -> Option<PathBuf> {
+    let s = won.to_str()?;
+    if is_action {
+        return Some(PathBuf::from(s.replace("/plugins/action/", "/plugins/modules/")));
+    }
+    if s.contains("/plugins/modules/") {
+        return Some(PathBuf::from(s.replace("/plugins/modules/", "/plugins/action/")));
+    }
+    // Core: `.../ansible/modules/x.py` -> `.../ansible/plugins/action/x.py`.
+    let i = s.rfind("/modules/")?;
+    Some(PathBuf::from(format!(
+        "{}/plugins/action/{}",
+        &s[..i],
+        &s[i + "/modules/".len()..]
+    )))
+}
+
+/// Every candidate tried, in order, marking the one that won.
+fn tried_list(res: &Resolution, ctx: &FileContext) -> String {
+    let won = res.targets.first();
+    let mut s = String::from("**Tried:**");
+    for c in &res.candidates {
+        if Some(c) == won {
+            s.push_str(&format!("\n- ✓ `{}` — won", shorten(c, ctx)));
+        } else {
+            s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
+        }
+    }
+    s
+}
+
 /// Hover markdown for a reference: the resolved target and every candidate tried, in
-/// order, marking the one that won. Missing references list what was tried; templated
-/// ones return `None` so the substitution hover explains the `{{ }}` instead.
-fn reference_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<String> {
+/// order, marking the one that won. Modules lead with a provenance line linking both the
+/// module and its action plugin; the path dump follows only when `show_tried` (the
+/// `candidatesOnResolved` setting) asks for it. Missing references return `None` — their
+/// diagnostic already carries the tried list, and VS Code renders diagnostics in the same
+/// tooltip, so a hover would print it twice.
+fn reference_hover(
+    kind: ReferenceKind,
+    res: &Resolution,
+    ctx: &FileContext,
+    show_tried: bool,
+) -> Option<String> {
+    if kind == ReferenceKind::Module && res.status == Status::Resolved {
+        let mut md = module_hover(res, ctx)?;
+        if show_tried {
+            md.push_str(&format!("\n\n{}", tried_list(res, ctx)));
+        }
+        return Some(md);
+    }
     match res.status {
         // A templated pattern that glob-matched: every target is equally possible until
         // runtime, so there is no winner to mark — list them all.
         Status::Resolved if res.skip_reason == Some(SkipReason::Templated) => {
             let n = res.targets.len();
             let mut s = format!(
-                "**{n} possible target{}** for `{}`:",
+                "**{n} possible target{}:**",
                 if n == 1 { "" } else { "s" },
-                r.value
             );
             for t in &res.targets {
                 s.push_str(&format!("\n- `{}`", shorten(t, ctx)));
             }
             Some(s)
         }
-        Status::Resolved => {
-            let won = res.targets.first();
-            let mut s = String::from("**Tried:**");
-            for c in &res.candidates {
-                if Some(c) == won {
-                    s.push_str(&format!("\n- ✓ `{}` — won", shorten(c, ctx)));
-                } else {
-                    s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
-                }
-            }
-            Some(s)
-        }
-        Status::Missing => {
-            let mut s = format!("**✗ no file found for `{}`**\n\nTried:", r.value);
-            for c in &res.candidates {
-                s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
-            }
-            Some(s)
-        }
+        Status::Resolved => Some(tried_list(res, ctx)),
+        Status::Missing => None,
         Status::Skipped => match res.skip_reason {
             // No candidates means no known-value substitution happened either — nothing
             // else will hover this, so say why it goes nowhere. With candidates, the
             // substitution hover already explains the `{{ }}`.
-            Some(SkipReason::Templated) if res.candidates.is_empty() => Some(format!(
-                "**Skipped** — `{}` depends on a runtime value and nothing on disk \
-                 matches the pattern (never warned; absence proves nothing)",
-                r.value
-            )),
+            Some(SkipReason::Templated) if res.candidates.is_empty() => {
+                Some("**Skipped** — value only known at runtime; no file matches".into())
+            }
             Some(SkipReason::Templated) => None,
             Some(SkipReason::NotInWorkspace) => {
                 Some("**Skipped** — not in this workspace (a builtin, or installed outside it)".into())
@@ -1152,17 +1258,23 @@ impl LanguageServer for Backend {
                 }
             }
             // Resolved refs stay quiet unless asked for (the target is a Cmd+click
-            // away); missing ones show what was tried, which is the whole point. An
-            // ambiguous ref — several targets — shows its list regardless: no single
-            // target is a click away, and the decoration only gives the count.
+            // away). Two exceptions show regardless: an ambiguous ref — several targets,
+            // where no single one is a click away and the decoration only gives the
+            // count — and modules, whose provenance line states facts a click doesn't
+            // (clicking opens the file; it doesn't say what its location means).
+            // Missing refs never hover: their diagnostic already lists what was tried.
             let wanted = match res.status {
                 Status::Resolved | Status::Skipped => {
-                    res.targets.len() > 1 || settings.candidates_on_resolved
+                    res.targets.len() > 1
+                        || r.kind == ReferenceKind::Module
+                        || settings.candidates_on_resolved
                 }
-                Status::Missing => settings.candidates_on_missing,
+                Status::Missing => false,
             };
             if wanted {
-                if let Some(value) = reference_hover(r, &res, &ctx) {
+                if let Some(value) =
+                    reference_hover(r.kind, &res, &ctx, settings.candidates_on_resolved)
+                {
                     return Ok(Some(Hover {
                         contents: HoverContents::Markup(MarkupContent {
                             kind: MarkupKind::Markdown,
@@ -1409,7 +1521,7 @@ mod tests {
         let hover = |value: &str| {
             let r = refs.iter().find(|r| r.value == value).expect("ref in demo");
             let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-            super::reference_hover(r, &res, &ctx)
+            super::reference_hover(r.kind, &res, &ctx, false)
         };
 
         let md = hover("{{ protocol }}_target/check.yml").expect("hover expected");
@@ -1426,6 +1538,55 @@ mod tests {
             let md = hover(value).expect("hover expected");
             assert!(md.contains("Skipped"), "skip reason for {value} in: {md}");
         }
+    }
+
+    /// T-029 box 4: a resolved module hovers one line of provenance — collection and
+    /// origin — not the raw candidate paths. `ansible.builtin.debug` also has an action
+    /// twin in core, so the documentation-only caveat must appear.
+    #[test]
+    fn hover_shows_module_provenance_not_paths() {
+        if ansible_core::install::AnsibleInstall::detect().package_dir.is_none() {
+            return; // ansible not on PATH
+        }
+        let path = std::path::Path::new("../../demo/tasks/modules.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text);
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs
+            .iter()
+            .find(|r| r.value == "ansible.builtin.debug")
+            .expect("ref in demo");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        if res.status != ansible_core::resolve::Status::Resolved {
+            return; // install detected but builtins not resolvable in this layout
+        }
+        let md = super::reference_hover(r.kind, &res, &ctx, false).expect("hover expected");
+        assert!(md.contains("`ansible.builtin`"), "collection in: {md}");
+        assert!(md.contains("the Ansible install"), "origin in: {md}");
+        assert!(
+            md.contains("runs on the controller (action plugin)"),
+            "run location in the header: {md}"
+        );
+        assert!(md.contains("- module: ["), "labelled module link in: {md}");
+        assert!(md.contains("- action plugin: ["), "labelled action link in: {md}");
+        assert!(
+            md.find("- action plugin:").unwrap() < md.find("- module:").unwrap(),
+            "the file that runs is listed first: {md}"
+        );
+        assert!(
+            md.contains("[ansible/plugins/action/debug.py]("),
+            "install path cut to its site-packages tail: {md}"
+        );
+        assert!(!md.contains("**Tried:**"), "no path dump without the setting: {md}");
+
+        // The setting appends the dump rather than replacing the provenance.
+        let md = super::reference_hover(r.kind, &res, &ctx, true).expect("hover expected");
+        assert!(md.contains("- module: ["), "links kept with the setting: {md}");
+        assert!(md.contains("**Tried:**"), "path dump with the setting: {md}");
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a

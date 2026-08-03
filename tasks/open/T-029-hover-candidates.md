@@ -36,9 +36,13 @@ Keep it short — three or four lines. A hover that fills the screen gets dismis
 ## Progress
 
 Landed in `39e5a4d`: the candidates hover with the winner marked, gated by
-`hover.candidatesOnResolved` (default **off** — the target is a Cmd+click away) and
-`hover.candidatesOnMissing` (default **on**). Hover resolves only the reference under the
-cursor instead of every reference in the file.
+`hover.candidatesOnResolved` (default **off** — the target is a Cmd+click away). Hover
+resolves only the reference under the cursor instead of every reference in the file.
+
+**Missing refs no longer hover at all** (and `hover.candidatesOnMissing` is retired): the
+missing-file diagnostic already carries the tried list, and VS Code renders diagnostics in
+the same tooltip, so the hover printed the identical list twice — found live on a missing
+role. The diagnostic owns that text; Neovim shows it via `vim.diagnostic` the same way.
 
 Gap found live on `demo/tasks/main.yml:81` and closed: a **templated path whose variables
 have no known value** used to get no hover at all — `path_substitution_hover` returned
@@ -58,4 +62,14 @@ is a click away, and the decoration only gives the count. Pinned by
 - [x] a skipped reference shows its skip reason: `NotInWorkspace` message; templated paths
       with unknown variable values list their glob-matched targets, or say why nothing
       matches (known-value substitution keeps its own richer hover)
-- [ ] modules show which collection and whether it's `plugins/modules/` or `plugins/action/`
+- [x] modules show which collection and whether it's `plugins/modules/` or `plugins/action/`
+      — ungated provenance (`module_hover`): collection + origin, with links to both the
+      module file and its action-plugin twin when both exist (the twin runs on the
+      controller and, for debug/template/copy, holds the real logic while the module file
+      is just docs). The raw Tried dump appends under `candidatesOnResolved`, not instead.
+      Pinned by `hover_shows_module_provenance_not_paths`.
+      The same-name twin is Ansible's default binding but not the whole story — "module"
+      can be a false negative in three routed cases, each tracked: `runtime.yml`
+      `action_plugin:` (T-064), network platform plugins (T-072), legacy
+      `action_plugins/` dirs (T-073). "Action plugin" labels are never wrong; "module"
+      labels are right unless one of those three applies.

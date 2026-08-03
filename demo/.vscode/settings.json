@@ -3,5 +3,6 @@
   // One switch. false = no `when:` explanation on hover. Applies immediately.
   // Diagnostics are unaffected — a warning is silenced per-line with
   // `# noqa: <rule-id>`, not from here.
-  "ansibleLsp.inlayHints.enabled": true
+  "ansibleLsp.inlayHints.enabled": true,
+  "ansibleLsp.hover.candidatesOnResolved": true
 }

@@ -45,7 +45,6 @@ function hintSettings() {
   return {
     inlayHints: { enabled: c.get("inlayHints.enabled", true) },
     hover: {
-      candidatesOnMissing: c.get("hover.candidatesOnMissing", true),
       candidatesOnResolved: c.get("hover.candidatesOnResolved", false),
     },
     ansiblePath: c.get("ansiblePath", ""),
