@@ -99,6 +99,7 @@ navigation win.
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M   | —          |
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
+| T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
 
 ### Downstream — not this repo's code
 
@@ -203,8 +204,9 @@ is why all 48 conditional imports here use it. Never recommend `include_playbook
 alternatives are `meta: end_play`, restructuring into a task file, or `--skip-tags`.
 → T-031
 
-**Not every `{{ }}` is a runtime unknown.** `playbook_dir`/`inventory_dir` are known;
-treating them as opaque left real references dead. The general rule: expand what the file
+**Not every `{{ }}` is a runtime unknown.** `playbook_dir` is guessable from convention;
+treating it as opaque left real references dead. (`inventory_dir` no longer substitutes —
+it is per-host, from inventory sources, and borrowed the playbook guesses wrongly; T-070.) The general rule: expand what the file
 already states, glob what it doesn't, and never expand a `vars:`/`set_fact` literal — those
 sit under 22 precedence levels, so expanding one invents certainty. `scan` prints the
 variables still appearing in templated paths, so "is anything left" is one command.

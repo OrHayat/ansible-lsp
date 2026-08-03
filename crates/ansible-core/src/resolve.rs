@@ -138,8 +138,12 @@ fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
         .iter()
         .flat_map(|r| [r.clone(), r.join("playbooks")])
         .collect();
-    apply("playbook_dir", playbook_dirs.clone(), &mut out);
-    apply("inventory_dir", playbook_dirs, &mut out);
+    apply("playbook_dir", playbook_dirs, &mut out);
+    // `inventory_dir` deliberately not substituted. It is per-host — the directory of the
+    // inventory source that first defined the host (`inventory/data.py:197-202`), set by
+    // `-i`/ansible.cfg at launch, `None` for add_host hosts — nothing like a playbook dir.
+    // Borrowing the playbook guesses for it was wrong on both value and definedness; T-070
+    // derives it from real inventory sources. Left templated, it globs and never warns.
 
     let still_templated = out.iter().any(|v| v.contains("{{"));
     let substituted = out.len() != 1 || out[0] != value;
@@ -745,6 +749,31 @@ mod tests {
         let res = first(&out, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(res.targets, vec![d.join("playbooks/setup/settings/c.yml")]);
+    }
+
+    /// `inventory_dir` used to borrow the playbook-dir guesses; it is per-host and set by
+    /// `-i` at launch, so it must stay templated — glob, never substitute, never warn.
+    #[test]
+    fn inventory_dir_is_not_substituted() {
+        let d = std::env::temp_dir().join("ansible-lsp-t070-invdir");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        // Planted exactly where the old project-root guess would have hit.
+        std::fs::write(d.join("only_here.yml"), "").unwrap();
+        let file = d.join("tasks/main.yml");
+        std::fs::write(&file, "").unwrap();
+
+        // Substitution would resolve this as a complete path with no skip reason; the
+        // templated route is only reachable when the `{{ }}` survives expansion.
+        let out = resolve_src(&file, "- include_tasks: \"{{ inventory_dir }}/only_here.yml\"\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.skip_reason, Some(SkipReason::Templated));
+
+        // And an absent target skips rather than warns.
+        let out = resolve_src(&file, "- include_tasks: \"{{ inventory_dir }}/absent.yml\"\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Skipped);
     }
 
     #[test]
