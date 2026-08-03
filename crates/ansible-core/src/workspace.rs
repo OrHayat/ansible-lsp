@@ -74,6 +74,40 @@ impl FileContext {
         dirs
     }
 
+    /// Legacy module search dirs for a bare module name, in the loader's order
+    /// (`loader.py:470-521`, `_get_paths_with_context`):
+    ///
+    /// 1. `extra_dirs` — `library/` dirs harvested while loading plays and roles
+    ///    (`module_loader`'s subdir name, `loader.py:1799-1804`). Approximated here with
+    ///    the file's own role, its directory, and the project root: the real set is
+    ///    per-execution state (whatever loaded before the task) we can't replay.
+    /// 2. the `library` cfg key when set, else `DEFAULT_MODULE_PATH`'s defaults
+    ///    `~/.ansible/plugins/modules` and `/usr/share/ansible/plugins/modules`
+    ///    (`config/base.yml:945-951` — the key *replaces* the defaults).
+    ///
+    /// The builtin package tree comes after all of these — "package path always gets
+    /// added last so that every other type of path is searched before it" — and is
+    /// appended by the caller, which also owns the routing-table last-ditch step.
+    pub fn legacy_module_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        if let Some(role) = &self.role_dir {
+            push_unique(&mut dirs, Some(role.join("library")));
+        }
+        push_unique(&mut dirs, Some(self.file_dir.join("library")));
+        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("library")));
+        if self.config.library.is_empty() {
+            if let Ok(home) = std::env::var("HOME") {
+                push_unique(&mut dirs, Some(PathBuf::from(home).join(".ansible/plugins/modules")));
+            }
+            push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/modules")));
+        } else {
+            for p in &self.config.library {
+                push_unique(&mut dirs, Some(p.clone()));
+            }
+        }
+        dirs
+    }
+
     pub fn collection_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         for p in &self.config.collections_path {

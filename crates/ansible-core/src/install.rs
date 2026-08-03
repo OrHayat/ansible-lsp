@@ -154,6 +154,51 @@ impl AnsibleInstall {
         let p = self.package_dir.as_ref()?.join("modules").join(format!("{name}.py"));
         p.is_file().then_some(p)
     }
+
+    /// The 2.10 collection-split table: `plugin_routing.modules.<bare name>.redirect` from
+    /// core's `config/ansible_builtin_runtime.yml` — how `docker:` resolves to
+    /// `community.docker.docker` with no file anywhere in core. Consulted as the loader's
+    /// last-ditch step (`loader.py:956-959`) after every path is searched.
+    /// Deprecations and tombstones stay T-064.
+    pub fn builtin_module_redirect(&self, name: &str) -> Option<String> {
+        let pkg = self.package_dir.as_ref()?;
+        module_redirect(&pkg.join("config/ansible_builtin_runtime.yml"), name)
+    }
+}
+
+/// `plugin_routing.modules.<name>.redirect` from a routing table — core's or a
+/// collection's `meta/runtime.yml`, both the same shape. Each file is parsed once per
+/// process and cached, keyed by path.
+pub fn module_redirect(table: &Path, name: &str) -> Option<String> {
+    use std::collections::HashMap;
+    static TABLES: OnceLock<std::sync::Mutex<HashMap<PathBuf, HashMap<String, String>>>> =
+        OnceLock::new();
+    let tables = TABLES.get_or_init(Default::default);
+    let mut tables = tables.lock().ok()?;
+    if !tables.contains_key(table) {
+        let mut map = HashMap::new();
+        if let Ok(text) = std::fs::read_to_string(table) {
+            let doc = crate::parse::Document::new(text);
+            let modules = doc.parse().and_then(|nodes| {
+                nodes.first().and_then(|n| {
+                    n.get("plugin_routing")
+                        .and_then(|n| n.get("modules"))
+                        .cloned()
+                })
+            });
+            if let Some(modules) = modules {
+                for (k, v) in modules.entries() {
+                    if let (Some(name), Some(to)) =
+                        (k.as_str(), v.get("redirect").and_then(|r| r.as_str()))
+                    {
+                        map.insert(name.to_string(), to.to_string());
+                    }
+                }
+            }
+        }
+        tables.insert(table.to_path_buf(), map);
+    }
+    tables.get(table)?.get(name).cloned()
 }
 
 /// First `name` on PATH, with symlinks resolved.

@@ -70,7 +70,7 @@
   ansible.builtin.include_role: { name: demo, tasks_from: sibling }
 
 - name: "The roles: list form lives in demo/playbook.yml"
-  ansible.builtin.debug:
+  debug:
     msg: open that file too
 
 # ------------------------------------------------ TEMPLATED PATHS (never warn)

@@ -45,18 +45,35 @@ items above.
 - `builtin.debug` → **fails**: "Cannot resolve 'builtin.debug' to an action or module."
 - `ansible.builtin.debug` → works
 
-The resolver (`resolve.rs:400-403`) skips everything that isn't 3 parts, so: bare names —
-valid Ansible — get no color and a wrong "not in this workspace" hover; and 2-part names —
-a *statically provable* runtime failure, since module names can't contain dots so only 1
-or 3 parts are possible — stay silent where an ERROR quoting Ansible's message is safe.
+~~The resolver skips everything that isn't 3 parts~~ — fixed; the resolver now walks the
+loader's own candidate order for a bare `foo:` (transcribed from
+`loader.py:470-521,956-959`, documented on `resolve_module`):
+
+```
+1. <role>/library/foo.py                 extra_dirs — local overrides shipped
+2. <file dir>/library/foo.py
+3. <project>/library/foo.py
+4. cfg `library` key dirs, else ~/.ansible/plugins/modules + /usr/share/ansible/plugins/modules
+5. <install>/ansible/modules/foo.py      package always last (loader.py:497)
+6. <install>/ansible/plugins/action/foo.py
+7. all missed → rename table (core's, then each collection's own meta/runtime.yml) gives
+   a new FQCN → restart under that name, visited-set cycle guard  → T-064
+```
+
+First existing file wins at every level, same as the loader. 2-part names — a *statically
+provable* runtime failure, since module names can't contain dots so only 1 or 3 parts are
+possible — still stay silent where an ERROR quoting Ansible's message is safe.
 
 ## Done when
 
 - [ ] a short module name resolves through an in-scope `collections:` list (or a test proves it
       already does)
 - [ ] `ns.coll.role` resolves from `collections_path` (or a test proves it already does)
-- [ ] a bare builtin name (`debug:`) resolves and hovers like its FQCN (with T-064's
-      routing for the general case)
+- [x] a bare builtin name (`debug:`) resolves and hovers like its FQCN — bare names now
+      extract and resolve in the loader's order (workspace `library/` shadowing pinned by
+      `demo/library/ping.py`; order documented on `resolve_module_bare`), including the
+      split-table redirect from `ansible_builtin_runtime.yml`. Corpus: module resolutions
+      3665 → 5894, still 0 missing. Redirect chains and per-collection tables stay T-064.
 - [ ] a 2-part name (`builtin.debug`) gets an ERROR quoting "Cannot resolve … to an
       action or module", pinned by fixture
 

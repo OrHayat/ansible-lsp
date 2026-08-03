@@ -259,9 +259,12 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
         }
 
         _ => {
-            // A 3-part dotted name in module position is a collection FQCN. The old walk
-            // matched any 3-part *key*; the AST already knows this key is the module.
-            if a.name.split('.').count() == 3 && !a.name.contains(' ') {
+            // The AST already knows this key is the module. A 3-part dotted name is a
+            // collection FQCN; a bare name is implicitly `ansible.legacy.<name>` — valid
+            // Ansible, resolved through the legacy search order. 2-part names stay
+            // unextracted (never valid; the T-042 ERROR will need them extracted first).
+            let dots = a.name.split('.').count();
+            if (dots == 1 || dots == 3) && !a.name.contains(' ') && !a.name.contains('{') {
                 out.push(Reference::new(ReferenceKind::Module, &a.name, a.key_span));
             }
         }
@@ -455,12 +458,15 @@ mod tests {
     }
 
     #[test]
-    fn fqcn_module_keys_are_references_but_urls_are_not() {
+    fn fqcn_and_bare_module_keys_are_references_but_urls_are_not() {
+        // The dotted URL sits in a *value*, never in module-key position, so it can't
+        // extract; the bare `debug` key is implicitly ansible.legacy and does.
         let r = of(
             "- community.lvm.pool_create:\n    name: p\n- debug:\n    msg: example.atlassian.net\n",
             ReferenceKind::Module,
         );
-        assert_eq!(r.len(), 1);
+        assert_eq!(r.len(), 2);
         assert_eq!(r[0].value, "community.lvm.pool_create");
+        assert_eq!(r[1].value, "debug");
     }
 }

@@ -396,37 +396,116 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
             Resolution::from_candidates(with_ext(&role.join("tasks"), &r.value))
         }
 
-        ReferenceKind::Module => {
-            let parts: Vec<&str> = r.value.split('.').collect();
-            let [ns, coll, module] = parts[..] else {
-                return Resolution::skipped(SkipReason::NotInWorkspace);
-            };
-            let mut candidates: Vec<PathBuf> = ctx
-                .collection_roots()
-                .iter()
-                .flat_map(|root| {
-                    let base = root.join(ns).join(coll).join("plugins");
-                    [
-                        base.join("modules").join(format!("{module}.py")),
-                        base.join("action").join(format!("{module}.py")),
-                    ]
-                })
-                .collect();
-            // ansible.builtin lives in the ansible package, not a collection tree.
-            if (ns, coll) == ("ansible", "builtin") {
-                if let Some(p) = AnsibleInstall::detect().builtin_module(module) {
-                    candidates.insert(0, p);
+        ReferenceKind::Module => resolve_module(&r.value, ctx),
+    }
+}
+
+/// Module resolution with redirect chasing — the loader's `while` loop
+/// (`loader.py:740-748`) transcribed: resolve the current name; if nothing on disk but a
+/// routing table renames it, follow the rename and try again. The visited set is the
+/// cycle guard — a name never resolves twice, so mutually-redirecting tables terminate
+/// (Ansible raises `AnsiblePluginCircularRedirect`; we quietly give up, keeping the trail).
+///
+/// Per name shape:
+/// - **bare** (`debug:`) — implicitly `ansible.legacy.<name>`, the pre-collections search,
+///   candidate order transcribed from the loader (first hit wins at both ends,
+///   `loader.py:817-819,930-934`): legacy dirs, local-overrides-shipped
+///   ([`FileContext::legacy_module_dirs`] documents the split), then the builtin package —
+///   "package path always gets added last …" (`loader.py:497`). Not found → core's 2.10
+///   split table renames it (`loader.py:956-959`).
+/// - **FQCN** — `plugins/modules/` then `plugins/action/` under every collection root,
+///   builtin's package dir first for `ansible.builtin.*`. Not found → the collection's own
+///   `meta/runtime.yml` may rename it (how `community.general.docker_container` reaches
+///   `community.docker`, a table the collection ships after moving a module out).
+/// - **2 parts** — never valid (module names can't contain dots, so only 1 or 3 are
+///   possible shapes); Ansible dies with "Cannot resolve … to an action or module".
+///   T-042 pins the future ERROR, skipped until then.
+///
+/// A name that ends the chain unresolved is skipped, not warned — usually a collection
+/// that isn't installed here, not a typo. The one loader step deliberately not modelled:
+/// the `_<name>` deprecated-alias retry (`loader.py:940-953`) — hits are rare and Ansible
+/// deprecation-warns each one itself. Deprecations/tombstones in the tables are T-064.
+fn resolve_module(value: &str, ctx: &FileContext) -> Resolution {
+    let mut trail: Vec<PathBuf> = Vec::new();
+    let mut visited: Vec<String> = vec![value.to_string()];
+    let mut name = value.to_string();
+    loop {
+        let parts: Vec<&str> = name.split('.').collect();
+        let (res, redirect) = match parts[..] {
+            [bare] => {
+                let file = format!("{bare}.py");
+                let mut candidates: Vec<PathBuf> =
+                    ctx.legacy_module_dirs().iter().map(|d| d.join(&file)).collect();
+                if let Some(pkg) = &AnsibleInstall::detect().package_dir {
+                    candidates.push(pkg.join("modules").join(&file));
+                    candidates.push(pkg.join("plugins/action").join(&file));
                 }
+                let res = Resolution::from_candidates(candidates);
+                let redirect = (res.status != Status::Resolved)
+                    .then(|| AnsibleInstall::detect().builtin_module_redirect(bare))
+                    .flatten();
+                (res, redirect)
             }
-            let res = Resolution::from_candidates(candidates);
-            // A module we can't find is usually a collection that isn't installed
-            // here, not a typo — don't warn.
-            match res.status {
-                Status::Missing => Resolution::skipped(SkipReason::NotInWorkspace),
-                _ => res,
+            [ns, coll, module] => {
+                let mut candidates: Vec<PathBuf> = ctx
+                    .collection_roots()
+                    .iter()
+                    .flat_map(|root| {
+                        let base = root.join(ns).join(coll).join("plugins");
+                        [
+                            base.join("modules").join(format!("{module}.py")),
+                            base.join("action").join(format!("{module}.py")),
+                        ]
+                    })
+                    .collect();
+                // ansible.builtin lives in the ansible package, not a collection tree.
+                if (ns, coll) == ("ansible", "builtin") {
+                    if let Some(p) = AnsibleInstall::detect().builtin_module(module) {
+                        candidates.insert(0, p);
+                    }
+                }
+                let res = Resolution::from_candidates(candidates);
+                let redirect = (res.status != Status::Resolved)
+                    .then(|| collection_module_redirect(ns, coll, module, ctx))
+                    .flatten();
+                (res, redirect)
+            }
+            _ => return Resolution::skipped(SkipReason::NotInWorkspace),
+        };
+        trail.extend(res.candidates.clone());
+        if res.status == Status::Resolved {
+            return Resolution { candidates: trail, ..res };
+        }
+        match redirect {
+            Some(next) if !visited.contains(&next) => {
+                visited.push(next.clone());
+                name = next;
+            }
+            _ => {
+                return Resolution {
+                    status: Status::Skipped,
+                    targets: Vec::new(),
+                    candidates: trail,
+                    skip_reason: Some(SkipReason::NotInWorkspace),
+                }
             }
         }
     }
+}
+
+/// A collection's own rename for one of its module names, from the first
+/// `<root>/<ns>/<coll>/meta/runtime.yml` that exists on any collection root.
+fn collection_module_redirect(
+    ns: &str,
+    coll: &str,
+    module: &str,
+    ctx: &FileContext,
+) -> Option<String> {
+    ctx.collection_roots()
+        .iter()
+        .map(|r| r.join(ns).join(coll).join("meta/runtime.yml"))
+        .find(|p| p.is_file())
+        .and_then(|p| crate::install::module_redirect(&p, module))
 }
 
 /// Role name -> its directory. Handles plain names and 3-part FQCNs.
@@ -517,6 +596,87 @@ mod tests {
 
     fn first(out: &[(Reference, Resolution)], kind: ReferenceKind) -> &Resolution {
         &out.iter().find(|(r, _)| r.kind == kind).expect("kind").1
+    }
+
+    /// Bare module names are implicitly `ansible.legacy`: a workspace `library/` shadows
+    /// the builtin (demo/library/ping.py wins over ansible/modules/ping.py — "package
+    /// path always gets added last", loader.py:497), plain builtins resolve into the
+    /// package, and split-table names redirect to their collection home.
+    #[test]
+    fn bare_module_names_resolve_in_the_loaders_order() {
+        let demo = PathBuf::from("../../demo").canonicalize().unwrap();
+        let file = demo.join("playbook.yml");
+
+        // Workspace library/ first — shadows the builtin even with ansible installed.
+        let out = resolve_src(&file, "- ping:\n    data: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(res.targets[0].ends_with("demo/library/ping.py"), "got {:?}", res.targets);
+
+        if AnsibleInstall::detect().package_dir.is_none() {
+            return; // no install: the remaining shapes can't resolve on this machine
+        }
+
+        // The package tree comes after every local path; the losing local candidates
+        // stay in the trail, order pinned.
+        let out = resolve_src(&file, "- debug:\n    msg: hi\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(res.targets[0].ends_with("ansible/modules/debug.py"), "got {:?}", res.targets);
+        assert!(
+            res.candidates[0].ends_with("demo/library/debug.py"),
+            "library dirs searched first: {:#?}",
+            res.candidates
+        );
+
+        // Split-table redirect: docker_container -> community.docker.docker_container.
+        // Resolved if that collection is installed; NotInWorkspace-skipped otherwise —
+        // both are the loader's outcome, never Missing.
+        let out = resolve_src(&file, "- docker_container:\n    name: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        match res.status {
+            Status::Resolved => assert!(
+                res.targets[0]
+                    .to_string_lossy()
+                    .contains("community/docker/plugins/modules/docker_container.py"),
+                "got {:?}",
+                res.targets
+            ),
+            _ => assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace)),
+        }
+
+        // 2-part names are never valid Ansible; pinned unextracted until T-042's ERROR.
+        let out = resolve_src(&file, "- builtin.debug:\n    msg: hi\n");
+        assert!(out.iter().all(|(r, _)| r.kind != ReferenceKind::Module));
+    }
+
+    /// Chained renames across collections' own `meta/runtime.yml` tables resolve to the
+    /// final home (demo.alpha.relay → demo.beta.relay → demo.charlie.relay, a real file);
+    /// a redirect cycle (loop_a ↔ loop_b) gives up quietly instead of hanging.
+    #[test]
+    fn chained_module_redirects_resolve_and_cycles_terminate() {
+        let demo = PathBuf::from("../../demo").canonicalize().unwrap();
+        let file = demo.join("playbook.yml");
+
+        let out = resolve_src(&file, "- demo.alpha.relay:\n    x: 1\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(
+            res.targets[0].ends_with("demo/charlie/plugins/modules/relay.py"),
+            "got {:?}",
+            res.targets
+        );
+        // The trail keeps every hop's candidates: alpha's misses come before charlie's hit.
+        assert!(
+            res.candidates.iter().any(|c| c.to_string_lossy().contains("demo/alpha/plugins")),
+            "first hop in the trail: {:#?}",
+            res.candidates
+        );
+
+        let out = resolve_src(&file, "- demo.alpha.loop_a:\n    x: 1\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Skipped, "cycle must give up: {:#?}", res.candidates);
+        assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace));
     }
 
     #[test]

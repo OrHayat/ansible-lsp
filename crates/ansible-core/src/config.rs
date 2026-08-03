@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 pub struct AnsibleConfig {
     pub roles_path: Vec<PathBuf>,
     pub collections_path: Vec<PathBuf>,
+    /// The `library` key — `DEFAULT_MODULE_PATH`'s ini name (`config/base.yml:945-951`).
+    /// When set it *replaces* the default legacy module dirs, not appends.
+    pub library: Vec<PathBuf>,
 }
 
 impl AnsibleConfig {
@@ -31,6 +34,7 @@ impl AnsibleConfig {
             match key.trim() {
                 "roles_path" => cfg.roles_path = paths(),
                 "collections_path" | "collections_paths" => cfg.collections_path = paths(),
+                "library" => cfg.library = paths(),
                 _ => {}
             }
         }

@@ -909,7 +909,7 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
 /// Ansible install itself), and whether the name hit `plugins/modules/` (ships to the
 /// target host) or `plugins/action/` (runs on the controller). The raw path dump the
 /// generic hover would show forces reading several 100-char paths to learn these facts.
-fn module_hover(res: &Resolution, ctx: &FileContext) -> Option<String> {
+fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<String> {
     let won = res.targets.first()?;
     let s = won.to_string_lossy().replace('\\', "/");
     let in_workspace = ctx.project_root.as_ref().is_some_and(|r| won.starts_with(r));
@@ -920,8 +920,21 @@ fn module_hover(res: &Resolution, ctx: &FileContext) -> Option<String> {
             let origin = if in_workspace { "this workspace" } else { "an installed collection" };
             (coll, origin)
         }
-        // No collection tree: the core layout, `.../site-packages/ansible/modules/<m>.py`.
-        None => ("ansible.builtin".into(), "the Ansible install"),
+        // No collection tree: the builtin package, or a pre-collections legacy `library/`
+        // dir — `ansible.legacy` is Ansible's own name for that namespace.
+        None => {
+            let builtin = ansible_core::install::AnsibleInstall::detect()
+                .package_dir
+                .as_ref()
+                .is_some_and(|d| won.starts_with(d));
+            if builtin {
+                ("ansible.builtin".into(), "the Ansible install")
+            } else if in_workspace {
+                ("ansible.legacy".into(), "a `library/` dir in this workspace")
+            } else {
+                ("ansible.legacy".into(), "a legacy library path")
+            }
+        }
     };
     let is_action = s.contains("/plugins/action/");
     let twin = plugin_twin(won, is_action).filter(|p| p.is_file());
@@ -946,6 +959,16 @@ fn module_hover(res: &Resolution, ctx: &FileContext) -> Option<String> {
             "runs on the target host"
         }
     );
+    // A winner whose final name differs from what the task wrote got there through a
+    // rename table (core's 2.10 split table, or a collection's own). Make the hop
+    // visible: it is otherwise an unmarked seam in the Tried list.
+    if s.contains("/ansible_collections/") {
+        let stem = won.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+        let resolved_as = format!("{collection}.{stem}");
+        if resolved_as != r.value {
+            md.push_str(&format!("\n\n`{}` → redirected to `{resolved_as}`", r.value));
+        }
+    }
     // The file that runs is listed first.
     match (is_action, &twin) {
         (true, t) => {
@@ -1024,13 +1047,13 @@ fn tried_list(res: &Resolution, ctx: &FileContext) -> String {
 /// diagnostic already carries the tried list, and VS Code renders diagnostics in the same
 /// tooltip, so a hover would print it twice.
 fn reference_hover(
-    kind: ReferenceKind,
+    r: &Reference,
     res: &Resolution,
     ctx: &FileContext,
     show_tried: bool,
 ) -> Option<String> {
-    if kind == ReferenceKind::Module && res.status == Status::Resolved {
-        let mut md = module_hover(res, ctx)?;
+    if r.kind == ReferenceKind::Module && res.status == Status::Resolved {
+        let mut md = module_hover(r, res, ctx)?;
         if show_tried {
             md.push_str(&format!("\n\n{}", tried_list(res, ctx)));
         }
@@ -1273,7 +1296,7 @@ impl LanguageServer for Backend {
             };
             if wanted {
                 if let Some(value) =
-                    reference_hover(r.kind, &res, &ctx, settings.candidates_on_resolved)
+                    reference_hover(r, &res, &ctx, settings.candidates_on_resolved)
                 {
                     return Ok(Some(Hover {
                         contents: HoverContents::Markup(MarkupContent {
@@ -1521,7 +1544,7 @@ mod tests {
         let hover = |value: &str| {
             let r = refs.iter().find(|r| r.value == value).expect("ref in demo");
             let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-            super::reference_hover(r.kind, &res, &ctx, false)
+            super::reference_hover(r, &res, &ctx, false)
         };
 
         let md = hover("{{ protocol }}_target/check.yml").expect("hover expected");
@@ -1564,7 +1587,7 @@ mod tests {
         if res.status != ansible_core::resolve::Status::Resolved {
             return; // install detected but builtins not resolvable in this layout
         }
-        let md = super::reference_hover(r.kind, &res, &ctx, false).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
         assert!(md.contains("`ansible.builtin`"), "collection in: {md}");
         assert!(md.contains("the Ansible install"), "origin in: {md}");
         assert!(
@@ -1584,9 +1607,55 @@ mod tests {
         assert!(!md.contains("**Tried:**"), "no path dump without the setting: {md}");
 
         // The setting appends the dump rather than replacing the provenance.
-        let md = super::reference_hover(r.kind, &res, &ctx, true).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, true).expect("hover expected");
         assert!(md.contains("- module: ["), "links kept with the setting: {md}");
         assert!(md.contains("**Tried:**"), "path dump with the setting: {md}");
+    }
+
+    /// A bare name that wins from a workspace `library/` dir is labelled `ansible.legacy`
+    /// (Ansible's own name for the pre-collections namespace), not builtin.
+    #[test]
+    fn hover_labels_workspace_library_modules_legacy() {
+        let path = std::path::Path::new("../../demo/playbook.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(
+            "- hosts: all\n  tasks:\n    - ping:\n        data: x\n".into(),
+        );
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "ping").expect("bare ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        assert_eq!(res.status, ansible_core::resolve::Status::Resolved);
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        assert!(md.contains("`ansible.legacy`"), "legacy label in: {md}");
+        assert!(md.contains("library/ping.py]("), "library path linked in: {md}");
+    }
+
+    /// A bare name that resolved into a collection tree got there via the 2.10 split
+    /// table — the hover must show that hop, or the Tried list has an unmarked seam.
+    #[test]
+    fn hover_marks_the_split_table_redirect() {
+        let path = std::path::Path::new("../../demo/playbook.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(
+            "- hosts: all\n  tasks:\n    - docker_container:\n        name: x\n".into(),
+        );
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "docker_container").expect("bare ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        if res.status != ansible_core::resolve::Status::Resolved {
+            return; // community.docker not installed here — nothing to mark
+        }
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        assert!(
+            md.contains("redirected to `community.docker.docker_container`"),
+            "redirect hop marked in: {md}"
+        );
     }
 
     /// A missing or malformed key must keep the default. Turning a feature off because a
