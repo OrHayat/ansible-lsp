@@ -28,6 +28,11 @@ we're leaving on the table.
 - Parse `plugin_routing` from core's builtin table and each reachable collection's
   `meta/runtime.yml` (installed + in-repo), cached per file like module doc schemas.
   Sections of interest: `modules` and `action`; the other plugin types can wait.
+- Same table, fourth key: `plugin_routing.modules.<name>.action_plugin` declares which
+  action plugin handles a module, **overriding** the same-name convention and checked
+  first (`loader.py:673-674`, `task_executor.py:955-958`). T-029's module hover only
+  checks the same-name twin, so it false-negatives on routed modules until this parser
+  feeds it. (Core's builtin table has zero `action_plugin` entries — collections only.)
 - Resolution follows redirects — **chained** (a → b → c happens across collection moves),
   with a cycle guard, before concluding "unknown module". Navigation lands on the final
   real file; hover can show the chain.
