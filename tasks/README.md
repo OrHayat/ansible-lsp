@@ -53,6 +53,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
 | T-033 | [`when:` vars defined nowhere](open/T-033-undefined-when-vars.md) | L    | —          |
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
+| T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
+| T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 
 ### P2 — coverage and usability
 
@@ -201,13 +203,17 @@ is why all 48 conditional imports here use it. Never recommend `include_playbook
 alternatives are `meta: end_play`, restructuring into a task file, or `--skip-tags`.
 → T-031
 
-**Not every `{{ }}` is a runtime unknown.** `role_path` is the containing role's
-directory and `playbook_dir`/`inventory_dir` are known too; treating them as opaque left 4
-real references dead. The general rule: expand what the file already states, glob what it
-doesn't, and never expand a `vars:`/`set_fact` literal — those sit under 22 precedence
-levels, so expanding one invents certainty. `scan` prints the variables still appearing in
-templated paths, so "is anything left" is one command.
-→ `expand_magic`, `role_path_expands_to_the_containing_role`, T-034
+**Not every `{{ }}` is a runtime unknown.** `playbook_dir`/`inventory_dir` are known;
+treating them as opaque left real references dead. The general rule: expand what the file
+already states, glob what it doesn't, and never expand a `vars:`/`set_fact` literal — those
+sit under 22 precedence levels, so expanding one invents certainty. `scan` prints the
+variables still appearing in templated paths, so "is anything left" is one command.
+**Partially superseded:** this entry used to include `role_path` as "the containing role's
+directory". Live runs against ansible-core showed that's the invoker's directory, not the
+file's (`vars/manager.py:478-481`) — undefined outside a role chain, a different role's dir
+on cross-role includes. Expansion disabled until T-068 derives it from invocation chains;
+T-067 covers the role-search-order half.
+→ `expand_magic`, `role_path_expands_to_the_containing_role` (ignored pending T-068), T-034
 
 **`| default(D)` states the value when a variable is unset, which is the only thing that makes
 static `when:` analysis possible** — no variable resolution, no precedence rules. It is also
