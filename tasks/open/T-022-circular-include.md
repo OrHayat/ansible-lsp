@@ -61,9 +61,14 @@ Also: the T-020 dependency is droppable for the reachable-from-open-file version
 path-stack during the existing walk reports the closing edge with no reverse index.
 Workspace-global detection (cycles in files nobody opens) stays with T-020.
 
-Scope check (source-verified 2026-08-03): `meta/runtime.yml` routing is NOT needed —
-`plugin_routing` has no `role` type, and `_get_collection_role_path`
+Scope check (source-verified AND live-proven 2026-08-03): `meta/runtime.yml` routing is
+NOT needed — `plugin_routing` has no `role` type, and `_get_collection_role_path`
 (`_collection_finder.py:1121`) resolves role names by pure path lookup, no redirects.
+Live: in a test collection, a `modules:` redirect works (control) while `role:`/`roles:`
+routing entries are ignored under both `include_role` and the `roles:` section — "role
+was not found" every time. A role name can never silently become another role, so a
+cycle can't hide behind routing. (Module redirect *chains* can be circular — that's
+T-064's problem, not this ticket's.)
 The real reach limit is collection-hosted roles (T-042 gap 2): an `include_role:
 ns.coll.role` edge resolves to nothing today, so a cycle through one is *missed* —
 never falsely reported. In-repo cycles are fully covered.
