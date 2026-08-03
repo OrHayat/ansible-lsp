@@ -47,7 +47,7 @@
 # If you see nothing: Cmd+Shift+P -> "Preferences: Open Settings (UI)" ->
 # search `inlay hints` -> set Editor > Inlay Hints: Enabled to `on`.
 
-- name: "The skip-flag pattern — 45 of 56 real conditions in ~/app/ansible"
+- name: "The skip-flag pattern"
   import_playbook: imported.yml
   when: not (skip_demo | default(false) | bool)
 
@@ -66,7 +66,6 @@
 - name: "BAD — when-import-var-mutated: the import sets the variable it is gated on"
   # The one rule here that reads other files. mutating.yml does `set_fact: demo_done`,
   # so this condition flips partway through and the playbook half-executes. Found a
-  # real instance of this in ~/app/ansible at playbooks/lustre-deploy-full.yml:247.
   import_playbook: mutating.yml
   when: not (demo_done | default(false) | bool)
 

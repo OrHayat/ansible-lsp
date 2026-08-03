@@ -29,7 +29,7 @@ scripts/smoke.js       drives the server over raw stdio, no editor needed
 
 ```sh
 cargo build --release
-cargo test                      # 93 tests, incl. real-repo regressions
+cargo test                      # incl. real-repo regressions
 ./target/release/scan ~/app/ansible   # whole-repo report / CI check
 node scripts/smoke.js           # end-to-end over LSP against ~/app/ansible
 python3 scripts/inlay-hints.py  # `when:` hover per settings combination, no editor

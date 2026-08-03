@@ -120,9 +120,6 @@
     - demo_other.state == demo_wanted.state
 
 # ================================================== WARNINGS — provably broken conditions
-# Wrong whatever any variable holds. ZERO of these exist in ~/app/ansible — it is
-# clean on all four rules — so this file is the only place they can be seen.
-
 - name: "BAD — when-jinja-delimiters: `when:` is already a Jinja expression"
   ansible.builtin.include_tasks: sibling.yml
   when: "{{ skip_demo == false }}"

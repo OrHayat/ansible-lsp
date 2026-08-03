@@ -22,7 +22,7 @@ in it stays findable.
 
 ## Where the project actually is
 
-35 commits, 93 tests, ~4500 lines. Whole-repo scan of `~/app/ansible` (kind breakdown from
+Whole-repo scan of `~/app/ansible` (kind breakdown from
 a reference run with Ansible installed — `module` resolution needs it):
 
 ```

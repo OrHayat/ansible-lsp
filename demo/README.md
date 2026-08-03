@@ -63,8 +63,6 @@ if it warned:
   anything at runtime, so absence proves nothing. Navigation offers every candidate instead.
   **But not every `{{ }}` is unknowable**: `role_path`, `playbook_dir` and `inventory_dir`
   are magic variables whose values we already hold, so they expand to a literal path and
-  are diagnosed like any other. Four real references in `~/app/ansible` were dead until
-  that landed.
 - **a role with no `tasks/main.yml` but a `tasks_from:`** — legal. `roles/cib-batch` in the
   real repo is exactly this and 16 working references depend on it.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.

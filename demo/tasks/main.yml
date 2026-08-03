@@ -94,11 +94,7 @@
 # ------------------------------------------- MAGIC VARIABLES (look templated, aren't)
 # `{{ role_path }}` reads like a runtime unknown and isn't: Ansible defines it as the
 # directory of the role containing the task, which is exactly what FileContext already
-# knows. Four references in ~/app/ansible were unnavigable until this was handled.
-#
-# Because these expand to a literal path, they get REAL diagnostics — unlike genuinely
-# templated paths, which can only ever offer candidates.
-
+# knows.
 - name: GOOD — role_path expands to this role's own directory
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/sibling.yml"
 
