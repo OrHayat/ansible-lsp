@@ -108,6 +108,31 @@ impl FileContext {
         dirs
     }
 
+    /// Where a controller-side action plugin can legacy-override a same-named module — the
+    /// pre-collections search Ansible still honors (`DEFAULT_ACTION_PLUGIN_PATH`): a role's
+    /// own `action_plugins/`, dirs adjacent to the file and project, then the
+    /// `action_plugins` cfg key (or its `~/.ansible` + `/usr/share` defaults). Mirrors
+    /// [`legacy_module_dirs`] with the `action_plugins` subdir. (T-073)
+    pub fn legacy_action_plugin_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        if let Some(role) = &self.role_dir {
+            push_unique(&mut dirs, Some(role.join("action_plugins")));
+        }
+        push_unique(&mut dirs, Some(self.file_dir.join("action_plugins")));
+        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("action_plugins")));
+        if self.config.action_plugins.is_empty() {
+            if let Ok(home) = std::env::var("HOME") {
+                push_unique(&mut dirs, Some(PathBuf::from(home).join(".ansible/plugins/action")));
+            }
+            push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/action")));
+        } else {
+            for p in &self.config.action_plugins {
+                push_unique(&mut dirs, Some(p.clone()));
+            }
+        }
+        dirs
+    }
+
     pub fn collection_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         for p in &self.config.collections_path {

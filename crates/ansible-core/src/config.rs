@@ -9,6 +9,9 @@ pub struct AnsibleConfig {
     /// The `library` key — `DEFAULT_MODULE_PATH`'s ini name (`config/base.yml:945-951`).
     /// When set it *replaces* the default legacy module dirs, not appends.
     pub library: Vec<PathBuf>,
+    /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
+    /// controller-side plugin dirs; a plugin here overrides a same-named module.
+    pub action_plugins: Vec<PathBuf>,
 }
 
 impl AnsibleConfig {
@@ -35,6 +38,7 @@ impl AnsibleConfig {
                 "roles_path" => cfg.roles_path = paths(),
                 "collections_path" | "collections_paths" => cfg.collections_path = paths(),
                 "library" => cfg.library = paths(),
+                "action_plugins" => cfg.action_plugins = paths(),
                 _ => {}
             }
         }

@@ -1,0 +1,40 @@
+---
+# Where does a task's code actually run? (T-073)
+#
+# A bare task name like `stage_files:` normally binds to a MODULE, which ships to and runs
+# on the TARGET host. But an *action plugin* of the same name runs on the CONTROLLER
+# instead, and intercepts the task. The hover tries to tell you which of the two it is.
+#
+# Modern action plugins live inside collections, and the hover already finds those. The
+# problem is the two PRE-COLLECTIONS ("legacy") places Ansible still honors:
+#
+#   - a directory named by the `action_plugins` key in ansible.cfg   (here: ./plugins/action)
+#   - a role's own action_plugins/ folder, beside its tasks/         (here: roles/reporting/)
+#
+# The hover doesn't look in either yet. So for the task below it says "runs on the target
+# host" and links the module — both WRONG: the real code is the controller-side action
+# plugin. T-073 makes the hover check these dirs, say "runs on the controller (action
+# plugin)", and link that file.
+
+# --- No twin: a plain module, nothing to intercept it ------------------------------------
+# The contrast case. `purge_cache` is a module in demo/library/ with NO action plugin
+# anywhere — no role action_plugins/, no cfg dir, no install twin. Hover says "runs on the
+# target host", and that's correct. This is what the two controller cases below differ from.
+- name: Plain module — no action plugin, so it runs on the target host
+  purge_cache:
+    path: /var/cache/build
+
+# --- Legacy location: an ansible.cfg `action_plugins` dir --------------------------------
+# Hover `stage_files`. The module is demo/library/stage_files.py, but
+# ./plugins/action/stage_files.py (a cfg-declared action_plugins dir) intercepts it and runs
+# on the controller. The hover now says so and links that plugin.
+- name: Controller-side via a cfg-declared action_plugins dir
+  stage_files:
+    dest: /srv/stage
+
+# --- Legacy location: a role's own action_plugins/ dir -----------------------------------
+# This one can only be shown from inside the role (a role's action_plugins/ applies to that
+# role's tasks only). Open demo/roles/reporting/tasks/main.yml and hover `deploy_report`.
+- name: "the role-local case is inside its role — open reporting/tasks/main.yml"
+  ansible.builtin.include_role:
+    name: reporting

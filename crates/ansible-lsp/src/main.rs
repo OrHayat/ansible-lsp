@@ -995,7 +995,16 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<St
         }
     };
     let is_action = s.contains("/plugins/action/");
-    let twin = plugin_twin(won, is_action).filter(|p| p.is_file());
+    // A same-name action plugin means the task actually runs on the controller. Look in the
+    // winner's own tree (install/collection, via the path swap) AND the legacy dirs a role
+    // or ansible.cfg can add — the legacy ones take precedence, since a local plugin
+    // overrides the module (T-073). Bare name only: those dirs predate namespacing.
+    let bare = r.value.rsplit('.').next().unwrap_or(r.value.as_str());
+    let twin = if is_action {
+        plugin_twin(won, is_action).filter(|p| p.is_file())
+    } else {
+        legacy_action_twin(bare, ctx).or_else(|| plugin_twin(won, is_action).filter(|p| p.is_file()))
+    };
     // One line per file, label first, the path as the link text — which file each link
     // opens must be readable without clicking.
     let entry = |label: &str, p: &Path| {
@@ -1069,6 +1078,17 @@ fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
 
 /// The sibling of a winning module path: its `plugins/action/` twin, or for an action
 /// winner the `plugins/modules/` file, in either layout.
+/// A controller-side action plugin that legacy-overrides a same-named module, found in a
+/// role's `action_plugins/` or a cfg `action_plugins` dir (T-073). Bare name only — those
+/// pre-collections dirs predate namespacing. First hit in Ansible's search order wins.
+fn legacy_action_twin(name: &str, ctx: &FileContext) -> Option<PathBuf> {
+    let file = format!("{name}.py");
+    ctx.legacy_action_plugin_dirs()
+        .into_iter()
+        .map(|d| d.join(&file))
+        .find(|p| p.is_file())
+}
+
 fn plugin_twin(won: &Path, is_action: bool) -> Option<PathBuf> {
     let s = won.to_str()?;
     if is_action {
@@ -1678,6 +1698,68 @@ mod tests {
         let md = super::reference_hover(r, &res, &ctx, true).expect("hover expected");
         assert!(md.contains("- module: ["), "links kept with the setting: {md}");
         assert!(md.contains("**Tried:**"), "path dump with the setting: {md}");
+    }
+
+    /// T-073: a bare module with a same-name action plugin in a cfg `action_plugins` dir
+    /// runs on the controller — the hover finds the legacy plugin and links it, not just
+    /// the target-side module.
+    #[test]
+    fn hover_finds_cfg_dir_action_plugin_twin() {
+        let path = std::path::Path::new("../../demo/tasks/action_plugins.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(
+            "- hosts: all\n  tasks:\n    - stage_files:\n        dest: /srv\n".into(),
+        );
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "stage_files").expect("bare ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let norm = md.replace('\\', "/");
+        assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
+        assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
+        assert!(norm.contains("plugins/action/stage_files.py"), "cfg-dir plugin linked in: {md}");
+    }
+
+    /// T-073 contrast: a plain module with no action plugin in any legacy dir (nor an
+    /// install twin) still reports the target host — the legacy lookup must not invent one.
+    #[test]
+    fn hover_plain_module_with_no_twin_runs_on_target() {
+        let path = std::path::Path::new("../../demo/tasks/action_plugins.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(
+            "- hosts: all\n  tasks:\n    - purge_cache:\n        path: /var/cache\n".into(),
+        );
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "purge_cache").expect("bare ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        assert!(md.contains("runs on the target host"), "target label in: {md}");
+        assert!(!md.contains("action plugin"), "no phantom action plugin in: {md}");
+    }
+
+    /// T-073: a role's own `action_plugins/` dir overrides a same-name module for tasks in
+    /// that role — the hover finds the role-local plugin and reports the controller.
+    #[test]
+    fn hover_finds_role_local_action_plugin_twin() {
+        let path = std::path::Path::new("../../demo/roles/reporting/tasks/main.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new("- deploy_report:\n    summary: x\n".into());
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "deploy_report").expect("bare ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let norm = md.replace('\\', "/");
+        assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
+        assert!(norm.contains("action_plugins/deploy_report.py"), "role-local plugin linked in: {md}");
     }
 
     /// A bare name that wins from a workspace `library/` dir is labelled `ansible.legacy`

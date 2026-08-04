@@ -125,6 +125,14 @@
 - name: "module source navigation lives in modules.yml"
   ansible.builtin.include_tasks: modules.yml
 
+# ----------------------------------------------------- ACTION PLUGINS (controller-side)
+# A task that looks like a module can be handled on the controller by an action plugin in a
+# legacy location — a role's action_plugins/ dir, or an ansible.cfg action_plugins path.
+# Examples in action_plugins.yml.
+
+- name: "legacy action-plugin locations live in action_plugins.yml"
+  ansible.builtin.include_tasks: action_plugins.yml
+
 # ----------------------------------------------------- VARIABLE GO-TO-DEFINITION
 # Cmd+click a {{ variable }} or a when: name to jump to where it's defined in the
 # same file (play vars, set_fact, register). Examples in variables.yml.

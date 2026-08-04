@@ -1,0 +1,17 @@
+---
+# Open this file and hover `deploy_report` below.
+#
+# It looks like an ordinary module — which would ship to and run on the TARGET host. But
+# this role ships a controller-side action plugin at
+# roles/reporting/action_plugins/deploy_report.py, and Ansible runs THAT on the controller.
+#
+# T-073 — the hover should read "runs on the controller (action plugin)" and link the
+# role-local file. Until it lands, the hover wrongly says "runs on the target host": the
+# twin check only looks in the winning module's own tree, not this role's action_plugins/.
+- name: Controller-side, despite looking like a plain module
+  deploy_report:
+    summary: "{{ inventory_hostname }} converged"
+
+- name: A genuine target-host module, for contrast
+  ansible.builtin.debug:
+    msg: this one really does run on the target
