@@ -1075,12 +1075,12 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
 
 /// Candidate paths are absolute and long; show them relative to the project root.
 fn shorten(p: &Path, ctx: &FileContext) -> String {
-    ctx.project_root
-        .as_ref()
-        .and_then(|root| p.strip_prefix(root).ok())
-        .unwrap_or(p)
-        .display()
-        .to_string()
+    ansible_core::posix_display(
+        ctx.project_root
+            .as_ref()
+            .and_then(|root| p.strip_prefix(root).ok())
+            .unwrap_or(p),
+    )
 }
 
 /// One line of provenance for a resolved module, derived from the winning path's shape:
@@ -1180,10 +1180,12 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<St
 fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
     if let Some(root) = &ctx.project_root {
         if let Ok(rel) = p.strip_prefix(root) {
-            return rel.display().to_string();
+            return ansible_core::posix_display(rel);
         }
     }
-    let s = p.to_string_lossy();
+    // POSIX-shaped from here on: the `/site-packages/` and home-dir cuts below are searches
+    // for separators, so on Windows they'd never match a `\` path.
+    let s = ansible_core::posix_display(p);
     // The leading `…/` marks a truncated absolute path — without it the tail reads
     // like a workspace-relative one (the repo really has collections/ansible_collections/).
     if let Some(i) = s.find("/site-packages/") {
@@ -1194,7 +1196,7 @@ fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
             return format!("~{rest}");
         }
     }
-    s.into_owned()
+    s
 }
 
 /// The sibling of a winning module path: its `plugins/action/` twin, or for an action

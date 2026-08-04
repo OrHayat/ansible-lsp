@@ -668,7 +668,7 @@ mod tests {
         );
         // The trail keeps every hop's candidates: alpha's misses come before charlie's hit.
         assert!(
-            res.candidates.iter().any(|c| c.to_string_lossy().contains("demo/alpha/plugins")),
+            res.candidates.iter().any(|c| crate::posix_display(c).contains("demo/alpha/plugins")),
             "first hop in the trail: {:#?}",
             res.candidates
         );

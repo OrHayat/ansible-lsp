@@ -206,10 +206,10 @@ fn load_dir(dir: &str, params: &Params, depth_kv: Option<&str>, ctx: &Ctx, fs: &
     };
 
     if !fs.exists(&root) {
-        return fail(format!("{} directory does not exist", root.display()));
+        return fail(format!("{} directory does not exist", posix(&root)));
     }
     if !fs.is_dir(&root) {
-        return fail(format!("{} is not a directory", root.display()));
+        return fail(format!("{} is not a directory", posix(&root)));
     }
     // k=v `depth` is a string the plugin never converts; any non-empty value crashes the
     // first walk comparison — live-verified (`dir=v depth=1`). Empty is falsy -> 0.
@@ -246,7 +246,7 @@ fn load_dir(dir: &str, params: &Params, depth_kv: Option<&str>, ctx: &Ctx, fs: &
                 }
                 return fail(format!(
                     "'{}' does not have a valid extension: {}",
-                    d.join(&name).display(),
+                    posix(&d.join(&name)),
                     params.extensions.join(", ")
                 ));
             }
@@ -338,9 +338,17 @@ fn string_list(n: &Node) -> Vec<String> {
     }
 }
 
+/// `os.path.isabs`, which is what the plugin calls — on the control node, which is POSIX,
+/// so a leading `/` is absolute no matter which host we're analysing from. `Path::is_absolute`
+/// alone answers "no" to `/etc/vars.yml` on Windows (it wants a drive prefix), which would
+/// send a genuinely absolute `file:` down the relative branch.
+fn is_absolute(path: &Path) -> bool {
+    path.is_absolute() || path.to_string_lossy().starts_with('/')
+}
+
 fn load_file(file: &str, params: &Params, fs: &dyn Fs) -> Outcome {
     let path = Path::new(file);
-    if !path.is_absolute() {
+    if !is_absolute(path) {
         return Outcome::NeedsNeedle { file: file.to_string() };
     }
     // `file:` skips extension validation — `_load_files` is called with its default
@@ -360,6 +368,10 @@ fn load_file(file: &str, params: &Params, fs: &dyn Fs) -> Outcome {
     }
 }
 
+/// The plugin builds these message paths with `os.path.join` on the control node, so they
+/// read with `/` — [`crate::posix_display`] keeps our replicas byte-identical on Windows.
+use crate::posix_display as posix;
+
 /// Python `splitext` semantics via `Path::extension`: both call `.hidden` extensionless.
 fn valid_ext(name: &str, extensions: &[String]) -> bool {
     Path::new(name)
@@ -372,10 +384,10 @@ fn valid_ext(name: &str, extensions: &[String]) -> bool {
 /// maps `data is None` to `{}`); any other non-mapping top level fails the task.
 fn read_names(path: &Path, fs: &dyn Fs) -> Result<Vec<String>, Outcome> {
     let Some(text) = fs.read(path) else {
-        return Err(Outcome::Failed { message: format!("Unable to read '{}'", path.display()) });
+        return Err(Outcome::Failed { message: format!("Unable to read '{}'", posix(path)) });
     };
     let Some(nodes) = Document::new(text).parse() else {
-        return Err(Outcome::Failed { message: format!("failed to parse '{}'", path.display()) });
+        return Err(Outcome::Failed { message: format!("failed to parse '{}'", posix(path)) });
     };
     let mut out = Vec::new();
     for n in &nodes {
@@ -387,7 +399,7 @@ fn read_names(path: &Path, fs: &dyn Fs) -> Result<Vec<String>, Outcome> {
                 if matches!(value.as_str(), "" | "~" | "null" | "Null" | "NULL") => {}
             _ => {
                 return Err(Outcome::Failed {
-                    message: format!("'{}' must be stored as a dictionary/hash", path.display()),
+                    message: format!("'{}' must be stored as a dictionary/hash", posix(path)),
                 });
             }
         }
@@ -555,7 +567,7 @@ mod tests {
         ]);
         let ctx = Ctx { role_path: None, task_dir: Path::new("/r/tasks") };
         let l = loaded(load(&dir_params("v"), &ctx, &fs));
-        let got: Vec<_> = l.files.iter().map(|p| p.to_str().unwrap()).collect();
+        let got: Vec<_> = l.files.iter().map(|p| posix(p)).collect();
         assert_eq!(got, ["/r/tasks/v/a.yml", "/r/tasks/v/b.yml", "/r/tasks/v/sub/c.yml"]);
     }
 
