@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::condition;
@@ -96,6 +97,10 @@ struct VarCache {
     entries: HashMap<PathBuf, Arc<Vec<vars::Located>>>,
     deps: HashMap<PathBuf, HashSet<PathBuf>>,
     reverse: HashMap<PathBuf, HashSet<PathBuf>>,
+    /// Bumped by every invalidation. The scan (detached since T-075) computes entries from
+    /// disk while edits arrive; an entry whose compute straddled an invalidation must not
+    /// be inserted, or a result read from pre-edit content outlives the edit.
+    epoch: u64,
 }
 
 fn var_cache() -> &'static Mutex<VarCache> {
@@ -111,17 +116,27 @@ fn canon(p: &Path) -> PathBuf {
 /// reverse map so later invalidation is precise.
 fn cached_definitions(path: &Path, nodes: &[Node]) -> Arc<Vec<vars::Located>> {
     let key = canon(path);
-    if let Some(hit) = var_cache().lock().ok().and_then(|c| c.entries.get(&key).cloned()) {
-        return hit;
-    }
+    let epoch = match var_cache().lock() {
+        Ok(c) => {
+            if let Some(hit) = c.entries.get(&key) {
+                return hit.clone();
+            }
+            c.epoch
+        }
+        Err(_) => return Arc::new(vars::definitions_with_deps(path, nodes).0),
+    };
     let (result, deps) = vars::definitions_with_deps(path, nodes);
     let arc = Arc::new(result);
     if let Ok(mut cache) = var_cache().lock() {
-        for f in &deps {
-            cache.reverse.entry(f.clone()).or_default().insert(key.clone());
+        // An invalidation landed while we computed — this result may predate the edit.
+        // Return it uncached; the next call recomputes from current content.
+        if cache.epoch == epoch {
+            for f in &deps {
+                cache.reverse.entry(f.clone()).or_default().insert(key.clone());
+            }
+            cache.deps.insert(key.clone(), deps);
+            cache.entries.insert(key, arc.clone());
         }
-        cache.deps.insert(key.clone(), deps);
-        cache.entries.insert(key, arc.clone());
     }
     arc
 }
@@ -133,6 +148,7 @@ fn invalidate_var_cache(file: &Path) {
     let Ok(mut cache) = var_cache().lock() else {
         return;
     };
+    cache.epoch = cache.epoch.wrapping_add(1);
     let mut keys: HashSet<PathBuf> = cache.reverse.get(&f).cloned().unwrap_or_default();
     keys.insert(f);
     for key in keys {
@@ -147,8 +163,11 @@ fn invalidate_var_cache(file: &Path) {
     }
 }
 
-struct Backend {
-    client: Client,
+/// Server state, split from `Backend` so the workspace scan can run detached (T-075):
+/// handlers only ever get `&self`, so anything a spawned task shares has to sit behind its
+/// own `Arc`. Locks are per field and held lock-copy-release only, never across an
+/// `.await` — that is what lets requests run while the scan works.
+struct State {
     docs: Mutex<HashMap<Url, String>>,
     /// Workspace folders, for the repo-wide scan.
     roots: Mutex<Vec<PathBuf>>,
@@ -162,6 +181,13 @@ struct Backend {
     settings: Mutex<Settings>,
     /// What arrived in `initializationOptions`, logged once the client can receive it.
     startup_note: Mutex<String>,
+    /// True while a workspace scan runs — a second trigger during one would double-publish.
+    scanning: AtomicBool,
+}
+
+struct Backend {
+    client: Client,
+    state: Arc<State>,
 }
 
 struct Analysis {
@@ -184,7 +210,19 @@ struct ScanTimings {
     files: usize,
 }
 
-impl Backend {
+impl ScanTimings {
+    /// Merge one file's timings into the scan total — each file is now measured inside
+    /// its own `spawn_blocking` (T-075), so the accumulator can't be threaded through.
+    fn add(&mut self, o: &ScanTimings) {
+        self.parse += o.parse;
+        self.context += o.context;
+        self.var_index += o.var_index;
+        self.resolve += o.resolve;
+        self.files += o.files;
+    }
+}
+
+impl State {
     fn text_of(&self, uri: &Url) -> Option<String> {
         self.docs.lock().ok()?.get(uri).cloned()
     }
@@ -193,9 +231,124 @@ impl Backend {
     /// isn't a real path, or doesn't parse.
     fn analyze(&self, uri: &Url) -> Option<Analysis> {
         let text = self.text_of(uri)?;
-        Self::analyze_text(text, &uri.to_file_path().ok()?)
+        Backend::analyze_text(text, &uri.to_file_path().ok()?)
     }
 
+    fn track(&self, uri: &Url, diagnostics: &[Diagnostic]) {
+        if let Ok(mut f) = self.flagged.lock() {
+            if diagnostics.is_empty() {
+                f.remove(uri);
+            } else {
+                f.insert(uri.clone());
+            }
+        }
+    }
+
+    /// One ERROR at the parse-error position when an open file isn't valid YAML. The parser
+    /// matches Ansible (libyaml), so this is invalid for Ansible too — a play that loads the
+    /// file will fail. Empty when the file is fine, isn't open, or is `# noqa`-suppressed.
+    fn unparseable_diagnostic(&self, uri: &Url) -> Vec<Diagnostic> {
+        let Some(text) = self.text_of(uri) else {
+            return Vec::new();
+        };
+        let doc = Document::new(text);
+        let Some(span) = doc.parse_error() else {
+            return Vec::new();
+        };
+        if doc.is_suppressed(span.start, "unparseable") {
+            return Vec::new();
+        }
+        let (sl, sc) = doc.byte_to_lsp(span.start);
+        let (el, ec) = doc.byte_to_lsp(span.end);
+        vec![Diagnostic {
+            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String("unparseable".into())),
+            message: "Invalid YAML — Ansible's parser rejects this too, so a play that loads \
+                      this file will fail. References here aren't analysed."
+                .into(),
+            ..Default::default()
+        }]
+    }
+
+    /// A `when:` on `import_playbook` whose variable the imported playbook itself sets.
+    ///
+    /// The condition is copied onto every imported task and re-evaluated per task, so a
+    /// `set_fact` inside flips it mid-run: everything before runs, everything after
+    /// silently skips. `set_fact` is host-scoped, so a cluster can split. This is the
+    /// only `when:` rule that needs to read other files.
+    fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for (r, res) in &a.refs {
+            if r.kind != ReferenceKind::ImportPlaybook || r.conditions.is_empty() {
+                continue;
+            }
+            let Some(span) = r.condition_span else { continue };
+            if a.doc.is_suppressed(span.start, "when-import-var-mutated") {
+                continue;
+            }
+            let used: Vec<String> = r
+                .conditions
+                .iter()
+                .flat_map(|c| condition::variables(c))
+                .collect();
+            if used.is_empty() {
+                continue;
+            }
+            for target in &res.targets {
+                let mutated = self.mutated_vars(target);
+                let mut hit: Vec<&String> =
+                    used.iter().filter(|v| mutated.contains(*v)).collect();
+                if hit.is_empty() {
+                    continue;
+                }
+                hit.sort();
+                hit.dedup();
+                let names = hit
+                    .iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let (sl, sc) = a.doc.byte_to_lsp(span.start);
+                let (el, ec) = a.doc.byte_to_lsp(span.end);
+                out.push(Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("when-import-var-mutated".into())),
+                    message: format!(
+                        "{names} is set by `{}` while it runs. This `when:` is copied onto \
+                         every imported task and re-evaluated per task, so it flips \
+                         partway through: tasks before the assignment run, tasks after \
+                         are silently skipped. `set_fact` is per-host, so hosts can \
+                         diverge. Gate with a variable the import doesn't assign, or use \
+                         `meta: end_play` inside it.",
+                        shorten(target, &a.ctx)
+                    ),
+                    ..Default::default()
+                });
+                break;
+            }
+        }
+        out
+    }
+
+    fn mutated_vars(&self, target: &Path) -> std::sync::Arc<HashSet<String>> {
+        if let Ok(cache) = self.mutations.lock() {
+            if let Some(hit) = cache.get(target) {
+                return hit.clone();
+            }
+        }
+        let computed = std::sync::Arc::new(mutation::mutated_vars(target));
+        if let Ok(mut cache) = self.mutations.lock() {
+            cache.insert(target.to_path_buf(), computed.clone());
+        }
+        computed
+    }
+}
+
+impl Backend {
     fn analyze_text(text: String, path: &Path) -> Option<Analysis> {
         Self::analyze_text_measured(text, path, &mut ScanTimings::default())
     }
@@ -241,62 +394,24 @@ impl Backend {
     /// Warn only on literal paths that resolved to nothing. Templated values and
     /// unsupported kinds stay silent — a warning you can't trust is worse than none.
     async fn publish_diagnostics(&self, uri: &Url) {
-        let Some(a) = self.analyze(uri) else {
+        let Some(a) = self.state.analyze(uri) else {
             // No analysis means the file didn't parse. Since the parser now matches Ansible's
             // (libyaml), a parse failure is a real one — a play that loads this file will
             // fail — so it's an error, not a silent gap.
-            let diags = self.unparseable_diagnostic(uri);
-            self.track(uri, &diags);
+            let diags = self.state.unparseable_diagnostic(uri);
+            self.state.track(uri, &diags);
             self.client.publish_diagnostics(uri.clone(), diags, None).await;
             return;
         };
         let mut diagnostics = Self::diagnostics_of(&a);
-        diagnostics.extend(self.mutated_condition_diagnostics(&a));
+        diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
         if let Ok(path) = uri.to_file_path() {
             diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
         }
-        self.track(uri, &diagnostics);
+        self.state.track(uri, &diagnostics);
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
             .await;
-    }
-
-    fn track(&self, uri: &Url, diagnostics: &[Diagnostic]) {
-        if let Ok(mut f) = self.flagged.lock() {
-            if diagnostics.is_empty() {
-                f.remove(uri);
-            } else {
-                f.insert(uri.clone());
-            }
-        }
-    }
-
-    /// One ERROR at the parse-error position when an open file isn't valid YAML. The parser
-    /// matches Ansible (libyaml), so this is invalid for Ansible too — a play that loads the
-    /// file will fail. Empty when the file is fine, isn't open, or is `# noqa`-suppressed.
-    fn unparseable_diagnostic(&self, uri: &Url) -> Vec<Diagnostic> {
-        let Some(text) = self.text_of(uri) else {
-            return Vec::new();
-        };
-        let doc = Document::new(text);
-        let Some(span) = doc.parse_error() else {
-            return Vec::new();
-        };
-        if doc.is_suppressed(span.start, "unparseable") {
-            return Vec::new();
-        }
-        let (sl, sc) = doc.byte_to_lsp(span.start);
-        let (el, ec) = doc.byte_to_lsp(span.end);
-        vec![Diagnostic {
-            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-            severity: Some(DiagnosticSeverity::ERROR),
-            source: Some("ansible-lsp".into()),
-            code: Some(NumberOrString::String("unparseable".into())),
-            message: "Invalid YAML — Ansible's parser rejects this too, so a play that loads \
-                      this file will fail. References here aren't analysed."
-                .into(),
-            ..Default::default()
-        }]
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {
@@ -416,89 +531,21 @@ impl Backend {
         out
     }
 
-    /// A `when:` on `import_playbook` whose variable the imported playbook itself sets.
-    ///
-    /// The condition is copied onto every imported task and re-evaluated per task, so a
-    /// `set_fact` inside flips it mid-run: everything before runs, everything after
-    /// silently skips. `set_fact` is host-scoped, so a cluster can split. This is the
-    /// only `when:` rule that needs to read other files.
-    fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for (r, res) in &a.refs {
-            if r.kind != ReferenceKind::ImportPlaybook || r.conditions.is_empty() {
-                continue;
-            }
-            let Some(span) = r.condition_span else { continue };
-            if a.doc.is_suppressed(span.start, "when-import-var-mutated") {
-                continue;
-            }
-            let used: Vec<String> = r
-                .conditions
-                .iter()
-                .flat_map(|c| condition::variables(c))
-                .collect();
-            if used.is_empty() {
-                continue;
-            }
-            for target in &res.targets {
-                let mutated = self.mutated_vars(target);
-                let mut hit: Vec<&String> =
-                    used.iter().filter(|v| mutated.contains(*v)).collect();
-                if hit.is_empty() {
-                    continue;
-                }
-                hit.sort();
-                hit.dedup();
-                let names = hit
-                    .iter()
-                    .map(|s| format!("`{s}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let (sl, sc) = a.doc.byte_to_lsp(span.start);
-                let (el, ec) = a.doc.byte_to_lsp(span.end);
-                out.push(Diagnostic {
-                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    source: Some("ansible-lsp".into()),
-                    code: Some(NumberOrString::String("when-import-var-mutated".into())),
-                    message: format!(
-                        "{names} is set by `{}` while it runs. This `when:` is copied onto \
-                         every imported task and re-evaluated per task, so it flips \
-                         partway through: tasks before the assignment run, tasks after \
-                         are silently skipped. `set_fact` is per-host, so hosts can \
-                         diverge. Gate with a variable the import doesn't assign, or use \
-                         `meta: end_play` inside it.",
-                        shorten(target, &a.ctx)
-                    ),
-                    ..Default::default()
-                });
-                break;
-            }
-        }
-        out
-    }
-
-    fn mutated_vars(&self, target: &Path) -> std::sync::Arc<HashSet<String>> {
-        if let Ok(cache) = self.mutations.lock() {
-            if let Some(hit) = cache.get(target) {
-                return hit.clone();
-            }
-        }
-        let computed = std::sync::Arc::new(mutation::mutated_vars(target));
-        if let Ok(mut cache) = self.mutations.lock() {
-            cache.insert(target.to_path_buf(), computed.clone());
-        }
-        computed
-    }
-
     /// Resolve every YAML file in the workspace and publish what's broken.
     ///
-    /// I/O bound (~3.5 s over a large workspace) so it runs detached and publishes as it
-    /// goes — the Problems panel fills progressively instead of appearing at the end.
-    async fn scan_workspace(&self) {
+    /// Runs as a detached task (T-075): `initialized` spawns this and returns, so hover /
+    /// definition / references are serviced while it works, and diagnostics fill the
+    /// Problems panel progressively. Each file's analysis is sync CPU+IO, so it runs under
+    /// `spawn_blocking` — the async workers stay free too. Because edits now interleave
+    /// with the scan, an open buffer wins everywhere: skip at read time, re-check at
+    /// publish time, and never clear or overwrite a flag the didChange path owns.
+    async fn scan_workspace(state: Arc<State>, client: Client) {
+        if state.scanning.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let scan_start = std::time::Instant::now();
-        let roots = self.roots.lock().map(|r| r.clone()).unwrap_or_default();
-        let stale: HashSet<Url> = self.flagged.lock().map(|f| f.clone()).unwrap_or_default();
+        let roots = state.roots.lock().map(|r| r.clone()).unwrap_or_default();
+        let stale: HashSet<Url> = state.flagged.lock().map(|f| f.clone()).unwrap_or_default();
         let mut still_flagged = HashSet::new();
         let mut t = ScanTimings::default();
         let mut seen = 0usize;
@@ -508,35 +555,59 @@ impl Backend {
                 seen += 1;
                 // An open buffer is authoritative over what's on disk.
                 let Ok(uri) = Url::from_file_path(&path) else { continue };
-                if self.text_of(&uri).is_some() {
+                if state.text_of(&uri).is_some() {
                     continue;
                 }
-                let Ok(text) = std::fs::read_to_string(&path) else { continue };
-                let Some(a) = Self::analyze_text_measured(text, &path, &mut t) else { continue };
-                t.files += 1;
-                let mut diagnostics = Self::diagnostics_of(&a);
-                diagnostics.extend(self.mutated_condition_diagnostics(&a));
+                let st = state.clone();
+                let analysed = tokio::task::spawn_blocking(move || {
+                    let mut ft = ScanTimings::default();
+                    let text = std::fs::read_to_string(&path).ok()?;
+                    let a = Self::analyze_text_measured(text, &path, &mut ft)?;
+                    ft.files = 1;
+                    let mut diagnostics = Self::diagnostics_of(&a);
+                    diagnostics.extend(st.mutated_condition_diagnostics(&a));
+                    Some((diagnostics, ft))
+                })
+                .await
+                .ok()
+                .flatten();
+                let Some((diagnostics, ft)) = analysed else { continue };
+                t.add(&ft);
                 if diagnostics.is_empty() {
                     continue;
                 }
+                // The file may have opened while we analysed the on-disk copy — its
+                // didOpen/didChange publish is authoritative, ours would clobber it.
+                if state.text_of(&uri).is_some() {
+                    continue;
+                }
                 still_flagged.insert(uri.clone());
-                self.client.publish_diagnostics(uri, diagnostics, None).await;
+                client.publish_diagnostics(uri, diagnostics, None).await;
             }
         }
 
-        // Clear files that were flagged before but are clean now.
+        // Clear files that were flagged before but are clean now. Open buffers are the
+        // didChange path's to clear, not ours.
         for uri in stale.difference(&still_flagged) {
-            self.client.publish_diagnostics(uri.clone(), vec![], None).await;
+            if state.text_of(uri).is_some() {
+                continue;
+            }
+            client.publish_diagnostics(uri.clone(), vec![], None).await;
+            if let Ok(mut f) = state.flagged.lock() {
+                f.remove(uri);
+            }
         }
-        if let Ok(mut f) = self.flagged.lock() {
-            *f = still_flagged;
+        // Merge rather than overwrite: handlers flag open files while the scan runs, and
+        // a wholesale `*f = still_flagged` would drop those.
+        if let Ok(mut f) = state.flagged.lock() {
+            f.extend(still_flagged);
         }
 
         // Startup perf metrics (T-074), to the *Ansible LSP* output channel. Phases are
         // sums across all analysed files; the wall clock also covers the file walk, reads,
         // diagnostics and publishing, so total > parse+context+var-index+resolve.
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
-        self.client
+        client
             .log_message(
                 MessageType::INFO,
                 format!(
@@ -551,11 +622,12 @@ impl Backend {
                 ),
             )
             .await;
+        state.scanning.store(false, Ordering::SeqCst);
     }
 
     /// Every resolvable reference and how many files it reaches.
     async fn resolved_references(&self, p: ReferencesParams) -> Result<Vec<ResolvedRef>> {
-        let Some(a) = self.analyze(&p.uri) else {
+        let Some(a) = self.state.analyze(&p.uri) else {
             return Ok(Vec::new());
         };
         let mut out: Vec<ResolvedRef> = a
@@ -1317,7 +1389,7 @@ fn hover_at(
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, p: InitializeParams) -> Result<InitializeResult> {
-        if let Ok(mut roots) = self.roots.lock() {
+        if let Ok(mut roots) = self.state.roots.lock() {
             if let Some(folders) = p.workspace_folders {
                 roots.extend(folders.iter().filter_map(|f| f.uri.to_file_path().ok()));
             }
@@ -1334,7 +1406,7 @@ impl LanguageServer for Backend {
         // a folder-level settings.json is ignored for window-scoped keys.
         let received = match &p.initialization_options {
             Some(opts) => {
-                if let Ok(mut s) = self.settings.lock() {
+                if let Ok(mut s) = self.state.settings.lock() {
                     *s = Settings::from_json(opts);
                 }
                 // Which Ansible to index, when several exist or none is on PATH. Read here,
@@ -1350,7 +1422,7 @@ impl LanguageServer for Backend {
             }
             None => "none — client sent no initializationOptions".to_string(),
         };
-        self.startup_note.lock().map(|mut n| *n = received).ok();
+        self.state.startup_note.lock().map(|mut n| *n = received).ok();
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -1399,8 +1471,8 @@ impl LanguageServer for Backend {
                 )
                 .await;
         }
-        let note = self.startup_note.lock().map(|n| n.clone()).unwrap_or_default();
-        let s = self.settings.lock().map(|s| *s).unwrap_or_default();
+        let note = self.state.startup_note.lock().map(|n| n.clone()).unwrap_or_default();
+        let s = self.state.settings.lock().map(|s| *s).unwrap_or_default();
         self.client
             .log_message(
                 MessageType::INFO,
@@ -1411,14 +1483,16 @@ impl LanguageServer for Backend {
                 ),
             )
             .await;
-        self.scan_workspace().await;
+        // Detached (T-075): the message pump must go back to servicing hover/goto while
+        // the scan runs. Everything the scan touches lives behind `Arc<State>`.
+        tokio::spawn(Self::scan_workspace(self.state.clone(), self.client.clone()));
     }
 
     async fn did_change_configuration(&self, p: DidChangeConfigurationParams) {
-        if let Ok(mut s) = self.settings.lock() {
+        if let Ok(mut s) = self.state.settings.lock() {
             *s = Settings::from_json(&p.settings);
         }
-        let s = self.settings.lock().map(|s| *s).unwrap_or_default();
+        let s = self.state.settings.lock().map(|s| *s).unwrap_or_default();
         self.client
             .log_message(
                 MessageType::INFO,
@@ -1441,10 +1515,10 @@ impl LanguageServer for Backend {
     /// end-of-line blame. Hover has room to spell out every clause instead of a truncated
     /// stub. Plain LSP, so it carries to Neovim, unlike the teal decoration.
     async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
-        let settings = self.settings.lock().map(|s| *s).unwrap_or_default();
+        let settings = self.state.settings.lock().map(|s| *s).unwrap_or_default();
         let uri = &p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        let Some(text) = self.text_of(uri) else {
+        let Some(text) = self.state.text_of(uri) else {
             return Ok(None);
         };
         let Ok(path) = uri.to_file_path() else {
@@ -1471,7 +1545,7 @@ impl LanguageServer for Backend {
         if let Ok(path) = uri.to_file_path() {
             invalidate_var_cache(&path);
         }
-        if let Ok(mut d) = self.docs.lock() {
+        if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), p.text_document.text);
         }
         self.publish_diagnostics(&uri).await;
@@ -1488,14 +1562,14 @@ impl LanguageServer for Backend {
         if let Ok(path) = uri.to_file_path() {
             invalidate_var_cache(&path);
         }
-        if let Ok(mut d) = self.docs.lock() {
+        if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), change.text);
         }
         self.publish_diagnostics(&uri).await;
     }
 
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
-        if let Ok(mut d) = self.docs.lock() {
+        if let Ok(mut d) = self.state.docs.lock() {
             d.remove(&p.text_document.uri);
         }
         self.client
@@ -1510,7 +1584,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
 
-        let Some(text) = self.text_of(&uri) else {
+        let Some(text) = self.state.text_of(&uri) else {
             return Ok(None);
         };
         let Ok(path) = uri.to_file_path() else {
@@ -1548,7 +1622,7 @@ impl LanguageServer for Backend {
     /// Every resolvable reference. The client also paints these, so what's clickable is
     /// visible without hovering.
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
-        let Some(a) = self.analyze(&p.text_document.uri) else {
+        let Some(a) = self.state.analyze(&p.text_document.uri) else {
             return Ok(None);
         };
         let links = a
@@ -1593,12 +1667,15 @@ async fn main() {
     let stdout = tokio::io::stdout();
     let (service, socket) = LspService::build(|client| Backend {
         client,
-        docs: Mutex::new(HashMap::new()),
-        roots: Mutex::new(Vec::new()),
-        flagged: Mutex::new(HashSet::new()),
-        mutations: Mutex::new(HashMap::new()),
-        settings: Mutex::new(Settings::default()),
-        startup_note: Mutex::new(String::new()),
+        state: Arc::new(State {
+            docs: Mutex::new(HashMap::new()),
+            roots: Mutex::new(Vec::new()),
+            flagged: Mutex::new(HashSet::new()),
+            mutations: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Settings::default()),
+            startup_note: Mutex::new(String::new()),
+            scanning: AtomicBool::new(false),
+        }),
     })
     .custom_method("ansible/references", Backend::resolved_references)
     .finish();

@@ -48,12 +48,48 @@ complaint.
 
 ## Done when
 
-- [ ] `initialized` returns without waiting for the workspace scan
-- [ ] hover / go-to-definition / colouring work on an open file while the scan is still running
-- [ ] diagnostics still publish progressively and the stale-clearing pass still runs
+- [x] `initialized` returns without waiting for the workspace scan
+- [x] hover / go-to-definition / colouring work on an open file while the scan is still running
+- [x] diagnostics still publish progressively and the stale-clearing pass still runs
 - [ ] an edit during the scan invalidates and republishes correctly (no lost or duplicated diags)
+      — guarded in code (publish-time open-buffer re-check, `flagged` merge, VarCache epoch)
+      and tests are green, but not yet exercised by hand
+- [ ] the after-numbers reproduced on the WSL machine (where the freeze was seconds, not ms)
+
+## What shipped
+
+Option A. `Backend`'s shared fields moved behind `Arc<State>` (per-field `Mutex`es unchanged);
+`initialized` spawns `scan_workspace(state, client)` detached, per-file analysis under
+`spawn_blocking`. New races from edits interleaving with the scan are closed by: an
+open-buffer re-check at publish time (not just read time), merging `still_flagged` instead of
+overwriting, never clearing an open buffer's diagnostics from the scan, and an epoch counter
+on the var cache so an entry computed from pre-edit disk content is discarded rather than
+inserted after an invalidation.
+
+## Measurements — before vs after this fix
+
+Apple M3 Pro (12-core, 36 GB RAM), macOS 26.6, release build, demo workspace (57 files
+analysed of 60), warm caches. `node scripts/bench-t075.js <binary> demo/` measures from the
+`initialized` notification: first `documentLink` / `hover` response on `demo/tasks/main.yml`,
+and the arrival of the T-074 scan log line. Three runs each:
+
+|                  | documentLink | hover                     | scan line |
+| ---------------- | ------------ | ------------------------- | --------- |
+| before (b73318d) | ~11 ms       | ~38 ms — equals scan end  | 33–49 ms  |
+| after            | ~7 ms        | ~7 ms                     | 33–41 ms  |
+
+The before-signature is the bug: hover latency exactly tracks scan completion (queued behind
+the pump). After, requests answer mid-scan and the scan itself costs the same. Two findings
+from measuring:
+
+- The demo scan is only ~40 ms on this Mac; T-074's 5.7 s reference is from WSL, where
+  per-file IO is ~100× slower — same T-076 redundancy, far bigger multiplier. Wall clock
+  here can't validate T-076; the walked-vs-unique-files counter can.
+- The freeze *felt* on this Mac was mostly cold `ansible --version` (measured 3.6 s cold,
+  0.35 s warm), which `initialized` still awaits inline before spawning the scan — split
+  out to T-084.
 
 ## Refs
 
 Surfaced by T-074 (metrics). Pairs with T-076 (the scan's actual cost); they compound —
-backgrounding stops the freeze, T-076 stops the wasted work.
+backgrounding stops the freeze, T-076 stops the wasted work. Startup detect cost: T-084.

@@ -79,6 +79,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-076 | [Var-index re-walks shared files per consumer](open/T-076-var-index-redundant-walk.md) | M | T-075 refs |
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
+| T-084 | [Cold `ansible --version` blocks startup](open/T-084-cold-ansible-detect.md) | S | T-075 refs |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
