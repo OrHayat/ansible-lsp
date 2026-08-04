@@ -33,6 +33,12 @@
           "default": false,
           "description": "On hover over a reference that DID resolve, show the paths tried and mark the winner. Off by default the target is already a Cmd+click away. Turn on to see the full search order and which candidate won (useful for ambiguous roles and modules)."
         },
+        "ansibleLsp.scan.concurrency": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "How many files the workspace scan analyses at once. 0 picks one per CPU core, which is best on a local disk. Raise it if your workspace is on a network share, a VM mount or WSL's /mnt/c, where files wait on the filesystem instead of working. Affects speed only, never what the scan reports. Applies to the next scan."
+        },
         "ansibleLsp.serverPath": {
           "type": "string",
           "default": "",

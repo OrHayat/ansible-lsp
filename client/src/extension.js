@@ -47,6 +47,7 @@ function hintSettings() {
     hover: {
       candidatesOnResolved: c.get("hover.candidatesOnResolved", false),
     },
+    scan: { concurrency: c.get("scan.concurrency", 0) },
     ansiblePath: c.get("ansiblePath", ""),
   };
 }
@@ -143,7 +144,8 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
         !e.affectsConfiguration("ansibleLsp.inlayHints") &&
-        !e.affectsConfiguration("ansibleLsp.hover")
+        !e.affectsConfiguration("ansibleLsp.hover") &&
+        !e.affectsConfiguration("ansibleLsp.scan")
       )
         return;
       client?.sendNotification("workspace/didChangeConfiguration", {

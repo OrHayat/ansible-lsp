@@ -50,6 +50,10 @@ struct Settings {
     /// that hover duplicated the diagnostic message VS Code already renders in the same
     /// tooltip, so both the hover and the key are gone.)
     candidates_on_resolved: bool,
+    /// Files the workspace scan analyses at once; 0 picks one per core. A knob because a
+    /// local disk peaks at `nproc` while a network mount, where the tasks are blocked rather
+    /// than running, wants more — and the server can't tell which it's on.
+    scan_concurrency: usize,
 }
 
 impl Default for Settings {
@@ -57,6 +61,7 @@ impl Default for Settings {
         Self {
             hints: true,
             candidates_on_resolved: false,
+            scan_concurrency: 0,
         }
     }
 }
@@ -77,6 +82,19 @@ impl Settings {
         Self {
             hints: get("inlayHints", "enabled", d.hints),
             candidates_on_resolved: get("hover", "candidatesOnResolved", d.candidates_on_resolved),
+            scan_concurrency: v
+                .get("scan")
+                .and_then(|s| s.get("concurrency"))
+                .and_then(|n| n.as_u64())
+                .map_or(d.scan_concurrency, |n| n as usize),
+        }
+    }
+
+    /// The setting resolved to a usable task count — `0` becomes one per core.
+    fn in_flight(&self) -> usize {
+        match self.scan_concurrency {
+            0 => std::thread::available_parallelism().map_or(4, |n| n.get()),
+            n => n,
         }
     }
 }
@@ -630,6 +648,34 @@ impl Backend {
         let disk = Arc::new(Counting::new(StdFs));
         let scan_cache = Arc::new(ScanCache::new(disk.clone()));
 
+        // Analyse several files at once. 580 files: ext4 19 -> 3 ms at `nproc`, 9p 14.5 -> 1.2 s.
+        let in_flight = state
+            .settings
+            .lock()
+            .map(|s| s.in_flight())
+            .unwrap_or(4)
+            .max(1);
+        let mut set: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, ScanTimings)>> =
+            tokio::task::JoinSet::new();
+
+        // Publishing stays here on one task, so `still_flagged` needs no lock and the
+        // open-buffer re-check keeps happening immediately before the publish it guards.
+        // Order between files carries no meaning: each notification replaces one URI's
+        // whole diagnostic set.
+        macro_rules! drain_one {
+            () => {
+                if let Some(done) = set.join_next().await {
+                    if let Some((uri, diagnostics, ft)) = done.ok().flatten() {
+                        t.add(&ft);
+                        if !diagnostics.is_empty() && state.text_of(&uri).is_none() {
+                            still_flagged.insert(uri.clone());
+                            client.publish_diagnostics(uri, diagnostics, None).await;
+                        }
+                    }
+                }
+            };
+        }
+
         for root in roots {
             for path in yaml_files(&root) {
                 seen += 1;
@@ -638,33 +684,27 @@ impl Backend {
                 if state.text_of(&uri).is_some() {
                     continue;
                 }
+                if set.len() >= in_flight {
+                    drain_one!();
+                }
                 let st = state.clone();
                 let sc = scan_cache.clone();
-                let analysed = tokio::task::spawn_blocking(move || {
+                set.spawn_blocking(move || {
                     let mut ft = ScanTimings::default();
                     let text = std::fs::read_to_string(&path).ok()?;
                     let a = Self::analyze_text_measured(text, &path, &mut ft, &sc)?;
                     ft.files = 1;
                     let mut diagnostics = Self::diagnostics_of(&a);
                     diagnostics.extend(st.mutated_condition_diagnostics(&a));
-                    Some((diagnostics, ft))
-                })
-                .await
-                .ok()
-                .flatten();
-                let Some((diagnostics, ft)) = analysed else { continue };
-                t.add(&ft);
-                if diagnostics.is_empty() {
-                    continue;
-                }
-                // The file may have opened while we analysed the on-disk copy — its
-                // didOpen/didChange publish is authoritative, ours would clobber it.
-                if state.text_of(&uri).is_some() {
-                    continue;
-                }
-                still_flagged.insert(uri.clone());
-                client.publish_diagnostics(uri, diagnostics, None).await;
+                    Some((uri, diagnostics, ft))
+                });
             }
+        }
+        // Every result must land before the cleanup below, which subtracts `still_flagged`
+        // from what was flagged previously — an in-flight file missing from that set would
+        // have its diagnostics cleared as though it had been fixed.
+        while !set.is_empty() {
+            drain_one!();
         }
 
         // Clear files that were flagged before but are clean now. Open buffers are the
