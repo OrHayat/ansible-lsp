@@ -11,7 +11,11 @@
 //! [`StdFs`] is the real filesystem and the default everywhere. The second
 //! implementation — a pass-scoped memo — is T-085; nothing here caches anything.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::Mutex;
+use std::time::Instant;
 
 /// What lives at a path. One primitive rather than three predicates, because a single
 /// `stat` answers all three questions — so an implementation that remembers answers
@@ -71,6 +75,26 @@ pub trait Fs: Send + Sync {
     }
 }
 
+/// So a caller can keep a handle on an implementation it also hands to something else —
+/// the point of [`Counting`] being a decorator is reading its tallies afterwards.
+impl<T: Fs + ?Sized> Fs for std::sync::Arc<T> {
+    fn kind(&self, p: &Path) -> Option<Kind> {
+        (**self).kind(p)
+    }
+    fn read(&self, p: &Path) -> Option<String> {
+        (**self).read(p)
+    }
+    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+        (**self).read_dir(p)
+    }
+    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
+        (**self).walk(root)
+    }
+    fn canonical(&self, p: &Path) -> Option<PathBuf> {
+        (**self).canonical(p)
+    }
+}
+
 /// The real filesystem. What every caller gets unless it opts into something else.
 pub struct StdFs;
 
@@ -120,5 +144,167 @@ impl Fs for StdFs {
 
     fn canonical(&self, p: &Path) -> Option<PathBuf> {
         p.canonicalize().ok()
+    }
+}
+
+// ------------------------------------------------------------------ counting (T-085)
+
+/// One operation's tally. Atomics, not a lock: a mutex on every filesystem call would
+/// serialise the concurrency the walk is built to allow, and it would double the locking a
+/// memoizing [`Fs`] already does — noise against a 540 µs stat on a 9p mount, 20–40% against
+/// a ~50–100 ns memo hit, which is the fast path the memo exists to create. Nothing branches
+/// on these mid-run; only the totals are read at the end, so `Relaxed` is enough.
+/// One operation's tally.
+///
+/// There is no `disk` field: one layer cannot know whether the thing below it went to the
+/// filesystem, and a single wrapper would report `disk == calls` always. The redundancy
+/// number comes from *stacking* instead — a [`Counting`] inside the memo counts syscalls, one
+/// outside counts asks, and the pair is the ratio.
+#[derive(Default, Debug)]
+pub struct Counter {
+    /// Times this layer was asked.
+    pub calls: AtomicUsize,
+    /// Answers of "nothing there". Half of all probes in a real scan — the number that
+    /// catches a cache which remembers only hits.
+    pub misses: AtomicUsize,
+    /// Time spent below this layer.
+    pub nanos: AtomicU64,
+}
+
+impl Counter {
+    fn record(&self, elapsed: std::time::Duration, missing: bool) {
+        self.calls.fetch_add(1, Relaxed);
+        self.nanos.fetch_add(elapsed.as_nanos() as u64, Relaxed);
+        if missing {
+            self.misses.fetch_add(1, Relaxed);
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct FsStats {
+    pub kind: Counter,
+    pub read: Counter,
+    pub read_dir: Counter,
+    pub walk: Counter,
+    pub canonical: Counter,
+    /// Per-path tallies — the only thing here needing a map, so the only thing behind a
+    /// lock, and `None` unless asked for. Gives the distinct-path count (the floor a memo
+    /// can reach: if calls ≈ distinct, caching is the wrong fix) and the repeat histogram
+    /// that names offenders outright. Too much to carry on every run for a 729-file corpus.
+    paths: Option<Mutex<HashMap<PathBuf, usize>>>,
+}
+
+impl FsStats {
+    /// Path tallying on when `ANSIBLE_LSP_FS_PATHS` is set.
+    fn new() -> Self {
+        Self {
+            paths: std::env::var_os("ANSIBLE_LSP_FS_PATHS")
+                .map(|_| Mutex::new(HashMap::new())),
+            ..Self::default()
+        }
+    }
+
+    fn note(&self, p: &Path) {
+        if let Some(m) = &self.paths {
+            if let Ok(mut g) = m.lock() {
+                *g.entry(p.to_path_buf()).or_default() += 1;
+            }
+        }
+    }
+
+    pub fn calls(&self) -> usize {
+        self.each().iter().map(|(_, c)| c.calls.load(Relaxed)).sum()
+    }
+
+    pub fn misses(&self) -> usize {
+        self.each().iter().map(|(_, c)| c.misses.load(Relaxed)).sum()
+    }
+
+    pub fn nanos(&self) -> u64 {
+        self.each().iter().map(|(_, c)| c.nanos.load(Relaxed)).sum()
+    }
+
+    pub fn each(&self) -> [(&'static str, &Counter); 5] {
+        [
+            ("kind", &self.kind),
+            ("read", &self.read),
+            ("read_dir", &self.read_dir),
+            ("walk", &self.walk),
+            ("canonical", &self.canonical),
+        ]
+    }
+
+    /// Distinct paths touched, and the most-repeated ones. `None` unless path tallying
+    /// was enabled.
+    pub fn distinct(&self) -> Option<usize> {
+        Some(self.paths.as_ref()?.lock().ok()?.len())
+    }
+
+    pub fn top_paths(&self, n: usize) -> Vec<(PathBuf, usize)> {
+        let Some(m) = &self.paths else { return Vec::new() };
+        let Ok(g) = m.lock() else { return Vec::new() };
+        let mut v: Vec<(PathBuf, usize)> = g.iter().map(|(p, c)| (p.clone(), *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v.truncate(n);
+        v
+    }
+}
+
+/// Counts what passes through, then delegates. A decorator rather than a field on each
+/// [`Fs`], so [`StdFs`] stays a zero-cost unit struct on the interactive paths — and so the
+/// *baseline* is measurable with the same code as the optimised side, which is the half
+/// nobody takes on faith.
+///
+/// It stacks: wrapping inside a memo counts syscalls, wrapping outside counts calls, so
+/// neither implementation has to track both itself.
+pub struct Counting<F: Fs> {
+    inner: F,
+    stats: FsStats,
+}
+
+impl<F: Fs> Counting<F> {
+    pub fn new(inner: F) -> Self {
+        Self { inner, stats: FsStats::new() }
+    }
+
+    pub fn stats(&self) -> &FsStats {
+        &self.stats
+    }
+
+    pub fn inner(&self) -> &F {
+        &self.inner
+    }
+
+    /// Tally one delegated call. `missing` feeds the miss counter; only `kind` and
+    /// `canonical` can meaningfully answer "nothing there", so the others pass `false`.
+    fn timed<T>(&self, c: &Counter, p: &Path, missing: fn(&T) -> bool, f: impl FnOnce() -> T) -> T {
+        self.stats.note(p);
+        let start = Instant::now();
+        let out = f();
+        c.record(start.elapsed(), missing(&out));
+        out
+    }
+}
+
+impl<F: Fs> Fs for Counting<F> {
+    fn kind(&self, p: &Path) -> Option<Kind> {
+        self.timed(&self.stats.kind, p, Option::is_none, || self.inner.kind(p))
+    }
+
+    fn read(&self, p: &Path) -> Option<String> {
+        self.timed(&self.stats.read, p, |_| false, || self.inner.read(p))
+    }
+
+    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+        self.timed(&self.stats.read_dir, p, |_| false, || self.inner.read_dir(p))
+    }
+
+    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
+        self.timed(&self.stats.walk, root, |_| false, || self.inner.walk(root))
+    }
+
+    fn canonical(&self, p: &Path) -> Option<PathBuf> {
+        self.timed(&self.stats.canonical, p, Option::is_none, || self.inner.canonical(p))
     }
 }
