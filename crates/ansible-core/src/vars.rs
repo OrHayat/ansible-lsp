@@ -13,14 +13,16 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::ast::{self, Ast, Block, Play, PlayItem, Stmt, Task};
+use crate::cache::{Contribution, ScanCache};
 use crate::condition;
 use crate::include_vars;
-use crate::parse::{Document, Node, Span};
+use crate::parse::{Node, Span};
 use crate::references::{self, ReferenceKind};
 use crate::resolve;
-use crate::workspace::{yaml_files, FileContext};
+use crate::workspace::FileContext;
 
 /// How a variable came to be defined. Ordered loosely by Ansible's precedence, low to
 /// high, though this pass doesn't yet rank across files.
@@ -386,21 +388,30 @@ pub fn known_literals(
     path: &Path,
     text: &str,
 ) -> std::collections::HashMap<String, Vec<String>> {
+    known_literals_in(defs, path, text, &ScanCache::default())
+}
+
+/// [`known_literals`] reading the defining files through a scan cache, so the files the
+/// walk already read aren't read again per consumer (T-076).
+pub fn known_literals_in(
+    defs: &[Located],
+    path: &Path,
+    text: &str,
+    cache: &ScanCache,
+) -> std::collections::HashMap<String, Vec<String>> {
     use std::collections::HashMap;
-    let mut disk: HashMap<PathBuf, String> = HashMap::new();
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for d in defs {
         if !value_span_source(d.source) {
             continue;
         }
-        let value = {
-            let src: &str = if d.file == path {
-                text
-            } else {
-                disk.entry(d.file.clone())
-                    .or_insert_with(|| std::fs::read_to_string(&d.file).unwrap_or_default())
-            };
-            d.span.slice(src).trim().to_string()
+        let value = if d.file == path {
+            d.span.slice(text).trim().to_string()
+        } else {
+            match cache.source(&d.file) {
+                Some(src) => d.span.slice(&src.text).trim().to_string(),
+                None => String::new(),
+            }
         };
         if value.is_empty() || value.contains("{{") {
             continue;
@@ -441,11 +452,25 @@ pub fn definitions(path: &Path, nodes: &[Node]) -> Vec<Located> {
 /// The caller owns the message; it must concede inventory, facts and `-e`, which are
 /// invisible here.
 pub fn undefined_uses(path: &Path, nodes: &[Node], text: &str) -> Vec<VarUse> {
+    undefined_uses_in(path, nodes, text, &ScanCache::default())
+}
+
+/// [`undefined_uses`] sharing a scan cache across the files of one pass (T-076).
+pub fn undefined_uses_in(
+    path: &Path,
+    nodes: &[Node],
+    text: &str,
+    cache: &ScanCache,
+) -> Vec<VarUse> {
     let tree = ast::build(nodes);
     if !matches!(tree, Ast::Playbook(_)) {
         return Vec::new();
     }
-    let defined: HashSet<String> = definitions(path, nodes).into_iter().map(|d| d.name).collect();
+    let defined: HashSet<String> = definitions_with_deps_in(path, nodes, cache)
+        .0
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     let declared = declared_names(nodes, text);
     uses(nodes)
         .into_iter()
@@ -537,31 +562,86 @@ fn softened(text: &str, at: usize) -> bool {
 /// [`definitions`] plus the set of files it read (canonicalised) — its dependencies, so a
 /// cache can invalidate this result precisely when any of them changes.
 pub fn definitions_with_deps(path: &Path, nodes: &[Node]) -> (Vec<Located>, HashSet<PathBuf>) {
-    let mut out = Vec::new();
-    // `visited` doubles as the dependency set: every file the walk reads is recorded here.
-    let mut visited = HashSet::new();
-    if let Ok(c) = path.canonicalize() {
-        visited.insert(c);
-    }
-    collect(path, nodes, &mut out, &mut visited);
-    // Same var reached by two paths (e.g. a vars file two plays share) collapses.
-    let mut seen = HashSet::new();
-    out.retain(|d| seen.insert((d.name.clone(), d.file.clone(), d.span.start)));
-    (out, visited)
+    definitions_with_deps_in(path, nodes, &ScanCache::default())
 }
 
-fn collect(
+/// [`definitions_with_deps`] sharing a [`ScanCache`] with the other files of the same pass,
+/// so a subtree several files reach is read, parsed and walked once for all of them (T-076).
+/// A fresh cache gives exactly [`definitions_with_deps`].
+pub fn definitions_with_deps_in(
     path: &Path,
     nodes: &[Node],
-    out: &mut Vec<Located>,
-    visited: &mut HashSet<PathBuf>,
-) {
-    let ctx = FileContext::discover(path);
+    cache: &ScanCache,
+) -> (Vec<Located>, HashSet<PathBuf>) {
+    let mut walk = Walk {
+        cache,
+        // The root is on the stack from the start: a subtree that loops back to it is
+        // truncated here exactly as before, and — because that makes its result incomplete
+        // for anyone else — the taint that rule sets is what keeps it out of the cache.
+        stack: HashSet::new(),
+        truncated: false,
+    };
+    if let Some(hit) = cache.contribution(path) {
+        cache.count_defs(hit.defs.len());
+        return (hit.defs.clone(), hit.deps.clone());
+    }
+    let mut c = Contribution::default();
+    if let Some(canon) = cache.canonical(path) {
+        walk.stack.insert(canon.clone());
+        c.deps.insert(canon);
+    }
+    collect(path, nodes, &mut c, &mut walk);
+    dedup(&mut c.defs);
+    cache.count_defs(c.defs.len());
+    // The root's walk is a contribution like any other — memoize it so the *next* file whose
+    // subtree reaches this one gets it for free. Only when nothing truncated it, and only
+    // when the caller's `nodes` are what's on disk; a scan's are (it skips open buffers) and
+    // an editing path uses a throwaway cache, so this can't publish an unsaved parse.
+    if !walk.truncated {
+        cache.store(
+            path.to_path_buf(),
+            Arc::new(Contribution { defs: c.defs.clone(), deps: c.deps.clone() }),
+        );
+    }
+    (c.defs, c.deps)
+}
+
+/// Same var reached by two routes (a vars file two plays share, a role listed twice)
+/// collapses. **First occurrence wins**, and that is load-bearing: the earlier route is the
+/// one Ansible actually executes, so its provenance is the one to keep (see the
+/// meta-dependency block in [`collect`]). Keys borrow rather than clone — this runs over
+/// every definition every file can see, which is the one part memoization can't remove.
+fn dedup(defs: &mut Vec<Located>) {
+    let keep: Vec<bool> = {
+        let mut seen: HashSet<(&str, &Path, usize)> = HashSet::new();
+        defs.iter()
+            .map(|d| seen.insert((d.name.as_str(), d.file.as_path(), d.span.start)))
+            .collect()
+    };
+    let mut it = keep.into_iter();
+    defs.retain(|_| it.next().unwrap_or(true));
+}
+
+/// One walk's own state. The cache is shared with the rest of the scan; the stack is not —
+/// "am I inside a cycle" is a property of this walk, and treating another thread's
+/// in-flight file as a cycle would wrongly truncate.
+struct Walk<'a> {
+    cache: &'a ScanCache,
+    /// Files whose contribution is being computed right now, innermost frames included.
+    stack: HashSet<PathBuf>,
+    /// Set when a frame stopped at a file already on the stack. Its result is missing
+    /// whatever that file would have added, so it is right for *this* walk and wrong for
+    /// any other — it must not be memoized, and neither must any frame above it.
+    truncated: bool,
+}
+
+fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk) {
+    let ctx = walk.cache.context(path);
     let tree = ast::build(nodes);
 
     // In-file definitions (play/block/task vars, set_fact, register).
     for d in index(&tree).defs() {
-        out.push(Located {
+        out.defs.push(Located {
             name: d.name.clone(),
             source: d.source,
             span: d.span,
@@ -573,22 +653,23 @@ fn collect(
 
     // The enclosing role's defaults/ and vars/ — fixed locations, no search.
     if let Some(role) = &ctx.role_dir {
-        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, visited, out);
-        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, visited, out);
+        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out, walk);
+        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out, walk);
 
         // meta/main.yml dependencies run before this role, so their defaults/vars and
         // set_facts are in scope here — and, transitively, for whoever calls this role
         // (entering a dependency's files rediscovers *its* role context and deps).
         {
             let meta = role.join("meta").join("main.yml");
-            if let Ok(text) = std::fs::read_to_string(&meta) {
-                if let Some(mnodes) = Document::new(text).parse() {
-                    let mctx = FileContext::discover(&meta);
+            if let Some(mnodes) = walk.cache.source(&meta).and_then(|s| s.nodes.clone()) {
+                {
+                    let mctx = walk.cache.context(&meta);
                     for dep in references::meta_dependencies(&mnodes) {
-                        let start = out.len();
+                        let start = out.defs.len();
                         for target in resolve::resolve(&dep, &mctx).targets {
-                            for f in role_task_files(&target) {
-                                collect_disk(&f, out, visited);
+                            let files = role_task_files(&target, walk);
+                            for f in files.iter() {
+                                collect_disk(f, out, walk);
                             }
                         }
                         // Provenance chain (T-066): everything this dependency's walk added
@@ -597,13 +678,15 @@ fn collect(
                         // builds each def's chain outermost-first — the order a reader
                         // follows the links from where they're hovering.
                         //
-                        // When a role is reachable both here and directly, whichever route
-                        // the walk (document order, deps-first) reaches first claims its
-                        // files via `visited` — deliberately: Ansible compiles both copies
-                        // and skips the second at runtime per host (play_iterator.py
-                        // "role has already run", allow_duplicates false by default for
-                        // roles:/deps), so the first route IS the one that executes.
-                        for d in &mut out[start..] {
+                        // When a role is reachable both here and directly, both routes now
+                        // contribute (the memo has no per-walk `visited` to swallow the
+                        // second) and the final dedup keeps whichever came first —
+                        // deliberately: Ansible compiles both copies and skips the second at
+                        // runtime per host (play_iterator.py "role has already run",
+                        // allow_duplicates false by default for roles:/deps), so the first
+                        // route IS the one that executes, and its breadcrumb is the one to
+                        // keep.
+                        for d in &mut out.defs[start..] {
                             d.via.insert(0, (meta.clone(), dep.span));
                         }
                     }
@@ -621,7 +704,7 @@ fn collect(
                         continue;
                     }
                     if let Some(f) = resolve_var_path(entry, &ctx) {
-                        read_var_file(&f, VarSource::VarsFiles, None, visited, out);
+                        read_var_file(&f, VarSource::VarsFiles, None, out, walk);
                     }
                 }
             }
@@ -656,7 +739,7 @@ fn collect(
                     include_vars::load(&params, &ictx, &include_vars::StdFs)
                 {
                     for f in &l.files {
-                        read_var_file(f, VarSource::IncludeVars, cond.clone(), visited, out);
+                        read_var_file(f, VarSource::IncludeVars, cond.clone(), out, walk);
                     }
                 }
             }
@@ -670,7 +753,7 @@ fn collect(
         if let Some(f) = file {
             if !f.contains("{{") {
                 if let Some(path) = resolve_var_path(f, &ctx) {
-                    read_var_file(&path, VarSource::IncludeVars, cond, visited, out);
+                    read_var_file(&path, VarSource::IncludeVars, cond, out, walk);
                 }
             }
         }
@@ -679,8 +762,8 @@ fn collect(
     // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
     // a workspace scan. The inventory-adjacent copies (next to a separate inventory file)
     // need the inventory's location, which we don't guess, so those stay unindexed.
-    read_var_dir(&ctx.file_dir.join("group_vars"), true, visited, out);
-    read_var_dir(&ctx.file_dir.join("host_vars"), false, visited, out);
+    read_var_dir(&ctx.file_dir.join("group_vars"), true, out, walk);
+    read_var_dir(&ctx.file_dir.join("host_vars"), false, out, walk);
 
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
@@ -698,54 +781,85 @@ fn collect(
             }
             for target in resolve::resolve(&r, &ctx).targets {
                 if r.kind == ReferenceKind::Role {
-                    for f in role_task_files(&target) {
-                        collect_disk(&f, out, visited);
+                    let files = role_task_files(&target, walk);
+                    for f in files.iter() {
+                        collect_disk(f, out, walk);
                     }
                 } else {
-                    collect_disk(&target, out, visited);
+                    collect_disk(&target, out, walk);
                 }
             }
         }
     }
 }
 
-fn collect_disk(path: &Path, out: &mut Vec<Located>, visited: &mut HashSet<PathBuf>) {
-    let Ok(canon) = path.canonicalize() else { return };
-    if !visited.insert(canon) {
+/// Follow one edge into `path`: serve its contribution from the scan cache when it's there,
+/// otherwise walk it once and put it there. What's merged is always a *clone*, because the
+/// caller may stamp provenance on it (T-066) and the cached copy must stay raw.
+fn collect_disk(path: &Path, out: &mut Contribution, walk: &mut Walk) {
+    let Some(canon) = walk.cache.canonical(path) else { return };
+    // Keyed by the path as written, not by `canon`: a file's contribution is derived from
+    // the spelling it was reached by — `file:` on each def, and the directory its
+    // `group_vars/` is looked up in — so two spellings of one file are two contributions.
+    // `canon` is for identity questions only: is this a cycle, and which files were read.
+    if let Some(hit) = walk.cache.contribution(path) {
+        merge(out, &hit);
         return;
     }
-    let Ok(text) = std::fs::read_to_string(path) else {
+    if !walk.stack.insert(canon.clone()) {
+        // Already being walked further up this stack — a cycle. Its defs land in that
+        // frame; stopping here is what makes the walk terminate. Flag the truncation so
+        // nothing computed under it gets memoized.
+        walk.truncated = true;
         return;
-    };
-    let Some(nodes) = Document::new(text).parse() else {
-        return;
-    };
-    collect(path, &nodes, out, visited);
+    }
+    let mut sub = Contribution::default();
+    sub.deps.insert(canon.clone());
+    if let Some(nodes) = walk.cache.source(path).and_then(|s| s.nodes.clone()) {
+        let outer = std::mem::replace(&mut walk.truncated, false);
+        collect(path, &nodes, &mut sub, walk);
+        let truncated = walk.truncated;
+        walk.truncated = outer || truncated;
+        walk.stack.remove(&canon);
+        // Collapse duplicates here rather than only at the root: a shared subtree reached
+        // twice from inside this file is dropped once, for every consumer of the memo.
+        dedup(&mut sub.defs);
+        let sub = Arc::new(sub);
+        if truncated {
+            walk.cache.count_uncached();
+        } else {
+            walk.cache.store(path.to_path_buf(), sub.clone());
+        }
+        merge(out, &sub);
+    } else {
+        // Unreadable or unparseable: still a dependency (a fix to it must invalidate), and
+        // still worth remembering so the next consumer doesn't retry the parse.
+        walk.stack.remove(&canon);
+        let sub = Arc::new(sub);
+        walk.cache.store(path.to_path_buf(), sub.clone());
+        merge(out, &sub);
+    }
+}
+
+fn merge(out: &mut Contribution, from: &Contribution) {
+    out.defs.extend(from.defs.iter().cloned());
+    out.deps.extend(from.deps.iter().cloned());
 }
 
 /// A role contributes every task file it has (`tasks_from` reaches beyond `main.yml`).
-fn role_task_files(role_main: &Path) -> Vec<PathBuf> {
+fn role_task_files(role_main: &Path, walk: &Walk) -> Arc<Vec<PathBuf>> {
     match role_main.parent() {
-        Some(tasks_dir) => yaml_files(tasks_dir),
-        None => vec![role_main.to_path_buf()],
+        Some(tasks_dir) => walk.cache.tree(tasks_dir),
+        None => Arc::new(vec![role_main.to_path_buf()]),
     }
 }
 
 /// Read every `*.yml` in a playbook-adjacent `group_vars/` or `host_vars/` directory. The
 /// source is derived from the file name: `group_vars/all` applies to all hosts, any other
 /// name is group- or host-scoped.
-fn read_var_dir(dir: &Path, group: bool, visited: &mut HashSet<PathBuf>, out: &mut Vec<Located>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if !matches!(
-            p.extension().and_then(|s| s.to_str()),
-            Some("yml") | Some("yaml")
-        ) {
-            continue;
-        }
+fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk) {
+    let files = walk.cache.listing(dir);
+    for p in files.iter() {
         let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let source = if !group {
             VarSource::HostVars
@@ -754,34 +868,34 @@ fn read_var_dir(dir: &Path, group: bool, visited: &mut HashSet<PathBuf>, out: &m
         } else {
             VarSource::GroupVars
         };
-        read_var_file(&p, source, None, visited, out);
+        read_var_file(p, source, None, out, walk);
     }
 }
 
 /// Read a flat `name: value` vars file and index every top-level key. `condition` is the
 /// `when:` guarding the load, if any (only `include_vars`, a task, can carry one). Records
-/// the file (canonicalised) in `visited` as a dependency.
+/// the file (canonicalised) as a dependency.
 fn read_var_file(
     file: &Path,
     source: VarSource,
     condition: Option<String>,
-    visited: &mut HashSet<PathBuf>,
-    out: &mut Vec<Located>,
+    out: &mut Contribution,
+    walk: &mut Walk,
 ) {
-    let Ok(text) = std::fs::read_to_string(file) else {
+    let Some(src) = walk.cache.source(file) else {
         return;
     };
-    if let Ok(c) = file.canonicalize() {
-        visited.insert(c);
+    if let Some(c) = &src.canon {
+        out.deps.insert(c.clone());
     }
-    let Some(nodes) = Document::new(text).parse() else {
+    let Some(nodes) = &src.nodes else {
         return;
     };
-    for n in &nodes {
+    for n in nodes.iter() {
         if let Node::Mapping { entries, .. } = n {
             for (k, v) in entries {
                 if let Some(name) = k.as_str() {
-                    out.push(Located {
+                    out.defs.push(Located {
                         name: name.to_string(),
                         source,
                         span: v.span(),
@@ -1364,5 +1478,68 @@ mod tests {
             .unwrap()
             .file
             .ends_with("vars/shared.yml"));
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+    use crate::parse::Document;
+    use crate::workspace::yaml_files;
+    use std::time::Instant;
+
+    /// The T-076 A/B, on whatever tree you point it at: walk every file with a cache per
+    /// file (what the scan did before) and then with one cache for the pass. Prints both
+    /// times and the edges-to-files ratio — the platform-independent half, since on a fast
+    /// machine the milliseconds can't see this phase at all.
+    ///
+    /// `cargo test --release var_walk -- --ignored --nocapture [dir]`, dir via `T076_ROOT`.
+    #[test]
+    #[ignore = "profiling aid: cargo test --release var_walk -- --ignored --nocapture"]
+    fn var_walk_shared_vs_per_file() {
+        // Tests run from the crate dir, so the default is the repo's own demo tree.
+        let root = match std::env::var("T076_ROOT") {
+            Ok(r) => PathBuf::from(r),
+            Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo"),
+        };
+        if !root.is_dir() {
+            println!("no such tree: {}", root.display());
+            return;
+        }
+        let files: Vec<(PathBuf, Vec<Node>)> = yaml_files(&root)
+            .into_iter()
+            .filter_map(|p| {
+                let text = std::fs::read_to_string(&p).ok()?;
+                let nodes = Document::new(text).parse()?;
+                Some((p, nodes))
+            })
+            .collect();
+
+        let run = |cache: Option<&ScanCache>| {
+            let t = Instant::now();
+            let mut defs = 0;
+            for (p, nodes) in &files {
+                defs += match cache {
+                    Some(c) => definitions_with_deps_in(p, nodes, c).0.len(),
+                    None => definitions_with_deps(p, nodes).0.len(),
+                };
+            }
+            (t.elapsed(), defs)
+        };
+
+        let (per_file, defs_a) = run(None);
+        let shared = ScanCache::default();
+        let (pass, defs_b) = run(Some(&shared));
+        let s = shared.stats();
+        println!("{} files under {}", files.len(), root.display());
+        println!("  cache per file: {per_file:?}");
+        println!("  one per pass:   {pass:?}");
+        println!(
+            "  var-walk: {} edges -> {} files ({} uncached), {} reads, {} contexts, \
+             {} ansible.cfg",
+            s.edges, s.files, s.uncached, s.reads, s.contexts, s.configs
+        );
+        // The point of the whole ticket: sharing must not change a single definition.
+        assert_eq!(defs_a, defs_b, "shared cache changed the result");
     }
 }

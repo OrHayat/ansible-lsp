@@ -20,13 +20,17 @@ pub struct FileContext {
 
 impl FileContext {
     pub fn discover(file: &Path) -> Self {
+        Self::discover_with(file, AnsibleConfig::load)
+    }
+
+    /// [`discover`](Self::discover) with the `ansible.cfg` read supplied by the caller, so a
+    /// scan can read each project's config once instead of once per file (T-076). Only the
+    /// file's *directory* is looked at, which is why a cache can key on it.
+    pub fn discover_with(file: &Path, config: impl FnOnce(&Path) -> AnsibleConfig) -> Self {
         let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
         let (role_dir, role_tasks_dir) = find_role(&file_dir);
         let project_root = find_project_root(&file_dir);
-        let config = project_root
-            .as_deref()
-            .map(AnsibleConfig::load)
-            .unwrap_or_default();
+        let config = project_root.as_deref().map(config).unwrap_or_default();
         Self {
             project_root,
             role_dir,

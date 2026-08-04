@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use ansible_core::cache::ScanCache;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Node, Span};
@@ -115,6 +116,19 @@ fn canon(p: &Path) -> PathBuf {
 /// Cached `vars::definitions`. On a miss, compute it and record its dependency files in the
 /// reverse map so later invalidation is precise.
 fn cached_definitions(path: &Path, nodes: &[Node]) -> Arc<Vec<vars::Located>> {
+    cached_definitions_in(path, nodes, &ScanCache::default())
+}
+
+/// [`cached_definitions`] against a caller-owned [`ScanCache`], so the files of one workspace
+/// scan share the subtrees they all reach instead of re-walking them each (T-076). The two
+/// caches answer different questions: this one keys whole results by file and survives until
+/// an edit invalidates it; the scan cache keys raw per-file contributions and dies with the
+/// pass.
+fn cached_definitions_in(
+    path: &Path,
+    nodes: &[Node],
+    scan: &ScanCache,
+) -> Arc<Vec<vars::Located>> {
     let key = canon(path);
     let epoch = match var_cache().lock() {
         Ok(c) => {
@@ -123,9 +137,9 @@ fn cached_definitions(path: &Path, nodes: &[Node]) -> Arc<Vec<vars::Located>> {
             }
             c.epoch
         }
-        Err(_) => return Arc::new(vars::definitions_with_deps(path, nodes).0),
+        Err(_) => return Arc::new(vars::definitions_with_deps_in(path, nodes, scan).0),
     };
-    let (result, deps) = vars::definitions_with_deps(path, nodes);
+    let (result, deps) = vars::definitions_with_deps_in(path, nodes, scan);
     let arc = Arc::new(result);
     if let Ok(mut cache) = var_cache().lock() {
         // An invalidation landed while we computed — this result may predate the edit.
@@ -350,28 +364,36 @@ impl State {
 
 impl Backend {
     fn analyze_text(text: String, path: &Path) -> Option<Analysis> {
-        Self::analyze_text_measured(text, path, &mut ScanTimings::default())
+        Self::analyze_text_measured(text, path, &mut ScanTimings::default(), &ScanCache::default())
     }
 
     /// The body of `analyze_text`, wrapping each phase with a timer that accumulates into
-    /// `t`. The un-instrumented `analyze_text` passes a throwaway accumulator, so the logic
-    /// lives in exactly one place.
-    fn analyze_text_measured(text: String, path: &Path, t: &mut ScanTimings) -> Option<Analysis> {
+    /// `t`. The un-instrumented `analyze_text` passes a throwaway accumulator and its own
+    /// one-shot cache, so the logic lives in exactly one place.
+    fn analyze_text_measured(
+        text: String,
+        path: &Path,
+        t: &mut ScanTimings,
+        scan: &ScanCache,
+    ) -> Option<Analysis> {
         use std::time::Instant;
         let s = Instant::now();
         let doc = Document::new(text);
         let nodes = doc.parse()?;
+        // Hand this file's parse to the scan cache: some other file's variable walk will
+        // reach it, and would otherwise read and parse it a second time.
+        scan.prime(path, &doc.text, &nodes);
         t.parse += s.elapsed();
 
         let s = Instant::now();
-        let ctx = FileContext::discover(path);
+        let ctx = (*scan.context(path)).clone();
         t.context += s.elapsed();
 
         // Variable values that are statically knowable, so a `{{ var }}` in a path can be
         // navigated to its real target (T-056). Navigation only — resolve_with never warns.
         let s = Instant::now();
-        let defs = cached_definitions(path, &nodes);
-        let literals = vars::known_literals(&defs, path, &doc.text);
+        let defs = cached_definitions_in(path, &nodes, scan);
+        let literals = vars::known_literals_in(&defs, path, &doc.text, scan);
         t.var_index += s.elapsed();
 
         let s = Instant::now();
@@ -598,6 +620,11 @@ impl Backend {
         let mut still_flagged = HashSet::new();
         let mut t = ScanTimings::default();
         let mut seen = 0usize;
+        // One cache for the whole pass (T-076): the files share every subtree they reach, so
+        // a role's defaults/meta and any shared task file are read, parsed and walked once
+        // for all of them instead of once each. Dropped when the scan ends, so it can never
+        // outlive the content it was built from.
+        let scan_cache = Arc::new(ScanCache::default());
 
         for root in roots {
             for path in yaml_files(&root) {
@@ -608,10 +635,11 @@ impl Backend {
                     continue;
                 }
                 let st = state.clone();
+                let sc = scan_cache.clone();
                 let analysed = tokio::task::spawn_blocking(move || {
                     let mut ft = ScanTimings::default();
                     let text = std::fs::read_to_string(&path).ok()?;
-                    let a = Self::analyze_text_measured(text, &path, &mut ft)?;
+                    let a = Self::analyze_text_measured(text, &path, &mut ft, &sc)?;
                     ft.files = 1;
                     let mut diagnostics = Self::diagnostics_of(&a);
                     diagnostics.extend(st.mutated_condition_diagnostics(&a));
@@ -656,18 +684,31 @@ impl Backend {
         // sums across all analysed files; the wall clock also covers the file walk, reads,
         // diagnostics and publishing, so total > parse+context+var-index+resolve.
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        // The var-walk counters (T-076) are the platform-independent half of this line: on a
+        // fast machine the var-index milliseconds can't see the difference, but edges-to-files
+        // is the redundancy itself. edges == files means nothing was walked twice.
+        let c = scan_cache.stats();
         client
             .log_message(
                 MessageType::INFO,
                 format!(
                     "ansible-lsp scan: {} files analysed of {seen} seen in {:.0} ms \
-                     (parse {:.0}, context {:.0}, var-index {:.0}, resolve {:.0})",
+                     (parse {:.0}, context {:.0}, var-index {:.0}, resolve {:.0}); \
+                     var-walk {} edges -> {} files ({} uncached), {} reads, {} contexts, \
+                     {} ansible.cfg, {} defs",
                     t.files,
                     ms(scan_start.elapsed()),
                     ms(t.parse),
                     ms(t.context),
                     ms(t.var_index),
                     ms(t.resolve),
+                    c.edges,
+                    c.files,
+                    c.uncached,
+                    c.reads,
+                    c.contexts,
+                    c.configs,
+                    c.defs,
                 ),
             )
             .await;

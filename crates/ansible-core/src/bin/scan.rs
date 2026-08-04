@@ -2,13 +2,14 @@
 //!
 //! Doubles as the CI check: non-zero exit when literal file paths are missing.
 
+use ansible_core::cache::ScanCache;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::vars;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
 use ansible_core::resolve::{resolve, rule_id, SkipReason, Status};
-use ansible_core::workspace::{yaml_files, FileContext};
+use ansible_core::workspace::yaml_files;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -32,6 +33,8 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("."));
 
     let files = yaml_files(&root);
+    // One cache for the whole run, like the editor's workspace scan (T-076).
+    let cache = ScanCache::default();
 
     let mut totals: BTreeMap<&str, [usize; 3]> = BTreeMap::new(); // resolved, missing, skipped
     let mut missing: Vec<String> = Vec::new();
@@ -60,7 +63,8 @@ fn main() {
             }
             continue;
         };
-        let ctx = FileContext::discover(path);
+        cache.prime(path, &doc.text, &nodes);
+        let ctx = cache.context(path);
         let mut refs = extract(&nodes);
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
@@ -166,7 +170,7 @@ fn main() {
 
         // T-051 base case: a warning, never part of the exit code — inventory and `-e`
         // are invisible here, so this can only ever say "not found where we can see".
-        for u in vars::undefined_uses(path, &nodes, &doc.text) {
+        for u in vars::undefined_uses_in(path, &nodes, &doc.text, &cache) {
             if doc.is_suppressed(u.span.start, "var-undefined") {
                 continue;
             }
@@ -180,7 +184,13 @@ fn main() {
         }
     }
 
-    println!("{} files, {} unparseable\n", files.len(), unparseable.len());
+    let c = cache.stats();
+    println!("{} files, {} unparseable", files.len(), unparseable.len());
+    println!(
+        "var-walk: {} edges -> {} files ({} uncached), {} reads, {} contexts, \
+         {} ansible.cfg, {} defs\n",
+        c.edges, c.files, c.uncached, c.reads, c.contexts, c.configs, c.defs
+    );
     println!("{:<16} {:>9} {:>8} {:>8}", "kind", "resolved", "missing", "skipped");
     for (k, [r, m, s]) in &totals {
         println!("{k:<16} {r:>9} {m:>8} {s:>8}");
