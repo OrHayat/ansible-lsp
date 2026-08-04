@@ -1579,3 +1579,78 @@ mod perf {
         assert_eq!(defs_a, defs_b, "shared cache changed the result");
     }
 }
+
+#[cfg(test)]
+mod parallel_spike {
+    use super::*;
+    use crate::parse::Document;
+    use crate::workspace::yaml_files;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    /// How much does the walk gain from running files concurrently? (T-085 follow-up)
+    ///
+    /// The walk is ~97% filesystem *latency* — 0.5–1.4 ms per round trip on a 9p mount —
+    /// so nothing is CPU-bound and overlapping requests should scale until the server
+    /// saturates. That ceiling is the thing worth knowing before rewriting the scan loop,
+    /// because `ScanCache`'s single lock and the LSP's publish bookkeeping both get harder
+    /// under concurrency and are only worth paying for if the ceiling is high.
+    ///
+    /// `cargo test --release parallel_spike -- --ignored --nocapture`
+    #[test]
+    #[ignore = "profiling aid: cargo test --release parallel_spike -- --ignored --nocapture"]
+    fn how_far_does_concurrency_get_us() {
+        let root = match std::env::var("T076_ROOT") {
+            Ok(r) => PathBuf::from(r),
+            Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo"),
+        };
+        if !root.is_dir() {
+            println!("no such tree: {}", root.display());
+            return;
+        }
+        let files: Vec<(PathBuf, Vec<Node>)> = yaml_files(&root)
+            .into_iter()
+            .filter_map(|p| {
+                let text = std::fs::read_to_string(&p).ok()?;
+                Some((p, Document::new(text).parse()?))
+            })
+            .collect();
+
+        // Warm the page cache so every row below measures the same thing.
+        let _ = {
+            let c = ScanCache::default();
+            files.iter().map(|(p, n)| definitions_with_deps_in(p, n, &c).0.len()).sum::<usize>()
+        };
+
+        println!("{} files under {}", files.len(), root.display());
+        let mut base = 0f64;
+        for threads in [1usize, 2, 4, 8, 16, 32] {
+            let cache = ScanCache::default();
+            let next = AtomicUsize::new(0);
+            let defs = AtomicUsize::new(0);
+            let t = Instant::now();
+            std::thread::scope(|s| {
+                for _ in 0..threads {
+                    s.spawn(|| loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((p, nodes)) = files.get(i) else { return };
+                        let n = definitions_with_deps_in(p, nodes, &cache).0.len();
+                        defs.fetch_add(n, Ordering::Relaxed);
+                    });
+                }
+            });
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            if threads == 1 {
+                base = ms;
+            }
+            let s = cache.stats();
+            println!(
+                "  {threads:>2} threads  {ms:>8.0} ms  {:>5.2}x   ({} defs, {} files walked, {} uncached)",
+                base / ms,
+                defs.load(Ordering::Relaxed),
+                s.files,
+                s.uncached
+            );
+        }
+    }
+}
