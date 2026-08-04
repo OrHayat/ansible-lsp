@@ -46,6 +46,15 @@ pub trait Fs: Send + Sync {
         self.kind(p).is_some()
     }
 
+    /// [`kind`](Fs::kind) without following a final symlink — one `lstat`. A symlink reports
+    /// [`Kind::Other`] whatever it points at, which is the signal "resolve this properly".
+    ///
+    /// Defaults to `kind`, which is exactly right for a tree that has no symlinks — an
+    /// in-memory fake, say. Only a real filesystem needs to override it.
+    fn symlink_kind(&self, p: &Path) -> Option<Kind> {
+        self.kind(p)
+    }
+
     fn read(&self, p: &Path) -> Option<String>;
 
     /// One directory's entries, not descending. Order is the filesystem's — callers
@@ -81,6 +90,9 @@ impl<T: Fs + ?Sized> Fs for std::sync::Arc<T> {
     fn kind(&self, p: &Path) -> Option<Kind> {
         (**self).kind(p)
     }
+    fn symlink_kind(&self, p: &Path) -> Option<Kind> {
+        (**self).symlink_kind(p)
+    }
     fn read(&self, p: &Path) -> Option<String> {
         (**self).read(p)
     }
@@ -101,6 +113,17 @@ pub struct StdFs;
 impl Fs for StdFs {
     fn kind(&self, p: &Path) -> Option<Kind> {
         let m = std::fs::metadata(p).ok()?;
+        Some(if m.is_file() {
+            Kind::File
+        } else if m.is_dir() {
+            Kind::Dir
+        } else {
+            Kind::Other
+        })
+    }
+
+    fn symlink_kind(&self, p: &Path) -> Option<Kind> {
+        let m = std::fs::symlink_metadata(p).ok()?;
         Some(if m.is_file() {
             Kind::File
         } else if m.is_dir() {
@@ -292,6 +315,10 @@ impl<F: Fs> Fs for Counting<F> {
         self.timed(&self.stats.kind, p, Option::is_none, || self.inner.kind(p))
     }
 
+    fn symlink_kind(&self, p: &Path) -> Option<Kind> {
+        self.timed(&self.stats.kind, p, Option::is_none, || self.inner.symlink_kind(p))
+    }
+
     fn read(&self, p: &Path) -> Option<String> {
         self.timed(&self.stats.read, p, |_| false, || self.inner.read(p))
     }
@@ -306,5 +333,72 @@ impl<F: Fs> Fs for Counting<F> {
 
     fn canonical(&self, p: &Path) -> Option<PathBuf> {
         self.timed(&self.stats.canonical, p, Option::is_none, || self.inner.canonical(p))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A door only works if there is no window (T-085).
+    ///
+    /// Every filesystem touch must go through [`Fs`], or the counters under-report and the
+    /// memo silently misses. That is not hypothetical: T-076's first measurement placed
+    /// counters at two call sites, reported 561 probes, and was wrong by 4× — `strace` found
+    /// 2340, the rest in `glob`, `include_vars`, `yaml_files` and `canonicalize`. This test
+    /// is what makes "one door" a property of the crate rather than a habit.
+    #[test]
+    fn no_filesystem_call_bypasses_the_seam() {
+        // `install.rs` is exempt on purpose: it describes the *machine's* Ansible
+        // installation, not workspace state. It is detected once behind a `OnceLock` and
+        // caches its own routing tables, so there is no per-scan `Fs` to hand it.
+        const EXEMPT: &[&str] = &["fs.rs", "install.rs"];
+        const BANNED: &[&str] = &[
+            "std::fs::",
+            ".is_file()",
+            ".is_dir()",
+            ".exists()",
+            ".canonicalize()",
+            ".symlink_metadata(",
+            // `.read_dir(` is deliberately absent: `std::fs::read_dir` is already caught
+            // by `std::fs::`, and as a bare method it false-positives whenever the
+            // receiver `fs` sits on the previous line.
+        ];
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                if EXEMPT.contains(&name.as_str()) {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&p) else { continue };
+                // Tests may touch the disk directly — they are building fixtures, not
+                // resolving a workspace.
+                let body = text.split("\n#[cfg(test)]").next().unwrap_or(&text);
+                for (i, line) in body.lines().enumerate() {
+                    let code = line.split("//").next().unwrap_or(line);
+                    for b in BANNED {
+                        if code.contains(b) {
+                            found.push(format!("{name}:{}  {}", i + 1, code.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "filesystem calls outside the Fs seam — route them through `fs`, or add a \
+             documented exemption:\n  {}",
+            found.join("\n  ")
+        );
     }
 }

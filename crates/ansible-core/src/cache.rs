@@ -23,9 +23,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::config::AnsibleConfig;
+use crate::fs::{Fs, Kind, StdFs};
 use crate::parse::{Document, Node};
 use crate::vars::Located;
-use crate::workspace::{yaml_files, FileContext};
+use crate::workspace::{yaml_files_in, FileContext};
 
 /// A file read from disk once: its text, and its parse (`None` when it isn't valid YAML).
 pub struct Source {
@@ -64,6 +65,12 @@ pub struct Stats {
 #[derive(Default)]
 struct Inner {
     canonical: HashMap<PathBuf, Option<PathBuf>>,
+    /// Existence probes, **negatives included** — half of them are misses, so a map of
+    /// hits alone would leave more than half the work on the floor.
+    kinds: HashMap<PathBuf, Option<Kind>>,
+    /// Raw directory entries, from which the YAML-filtered `listings` are derived.
+    dirs: HashMap<PathBuf, Arc<Vec<PathBuf>>>,
+    walks: HashMap<PathBuf, Arc<Vec<(PathBuf, Vec<String>)>>>,
     sources: HashMap<PathBuf, Option<Arc<Source>>>,
     contexts: HashMap<PathBuf, Arc<FileContext>>,
     configs: HashMap<PathBuf, AnsibleConfig>,
@@ -78,12 +85,36 @@ struct Inner {
 /// Shared across the files of one scan. Every method takes `&self` and locks only around the
 /// map access, never across the filesystem work — so a miss on one thread doesn't hold the
 /// others. Two threads racing the same miss both compute it and agree on the answer.
-#[derive(Default)]
+///
+/// One lock for all the maps, deliberately: `stats` is touched by nearly every operation, so
+/// per-map locks would make the common path take *two* acquisitions instead of one — a real
+/// cost on the ~50–100 ns memo-hit path this exists to create, bought against parallelism the
+/// scan loop doesn't use yet. If it ever does, the order is: move `stats` to atomics first
+/// (see [`crate::fs::Counter`]), then shard the hot map by path hash. Splitting by field
+/// helps least, because every thread hits `contributions` and `canonical` regardless.
 pub struct ScanCache {
+    /// What answers a miss. `StdFs` normally; wrap it in [`crate::fs::Counting`] to see the
+    /// syscalls this saved.
+    fs: Box<dyn Fs>,
     inner: Mutex<Inner>,
 }
 
+impl Default for ScanCache {
+    fn default() -> Self {
+        Self::new(StdFs)
+    }
+}
+
 impl ScanCache {
+    pub fn new(fs: impl Fs + 'static) -> Self {
+        Self { fs: Box::new(fs), inner: Mutex::new(Inner::default()) }
+    }
+
+    /// The backend a miss falls through to — where its counters live, if it has any.
+    pub fn backend(&self) -> &dyn Fs {
+        &*self.fs
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut Inner) -> T) -> Option<T> {
         self.inner.lock().ok().map(|mut i| f(&mut i))
     }
@@ -92,29 +123,54 @@ impl ScanCache {
         self.with(|i| i.stats).unwrap_or_default()
     }
 
-    /// `Path::canonicalize` is a filesystem round trip — on Windows an open-and-query per
-    /// call — and the walk asks about the same handful of paths over and over: once per
-    /// edge into a file, once per read, once per definition whose literal gets sliced.
-    /// Memoized, it stops being the thing the memoization pays for.
-    pub fn canonical(&self, path: &Path) -> Option<PathBuf> {
-        if let Some(hit) = self.with(|i| i.canonical.get(path).cloned()).flatten() {
-            return hit;
+    /// Resolve the parent — memoized, so a shared prefix is walked once for the whole scan —
+    /// then settle the final component with a single `lstat`.
+    ///
+    /// `realpath` interrogates *every* component, so the naive version spends 711 of 712
+    /// `readlink` calls learning that `/mnt`, `/mnt/c`, `/mnt/c/Users` … are still not
+    /// symlinks, once per file. Resolving per directory turns a new file in a known
+    /// directory into one syscall.
+    ///
+    /// Not on Windows: `canonicalize` there is a single handle open rather than a component
+    /// walk, so there is little to save — and it returns the *on-disk* casing, which this
+    /// shortcut cannot (it keeps the caller's). On a case-insensitive filesystem that would
+    /// hand two spellings of one file two identities, and identity is what cycle detection
+    /// and the dependency sets are built on.
+    fn canonical_uncached(&self, path: &Path) -> Option<PathBuf> {
+        if cfg!(windows) {
+            return self.fs.canonical(path);
         }
-        let canon = path.canonicalize().ok();
-        self.with(|i| i.canonical.insert(path.to_path_buf(), canon.clone()));
-        canon
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return self.fs.canonical(path);
+        };
+        // A `.`/`..` tail has no name to append — let the real thing sort it out.
+        if parent.as_os_str().is_empty()
+            || !matches!(
+                path.components().next_back(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return self.fs.canonical(path);
+        }
+        let candidate = Fs::canonical(self, parent)?.join(name);
+        match self.fs.symlink_kind(&candidate) {
+            None => None,
+            // A symlink (or something stranger) at the tail: resolve it properly.
+            Some(Kind::Other) => self.fs.canonical(&candidate),
+            Some(_) => Some(candidate),
+        }
     }
 
     /// Read and parse `path` once per scan. `None` when it can't be read.
     pub fn source(&self, path: &Path) -> Option<Arc<Source>> {
-        let canon = self.canonical(path);
+        let canon = Fs::canonical(self, path);
         let key = canon.clone().unwrap_or_else(|| path.to_path_buf());
         // Two levels of `Option` collapse here: "the lock is gone" and "never looked at"
         // both mean recompute, while a remembered *failure* is a hit that returns `None`.
         if let Some(hit) = self.with(|i| i.sources.get(&key).cloned()).flatten() {
             return hit;
         }
-        let src = std::fs::read_to_string(path).ok().map(|text| {
+        let src = self.fs.read(path).map(|text| {
             let doc = Document::new(text);
             let nodes = doc.parse().map(Arc::new);
             Arc::new(Source {
@@ -134,7 +190,7 @@ impl ScanCache {
     /// the subject of its own analysis, and would otherwise read it again when some other
     /// file's walk reaches it.
     pub fn prime(&self, path: &Path, text: &str, nodes: &[Node]) {
-        let Some(canon) = self.canonical(path) else { return };
+        let Some(canon) = Fs::canonical(self, path) else { return };
         self.with(|i| {
             i.sources.entry(canon.clone()).or_insert_with(|| {
                 Some(Arc::new(Source {
@@ -153,7 +209,7 @@ impl ScanCache {
         if let Some(hit) = self.with(|i| i.contexts.get(&dir).cloned()).flatten() {
             return hit;
         }
-        let ctx = Arc::new(FileContext::discover_with(file, |root| self.config(root)));
+        let ctx = Arc::new(FileContext::discover_with(file, self, |root| self.config(root)));
         self.with(|i| {
             i.stats.contexts += 1;
             i.contexts.insert(dir, ctx.clone());
@@ -165,7 +221,7 @@ impl ScanCache {
         if let Some(hit) = self.with(|i| i.configs.get(root).cloned()).flatten() {
             return hit;
         }
-        let cfg = AnsibleConfig::load(root);
+        let cfg = AnsibleConfig::load_in(root, self);
         self.with(|i| {
             i.stats.configs += 1;
             i.configs.insert(root.to_path_buf(), cfg.clone());
@@ -178,7 +234,7 @@ impl ScanCache {
         if let Some(hit) = self.with(|i| i.trees.get(dir).cloned()).flatten() {
             return hit;
         }
-        let files = Arc::new(yaml_files(dir));
+        let files = Arc::new(yaml_files_in(dir, self));
         self.with(|i| i.trees.insert(dir.to_path_buf(), files.clone()));
         files
     }
@@ -189,19 +245,17 @@ impl ScanCache {
         if let Some(hit) = self.with(|i| i.listings.get(dir).cloned()).flatten() {
             return hit;
         }
-        let mut files = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if matches!(
-                    p.extension().and_then(|s| s.to_str()),
-                    Some("yml") | Some("yaml")
-                ) {
-                    files.push(p);
-                }
-            }
-        }
-        let files = Arc::new(files);
+        let files = Arc::new(
+            Fs::read_dir(self, dir)
+                .into_iter()
+                .filter(|p| {
+                    matches!(
+                        p.extension().and_then(|s| s.to_str()),
+                        Some("yml") | Some("yaml")
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
         self.with(|i| i.listings.insert(dir.to_path_buf(), files.clone()));
         files
     }
@@ -232,5 +286,60 @@ impl ScanCache {
 
     pub fn count_defs(&self, n: usize) {
         self.with(|i| i.stats.defs += n);
+    }
+}
+
+/// The memoizing half of the seam (T-085). Every answer is remembered for the pass —
+/// **including "nothing there"**, which is half of all probes in a real scan: role search
+/// re-testing the same missing name against the same roots, the `ansible.cfg` walk-up
+/// re-testing the same ancestors.
+impl Fs for ScanCache {
+    fn kind(&self, p: &Path) -> Option<Kind> {
+        if let Some(hit) = self.with(|i| i.kinds.get(p).copied()).flatten() {
+            return hit;
+        }
+        let k = self.fs.kind(p);
+        self.with(|i| i.kinds.insert(p.to_path_buf(), k));
+        k
+    }
+
+    /// Not memoized: the caller only asks about a path whose parent it just resolved, so
+    /// there is no repeat to save, and caching `lstat` alongside `stat` would double the
+    /// map for one use.
+    fn symlink_kind(&self, p: &Path) -> Option<Kind> {
+        self.fs.symlink_kind(p)
+    }
+
+    /// Shares [`ScanCache::source`]'s read, so a file that is both parsed by the walk and
+    /// read as a vars file crosses the filesystem once.
+    fn read(&self, p: &Path) -> Option<String> {
+        Some(self.source(p)?.text.to_string())
+    }
+
+    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+        if let Some(hit) = self.with(|i| i.dirs.get(p).cloned()).flatten() {
+            return (*hit).clone();
+        }
+        let entries = Arc::new(self.fs.read_dir(p));
+        self.with(|i| i.dirs.insert(p.to_path_buf(), entries.clone()));
+        (*entries).clone()
+    }
+
+    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
+        if let Some(hit) = self.with(|i| i.walks.get(root).cloned()).flatten() {
+            return (*hit).clone();
+        }
+        let out = Arc::new(self.fs.walk(root));
+        self.with(|i| i.walks.insert(root.to_path_buf(), out.clone()));
+        (*out).clone()
+    }
+
+    fn canonical(&self, p: &Path) -> Option<PathBuf> {
+        if let Some(hit) = self.with(|i| i.canonical.get(p).cloned()).flatten() {
+            return hit;
+        }
+        let out = self.canonical_uncached(p);
+        self.with(|i| i.canonical.insert(p.to_path_buf(), out.clone()));
+        out
     }
 }

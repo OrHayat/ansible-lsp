@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::ast::{self, Ast, Block, Play, PlayItem, Stmt, Task};
 use crate::cache::{Contribution, ScanCache};
+use crate::fs::Fs;
 use crate::condition;
 use crate::include_vars;
 use crate::parse::{Node, Span};
@@ -666,7 +667,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                     let mctx = walk.cache.context(&meta);
                     for dep in references::meta_dependencies(&mnodes) {
                         let start = out.defs.len();
-                        for target in resolve::resolve(&dep, &mctx).targets {
+                        for target in resolve::resolve_in(&dep, &mctx, walk.cache).targets {
                             let files = role_task_files(&target, walk);
                             for f in files.iter() {
                                 collect_disk(f, out, walk);
@@ -703,7 +704,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                     if entry.contains("{{") {
                         continue;
                     }
-                    if let Some(f) = resolve_var_path(entry, &ctx) {
+                    if let Some(f) = resolve_var_path(entry, &ctx, walk.cache) {
                         read_var_file(&f, VarSource::VarsFiles, None, out, walk);
                     }
                 }
@@ -736,7 +737,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                     task_dir: &ctx.file_dir,
                 };
                 if let include_vars::Outcome::Loaded(l) =
-                    include_vars::load(&params, &ictx, &include_vars::StdFs)
+                    include_vars::load(&params, &ictx, walk.cache)
                 {
                     for f in &l.files {
                         read_var_file(f, VarSource::IncludeVars, cond.clone(), out, walk);
@@ -752,7 +753,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         };
         if let Some(f) = file {
             if !f.contains("{{") {
-                if let Some(path) = resolve_var_path(f, &ctx) {
+                if let Some(path) = resolve_var_path(f, &ctx, walk.cache) {
                     read_var_file(&path, VarSource::IncludeVars, cond, out, walk);
                 }
             }
@@ -779,7 +780,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             ) {
                 continue;
             }
-            for target in resolve::resolve(&r, &ctx).targets {
+            for target in resolve::resolve_in(&r, &ctx, walk.cache).targets {
                 if r.kind == ReferenceKind::Role {
                     let files = role_task_files(&target, walk);
                     for f in files.iter() {
@@ -942,7 +943,7 @@ fn each_task(tree: &Ast, f: &mut impl FnMut(&Task)) {
 
 /// Resolve a `vars_files:` entry against the file dir, its `vars/`, the role `vars/` and the
 /// project root — where Ansible looks — returning the first path that exists.
-fn resolve_var_path(entry: &str, ctx: &FileContext) -> Option<PathBuf> {
+fn resolve_var_path(entry: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
     let mut cands = vec![ctx.file_dir.join(entry), ctx.file_dir.join("vars").join(entry)];
     if let Some(role) = &ctx.role_dir {
         cands.push(role.join("vars").join(entry));
@@ -950,7 +951,7 @@ fn resolve_var_path(entry: &str, ctx: &FileContext) -> Option<PathBuf> {
     if let Some(root) = &ctx.project_root {
         cands.push(root.join(entry));
     }
-    cands.into_iter().find(|p| p.is_file())
+    cands.into_iter().find(|p| fs.is_file(p))
 }
 
 #[cfg(test)]
@@ -1527,8 +1528,16 @@ mod perf {
             (t.elapsed(), defs)
         };
 
+        // Warm the OS page cache first. Without this the *first* run pays every cold miss
+        // and the second reads a warmed tree — on a 9p mount that is the difference between
+        // 1.4 ms and 0.5 ms per stat, so whichever pass ran second looked ~2x better than it
+        // was. Both passes measure warm now; for cold numbers, read the editor's scan line.
+        let _ = run(Some(&ScanCache::default()));
+
         let (per_file, defs_a) = run(None);
-        let shared = ScanCache::default();
+        // Counting *under* the memo: what actually reached the filesystem (T-085).
+        let disk = std::sync::Arc::new(crate::fs::Counting::new(crate::fs::StdFs));
+        let shared = ScanCache::new(disk.clone());
         let (pass, defs_b) = run(Some(&shared));
         let s = shared.stats();
         println!("{} files under {}", files.len(), root.display());
@@ -1539,6 +1548,33 @@ mod perf {
              {} ansible.cfg",
             s.edges, s.files, s.uncached, s.reads, s.contexts, s.configs
         );
+        let fs = disk.stats();
+        println!(
+            "  syscalls: {} in {:.0} ms ({} missing){}",
+            fs.calls(),
+            fs.nanos() as f64 / 1e6,
+            fs.misses(),
+            match fs.distinct() {
+                Some(d) => format!(", {d} distinct paths"),
+                None => String::new(),
+            }
+        );
+        for (name, c) in fs.each() {
+            let (calls, misses, nanos) = (
+                c.calls.load(std::sync::atomic::Ordering::Relaxed),
+                c.misses.load(std::sync::atomic::Ordering::Relaxed),
+                c.nanos.load(std::sync::atomic::Ordering::Relaxed),
+            );
+            if calls > 0 {
+                println!(
+                    "    {name:<10} {calls:>6} calls  {:>7.1} ms  {misses} missing",
+                    nanos as f64 / 1e6
+                );
+            }
+        }
+        for (p, n) in fs.top_paths(6) {
+            println!("    repeat x{n:<4} {}", p.display());
+        }
         // The point of the whole ticket: sharing must not change a single definition.
         assert_eq!(defs_a, defs_b, "shared cache changed the result");
     }

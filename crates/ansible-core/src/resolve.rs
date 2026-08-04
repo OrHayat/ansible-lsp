@@ -1,5 +1,6 @@
 //! Reference -> file on disk, following Ansible's own search order.
 
+use crate::fs::{Fs, StdFs};
 use crate::include_vars;
 use crate::install::AnsibleInstall;
 use crate::references::{Reference, ReferenceKind};
@@ -45,8 +46,8 @@ impl Resolution {
 
     /// First match wins — verified against real `ansible-playbook`, which silently
     /// takes the first hit in its search order and never reports the shadowed one.
-    fn from_candidates(candidates: Vec<PathBuf>) -> Self {
-        match candidates.iter().find(|p| p.is_file()).cloned() {
+    fn from_candidates(candidates: Vec<PathBuf>, fs: &dyn Fs) -> Self {
+        match candidates.iter().find(|p| fs.is_file(p)).cloned() {
             Some(p) => Self {
                 status: Status::Resolved,
                 targets: vec![p],
@@ -159,6 +160,17 @@ pub fn resolve_with(
     ctx: &FileContext,
     literals: &HashMap<String, Vec<String>>,
 ) -> Resolution {
+    resolve_with_in(r, ctx, literals, &StdFs)
+}
+
+/// [`resolve_with`] against a caller-supplied filesystem, so a scan can memoize the probes
+/// (T-085).
+pub fn resolve_with_in(
+    r: &Reference,
+    ctx: &FileContext,
+    literals: &HashMap<String, Vec<String>>,
+    fs: &dyn Fs,
+) -> Resolution {
     if r.value.contains("{{") {
         if let Some(bases) = path_bases(r.kind, ctx) {
             let subs = substitute_literals(&r.value, literals);
@@ -169,7 +181,7 @@ pub fn resolve_with(
                         cands.push(normalise(&b.join(v)));
                     }
                 }
-                let mut res = Resolution::from_candidates(unique(cands.into_iter()));
+                let mut res = Resolution::from_candidates(unique(cands.into_iter()), fs);
                 // Offer, don't assert: navigable, but never a warning.
                 res.skip_reason = Some(SkipReason::Templated);
                 if res.status == Status::Missing {
@@ -179,7 +191,7 @@ pub fn resolve_with(
             }
         }
     }
-    resolve(r, ctx)
+    resolve_in(r, ctx, fs)
 }
 
 /// The base directories a path-shaped reference is resolved against. `None` for name-shaped
@@ -246,6 +258,13 @@ fn substitute_literals(value: &str, literals: &HashMap<String, Vec<String>>) -> 
 }
 
 pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
+    resolve_in(r, ctx, &StdFs)
+}
+
+/// [`resolve`] against a caller-supplied filesystem. Role search alone re-probes the same
+/// name against the same roots once per consuming file, so a memoizing `fs` is most of
+/// T-085's win.
+pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
     // A templated static import is wrong whatever is on disk — Ansible templates the
@@ -270,7 +289,7 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
             _ => return Resolution::skipped(SkipReason::Templated),
         };
-        let targets = crate::glob::candidates(&bases, &r.value);
+        let targets = crate::glob::candidates_in(&bases, &r.value, fs);
         return Resolution {
             status: if targets.is_empty() {
                 Status::Skipped
@@ -288,25 +307,32 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
             // An expansion is already anchored at the directory it named, so the search
             // path does not apply to it.
             if substituted {
-                return Resolution::from_candidates(unique(
-                    values.iter().map(|v| normalise(Path::new(v))),
-                ));
+                return Resolution::from_candidates(
+                    unique(values.iter().map(|v| normalise(Path::new(v)))),
+                    fs,
+                );
             }
-            Resolution::from_candidates(unique(
-                ctx.task_search_dirs()
-                    .iter()
-                    .map(|b| normalise(&b.join(&r.value))),
-            ))
+            Resolution::from_candidates(
+                unique(
+                    ctx.task_search_dirs()
+                        .iter()
+                        .map(|b| normalise(&b.join(&r.value))),
+                ),
+                fs,
+            )
         }
 
         // Relative to the importing playbook, then the project root. No role or
         // collection paths apply at play level.
-        ReferenceKind::ImportPlaybook => Resolution::from_candidates(unique(
-            [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
-                .into_iter()
-                .flatten()
-                .map(|b| normalise(&b.join(&r.value))),
-        )),
+        ReferenceKind::ImportPlaybook => Resolution::from_candidates(
+            unique(
+                [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
+                    .into_iter()
+                    .flatten()
+                    .map(|b| normalise(&b.join(&r.value))),
+            ),
+            fs,
+        ),
 
         // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
         // project root — the places Ansible looks for a vars file.
@@ -318,7 +344,10 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
             if let Some(root) = &ctx.project_root {
                 bases.push(root.clone());
             }
-            Resolution::from_candidates(unique(bases.iter().map(|b| normalise(&b.join(&r.value)))))
+            Resolution::from_candidates(
+                unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
+                fs,
+            )
         }
 
         // The dir form runs the ported action-plugin semantics: one computed root
@@ -337,8 +366,7 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
                 role_path: ctx.role_dir.as_deref(),
                 task_dir: &ctx.file_dir,
             };
-            let fs = include_vars::StdFs;
-            match include_vars::load(&params, &ictx, &fs) {
+            match include_vars::load(&params, &ictx, fs) {
                 include_vars::Outcome::Loaded(l) => Resolution {
                     status: Status::Resolved,
                     targets: l.files,
@@ -360,7 +388,7 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
                         candidates: params
                             .dir
                             .as_deref()
-                            .and_then(|d| include_vars::dir_root(d, &ictx, &fs))
+                            .and_then(|d| include_vars::dir_root(d, &ictx, fs))
                             .into_iter()
                             .collect(),
                         skip_reason: None,
@@ -369,9 +397,9 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
             }
         }
 
-        ReferenceKind::Role => match role_dir(&r.value, ctx) {
+        ReferenceKind::Role => match role_dir(&r.value, ctx, fs) {
             Some(dir) => {
-                let res = Resolution::from_candidates(with_ext(&dir.join("tasks"), "main"));
+                let res = Resolution::from_candidates(with_ext(&dir.join("tasks"), "main"), fs);
                 // `roles/cib-batch` has only begin/commit/abort.yml and no main.yml —
                 // legal, because every caller passes tasks_from. Warning here would
                 // fire on 16 working references in this repo alone.
@@ -390,13 +418,13 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
         },
 
         ReferenceKind::TasksFrom => {
-            let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx)) else {
+            let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx, fs)) else {
                 return Resolution::skipped(SkipReason::NotInWorkspace);
             };
-            Resolution::from_candidates(with_ext(&role.join("tasks"), &r.value))
+            Resolution::from_candidates(with_ext(&role.join("tasks"), &r.value), fs)
         }
 
-        ReferenceKind::Module => resolve_module(&r.value, ctx),
+        ReferenceKind::Module => resolve_module(&r.value, ctx, fs),
     }
 }
 
@@ -425,7 +453,7 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
 /// that isn't installed here, not a typo. The one loader step deliberately not modelled:
 /// the `_<name>` deprecated-alias retry (`loader.py:940-953`) — hits are rare and Ansible
 /// deprecation-warns each one itself. Deprecations/tombstones in the tables are T-064.
-fn resolve_module(value: &str, ctx: &FileContext) -> Resolution {
+fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     let mut trail: Vec<PathBuf> = Vec::new();
     let mut visited: Vec<String> = vec![value.to_string()];
     let mut name = value.to_string();
@@ -440,7 +468,7 @@ fn resolve_module(value: &str, ctx: &FileContext) -> Resolution {
                     candidates.push(pkg.join("modules").join(&file));
                     candidates.push(pkg.join("plugins/action").join(&file));
                 }
-                let res = Resolution::from_candidates(candidates);
+                let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
                     .then(|| AnsibleInstall::detect().builtin_module_redirect(bare))
                     .flatten();
@@ -464,9 +492,9 @@ fn resolve_module(value: &str, ctx: &FileContext) -> Resolution {
                         candidates.insert(0, p);
                     }
                 }
-                let res = Resolution::from_candidates(candidates);
+                let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
-                    .then(|| collection_module_redirect(ns, coll, module, ctx))
+                    .then(|| collection_module_redirect(ns, coll, module, ctx, fs))
                     .flatten();
                 (res, redirect)
             }
@@ -500,16 +528,17 @@ fn collection_module_redirect(
     coll: &str,
     module: &str,
     ctx: &FileContext,
+    fs: &dyn Fs,
 ) -> Option<String> {
     ctx.collection_roots()
         .iter()
         .map(|r| r.join(ns).join(coll).join("meta/runtime.yml"))
-        .find(|p| p.is_file())
+        .find(|p| fs.is_file(p))
         .and_then(|p| crate::install::module_redirect(&p, module))
 }
 
 /// Role name -> its directory. Handles plain names and 3-part FQCNs.
-fn role_dir(name: &str, ctx: &FileContext) -> Option<PathBuf> {
+fn role_dir(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
     if name.contains("{{") {
         return None;
     }
@@ -519,12 +548,12 @@ fn role_dir(name: &str, ctx: &FileContext) -> Option<PathBuf> {
             .collection_roots()
             .iter()
             .map(|r| r.join(ns).join(coll).join("roles").join(role))
-            .find(|p| p.is_dir());
+            .find(|p| fs.is_dir(p));
     }
     ctx.roles_roots()
         .iter()
         .map(|r| r.join(name))
-        .find(|p| p.is_dir())
+        .find(|p| fs.is_dir(p))
 }
 
 /// `tasks_from: begin` and `tasks_from: begin.yml` are both legal.

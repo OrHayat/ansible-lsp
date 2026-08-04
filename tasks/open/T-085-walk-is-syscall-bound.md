@@ -95,41 +95,83 @@ changes resolution semantics, which is a correctness surface, not a perf one. No
 
 ## Instrumentation
 
-The counters hang off the seam, one set per `Fs` implementation, so a call site added later
-counts itself. Per *operation*, not aggregated — the costs differ 3× (`openat` 834 µs,
-`statx` 621 µs, `readlink` 304 µs) and one combined number hides which to attack.
+Counting is a **decorator**, not a property of each implementation. `StdFs` stays a
+zero-cost unit struct — it is what every interactive path uses (hover, goto, `didChange`),
+and it has nowhere to keep state anyway short of a static, which would outlive any one pass.
 
 ```rust
-pub struct FsStats {
-    pub kind: Counter,      // existence probes
-    pub read: Counter,
-    pub read_dir: Counter,
-    pub walk: Counter,
-    pub canonical: Counter,
+pub struct Counting<F: Fs> {
+    inner: F,
+    stats: FsStats,
 }
 
+impl<F: Fs> Fs for Counting<F> { /* tally, delegate to inner */ }
+```
+
+| to measure | wrap |
+| --------------------------- | ------------------------------------- |
+| the baseline, uncached      | `Counting::new(StdFs)`                |
+| after the memo              | `Counting::new(ScanCache::new(StdFs))` |
+| production hover / goto     | plain `StdFs` — nothing paid          |
+
+One implementation of counting instead of one per backend, and **both sides of the A/B
+measurable with the same code** — which is the half that matters, since the before-number is
+the one nobody believes. It also stacks: wrapping *inside* the cache counts syscalls,
+wrapping *outside* counts calls, so neither implementation has to track both itself.
+
+Per *operation*, not aggregated — the costs differ 3× (`openat` 834 µs, `statx` 621 µs,
+`readlink` 304 µs) and one combined number hides which to attack.
+
+```rust
+#[derive(Default)]
 pub struct Counter {
-    pub calls: usize,     // times the seam was asked
-    pub disk: usize,      // times it actually reached the filesystem
-    pub distinct: usize,  // unique paths — the floor a memo can reach
-    pub nanos: u64,       // time in the disk path only
+    calls: AtomicUsize,   // times the seam was asked
+    disk: AtomicUsize,    // times it actually reached the filesystem
+    misses: AtomicUsize,  // kind() == None
+    nanos: AtomicU64,     // time in the disk path only
+}
+
+#[derive(Default)]
+pub struct FsStats {
+    kind: Counter,
+    read: Counter,
+    read_dir: Counter,
+    walk: Counter,
+    canonical: Counter,
+    /// The only thing needing a map, so the only thing behind a lock — and off
+    /// unless asked for. Gives `distinct` and the top-N histogram.
+    paths: Option<Mutex<HashMap<PathBuf, usize>>>,
 }
 ```
+
+**Atomics, not a `Mutex<FsStats>`.** A single lock on every filesystem call would serialise
+the one thing `ScanCache` was deliberately built to allow — it takes `&self` throughout so
+files *can* walk concurrently, and the sequential scan loop is the obvious next thing to
+parallelise. Worse, `ScanCache` already holds a `Mutex<Inner>`, so a stats lock doubles the
+locking on every op: noise against a 540 µs 9p stat, but 20–40% against a *memo hit*, which
+is a ~50–100 ns hashmap lookup and precisely the fast path this exists to create.
+`fetch_add(1, Relaxed)` is ~1–5 ns and lock-free; nothing branches on these mid-run, only
+the totals are read at the end.
 
 Why each earns its place:
 
 - **`calls` vs `disk`** is the redundancy itself — the ratio that says 2340 → 538.
-- **`distinct`** is the best case available. If `calls ≈ distinct`, memoizing is the wrong
-  fix and the answer is option C (shrink the candidate lists). No other metric says that.
-- **negatives** — how many `kind()` returned `None`, 724 of 1455 today. This is the metric
-  that catches a future hits-only cache silently leaving half the prize behind.
+- **`misses`** — 724 of 1455 today. This is the metric that catches a future hits-only cache
+  silently leaving more than half the prize behind.
 - **`nanos` on the disk path only.** Two `Instant::now()` calls are ~40 ns against a 540 µs
   9p stat — 0.007% where it matters. Don't time memo hits: a hashmap lookup is uninteresting
   and on ext4 the timer costs more than the thing measured. This is the portable number,
   directly comparable across filesystems that are 860× apart on wall clock.
-- **top-N repeated paths**, behind an env var. This is what actually diagnosed the bug —
-  `demo/roles/demo` ×25 and `demo/ansible.cfg` ×28 named both causes outright. A full
-  `HashMap<PathBuf, usize>` is too much to keep always-on for a 729-file corpus.
+- **`distinct` and top-N repeated paths**, behind an env var, both from `paths`. `distinct`
+  is the floor a memo can reach: if `calls ≈ distinct`, memoizing is the wrong fix and the
+  answer is option C. The histogram is what actually diagnosed this bug — `demo/roles/demo`
+  ×25 and `demo/ansible.cfg` ×28 named both causes outright. Neither can be an always-on
+  counter: both need the map, and a full `HashMap<PathBuf, usize>` is too much to carry for
+  a 729-file corpus on every run.
+
+Residual, accepted: 5 operations × 4 atomics in one struct share cache lines, so heavy
+multi-threaded counting gets false sharing. Unmeasurable at syscall rates; padding it would
+be optimising the instrument instead of the thing.
 
 Deliberately **not** added: per-call-site attribution. That is precisely the hand-maintained
 list that drifted and produced the 4× wrong answer, just relocated.

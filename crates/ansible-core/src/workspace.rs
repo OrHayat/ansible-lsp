@@ -1,6 +1,7 @@
 //! Where a file sits in an Ansible project.
 
 use crate::config::AnsibleConfig;
+use crate::fs::{Fs, StdFs};
 use crate::install::AnsibleInstall;
 use std::path::{Path, PathBuf};
 
@@ -20,16 +21,21 @@ pub struct FileContext {
 
 impl FileContext {
     pub fn discover(file: &Path) -> Self {
-        Self::discover_with(file, AnsibleConfig::load)
+        Self::discover_with(file, &StdFs, AnsibleConfig::load)
     }
 
     /// [`discover`](Self::discover) with the `ansible.cfg` read supplied by the caller, so a
-    /// scan can read each project's config once instead of once per file (T-076). Only the
-    /// file's *directory* is looked at, which is why a cache can key on it.
-    pub fn discover_with(file: &Path, config: impl FnOnce(&Path) -> AnsibleConfig) -> Self {
+    /// scan can read each project's config once instead of once per file (T-076), and against
+    /// a caller-supplied filesystem so the ancestor walk's probes can be memoized (T-085).
+    /// Only the file's *directory* is looked at, which is why a cache can key on it.
+    pub fn discover_with(
+        file: &Path,
+        fs: &dyn Fs,
+        config: impl FnOnce(&Path) -> AnsibleConfig,
+    ) -> Self {
         let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let (role_dir, role_tasks_dir) = find_role(&file_dir);
-        let project_root = find_project_root(&file_dir);
+        let (role_dir, role_tasks_dir) = find_role(&file_dir, fs);
+        let project_root = find_project_root(&file_dir, fs);
         let config = project_root.as_deref().map(config).unwrap_or_default();
         Self {
             project_root,
@@ -158,17 +164,23 @@ impl FileContext {
 
 /// Every YAML file under `root`, skipping VCS and cache directories.
 pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        for e in rd.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().to_string();
-            if p.is_dir() {
+    yaml_files_in(root, &StdFs)
+}
+
+/// [`yaml_files`] against a caller-supplied filesystem (T-085).
+pub fn yaml_files_in(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
+    fn walk(dir: &Path, fs: &dyn Fs, out: &mut Vec<PathBuf>) {
+        for p in fs.read_dir(dir) {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if fs.is_dir(&p) {
                 if !matches!(
                     name.as_str(),
                     ".git" | "__pycache__" | ".pytest_cache" | "node_modules" | "target"
                 ) {
-                    walk(&p, out);
+                    walk(&p, fs, out);
                 }
             } else if matches!(
                 p.extension().and_then(|s| s.to_str()),
@@ -179,7 +191,7 @@ pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(root, &mut out);
+    walk(root, fs, &mut out);
     out
 }
 
@@ -198,32 +210,35 @@ fn push_unique(dirs: &mut Vec<PathBuf>, p: Option<PathBuf>) {
     }
 }
 
-fn find_project_root(from: &Path) -> Option<PathBuf> {
+/// Walks up asking "is `ansible.cfg` here?" at every ancestor. Each *directory* asks about
+/// the same shared ancestors, so on a scan this is the single most repeated probe in the
+/// codebase — 28 hits on one path in a 60-file demo. A memoizing `fs` collapses it (T-085).
+fn find_project_root(from: &Path, fs: &dyn Fs) -> Option<PathBuf> {
     from.ancestors()
-        .find(|d| d.join("ansible.cfg").is_file())
+        .find(|d| fs.is_file(&d.join("ansible.cfg")))
         .map(Path::to_path_buf)
 }
 
-fn find_role(from: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+fn find_role(from: &Path, fs: &dyn Fs) -> (Option<PathBuf>, Option<PathBuf>) {
     for dir in from.ancestors() {
         if dir.file_name().and_then(|n| n.to_str()) == Some("tasks") {
             if let Some(role) = dir.parent() {
-                if is_role_dir(role) {
+                if is_role_dir(role, fs) {
                     return (Some(role.to_path_buf()), Some(dir.to_path_buf()));
                 }
             }
         }
     }
     for dir in from.ancestors() {
-        if is_role_dir(dir) {
+        if is_role_dir(dir, fs) {
             return (Some(dir.to_path_buf()), Some(dir.join("tasks")));
         }
     }
     (None, None)
 }
 
-fn is_role_dir(d: &Path) -> bool {
-    d.join("tasks").is_dir() || d.join("defaults").is_dir() || d.join("meta").is_dir()
+fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
+    fs.is_dir(&d.join("tasks")) || fs.is_dir(&d.join("defaults")) || fs.is_dir(&d.join("meta"))
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::cache::ScanCache;
+use ansible_core::fs::{Counting, StdFs};
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Node, Span};
@@ -404,7 +405,7 @@ impl Backend {
         let refs = extracted
             .into_iter()
             .map(|r| {
-                let res = resolve::resolve_with(&r, &ctx, &literals);
+                let res = resolve::resolve_with_in(&r, &ctx, &literals, scan);
                 (r, res)
             })
             .collect();
@@ -624,7 +625,10 @@ impl Backend {
         // a role's defaults/meta and any shared task file are read, parsed and walked once
         // for all of them instead of once each. Dropped when the scan ends, so it can never
         // outlive the content it was built from.
-        let scan_cache = Arc::new(ScanCache::default());
+        // Counting sits *under* the memo, so it reports what actually reached the disk —
+        // the walk is ~98% syscalls on a network/9p workspace, so this is the number.
+        let disk = Arc::new(Counting::new(StdFs));
+        let scan_cache = Arc::new(ScanCache::new(disk.clone()));
 
         for root in roots {
             for path in yaml_files(&root) {
@@ -688,6 +692,7 @@ impl Backend {
         // fast machine the var-index milliseconds can't see the difference, but edges-to-files
         // is the redundancy itself. edges == files means nothing was walked twice.
         let c = scan_cache.stats();
+        let f = disk.stats();
         client
             .log_message(
                 MessageType::INFO,
@@ -695,7 +700,7 @@ impl Backend {
                     "ansible-lsp scan: {} files analysed of {seen} seen in {:.0} ms \
                      (parse {:.0}, context {:.0}, var-index {:.0}, resolve {:.0}); \
                      var-walk {} edges -> {} files ({} uncached), {} reads, {} contexts, \
-                     {} ansible.cfg, {} defs",
+                     {} ansible.cfg, {} defs; fs {} syscalls in {:.0} ms ({} missing)",
                     t.files,
                     ms(scan_start.elapsed()),
                     ms(t.parse),
@@ -709,6 +714,9 @@ impl Backend {
                     c.contexts,
                     c.configs,
                     c.defs,
+                    f.calls(),
+                    f.nanos() as f64 / 1e6,
+                    f.misses(),
                 ),
             )
             .await;

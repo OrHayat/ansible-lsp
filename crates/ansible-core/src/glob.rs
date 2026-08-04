@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::fs::{Fs, StdFs};
+
 /// Cap on returned matches. A pattern that explodes is unhelpful as a jump list.
 const MAX_MATCHES: usize = 20;
 
@@ -54,32 +56,30 @@ fn matches(pattern: &str, name: &str) -> bool {
 }
 
 /// Expand one component at a time, reading the directory only where a wildcard sits.
-fn expand(base: &Path, components: &[&str], out: &mut Vec<PathBuf>) {
+fn expand(base: &Path, components: &[&str], fs: &dyn Fs, out: &mut Vec<PathBuf>) {
     if out.len() >= MAX_MATCHES {
         return;
     }
     let Some((head, tail)) = components.split_first() else {
-        if base.is_file() {
+        if fs.is_file(base) {
             out.push(base.to_path_buf());
         }
         return;
     };
 
     if !head.contains('*') {
-        return expand(&base.join(head), tail, out);
+        return expand(&base.join(head), tail, fs, out);
     }
 
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return;
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_string())
+    let mut names: Vec<String> = fs
+        .read_dir(base)
+        .into_iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .filter(|n| matches(head, n))
         .collect();
     names.sort();
     for name in names {
-        expand(&base.join(name), tail, out);
+        expand(&base.join(name), tail, fs, out);
     }
 }
 
@@ -88,6 +88,11 @@ fn expand(base: &Path, components: &[&str], out: &mut Vec<PathBuf>) {
 /// Returns nothing when the pattern has no literal text left to anchor on —
 /// `"{{ x }}.yml"` would otherwise match every YAML file in the tree.
 pub fn candidates(bases: &[PathBuf], value: &str) -> Vec<PathBuf> {
+    candidates_in(bases, value, &StdFs)
+}
+
+/// [`candidates`] against a caller-supplied filesystem (T-085).
+pub fn candidates_in(bases: &[PathBuf], value: &str, fs: &dyn Fs) -> Vec<PathBuf> {
     let pattern = to_pattern(value);
     // The extension is not anchor text: "{{ x }}.yml" -> "*.yml" would otherwise
     // look anchored by "yml" and match every task file.
@@ -103,7 +108,7 @@ pub fn candidates(bases: &[PathBuf], value: &str) -> Vec<PathBuf> {
     let components: Vec<&str> = pattern.split('/').filter(|c| !c.is_empty()).collect();
     let mut out = Vec::new();
     for base in bases {
-        expand(base, &components, &mut out);
+        expand(base, &components, fs, &mut out);
         if out.len() >= MAX_MATCHES {
             break;
         }

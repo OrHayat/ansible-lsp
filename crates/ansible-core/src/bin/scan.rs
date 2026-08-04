@@ -8,7 +8,7 @@ use ansible_core::mutation;
 use ansible_core::vars;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
-use ansible_core::resolve::{resolve, rule_id, SkipReason, Status};
+use ansible_core::resolve::{resolve_in, rule_id, SkipReason, Status};
 use ansible_core::workspace::yaml_files;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -48,11 +48,13 @@ fn main() {
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
 
     for path in &files {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        // Through the cache: one read *and* one parse per file, shared with the var walk
+        // that will reach most of these files again.
+        let Some(src) = cache.source(path) else {
             continue;
         };
-        let doc = Document::new(text);
-        let Some(nodes) = doc.parse() else {
+        let doc = Document::new(src.text.to_string());
+        let Some(nodes) = src.nodes.clone() else {
             let rel = path.strip_prefix(&root).unwrap_or(path).display();
             match doc.parse_error() {
                 Some(span) => {
@@ -63,14 +65,13 @@ fn main() {
             }
             continue;
         };
-        cache.prime(path, &doc.text, &nodes);
         let ctx = cache.context(path);
         let mut refs = extract(&nodes);
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
         }
         for r in refs {
-            let res = resolve(&r, &ctx);
+            let res = resolve_in(&r, &ctx, &cache);
 
             // Conditions that cannot work at all, and the cross-file one.
             if let Some(span) = r.condition_span {
@@ -98,7 +99,7 @@ fn main() {
                     for target in &res.targets {
                         let m = mut_cache
                             .entry(target.clone())
-                            .or_insert_with(|| mutation::mutated_vars(target));
+                            .or_insert_with(|| mutation::mutated_vars_in(target, &cache));
                         let hit: Vec<&String> = used.iter().filter(|v| m.contains(*v)).collect();
                         if !hit.is_empty() {
                             mutated.push(format!(

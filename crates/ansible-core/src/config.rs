@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::fs::{Fs, StdFs};
+
 #[derive(Debug, Clone, Default)]
 pub struct AnsibleConfig {
     pub roles_path: Vec<PathBuf>,
@@ -16,7 +18,13 @@ pub struct AnsibleConfig {
 
 impl AnsibleConfig {
     pub fn load(project_root: &Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(project_root.join("ansible.cfg")) else {
+        Self::load_in(project_root, &StdFs)
+    }
+
+    /// [`load`](Self::load) against a caller-supplied filesystem, so a scan reads each
+    /// project's config once (T-085).
+    pub fn load_in(project_root: &Path, fs: &dyn Fs) -> Self {
+        let Some(text) = fs.read(&project_root.join("ansible.cfg")) else {
             return Self::default();
         };
         let mut cfg = Self::default();

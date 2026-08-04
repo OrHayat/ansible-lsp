@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{self, Ast, PlayItem, Stmt, Task};
+use crate::fs::{Fs, StdFs};
 use crate::parse::Document;
 use crate::references::{self, ReferenceKind};
 use crate::resolve;
@@ -24,25 +25,36 @@ use crate::workspace::FileContext;
 /// Over-collecting is the safe direction for the caller: a name here only matters if it
 /// also appears in an import's condition, and missing one means missing a real bug.
 pub fn mutated_vars(playbook: &Path) -> HashSet<String> {
+    mutated_vars_in(playbook, &StdFs)
+}
+
+/// [`mutated_vars`] against a caller-supplied filesystem, so a scan's memo covers this walk
+/// too (T-085).
+pub fn mutated_vars_in(playbook: &Path, fs: &dyn Fs) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut visited = HashSet::new();
-    walk_file(playbook, &mut out, &mut visited);
+    walk_file(playbook, fs, &mut out, &mut visited);
     out
 }
 
-fn walk_file(path: &Path, out: &mut HashSet<String>, visited: &mut HashSet<PathBuf>) {
-    let Ok(canon) = path.canonicalize() else { return };
+fn walk_file(
+    path: &Path,
+    fs: &dyn Fs,
+    out: &mut HashSet<String>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    let Some(canon) = fs.canonical(path) else { return };
     if !visited.insert(canon) {
         return;
     }
-    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Some(text) = fs.read(path) else { return };
     let doc = Document::new(text);
     let Some(nodes) = doc.parse() else { return };
 
     collect_assignments(&ast::build(&nodes), out);
 
     // Follow anything that can carry a `set_fact` into this playbook's run.
-    let ctx = FileContext::discover(path);
+    let ctx = FileContext::discover_with(path, fs, |root| crate::config::AnsibleConfig::load_in(root, fs));
     for r in references::extract(&nodes) {
         if !matches!(
             r.kind,
@@ -54,15 +66,15 @@ fn walk_file(path: &Path, out: &mut HashSet<String>, visited: &mut HashSet<PathB
         ) {
             continue;
         }
-        for target in resolve::resolve(&r, &ctx).targets {
+        for target in resolve::resolve_in(&r, &ctx, fs).targets {
             if r.kind == ReferenceKind::Role {
                 // A role contributes every task file it has, not just main.yml —
                 // `tasks_from` reaches the others and they set facts too.
                 for f in role_task_files(&target) {
-                    walk_file(&f, out, visited);
+                    walk_file(&f, fs, out, visited);
                 }
             } else {
-                walk_file(&target, out, visited);
+                walk_file(&target, fs, out, visited);
             }
         }
     }
