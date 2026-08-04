@@ -85,9 +85,11 @@ from measuring:
 - The demo scan is only ~40 ms on this Mac; T-074's 5.7 s reference is from WSL, where
   per-file IO is ~100× slower — same T-076 redundancy, far bigger multiplier. Wall clock
   here can't validate T-076; the walked-vs-unique-files counter can.
-- The freeze *felt* on this Mac was mostly cold `ansible --version` (measured 3.6 s cold,
-  0.35 s warm), which `initialized` still awaits inline before spawning the scan — split
-  out to T-084.
+- ~~The freeze *felt* on this Mac was mostly cold `ansible --version`~~ — **wrong, corrected
+  by T-084.** The 3.6 s cold / 0.35 s warm was measured on the bare command, never through
+  `detect()`, which takes a filesystem fast path that execs nothing (1 ms measured on WSL).
+  The 3.6 s itself is macOS's first-exec security assessment, not Python startup. Detect did
+  hold the pump and T-084 moved it off, but it was not the cost it looked like.
 
 ## WSL (the machine the complaint came from)
 

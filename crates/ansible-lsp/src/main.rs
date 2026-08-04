@@ -531,6 +531,55 @@ impl Backend {
         out
     }
 
+    /// Everything startup does after `initialized` has already returned: find the Ansible
+    /// install, then scan the workspace.
+    ///
+    /// Detect runs here rather than on the pump (T-084) because its slow path shells out to
+    /// `ansible --version`, which is seconds when Python's import cache is cold — the freeze
+    /// T-075's scan fix left behind, and one the scan's own metrics never counted. Detect
+    /// still goes first: the scan's module resolution wants the install anyway.
+    async fn startup(state: Arc<State>, client: Client) {
+        let install = tokio::task::spawn_blocking(|| {
+            ansible_core::install::AnsibleInstall::detect().clone()
+        })
+        .await
+        .unwrap_or_default();
+        client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "ansible-lsp detect: {} in {:.0} ms{}",
+                    install.source.as_str(),
+                    install.detect_ms,
+                    install
+                        .package_dir
+                        .as_ref()
+                        .map(|p| format!(" — {}", p.display()))
+                        .unwrap_or_default()
+                ),
+            )
+            .await;
+        // No install means builtins and installed collections can't resolve — say so, so a
+        // plain `ansible.builtin.debug` that won't jump reads as "no Ansible here", not "the
+        // tool is broken". In-repo files, roles, and modules still work. The status
+        // notification drives a persistent status-bar item; the toast is the immediate nudge.
+        let found = install.package_dir.is_some();
+        let _ = client
+            .send_notification::<AnsibleStatus>(serde_json::json!({ "found": found }))
+            .await;
+        if !found {
+            client
+                .show_message(
+                    MessageType::WARNING,
+                    "Ansible not found on PATH — builtin modules (ansible.builtin.*) and \
+                     installed collections won't resolve. In-repo files, roles, and modules \
+                     still work. Install ansible-core (WSL on Windows).",
+                )
+                .await;
+        }
+        Self::scan_workspace(state, client).await;
+    }
+
     /// Resolve every YAML file in the workspace and publish what's broken.
     ///
     /// Runs as a detached task (T-075): `initialized` spawns this and returns, so hover /
@@ -1445,32 +1494,6 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        // Detecting the ansible install shells out to `ansible --version` (~500 ms).
-        // Warm it here, off the request path, so the first documentLink isn't slow.
-        let install = tokio::task::spawn_blocking(|| {
-            ansible_core::install::AnsibleInstall::detect().clone()
-        })
-        .await
-        .unwrap_or_default();
-        // No install means builtins and installed collections can't resolve — say so, so a
-        // plain `ansible.builtin.debug` that won't jump reads as "no Ansible here", not "the
-        // tool is broken". In-repo files, roles, and modules still work. The status
-        // notification drives a persistent status-bar item; the toast is the immediate nudge.
-        let found = install.package_dir.is_some();
-        let _ = self
-            .client
-            .send_notification::<AnsibleStatus>(serde_json::json!({ "found": found }))
-            .await;
-        if !found {
-            self.client
-                .show_message(
-                    MessageType::WARNING,
-                    "Ansible not found on PATH — builtin modules (ansible.builtin.*) and \
-                     installed collections won't resolve. In-repo files, roles, and modules \
-                     still work. Install ansible-core (WSL on Windows).",
-                )
-                .await;
-        }
         let note = self.state.startup_note.lock().map(|n| n.clone()).unwrap_or_default();
         let s = self.state.settings.lock().map(|s| *s).unwrap_or_default();
         self.client
@@ -1484,8 +1507,8 @@ impl LanguageServer for Backend {
             )
             .await;
         // Detached (T-075): the message pump must go back to servicing hover/goto while
-        // the scan runs. Everything the scan touches lives behind `Arc<State>`.
-        tokio::spawn(Self::scan_workspace(self.state.clone(), self.client.clone()));
+        // startup work runs. Everything it touches lives behind `Arc<State>`.
+        tokio::spawn(Self::startup(self.state.clone(), self.client.clone()));
     }
 
     async fn did_change_configuration(&self, p: DidChangeConfigurationParams) {

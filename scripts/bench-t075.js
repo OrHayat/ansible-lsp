@@ -40,6 +40,8 @@ srv.stdout.on("data", (chunk) => {
     if (msg.id !== undefined && pending.has(msg.id)) {
       pending.get(msg.id)(msg);
       pending.delete(msg.id);
+    } else if (msg.method === "window/logMessage" && /ansible-lsp detect:/.test(msg.params.message)) {
+      console.log(`detect finished    ${ms()} ms   (${msg.params.message.trim()})`);
     } else if (msg.method === "window/logMessage" && /ansible-lsp scan:/.test(msg.params.message)) {
       scanLine = ms();
       console.log(`scan finished      ${scanLine} ms   (${msg.params.message.trim()})`);

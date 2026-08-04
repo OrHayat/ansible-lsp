@@ -10,6 +10,38 @@ pub struct AnsibleInstall {
     pub package_dir: Option<PathBuf>,
     /// Every `ansible_collections` root outside the workspace.
     pub collection_roots: Vec<PathBuf>,
+    /// Which path found `package_dir`, and what the whole detection cost. Startup is the
+    /// only place this runs, and it used to be unmeasured — T-084.
+    pub source: Source,
+    pub detect_ms: f64,
+}
+
+/// How `package_dir` was found. The cost difference between these is three orders of
+/// magnitude, so "which one won" is the number worth logging.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Source {
+    #[default]
+    NotFound,
+    /// `ansibleLsp.ansiblePath`.
+    Override,
+    /// Walked up from the `ansible` executable on PATH.
+    PathWalkUp,
+    /// A uv/pipx tool venv.
+    ToolInstall,
+    /// The `ansible --version` subprocess — seconds when Python's import cache is cold.
+    VersionCommand,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFound => "not-found",
+            Self::Override => "override",
+            Self::PathWalkUp => "path-walk-up",
+            Self::ToolInstall => "tool-install",
+            Self::VersionCommand => "version-command",
+        }
+    }
 }
 
 static DETECTED: OnceLock<AnsibleInstall> = OnceLock::new();
@@ -31,14 +63,18 @@ impl AnsibleInstall {
 
     fn run() -> Self {
         // Fast path: derive everything from the filesystem. `ansible --version` is
-        // authoritative but costs ~500 ms of Python startup — and on Windows it crashes
-        // outright (Ansible's control node isn't supported there), so once the filesystem
-        // has found the package we must NOT fall through to it.
+        // authoritative but costs seconds of Python startup when cold (3.6 s measured, T-084)
+        // — and on Windows it crashes outright (Ansible's control node isn't supported
+        // there), so once the filesystem has found the package we must NOT fall through to it.
+        let started = std::time::Instant::now();
         let fast = Self::from_filesystem();
-        if fast.package_dir.is_some() {
-            return fast;
-        }
-        Self::from_version_command().unwrap_or(fast)
+        let mut install = if fast.package_dir.is_some() {
+            fast
+        } else {
+            Self::from_version_command().unwrap_or(fast)
+        };
+        install.detect_ms = started.elapsed().as_secs_f64() * 1e3;
+        install
     }
 
     /// Locate the ansible package by resolving the `ansible` executable, plus the
@@ -57,6 +93,7 @@ impl AnsibleInstall {
                     install.collection_roots.push(bundled);
                 }
                 install.package_dir = Some(pkg);
+                install.source = Source::Override;
             }
         }
 
@@ -72,14 +109,19 @@ impl AnsibleInstall {
                                 install.collection_roots.push(bundled);
                             }
                             install.package_dir = Some(pkg);
+                            install.source = Source::PathWalkUp;
                         }
                     }
                 }
             }
         }
 
-        // uv/pipx put the `ansible` executable behind a shim outside the venv, so the
-        // walk-up above can't reach the package. Probe their conventional tool-install dirs
+        // uv/pipx can put the `ansible` executable behind a shim outside the venv, so the
+        // walk-up above can't reach the package. Platform-dependent: on Linux uv symlinks
+        // `~/.local/bin/ansible` into the tool venv and `which` canonicalizes, so the
+        // walk-up wins and this never fires (measured, T-084); on Windows uv writes a real
+        // trampoline `.exe` and this is the only thing that finds the install. Probe their
+        // conventional tool-install dirs
         // directly — this is what makes a `uv tool install ansible-core` just work, with no
         // env var and no working `ansible` CLI (which crashes on Windows anyway).
         if install.package_dir.is_none() {
@@ -89,6 +131,7 @@ impl AnsibleInstall {
                     install.collection_roots.push(bundled);
                 }
                 install.package_dir = Some(pkg);
+                install.source = Source::ToolInstall;
             }
         }
 
@@ -134,6 +177,7 @@ impl AnsibleInstall {
                         }
                     }
                     install.package_dir = Some(pkg);
+                    install.source = Source::VersionCommand;
                 }
                 "ansible collection location" => {
                     for p in value.split(':').filter(|s| !s.is_empty()) {
