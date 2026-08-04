@@ -65,3 +65,8 @@ first as a stepping stone if needed, then layer 3 on top.
 
 Surfaced and quantified by T-074. Pairs with T-075 (backgrounding) — that stops the freeze,
 this stops the wasted work; do both.
+
+Re-confirmed post-T-075 on WSL: **var-index 5183 ms of a 6113 ms scan (85%), parse 2 ms** —
+the same ratio as T-074's original numbers, so backgrounding changed nothing about the cost.
+Note the platform gap when benching: this phase is ~40 ms total on an M3 Pro, where wall clock
+can't measure the win at all. Use WSL, or the walked-vs-unique-files counter.

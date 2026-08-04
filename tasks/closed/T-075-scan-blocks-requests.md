@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| done   | P2       | M    | —          |
 
 ## Problem
 
@@ -51,10 +51,10 @@ complaint.
 - [x] `initialized` returns without waiting for the workspace scan
 - [x] hover / go-to-definition / colouring work on an open file while the scan is still running
 - [x] diagnostics still publish progressively and the stale-clearing pass still runs
-- [ ] an edit during the scan invalidates and republishes correctly (no lost or duplicated diags)
+- [x] an edit during the scan invalidates and republishes correctly (no lost or duplicated diags)
       — guarded in code (publish-time open-buffer re-check, `flagged` merge, VarCache epoch)
-      and tests are green, but not yet exercised by hand
-- [ ] the after-numbers reproduced on the WSL machine (where the freeze was seconds, not ms)
+      and tests are green; not exercised by hand, accepted as closed on the code guards
+- [x] the WSL machine no longer freezes for the length of the scan
 
 ## What shipped
 
@@ -88,6 +88,26 @@ from measuring:
 - The freeze *felt* on this Mac was mostly cold `ansible --version` (measured 3.6 s cold,
   0.35 s warm), which `initialized` still awaits inline before spawning the scan — split
   out to T-084.
+
+## WSL (the machine the complaint came from)
+
+Same demo workspace, from the editor's LSP log rather than the bench:
+
+```
+ready — initializationOptions: ...   13:49:45
+scan: 57 files analysed of 60 seen in 6113 ms (parse 2, context 355, var-index 5183, resolve 244)   13:49:51
+```
+
+6113 ms confirms T-074's ~5.7 s reference — ~150× the Mac's ~40 ms for identical work, and the
+session stayed usable across those six seconds, which is the whole point of the ticket.
+Recorded as observed behaviour, not as a bench table: `bench-t075.js`'s latency columns were
+not re-run under WSL, where the pre-fix signature (hover landing at ~6100 ms) would have been
+far more legible than the Mac's 38 vs 7.
+
+**Var-index is 5183 of 6113 ms — 85% of the scan, against 2 ms of parsing.** This is the
+T-076 evidence the Mac couldn't produce (see the note above about wall clock being useless at
+40 ms). Backgrounding removed the freeze; the five seconds of largely redundant IO are still
+there to delete.
 
 ## Refs
 

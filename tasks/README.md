@@ -75,7 +75,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L | — |
 | T-041 | [`meta/argument_specs.yml` role signatures](open/T-041-role-argument-specs.md) | M | — |
 | T-042 | [Resolver gaps: collections, `*_from`](open/T-042-resolver-gaps.md) | S | — |
-| T-075 | [Startup scan blocks all requests](open/T-075-scan-blocks-requests.md) | M | — |
 | T-076 | [Var-index re-walks shared files per consumer](open/T-076-var-index-redundant-walk.md) | M | T-075 refs |
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
@@ -138,6 +137,7 @@ navigation win.
 | T-074 | [Startup scan metrics](closed/T-074-startup-scan-metrics.md)   | done     |
 | T-073 | [Legacy `action_plugins/` dirs in the hover twin check](closed/T-073-legacy-action-plugin-dirs.md) | done |
 | T-078 | [`when:` explanation hijacks the module-name hover](closed/T-078-when-hover-hijacks-module-hover.md) | done |
+| T-075 | [Startup scan blocks all requests](closed/T-075-scan-blocks-requests.md) | done |
 
 ## Settled — don't re-derive these
 
