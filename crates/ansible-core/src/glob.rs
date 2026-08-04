@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::fs::{Fs, StdFs};
+use crate::fs::{Fs, Kind, StdFs};
 
 /// Cap on returned matches. A pattern that explodes is unhelpful as a jump list.
 const MAX_MATCHES: usize = 20;
@@ -71,10 +71,14 @@ fn expand(base: &Path, components: &[&str], fs: &dyn Fs, out: &mut Vec<PathBuf>)
         return expand(&base.join(head), tail, fs, out);
     }
 
+    // With pattern left to match, only a directory can hold it — descending into a file
+    // builds paths that cannot exist (`playbook.yml/tasks/sibling.yml`) and stats them.
+    // The kind is free: the directory read already reported it.
     let mut names: Vec<String> = fs
         .read_dir(base)
         .into_iter()
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .filter(|(_, kind)| tail.is_empty() || *kind == Kind::Dir)
+        .filter_map(|(p, _)| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .filter(|n| matches(head, n))
         .collect();
     names.sort();

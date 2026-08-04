@@ -430,11 +430,11 @@ mod tests {
         fn read(&self, p: &Path) -> Option<String> {
             self.0.get(p).cloned()
         }
-        fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+        fn read_dir(&self, p: &Path) -> Vec<(PathBuf, crate::fs::Kind)> {
             self.0
                 .keys()
                 .filter(|k| k.parent() == Some(p))
-                .cloned()
+                .map(|k| (k.clone(), crate::fs::Kind::File))
                 .collect()
         }
         /// Nothing in an in-memory tree is a symlink, so a path is its own identity.

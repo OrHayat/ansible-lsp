@@ -1,7 +1,7 @@
 //! Where a file sits in an Ansible project.
 
 use crate::config::AnsibleConfig;
-use crate::fs::{Fs, StdFs};
+use crate::fs::{Fs, Kind, StdFs};
 use crate::install::AnsibleInstall;
 use std::path::{Path, PathBuf};
 
@@ -170,12 +170,13 @@ pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
 /// [`yaml_files`] against a caller-supplied filesystem (T-085).
 pub fn yaml_files_in(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
     fn walk(dir: &Path, fs: &dyn Fs, out: &mut Vec<PathBuf>) {
-        for p in fs.read_dir(dir) {
+        // The kind comes from the listing itself — no stat per entry.
+        for (p, kind) in fs.read_dir(dir) {
             let name = p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if fs.is_dir(&p) {
+            if kind == Kind::Dir {
                 if !matches!(
                     name.as_str(),
                     ".git" | "__pycache__" | ".pytest_cache" | "node_modules" | "target"

@@ -57,9 +57,20 @@ pub trait Fs: Send + Sync {
 
     fn read(&self, p: &Path) -> Option<String>;
 
-    /// One directory's entries, not descending. Order is the filesystem's — callers
-    /// that need determinism sort.
-    fn read_dir(&self, p: &Path) -> Vec<PathBuf>;
+    /// One directory's entries with what each one *is*, not descending. Order is the
+    /// filesystem's — callers that need determinism sort.
+    ///
+    /// The kind rides along because the directory read already knows it: `getdents64`
+    /// carries `d_type`, `FindNextFile` carries the attributes. Returning bare paths threw
+    /// that away and made every caller stat each entry to re-learn what the kernel had
+    /// just told us. A memoizing implementation can seed its existence map from this for
+    /// free.
+    fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)>;
+
+    /// Entry paths only, for callers that don't care what they are.
+    fn read_dir_paths(&self, p: &Path) -> Vec<PathBuf> {
+        self.read_dir(p).into_iter().map(|(p, _)| p).collect()
+    }
 
     /// Every directory at-or-under `root`, each with its file basenames. Mirrors
     /// `os.walk(followlinks=True)`, which is the shape [`crate::include_vars`] needs
@@ -96,7 +107,7 @@ impl<T: Fs + ?Sized> Fs for std::sync::Arc<T> {
     fn read(&self, p: &Path) -> Option<String> {
         (**self).read(p)
     }
-    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+    fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {
         (**self).read_dir(p)
     }
     fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
@@ -137,19 +148,30 @@ impl Fs for StdFs {
         std::fs::read_to_string(p).ok()
     }
 
-    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
-        match std::fs::read_dir(p) {
-            Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
-            Err(_) => Vec::new(),
-        }
+    fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {
+        let Ok(rd) = std::fs::read_dir(p) else { return Vec::new() };
+        rd.flatten()
+            .map(|e| {
+                let path = e.path();
+                // `file_type()` comes free with the listing but does NOT follow symlinks,
+                // where `is_dir()` does. Resolving those with a real stat keeps a symlinked
+                // role directory walkable; they are rare enough for that to stay cheap.
+                let kind = match e.file_type() {
+                    Ok(t) if t.is_dir() => Some(Kind::Dir),
+                    Ok(t) if t.is_file() => Some(Kind::File),
+                    _ => self.kind(&path),
+                };
+                (path, kind.unwrap_or(Kind::Other))
+            })
+            .collect()
     }
 
     fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
         fn descend(fs: &StdFs, dir: &Path, out: &mut Vec<(PathBuf, Vec<String>)>) {
             let mut files = Vec::new();
             let mut subdirs = Vec::new();
-            for p in fs.read_dir(dir) {
-                if p.is_dir() {
+            for (p, kind) in fs.read_dir(dir) {
+                if kind == Kind::Dir {
                     subdirs.push(p);
                 } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
                     files.push(n.to_string());
@@ -323,7 +345,7 @@ impl<F: Fs> Fs for Counting<F> {
         self.timed(&self.stats.read, p, |_| false, || self.inner.read(p))
     }
 
-    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+    fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {
         self.timed(&self.stats.read_dir, p, |_| false, || self.inner.read_dir(p))
     }
 

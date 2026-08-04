@@ -69,7 +69,7 @@ struct Inner {
     /// hits alone would leave more than half the work on the floor.
     kinds: HashMap<PathBuf, Option<Kind>>,
     /// Raw directory entries, from which the YAML-filtered `listings` are derived.
-    dirs: HashMap<PathBuf, Arc<Vec<PathBuf>>>,
+    dirs: HashMap<PathBuf, Arc<Vec<(PathBuf, Kind)>>>,
     walks: HashMap<PathBuf, Arc<Vec<(PathBuf, Vec<String>)>>>,
     sources: HashMap<PathBuf, Option<Arc<Source>>>,
     contexts: HashMap<PathBuf, Arc<FileContext>>,
@@ -248,6 +248,7 @@ impl ScanCache {
         let files = Arc::new(
             Fs::read_dir(self, dir)
                 .into_iter()
+                .map(|(p, _)| p)
                 .filter(|p| {
                     matches!(
                         p.extension().and_then(|s| s.to_str()),
@@ -316,12 +317,19 @@ impl Fs for ScanCache {
         Some(self.source(p)?.text.to_string())
     }
 
-    fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+    /// Seeds the existence map as a side effect: the listing already knows what each entry
+    /// is, so every later `kind()` on one of them is answered without a syscall.
+    fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {
         if let Some(hit) = self.with(|i| i.dirs.get(p).cloned()).flatten() {
             return (*hit).clone();
         }
         let entries = Arc::new(self.fs.read_dir(p));
-        self.with(|i| i.dirs.insert(p.to_path_buf(), entries.clone()));
+        self.with(|i| {
+            for (path, kind) in entries.iter() {
+                i.kinds.entry(path.clone()).or_insert(Some(*kind));
+            }
+            i.dirs.insert(p.to_path_buf(), entries.clone());
+        });
         (*entries).clone()
     }
 
