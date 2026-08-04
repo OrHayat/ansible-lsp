@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::condition;
 use ansible_core::mutation;
-use ansible_core::parse::{Document, Node};
+use ansible_core::parse::{Document, Node, Span};
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
 use ansible_core::vars;
@@ -1120,6 +1120,42 @@ fn tried_list(res: &Resolution, ctx: &FileContext) -> String {
     s
 }
 
+/// One compact line saying a reference is guarded, to sit under whatever the reference
+/// hover already says. The full `when:` block belongs on the `when:` clause; here the guard
+/// is a property of the edge — "this include may not be taken" — so it must not crowd out
+/// the target or the provenance it appends to.
+fn guard_line(r: &Reference) -> String {
+    let raw = |c: &str| format!("`{}`", c.trim());
+    let mut s = match r.conditions.as_slice() {
+        [only] => format!(
+            "_Conditional_ : {}",
+            condition::classify(only).label().unwrap_or_else(|| raw(only))
+        ),
+        many => {
+            let mut s = String::from("_Conditional_ — runs only when **all** hold:");
+            for c in many {
+                s.push_str(&format!(
+                    "\n- {}",
+                    condition::classify(c).requirement().unwrap_or_else(|| raw(c))
+                ));
+            }
+            s
+        }
+    };
+    if r.kind == ReferenceKind::ImportPlaybook {
+        s.push_str("\n\n_…and copied onto every task in the imported playbook._");
+    }
+    s
+}
+
+/// Where a resolved reference points, in one line. What the verbose `Tried:` dump says
+/// implicitly with a ✓, for the case where the dump isn't wanted but something has to
+/// anchor the guard line above.
+fn target_line(res: &Resolution, ctx: &FileContext) -> Option<String> {
+    let t = res.targets.first()?;
+    Some(format!("**→ `{}`**", shorten(t, ctx)))
+}
+
 /// Hover markdown for a reference: the resolved target and every candidate tried, in
 /// order, marking the one that won. Modules lead with a provenance line linking both the
 /// module and its action plugin; the path dump follows only when `show_tried` (the
@@ -1169,6 +1205,113 @@ fn reference_hover(
             None => None,
         },
     }
+}
+
+/// Everything the hover request decides, given a parsed document and a byte offset. Kept
+/// out of the async handler because the whole point of T-078 is the *precedence* between
+/// the three hovers that can claim a token, and precedence is what wants a test.
+///
+/// One token, one hover, in this order:
+///
+/// 1. the `when:` **keyword** — the guard explained in English
+/// 2. a reference span (an include path, a role name, a module name) — target/provenance
+/// 3. anything else, including the `when:` **value** — the variable under the cursor
+fn hover_at(
+    doc: &Document,
+    nodes: &[Node],
+    path: &Path,
+    byte: usize,
+    settings: Settings,
+) -> Option<(String, Range)> {
+    let ctx = FileContext::discover(path);
+    let range = |s: Span| {
+        let (sl, sc) = doc.byte_to_lsp(s.start);
+        let (el, ec) = doc.byte_to_lsp(s.end);
+        Range::new(Position::new(sl, sc), Position::new(el, ec))
+    };
+
+    // The reference under the cursor, extracted but not yet resolved. Resolving every
+    // reference in the file to answer a hover on one is the cost this path avoids:
+    // only the hovered reference is resolved, and only if a branch below needs it.
+    let mut refs = references::extract(nodes);
+    if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+        refs.extend(references::meta_dependencies(nodes));
+    }
+
+    // The condition is attached to the module/include reference (other consumers need it
+    // there), but anchoring its *explanation* on that reference made one token mean two
+    // things: with inlay hints on you could never see a module's provenance, with them off
+    // you could never see the condition. The keyword means "this guard" and nothing else,
+    // so it owns the explanation — and the condition value is left to the variable hover,
+    // so `cmd_result` in `when: cmd_result.rc == 0` still says where it was registered.
+    // Not gated on the inlay-hints setting: that setting is about inlay hints. Needs no
+    // resolution, so it never touches the disk.
+    if let Some(r) = refs.iter().find(|r| {
+        !r.conditions.is_empty()
+            && r.condition_key_span
+                .is_some_and(|s| s.start <= byte && byte <= s.end)
+    }) {
+        let s = r.condition_key_span.expect("matched on Some above");
+        return Some((when_hover(r), range(s)));
+    }
+
+    if let Some(r) = refs.iter().find(|r| r.span.start <= byte && byte <= r.span.end) {
+        // Resolve just this reference. A templated path gets the substitution hover
+        // (what the `{{ }}` expands to and where those values are defined); a literal
+        // one gets the resolved target and the candidates tried, winner marked.
+        let defs = cached_definitions(path, nodes);
+        let literals = vars::known_literals(&defs, path, &doc.text);
+        let res = resolve::resolve_with(r, &ctx, &literals);
+        if r.templated {
+            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path) {
+                return Some(hit);
+            }
+        }
+        // Resolved refs stay quiet unless asked for (the target is a Cmd+click away).
+        // Two exceptions show regardless: an ambiguous ref — several targets, where no
+        // single one is a click away and the decoration only gives the count — and
+        // modules, whose provenance line states facts a click doesn't (clicking opens
+        // the file; it doesn't say what its location means). Skip reasons always show:
+        // one line answering "why isn't this coloured" — the setting gates the verbose
+        // path dump, not explanations. Missing refs never hover: their diagnostic
+        // already lists what was tried.
+        let wanted = match res.status {
+            Status::Skipped => true,
+            Status::Resolved => {
+                res.targets.len() > 1
+                    || r.kind == ReferenceKind::Module
+                    || settings.candidates_on_resolved
+            }
+            Status::Missing => false,
+        };
+        // A guard is a property of the *edge*, so it belongs on the reference — that much
+        // the old code had right. What it got wrong was letting the guard *replace* the
+        // reference hover instead of appending to it, which buried module provenance. It
+        // also means a guarded reference is worth hovering even when a resolved single
+        // target otherwise wouldn't be: "this include may not run" is not a Cmd+click away.
+        let body = wanted
+            .then(|| reference_hover(r, &res, &ctx, settings.candidates_on_resolved))
+            .flatten();
+        let guard = (!r.conditions.is_empty()).then(|| guard_line(r));
+        let md = match (body, guard) {
+            (Some(b), Some(g)) => Some(format!("{b}\n\n{g}")),
+            (Some(b), None) => Some(b),
+            // Nothing else wanted the hover, so the guard needs its own anchor: where the
+            // edge goes, then the condition on it. Not the `Tried:` dump — that stays
+            // behind `candidatesOnResolved`.
+            (None, Some(g)) => Some(match target_line(&res, &ctx) {
+                Some(t) => format!("{t}\n\n{g}"),
+                None => g,
+            }),
+            (None, None) => None,
+        };
+        if let Some(md) = md {
+            return Some((md, range(r.span)));
+        }
+    }
+
+    // Variable hover: where the variable under the cursor is defined, and its value.
+    Backend::variable_hover_at(doc, nodes, byte, path)
 }
 
 #[tower_lsp::async_trait]
@@ -1311,98 +1454,16 @@ impl LanguageServer for Backend {
         let Some(nodes) = doc.parse() else {
             return Ok(None);
         };
-        let ctx = FileContext::discover(&path);
         let byte = doc.lsp_to_byte(pos.line, pos.character);
-
-        // The reference under the cursor, extracted but not yet resolved. Resolving every
-        // reference in the file to answer a hover on one is the cost this path avoids:
-        // only the hovered reference is resolved, and only if a branch below needs it.
-        let mut refs = references::extract(&nodes);
-        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
-            refs.extend(references::meta_dependencies(&nodes));
-        }
-        let hovered = refs
-            .into_iter()
-            .find(|r| r.span.start <= byte && byte <= r.span.end);
-
-        if let Some(r) = &hovered {
-            let (sl, sc) = doc.byte_to_lsp(r.span.start);
-            let (el, ec) = doc.byte_to_lsp(r.span.end);
-            let range = Range::new(Position::new(sl, sc), Position::new(el, ec));
-            // `when:` hover, anchored on the reference value (the import path) — the thing
-            // you point at. Gated on the hints setting, like the inlay it replaced. No
-            // resolution needed, so it never touches the disk.
-            if settings.hints && !r.conditions.is_empty() {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: when_hover(r),
-                    }),
-                    range: Some(range),
-                }));
-            }
-            // Resolve just this reference. A templated path gets the substitution hover
-            // (what the `{{ }}` expands to and where those values are defined); a literal
-            // one gets the resolved target and the candidates tried, winner marked.
-            let defs = cached_definitions(&path, &nodes);
-            let literals = vars::known_literals(&defs, &path, &doc.text);
-            let res = resolve::resolve_with(r, &ctx, &literals);
-            if r.templated {
-                if let Some((value, range)) =
-                    Self::path_substitution_hover(&doc, &nodes, r, &res, &path)
-                {
-                    return Ok(Some(Hover {
-                        contents: HoverContents::Markup(MarkupContent {
-                            kind: MarkupKind::Markdown,
-                            value,
-                        }),
-                        range: Some(range),
-                    }));
-                }
-            }
-            // Resolved refs stay quiet unless asked for (the target is a Cmd+click
-            // away). Two exceptions show regardless: an ambiguous ref — several targets,
-            // where no single one is a click away and the decoration only gives the
-            // count — and modules, whose provenance line states facts a click doesn't
-            // (clicking opens the file; it doesn't say what its location means).
-            // Skip reasons always show: one line answering "why isn't this coloured" —
-            // the setting gates the verbose path dump, not explanations. Missing refs
-            // never hover: their diagnostic already lists what was tried.
-            let wanted = match res.status {
-                Status::Skipped => true,
-                Status::Resolved => {
-                    res.targets.len() > 1
-                        || r.kind == ReferenceKind::Module
-                        || settings.candidates_on_resolved
-                }
-                Status::Missing => false,
-            };
-            if wanted {
-                if let Some(value) =
-                    reference_hover(r, &res, &ctx, settings.candidates_on_resolved)
-                {
-                    return Ok(Some(Hover {
-                        contents: HoverContents::Markup(MarkupContent {
-                            kind: MarkupKind::Markdown,
-                            value,
-                        }),
-                        range: Some(range),
-                    }));
-                }
-            }
-        }
-
-        // Variable hover: where the variable under the cursor is defined, and its value.
-        if let Some((value, range)) = Self::variable_hover_at(&doc, &nodes, byte, &path) {
-            return Ok(Some(Hover {
+        Ok(
+            hover_at(&doc, &nodes, &path, byte, settings).map(|(value, range)| Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
                     value,
                 }),
                 range: Some(range),
-            }));
-        }
-        Ok(None)
+            }),
+        )
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
@@ -1721,6 +1782,76 @@ mod tests {
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
         assert!(norm.contains("plugins/action/stage_files.py"), "cfg-dir plugin linked in: {md}");
+    }
+
+    /// T-078 against the real demo: on a task carrying both a module and a `when:`, the
+    /// three tokens hover three different things, and none of it moves with the
+    /// inlay-hints setting — the module name used to be unreachable with hints on and the
+    /// condition unreachable with them off.
+    #[test]
+    fn when_module_and_variable_each_own_their_token() {
+        let path = std::path::Path::new("../../demo/tasks/variables.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+
+        // The task under test: `debug` + `msg: {{ cmd_result.stdout }}` + `when: cmd_result.rc == 0`.
+        let when_kw = text.find("when: cmd_result.rc").unwrap();
+        let module = text[..when_kw].rfind("ansible.builtin.debug").unwrap() + 4;
+        let cond_var = when_kw + "when: ".len() + 2;
+
+        for hints in [true, false] {
+            let settings = Settings { hints, ..Settings::default() };
+            let hover = |byte: usize| {
+                super::hover_at(&doc, &nodes, &path, byte, settings)
+                    .unwrap_or_else(|| panic!("hover expected at {byte} (hints={hints})"))
+                    .0
+            };
+
+            let kw = hover(when_kw + 1);
+            assert!(kw.contains("`when:`"), "condition explained on the keyword: {kw}");
+            assert!(kw.contains("cmd_result.rc == 0"), "clause spelled out in: {kw}");
+
+            // Whatever the module name hovers, it is the module's own hover and not the
+            // condition's. (Which line `ansible.builtin.debug` produces depends on there
+            // being an Ansible install to resolve into; that it isn't the `when:` text
+            // does not — see the sibling test for the provenance half.)
+            let m = hover(module);
+            assert!(!m.contains("`when:`"), "condition must not claim the module token: {m}");
+
+            // The condition's *value* belongs to the variables written in it, so hover
+            // agrees with Cmd+click instead of restating the guard.
+            let v = hover(cond_var);
+            assert!(v.contains("cmd_result"), "registration shown in: {v}");
+            assert!(!v.contains("`when:`"), "keyword hover must not leak onto its value: {v}");
+        }
+    }
+
+    /// T-078, the provenance half: a module that resolves inside the workspace still shows
+    /// its provenance when the task carries a `when:` and inlay hints are on — the
+    /// combination that used to make the module hover unreachable.
+    #[test]
+    fn module_provenance_survives_a_when_with_hints_on() {
+        let path = std::path::Path::new("../../demo/playbook.yml")
+            .canonicalize()
+            .unwrap();
+        let text = "- hosts: all\n  tasks:\n    - ping:\n        data: x\n      when: feature_on\n";
+        let doc = ansible_core::parse::Document::new(text.into());
+        let nodes = doc.parse().unwrap();
+        let settings = Settings { hints: true, ..Settings::default() };
+
+        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings)
+            .expect("module hover expected")
+            .0;
+        assert!(md.contains("ansible.legacy"), "provenance, not the condition, in: {md}");
+
+        // And the condition is still reachable — on its keyword.
+        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings)
+            .expect("when hover expected")
+            .0;
+        assert!(kw.contains("`when:`"), "condition on its keyword in: {kw}");
     }
 
     /// T-073 contrast: a plain module with no action plugin in any legacy dir (nor an

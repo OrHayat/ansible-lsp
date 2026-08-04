@@ -42,6 +42,10 @@ pub struct Reference {
     /// Span of the `when:` value, so a problem with the condition is reported on the
     /// condition rather than on the reference a few lines away.
     pub condition_span: Option<Span>,
+    /// Span of the `when:` keyword itself. The value belongs to the variables written in
+    /// it; the keyword is the one token that means "this guard" and nothing else, so it
+    /// is what an explanation of the guard anchors on (T-078).
+    pub condition_key_span: Option<Span>,
     /// The containing task has a `loop:`/`with_*`, so it may happen many times.
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
@@ -63,6 +67,7 @@ impl Reference {
             conditional: false,
             conditions: Vec::new(),
             condition_span: None,
+            condition_key_span: None,
             repeated: false,
             task_name: None,
             include_vars: None,
@@ -133,6 +138,12 @@ fn play(p: &Play, out: &mut Vec<Reference>) {
     }
 }
 
+/// `when` is a directive on tasks, blocks and plays alike, so its keyword span is already
+/// collected — nothing needs to change in the AST to anchor on it.
+fn when_key_span(directives: &[ast::Directive]) -> Option<Span> {
+    directives.iter().find(|d| d.key == "when").map(|d| d.key_span)
+}
+
 fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
     if let Some(file) = &i.file {
         let mut r = Reference::new(ReferenceKind::ImportPlaybook, file, i.span);
@@ -140,6 +151,7 @@ fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
         r.conditional = i.when_span.is_some();
         r.conditions = i.when.clone();
         r.condition_span = i.when_span;
+        r.condition_key_span = when_key_span(&i.directives);
         out.push(r);
     }
 }
@@ -162,11 +174,13 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
     let Some(action) = &t.action else { return };
     let before = out.len();
     module_refs(action, out);
+    let key_span = when_key_span(&t.directives);
     // The task's `when:`/`loop:`/`name:` belong to every reference it produced.
     for r in &mut out[before..] {
         r.conditional = t.when_span.is_some();
         r.conditions = t.when.clone();
         r.condition_span = t.when_span;
+        r.condition_key_span = key_span;
         r.repeated = t.looped;
         r.task_name = t.name.clone();
     }

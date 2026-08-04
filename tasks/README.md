@@ -103,7 +103,6 @@ navigation win.
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
 | T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
-| T-078 | [`when:` explanation hijacks the module-name hover](open/T-078-when-hover-hijacks-module-hover.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
 
@@ -134,6 +133,7 @@ navigation win.
 | T-043 | [Docs stale after the parser swap](closed/T-043-docs-stale-after-parser-swap.md) | done |
 | T-074 | [Startup scan metrics](closed/T-074-startup-scan-metrics.md)   | done     |
 | T-073 | [Legacy `action_plugins/` dirs in the hover twin check](closed/T-073-legacy-action-plugin-dirs.md) | done |
+| T-078 | [`when:` explanation hijacks the module-name hover](closed/T-078-when-hover-hijacks-module-hover.md) | done |
 
 ## Settled — don't re-derive these
 
