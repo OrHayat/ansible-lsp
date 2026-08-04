@@ -14,5 +14,5 @@ rust-version = "1.85"
 libyaml-safer = "0.3"
 # `files_matching` / `ignore_files` are Python-re patterns. Full `regex` (not -lite) for
 # Unicode-aware \d/\w/case-folding like Python's; lookaround/backrefs are still absent in
-# both — that gap would need fancy-regex, and no real filename pattern uses them.
+# both. that gap would need fancy-regex, and no real filename pattern uses them.
 regex = "1"

@@ -1,9 +1,5 @@
 /target
 client/node_modules
-
-# built binaries, in case one lands outside /target (custom CARGO_TARGET_DIR, a copy).
-# The Linux/ELF build is named `ansible-lsp` with no extension, so it can only be caught
-# by living under /target — keep builds there.
 *.exe
 *.dll
 *.pdb

@@ -31,7 +31,7 @@
         "ansibleLsp.hover.candidatesOnResolved": {
           "type": "boolean",
           "default": false,
-          "description": "On hover over a reference that DID resolve, show the paths tried and mark the winner. Off by default — the target is already a Cmd+click away. Turn on to see the full search order and which candidate won (useful for ambiguous roles and modules)."
+          "description": "On hover over a reference that DID resolve, show the paths tried and mark the winner. Off by default the target is already a Cmd+click away. Turn on to see the full search order and which candidate won (useful for ambiguous roles and modules)."
         },
         "ansibleLsp.serverPath": {
           "type": "string",
