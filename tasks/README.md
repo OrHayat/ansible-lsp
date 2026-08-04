@@ -77,6 +77,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-075 | [Startup scan blocks all requests](open/T-075-scan-blocks-requests.md) | M | — |
 | T-076 | [Var-index re-walks shared files per consumer](open/T-076-var-index-redundant-walk.md) | M | T-075 refs |
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
+| T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -105,6 +106,7 @@ navigation win.
 | T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
+| T-082 | [Hover markdown is assembled by hand](open/T-082-hover-markdown-built-by-hand.md) | M | — |
 
 ### Downstream — not this repo's code
 
