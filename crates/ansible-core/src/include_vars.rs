@@ -88,15 +88,10 @@ pub struct Loaded {
     pub vars: Vec<String>,
 }
 
-/// Read-only filesystem surface, so tests supply an in-memory tree.
-pub trait Fs {
-    fn exists(&self, p: &Path) -> bool;
-    fn is_dir(&self, p: &Path) -> bool;
-    fn read(&self, p: &Path) -> Option<String>;
-    /// Every directory at-or-under `root` paired with its file basenames, any order —
-    /// `load` sorts. Mirrors `os.walk(followlinks=True)`.
-    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)>;
-}
+/// This module's filesystem surface is the crate's — re-exported so the call sites
+/// here keep reading `include_vars::Fs`. It used to be a second, narrower trait
+/// declared right here; one door is the point (see [`crate::fs`]).
+pub use crate::fs::{Fs, StdFs};
 
 pub fn load(params: &Params, ctx: &Ctx, fs: &dyn Fs) -> Outcome {
     let mut depth_kv = None;
@@ -407,42 +402,6 @@ fn read_names(path: &Path, fs: &dyn Fs) -> Result<Vec<String>, Outcome> {
     Ok(out)
 }
 
-/// The real filesystem, for the LSP side. Not used by unit tests.
-pub struct StdFs;
-
-impl Fs for StdFs {
-    fn exists(&self, p: &Path) -> bool {
-        p.exists()
-    }
-    fn is_dir(&self, p: &Path) -> bool {
-        p.is_dir()
-    }
-    fn read(&self, p: &Path) -> Option<String> {
-        std::fs::read_to_string(p).ok()
-    }
-    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-        fn descend(dir: &Path, out: &mut Vec<(PathBuf, Vec<String>)>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
-            let mut files = Vec::new();
-            let mut subdirs = Vec::new();
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    subdirs.push(p);
-                } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
-                    files.push(n.to_string());
-                }
-            }
-            out.push((dir.to_path_buf(), files));
-            for s in subdirs {
-                descend(&s, out);
-            }
-        }
-        let mut out = Vec::new();
-        descend(root, &mut out);
-        out
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -459,14 +418,28 @@ mod tests {
     }
 
     impl Fs for MemFs {
-        fn exists(&self, p: &Path) -> bool {
-            self.0.contains_key(p) || self.is_dir(p)
-        }
-        fn is_dir(&self, p: &Path) -> bool {
-            self.0.keys().any(|k| k.starts_with(p) && k != p)
+        fn kind(&self, p: &Path) -> Option<crate::fs::Kind> {
+            if self.0.contains_key(p) {
+                Some(crate::fs::Kind::File)
+            } else if self.0.keys().any(|k| k.starts_with(p) && k != p) {
+                Some(crate::fs::Kind::Dir)
+            } else {
+                None
+            }
         }
         fn read(&self, p: &Path) -> Option<String> {
             self.0.get(p).cloned()
+        }
+        fn read_dir(&self, p: &Path) -> Vec<PathBuf> {
+            self.0
+                .keys()
+                .filter(|k| k.parent() == Some(p))
+                .cloned()
+                .collect()
+        }
+        /// Nothing in an in-memory tree is a symlink, so a path is its own identity.
+        fn canonical(&self, p: &Path) -> Option<PathBuf> {
+            self.exists(p).then(|| p.to_path_buf())
         }
         fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
             let mut dirs: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();

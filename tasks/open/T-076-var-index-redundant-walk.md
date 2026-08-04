@@ -61,10 +61,57 @@ first as a stepping stone if needed, then layer 3 on top.
 - [ ] variable hover/goto and the T-066 provenance breadcrumbs are unchanged (tests green)
 - [ ] the corpus scan (`~/app/ansible`) resolves identically to before
 
+## What shipped (option A, part 1)
+
+A `ScanCache` (`crates/ansible-core/src/cache.rs`) memoizing, for one pass: canonical paths,
+file text + parse, `FileContext` by directory, `ansible.cfg` by project root, directory
+listings, and each file's raw contribution. Two rules keep layer 3 honest:
+
+- **keyed by the path as written, not canonicalised.** A contribution is derived from the
+  spelling it was reached by (`file:` on each def, the directory its `group_vars/` is read
+  from), so two spellings are two contributions. Canonical paths are for identity only —
+  cycle detection and the dependency set. Found by the A/B assert, not by reasoning: keying
+  on canonical silently dropped 7 defs on the demo.
+- **a walk truncated by a cycle is never memoized**, nor is any frame above it. It is right
+  for that walk and wrong for anyone else. This is what the `truncated` flag is for.
+
+`via` provenance (T-066) is stamped on the merged clone, never on the cached copy. First
+occurrence still wins at dedup, which keeps the route Ansible actually executes.
+
+## What the numbers said
+
+Demo, one cache per pass vs one per file (`cargo test --release var_walk -- --ignored`):
+
+| tree | per file | one per pass |
+| ---------------------- | -------: | -----------: |
+| `/mnt/c` (WSL over 9p) | 4523 ms  | 1254 ms      |
+| ext4 (WSL native)      | 8.8 ms   | 3.4 ms       |
+
+346 walk edges collapse to 61 walked files. `scan demo` output is byte-identical bar the new
+counter line. In-editor: var-index 5183 ms → 1160 ms.
+
+**3.6×, not the order of magnitude this ticket asked for** — so the "done when" above is not
+met and the remaining work is split out as **T-085**. The reason, from `strace`: the walking
+redundancy is gone, but each of the 61 remaining walks is syscall-bound, and 4.3× of those
+syscalls are repeats (role search re-probing, the `ansible.cfg` walk-up, and `canonicalize`
+re-walking shared path prefixes). Numbers in T-085.
+
+Two corrections the trace forced:
+
+- **Ad-hoc counters gave a 4× wrong answer.** Instrumenting `resolve.rs` and `workspace.rs`
+  reported 561 probes and "explained" 170 ms of 1254 ms; `strace` found 2340 path touches,
+  the rest in `glob`, `include_vars`, `yaml_files` and `canonicalize`. The `fs::Fs` seam
+  exists because of this — a door can't drift the way a hand-maintained call-site list does.
+- **The `canonicalize` cost predates this work.** It looked at first like the new memo had
+  introduced it. It had not: the old `collect_disk` canonicalised *per edge* (346 of them),
+  unmemoized. Measured, old vs new: `readlink` 1879 → 712, total file syscalls 4164 → 2464.
+  The memo is one level too coarse (whole paths, not directories), which is a missed
+  opportunity, not a regression.
+
 ## Refs
 
 Surfaced and quantified by T-074. Pairs with T-075 (backgrounding) — that stops the freeze,
-this stops the wasted work; do both.
+this stops the wasted work; do both. The remainder is T-085.
 
 Re-confirmed post-T-075 on WSL: **var-index 5183 ms of a 6113 ms scan (85%), parse 2 ms** —
 the same ratio as T-074's original numbers, so backgrounding changed nothing about the cost.
