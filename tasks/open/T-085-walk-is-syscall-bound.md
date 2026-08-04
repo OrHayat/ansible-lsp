@@ -93,12 +93,64 @@ ancestor walk inside `find_project_root`, fix `canonicalize` to be per-directory
 **C — Shrink the candidate lists.** Fewer probes rather than cheaper ones. Real, but it
 changes resolution semantics, which is a correctness surface, not a perf one. Not now.
 
+## Instrumentation
+
+The counters hang off the seam, one set per `Fs` implementation, so a call site added later
+counts itself. Per *operation*, not aggregated — the costs differ 3× (`openat` 834 µs,
+`statx` 621 µs, `readlink` 304 µs) and one combined number hides which to attack.
+
+```rust
+pub struct FsStats {
+    pub kind: Counter,      // existence probes
+    pub read: Counter,
+    pub read_dir: Counter,
+    pub walk: Counter,
+    pub canonical: Counter,
+}
+
+pub struct Counter {
+    pub calls: usize,     // times the seam was asked
+    pub disk: usize,      // times it actually reached the filesystem
+    pub distinct: usize,  // unique paths — the floor a memo can reach
+    pub nanos: u64,       // time in the disk path only
+}
+```
+
+Why each earns its place:
+
+- **`calls` vs `disk`** is the redundancy itself — the ratio that says 2340 → 538.
+- **`distinct`** is the best case available. If `calls ≈ distinct`, memoizing is the wrong
+  fix and the answer is option C (shrink the candidate lists). No other metric says that.
+- **negatives** — how many `kind()` returned `None`, 724 of 1455 today. This is the metric
+  that catches a future hits-only cache silently leaving half the prize behind.
+- **`nanos` on the disk path only.** Two `Instant::now()` calls are ~40 ns against a 540 µs
+  9p stat — 0.007% where it matters. Don't time memo hits: a hashmap lookup is uninteresting
+  and on ext4 the timer costs more than the thing measured. This is the portable number,
+  directly comparable across filesystems that are 860× apart on wall clock.
+- **top-N repeated paths**, behind an env var. This is what actually diagnosed the bug —
+  `demo/roles/demo` ×25 and `demo/ansible.cfg` ×28 named both causes outright. A full
+  `HashMap<PathBuf, usize>` is too much to keep always-on for a 729-file corpus.
+
+Deliberately **not** added: per-call-site attribution. That is precisely the hand-maintained
+list that drifted and produced the 4× wrong answer, just relocated.
+
+Reporting: compact on the scan log line — `fs: 2340 calls -> 538 disk, 231 misses, 47 ms` —
+and the full per-operation table in the `var_walk` perf test and CLI `scan`.
+
+### A guard test, not a counter
+
+A door only works if there is no window. Add a test that greps the crate for `std::fs::`,
+`.is_file()`, `.is_dir()`, `.exists()` and `.canonicalize()` outside `fs.rs` and fails on a
+hit. That is the structural fix for what cost the most in T-076: the counters were right
+about the sites they covered and blind to the four they did not.
+
 ## Done when
 
 - [ ] `statx` and `readlink` counts on `scan demo` drop to roughly their distinct-path counts
 - [ ] var-index on a `/mnt/c` workspace drops by an order of magnitude against T-074's 5183 ms
 - [ ] the corpus resolves identically — `scan` output byte-identical bar counter lines
 - [ ] the counters come from the `Fs` seam, not from hand-placed instrumentation
+- [ ] no filesystem call bypasses the seam — the guard test above is green
 
 ## Refs
 
