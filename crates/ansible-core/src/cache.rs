@@ -19,7 +19,9 @@
 //! nothing here can go stale against an edit.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::config::AnsibleConfig;
@@ -62,41 +64,99 @@ pub struct Stats {
     pub defs: usize,
 }
 
+/// Atomics, not fields under the map lock: nearly every operation ticks one, so sharing the
+/// lock serialised operations whose maps could never collide.
 #[derive(Default)]
-struct Inner {
-    canonical: HashMap<PathBuf, Option<PathBuf>>,
-    /// Existence probes, **negatives included** — half of them are misses, so a map of
-    /// hits alone would leave more than half the work on the floor.
-    kinds: HashMap<PathBuf, Option<Kind>>,
-    /// Raw directory entries, from which the YAML-filtered `listings` are derived.
-    dirs: HashMap<PathBuf, Arc<Vec<(PathBuf, Kind)>>>,
-    walks: HashMap<PathBuf, Arc<Vec<(PathBuf, Vec<String>)>>>,
-    sources: HashMap<PathBuf, Option<Arc<Source>>>,
-    contexts: HashMap<PathBuf, Arc<FileContext>>,
-    configs: HashMap<PathBuf, AnsibleConfig>,
-    contributions: HashMap<PathBuf, Arc<Contribution>>,
-    /// Recursive YAML listings, for `role_task_files`.
-    trees: HashMap<PathBuf, Arc<Vec<PathBuf>>>,
-    /// One directory's own YAML files, for `group_vars/` and `host_vars/`.
-    listings: HashMap<PathBuf, Arc<Vec<PathBuf>>>,
-    stats: Stats,
+struct AtomicStats {
+    edges: AtomicUsize,
+    files: AtomicUsize,
+    uncached: AtomicUsize,
+    reads: AtomicUsize,
+    contexts: AtomicUsize,
+    configs: AtomicUsize,
+    defs: AtomicUsize,
+}
+
+impl AtomicStats {
+    fn snapshot(&self) -> Stats {
+        Stats {
+            edges: self.edges.load(Ordering::Relaxed),
+            files: self.files.load(Ordering::Relaxed),
+            uncached: self.uncached.load(Ordering::Relaxed),
+            reads: self.reads.load(Ordering::Relaxed),
+            contexts: self.contexts.load(Ordering::Relaxed),
+            configs: self.configs.load(Ordering::Relaxed),
+            defs: self.defs.load(Ordering::Relaxed),
+        }
+    }
+}
+
+const SHARDS: usize = 32;
+
+/// A path-keyed map split into [`SHARDS`] independently locked pieces, so two threads
+/// touching unrelated paths don't queue behind each other. Sharded rather than one
+/// `RwLock`: the miss path *writes*, and a scan's first pass is nearly all misses.
+struct Map<V> {
+    shards: [Mutex<HashMap<PathBuf, V>>; SHARDS],
+}
+
+impl<V> Default for Map<V> {
+    fn default() -> Self {
+        Self { shards: std::array::from_fn(|_| Mutex::new(HashMap::new())) }
+    }
+}
+
+impl<V: Clone> Map<V> {
+    fn slot(&self, k: &Path) -> &Mutex<HashMap<PathBuf, V>> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        k.hash(&mut h);
+        &self.shards[h.finish() as usize % SHARDS]
+    }
+
+    fn get(&self, k: &Path) -> Option<V> {
+        self.slot(k).lock().ok()?.get(k).cloned()
+    }
+
+    fn insert(&self, k: PathBuf, v: V) {
+        if let Ok(mut m) = self.slot(&k).lock() {
+            m.insert(k, v);
+        }
+    }
+
+    fn or_insert_with(&self, k: PathBuf, f: impl FnOnce() -> V) {
+        if let Ok(mut m) = self.slot(&k).lock() {
+            m.entry(k).or_insert_with(f);
+        }
+    }
 }
 
 /// Shared across the files of one scan. Every method takes `&self` and locks only around the
 /// map access, never across the filesystem work — so a miss on one thread doesn't hold the
 /// others. Two threads racing the same miss both compute it and agree on the answer.
 ///
-/// One lock for all the maps, deliberately: `stats` is touched by nearly every operation, so
-/// per-map locks would make the common path take *two* acquisitions instead of one — a real
-/// cost on the ~50–100 ns memo-hit path this exists to create, bought against parallelism the
-/// scan loop doesn't use yet. If it ever does, the order is: move `stats` to atomics first
-/// (see [`crate::fs::Counter`]), then shard the hot map by path hash. Splitting by field
-/// helps least, because every thread hits `contributions` and `canonical` regardless.
+/// Sharded by path hash rather than one lock over everything: the scan walks files
+/// concurrently, and a memo hit is ~50–100 ns, so on a local filesystem contention cost
+/// more than the syscalls the memo saves.
 pub struct ScanCache {
     /// What answers a miss. `StdFs` normally; wrap it in [`crate::fs::Counting`] to see the
     /// syscalls this saved.
     fs: Box<dyn Fs>,
-    inner: Mutex<Inner>,
+    canonical: Map<Option<PathBuf>>,
+    /// Existence probes, **negatives included** — half of them are misses, so a map of
+    /// hits alone would leave more than half the work on the floor.
+    kinds: Map<Option<Kind>>,
+    /// Raw directory entries, from which the YAML-filtered `listings` are derived.
+    dirs: Map<Arc<Vec<(PathBuf, Kind)>>>,
+    walks: Map<Arc<Vec<(PathBuf, Vec<String>)>>>,
+    sources: Map<Option<Arc<Source>>>,
+    contexts: Map<Arc<FileContext>>,
+    configs: Map<AnsibleConfig>,
+    contributions: Map<Arc<Contribution>>,
+    /// Recursive YAML listings, for `role_task_files`.
+    trees: Map<Arc<Vec<PathBuf>>>,
+    /// One directory's own YAML files, for `group_vars/` and `host_vars/`.
+    listings: Map<Arc<Vec<PathBuf>>>,
+    stats: AtomicStats,
 }
 
 impl Default for ScanCache {
@@ -107,7 +167,20 @@ impl Default for ScanCache {
 
 impl ScanCache {
     pub fn new(fs: impl Fs + 'static) -> Self {
-        Self { fs: Box::new(fs), inner: Mutex::new(Inner::default()) }
+        Self {
+            fs: Box::new(fs),
+            canonical: Map::default(),
+            kinds: Map::default(),
+            dirs: Map::default(),
+            walks: Map::default(),
+            sources: Map::default(),
+            contexts: Map::default(),
+            configs: Map::default(),
+            contributions: Map::default(),
+            trees: Map::default(),
+            listings: Map::default(),
+            stats: AtomicStats::default(),
+        }
     }
 
     /// The backend a miss falls through to — where its counters live, if it has any.
@@ -115,12 +188,8 @@ impl ScanCache {
         &*self.fs
     }
 
-    fn with<T>(&self, f: impl FnOnce(&mut Inner) -> T) -> Option<T> {
-        self.inner.lock().ok().map(|mut i| f(&mut i))
-    }
-
     pub fn stats(&self) -> Stats {
-        self.with(|i| i.stats).unwrap_or_default()
+        self.stats.snapshot()
     }
 
     /// Resolve the parent — memoized, so a shared prefix is walked once for the whole scan —
@@ -167,7 +236,7 @@ impl ScanCache {
         let key = canon.clone().unwrap_or_else(|| path.to_path_buf());
         // Two levels of `Option` collapse here: "the lock is gone" and "never looked at"
         // both mean recompute, while a remembered *failure* is a hit that returns `None`.
-        if let Some(hit) = self.with(|i| i.sources.get(&key).cloned()).flatten() {
+        if let Some(hit) = self.sources.get(&key) {
             return hit;
         }
         let src = self.fs.read(path).map(|text| {
@@ -179,10 +248,8 @@ impl ScanCache {
                 canon: canon.clone(),
             })
         });
-        self.with(|i| {
-            i.stats.reads += 1;
-            i.sources.insert(key, src.clone());
-        });
+        self.stats.reads.fetch_add(1, Ordering::Relaxed);
+        self.sources.insert(key, src.clone());
         src
     }
 
@@ -191,14 +258,12 @@ impl ScanCache {
     /// file's walk reaches it.
     pub fn prime(&self, path: &Path, text: &str, nodes: &[Node]) {
         let Some(canon) = Fs::canonical(self, path) else { return };
-        self.with(|i| {
-            i.sources.entry(canon.clone()).or_insert_with(|| {
-                Some(Arc::new(Source {
-                    text: Arc::from(text),
-                    nodes: Some(Arc::new(nodes.to_vec())),
-                    canon: Some(canon),
-                }))
-            });
+        self.sources.or_insert_with(canon.clone(), || {
+            Some(Arc::new(Source {
+                text: Arc::from(text),
+                nodes: Some(Arc::new(nodes.to_vec())),
+                canon: Some(canon),
+            }))
         });
     }
 
@@ -206,43 +271,39 @@ impl ScanCache {
     /// `discover` looks at — with the project's `ansible.cfg` read at most once.
     pub fn context(&self, file: &Path) -> Arc<FileContext> {
         let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        if let Some(hit) = self.with(|i| i.contexts.get(&dir).cloned()).flatten() {
+        if let Some(hit) = self.contexts.get(&dir) {
             return hit;
         }
         let ctx = Arc::new(FileContext::discover_with(file, self, |root| self.config(root)));
-        self.with(|i| {
-            i.stats.contexts += 1;
-            i.contexts.insert(dir, ctx.clone());
-        });
+        self.stats.contexts.fetch_add(1, Ordering::Relaxed);
+        self.contexts.insert(dir, ctx.clone());
         ctx
     }
 
     fn config(&self, root: &Path) -> AnsibleConfig {
-        if let Some(hit) = self.with(|i| i.configs.get(root).cloned()).flatten() {
+        if let Some(hit) = self.configs.get(root) {
             return hit;
         }
         let cfg = AnsibleConfig::load_in(root, self);
-        self.with(|i| {
-            i.stats.configs += 1;
-            i.configs.insert(root.to_path_buf(), cfg.clone());
-        });
+        self.stats.configs.fetch_add(1, Ordering::Relaxed);
+        self.configs.insert(root.to_path_buf(), cfg.clone());
         cfg
     }
 
     /// Every YAML file under `dir`, memoized.
     pub fn tree(&self, dir: &Path) -> Arc<Vec<PathBuf>> {
-        if let Some(hit) = self.with(|i| i.trees.get(dir).cloned()).flatten() {
+        if let Some(hit) = self.trees.get(dir) {
             return hit;
         }
         let files = Arc::new(yaml_files_in(dir, self));
-        self.with(|i| i.trees.insert(dir.to_path_buf(), files.clone()));
+        self.trees.insert(dir.to_path_buf(), files.clone());
         files
     }
 
     /// `dir`'s own `*.yml`/`*.yaml` files, not descending — memoized. Empty when `dir`
     /// isn't a directory.
     pub fn listing(&self, dir: &Path) -> Arc<Vec<PathBuf>> {
-        if let Some(hit) = self.with(|i| i.listings.get(dir).cloned()).flatten() {
+        if let Some(hit) = self.listings.get(dir) {
             return hit;
         }
         let files = Arc::new(
@@ -257,36 +318,29 @@ impl ScanCache {
                 })
                 .collect::<Vec<_>>(),
         );
-        self.with(|i| i.listings.insert(dir.to_path_buf(), files.clone()));
+        self.listings.insert(dir.to_path_buf(), files.clone());
         files
     }
 
     /// The memoized contribution of `canon`, and a tick on the edge counter.
     pub fn contribution(&self, canon: &Path) -> Option<Arc<Contribution>> {
-        self.with(|i| {
-            i.stats.edges += 1;
-            i.contributions.get(canon).cloned()
-        })
-        .flatten()
+        self.stats.edges.fetch_add(1, Ordering::Relaxed);
+        self.contributions.get(canon)
     }
 
     pub fn store(&self, canon: PathBuf, c: Arc<Contribution>) {
-        self.with(|i| {
-            i.stats.files += 1;
-            i.contributions.insert(canon, c);
-        });
+        self.stats.files.fetch_add(1, Ordering::Relaxed);
+        self.contributions.insert(canon, c);
     }
 
     /// A file walked but deliberately not memoized (its result was truncated by a cycle).
     pub fn count_uncached(&self) {
-        self.with(|i| {
-            i.stats.files += 1;
-            i.stats.uncached += 1;
-        });
+        self.stats.files.fetch_add(1, Ordering::Relaxed);
+        self.stats.uncached.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn count_defs(&self, n: usize) {
-        self.with(|i| i.stats.defs += n);
+        self.stats.defs.fetch_add(n, Ordering::Relaxed);
     }
 }
 
@@ -296,11 +350,11 @@ impl ScanCache {
 /// re-testing the same ancestors.
 impl Fs for ScanCache {
     fn kind(&self, p: &Path) -> Option<Kind> {
-        if let Some(hit) = self.with(|i| i.kinds.get(p).copied()).flatten() {
+        if let Some(hit) = self.kinds.get(p) {
             return hit;
         }
         let k = self.fs.kind(p);
-        self.with(|i| i.kinds.insert(p.to_path_buf(), k));
+        self.kinds.insert(p.to_path_buf(), k);
         k
     }
 
@@ -320,34 +374,32 @@ impl Fs for ScanCache {
     /// Seeds the existence map as a side effect: the listing already knows what each entry
     /// is, so every later `kind()` on one of them is answered without a syscall.
     fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {
-        if let Some(hit) = self.with(|i| i.dirs.get(p).cloned()).flatten() {
+        if let Some(hit) = self.dirs.get(p) {
             return (*hit).clone();
         }
         let entries = Arc::new(self.fs.read_dir(p));
-        self.with(|i| {
-            for (path, kind) in entries.iter() {
-                i.kinds.entry(path.clone()).or_insert(Some(*kind));
-            }
-            i.dirs.insert(p.to_path_buf(), entries.clone());
-        });
+        for (path, kind) in entries.iter() {
+            self.kinds.or_insert_with(path.clone(), || Some(*kind));
+        }
+        self.dirs.insert(p.to_path_buf(), entries.clone());
         (*entries).clone()
     }
 
     fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-        if let Some(hit) = self.with(|i| i.walks.get(root).cloned()).flatten() {
+        if let Some(hit) = self.walks.get(root) {
             return (*hit).clone();
         }
         let out = Arc::new(self.fs.walk(root));
-        self.with(|i| i.walks.insert(root.to_path_buf(), out.clone()));
+        self.walks.insert(root.to_path_buf(), out.clone());
         (*out).clone()
     }
 
     fn canonical(&self, p: &Path) -> Option<PathBuf> {
-        if let Some(hit) = self.with(|i| i.canonical.get(p).cloned()).flatten() {
+        if let Some(hit) = self.canonical.get(p) {
             return hit;
         }
         let out = self.canonical_uncached(p);
-        self.with(|i| i.canonical.insert(p.to_path_buf(), out.clone()));
+        self.canonical.insert(p.to_path_buf(), out.clone());
         out
     }
 }
