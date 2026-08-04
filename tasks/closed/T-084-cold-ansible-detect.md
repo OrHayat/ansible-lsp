@@ -94,6 +94,24 @@ Residual, accepted: if the subprocess branch *is* reached on macOS it still cost
 It now runs detached, so the cost is a late toast rather than a dead editor — which is what
 A was for.
 
+## Post-close bench (2026-08-04, M3 Pro, after the bare-name/rename-table work)
+
+CLI `scan` (includes detect + the runtime.yml table parse), first run vs repeats:
+
+```
+scan demo              (63 files)   0.95 s cold   0.02–0.04 s warm
+scan ~/app/ansible  (731 files)  4.98 s cold   ~1.5 s warm
+ansible --version                   2.81 s        (the subprocess detect never runs)
+```
+
+- The cold/warm split is filesystem cache, not code — nothing left for the rejected B/C.
+- In-editor line the same day: `60 files analysed of 63 seen in 67 ms` with the pump free —
+  the intended end state. The logged phases (parse 1, context 1, var-index 35, resolve 7)
+  sum to 44 ms; the ~23 ms remainder is walk/IO with no phase bucket.
+- `ansible --version` on WSL reported at ~0.1 s: the fallback's cost spans 30× across
+  platforms (Linux cheap, macOS brutal, Windows crashes) — confirming last-tier is the only
+  sane place for it.
+
 ## Refs
 
 Found while measuring T-075 (its ticket has the numbers). T-074's scan metrics are blind to
