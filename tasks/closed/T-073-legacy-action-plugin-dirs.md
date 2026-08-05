@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| closed | P3       | S    | —          |
+| done   | P3       | S    | —          |
 
 Escape #3 from the T-029 module-hover discussion: pre-collections plugin dirs can inject or
 shadow an action plugin outside the collection tree the twin check searches.

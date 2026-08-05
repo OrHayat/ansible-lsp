@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | —          |
+| done   | P2       | S    | —          |
 
 ## Problem
 
@@ -54,9 +54,35 @@ part of the ticket, not a prerequisite for it.
 
 ## Done when
 
-- [ ] a script reports every disagreement between `tasks/{open,closed}/` and the README tables,
+- [x] a script reports every disagreement between `tasks/{open,closed}/` and the README tables,
       and exits non-zero when there is one
-- [ ] the 27 existing disagreements are fixed, so the check passes on a clean tree
-- [ ] closing a ticket no longer requires hand-editing a README row, or the check catches it when
+- [x] the 27 existing disagreements are fixed, so the check passes on a clean tree
+- [x] closing a ticket no longer requires hand-editing a README row, or the check catches it when
       someone forgets
-- [ ] the hand-written prose sections survive whatever the tool does to the tables
+- [x] the hand-written prose sections survive whatever the tool does to the tables
+
+## Outcome — the check only; no generator
+
+`crates/ansible-core/tests/board.rs`, run by plain `cargo test`. Not a script in `scripts/`:
+the closest precedent is T-085's "a door only works if there is no window" guard in `fs.rs`,
+and a test is already wired into the thing that runs on every change. It writes nothing, so
+the prose sections cannot be clobbered — the fourth box is satisfied structurally rather than
+by being careful.
+
+It found **36** problems on the first run. The 27 this ticket predicted, exactly — 2 listed
+open but sitting in `closed/` (T-018, T-033), 14 in `open/` with no row, 11 in `closed/` with
+no row — plus **9 the audit missed**, because it only compared folders against the README and
+never against the ticket's *own* status line. T-018 was in `closed/` still saying `open`;
+T-033, T-066 and T-073 said `closed`, which isn't one of the three declared values. That is the
+second of the three manual edits, and it drifts the same way the third does.
+
+`partly done` is now an accepted status for a ticket in `open/` — T-029, T-031 and T-032 all
+use it and the README prose already explains it. Flattening those to `open` would have thrown
+away true information to satisfy a checker, so the checker learned the word instead.
+
+Verified by simulating the failure it exists for: `git mv`ing an open ticket to `closed/` and
+changing nothing else fails with all three edits named.
+
+The **generate** half is deliberately not built. With the check green the remaining cost of
+closing a ticket is one README row, and a generator that rewrites table blocks is a
+prose-eating risk for that one line of savings. Reconsider if the board drifts again.

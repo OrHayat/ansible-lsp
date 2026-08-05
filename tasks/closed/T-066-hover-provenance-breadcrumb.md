@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| closed | P2       | S    | T-018      |
+| done   | P2       | S    | T-018      |
 
 ## Problem
 

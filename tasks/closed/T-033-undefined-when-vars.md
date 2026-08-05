@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| closed | —        | L    | —          |
+| done   | —        | L    | —          |
 
 **Split 2026-08-02.** The playbook-level unguarded class shipped as T-051's
 `var-undefined`; the rest became per-feature tickets: **T-060** (`suspicious-var`

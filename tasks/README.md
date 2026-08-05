@@ -51,8 +51,12 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | ID    | Title                                                       | Size | Blocked by |
 | ----- | ----------------------------------------------------------- | ---- | ---------- |
 | T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
-| T-033 | [`when:` vars defined nowhere](open/T-033-undefined-when-vars.md) | L    | —          |
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
+| T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
+| T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
+| T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | T-062 |
+| T-062 | [Index ini inventories and extension-less `group_vars`](open/T-062-inventory-var-sources.md) | M | — |
+| T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
@@ -66,7 +70,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-020 | [Reverse index](open/T-020-reverse-index.md)              | M    | —    |
 | T-016 | [`vars_files`](open/T-016-vars-files.md)                  | M    | 75   |
 | T-017 | [`include_vars`](open/T-017-include-vars.md)              | M    | 30   |
-| T-018 | [`meta` dependencies](open/T-018-meta-dependencies.md)    | S    | 3    |
 | T-034 | [Templating that only looks dynamic](open/T-034-statically-knowable-templating.md) | M | 21 |
 | T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
 | T-032 | [Static `when:` evaluation](open/T-032-static-when.md)    | L    | 2669 |
@@ -75,10 +78,14 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L | — |
 | T-041 | [`meta/argument_specs.yml` role signatures](open/T-041-role-argument-specs.md) | M | — |
 | T-042 | [Resolver gaps: collections, `*_from`](open/T-042-resolver-gaps.md) | S | — |
+| T-046 | [Harden the module/args split](open/T-046-module-args-split.md) | M | T-044 |
+| T-057 | [Module `DOCUMENTATION`/`RETURN` schema](open/T-057-module-doc-schema.md) | L | T-046 |
+| T-061 | [`undeclared-var`: the playbook's required `-e` inputs](open/T-061-undeclared-var-contract.md) | S | T-062 |
+| T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M | — |
+| T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
 | T-076 | [Var-index re-walks shared files per consumer](open/T-076-var-index-redundant-walk.md) | M | T-075 refs |
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | T-076 |
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
-| T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -86,9 +93,9 @@ shipped; the tree consumer and the code action didn't.
 Counts are grep estimates with comments excluded — treat as ±5%. Of T-015's 385, roughly 256
 are local paths worth checking and the rest are paths on the managed host.
 
-T-018's 3 is exact, and it's the one to read before starting: an earlier count of 39 was almost
-entirely unrelated matches, so it's a prerequisite for T-021's correctness rather than a
-navigation win.
+T-018 landed, and its count of 3 was exact: an earlier count of 39 was almost entirely
+unrelated matches. It mattered for T-021's correctness rather than as a navigation win, so
+T-021 is now unblocked on that side.
 
 ### P3 — on top of the index / later
 
@@ -104,7 +111,11 @@ navigation win.
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M   | —          |
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
+| T-054 | [Find variable references](open/T-054-variable-references.md)    | M    | T-049, T-020 |
+| T-058 | [Warn when a module ships no `DOCUMENTATION`](open/T-058-module-doc-missing-warn.md) | S | T-057, T-010 |
 | T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
+| T-071 | [`unconstrained-path-var`: the value set a path implies](open/T-071-unconstrained-path-var.md) | S | — |
+| T-072 | [Network modules: one platform action plugin per family](open/T-072-network-platform-action-plugins.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
 | T-082 | [Hover markdown is assembled by hand](open/T-082-hover-markdown-built-by-hand.md) | M | — |
@@ -132,13 +143,27 @@ navigation win.
 | T-011 | [Execution tree via LSP call hierarchy](closed/T-011-call-hierarchy-tree.md) | **rejected** |
 | T-014 | [README is stale](closed/T-014-readme-drift.md)                | done     |
 | T-013 | [Unparseable files flagged as errors](closed/T-013-unparseable-hint.md) | done |
+| T-018 | [`meta/main.yml` dependencies](closed/T-018-meta-dependencies.md) | done |
+| T-033 | [`when:` vars defined nowhere](closed/T-033-undefined-when-vars.md) | done |
 | T-036 | [libyaml parser, matches Ansible](closed/T-036-parse-what-ansible-parses.md) | done |
 | T-043 | [Docs stale after the parser swap](closed/T-043-docs-stale-after-parser-swap.md) | done |
+| T-044 | [Semantic AST (Play / Block / Task / Role)](closed/T-044-semantic-ast.md) | done |
+| T-045 | [Keyword schema from Ansible's FieldAttributes](closed/T-045-keyword-schema.md) | done |
+| T-047 | [Resolvers moved onto the AST](closed/T-047-resolvers-on-ast.md) | done |
+| T-048 | [Variable definition index (in-file + cross-file)](closed/T-048-variable-index.md) | done |
+| T-049 | [Variable uses with byte-accurate spans](closed/T-049-variable-uses.md) | done |
+| T-050 | [Go-to-definition for variables](closed/T-050-variable-goto-definition.md) | done |
+| T-052 | [Variable hover: where it's defined, and its value](closed/T-052-variable-hover.md) | done |
+| T-053 | [Remaining variable-definition sources](closed/T-053-remaining-var-sources.md) | done |
+| T-055 | [Cache the cross-file variable index](closed/T-055-variable-perf.md) | done |
+| T-056 | [Expand known-value variables in templated paths](closed/T-056-expand-known-vars-in-paths.md) | done |
+| T-066 | [Hover provenance breadcrumb](closed/T-066-hover-provenance-breadcrumb.md) | done |
 | T-074 | [Startup scan metrics](closed/T-074-startup-scan-metrics.md)   | done     |
 | T-073 | [Legacy `action_plugins/` dirs in the hover twin check](closed/T-073-legacy-action-plugin-dirs.md) | done |
 | T-078 | [`when:` explanation hijacks the module-name hover](closed/T-078-when-hover-hijacks-module-hover.md) | done |
 | T-075 | [Startup scan blocks all requests](closed/T-075-scan-blocks-requests.md) | done |
 | T-084 | [Cold `ansible --version` blocks startup](closed/T-084-cold-ansible-detect.md) | done — A only, B/C rejected on measurement |
+| T-081 | [The board is hand-edited, and it has drifted](closed/T-081-board-generated-not-hand-edited.md) | done — check only, no generator |
 
 ## Settled — don't re-derive these
 
