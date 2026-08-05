@@ -186,6 +186,50 @@ A door only works if there is no window. Add a test that greps the crate for `st
 hit. That is the structural fix for what cost the most in T-076: the counters were right
 about the sites they covered and blind to the four they did not.
 
+## Measured: five follow-up attempts, all rejected
+
+Bench: kubespray, 584 YAML files, cloned to WSL ext4 and copied byte-identical to `/mnt/c`
+(9p). 32 cores. `var_walk` for syscall counts, `parallel_spike` for wall clock. Every variant
+kept the corpus identical — 27700 defs, 3257 edges -> 1276 files, 191 tests green.
+
+| attempt | ext4 1t | ext4 32t | 9p 1t | 9p 32t |
+| ------- | ------: | -------: | ----: | -----: |
+| cache-pad the `AtomicStats` counters | 0 | 0 | 0 | 0 |
+| `read_dir` returns `Arc<[..]>` not `Vec` | **+10%** | — | flat | — |
+| `kind()` answers from an already-known parent | flat | — | −1.4% | — |
+| `kind()` climbs to the nearest known ancestor | — | — | **+6.5% syscalls** | — |
+| `kind()` lists the parent instead of stat'ing | +5.5% | **+26%** | **−22%** | +2% |
+
+- **Padding.** The residual above is now measured, and it is smaller than the note assumed:
+  deleting the counters *outright* — the ceiling on any counter scheme — is also unmeasurable
+  (8.95 vs 9.19 ms at 32 threads, σ≈0.6–0.9). At n=5 a 1 ms artifact looked real and flipped
+  sign at n=21. Interleave variants and use ≥20 reps.
+- **`Arc`.** `.into_iter()` on an owned `Vec` *moves* each `PathBuf`; `.iter()` on a shared
+  `Arc` must *clone* it — one allocation became N. `dirs` is rarely hit anyway, because
+  `listings` and `trees` absorb the repeats.
+- **Ancestor climb.** Costs one stat per unseen ancestor and only pays on a dead one. 552 live
+  against 64 dead: 8.6:1 the wrong way.
+- **List-the-parent.** The only one that works on its own terms — 7499 -> 5493 syscalls
+  (−27%), misses 2759 -> 491, 9p sequential 17.0 -> 13.0 s. Rejected anyway: `read_dir` is far
+  more CPU than `stat` (an allocation per entry plus a shard lock each), so it regresses the
+  concurrent scan, and T-085's own concurrency already takes 9p sequential 19.7 -> 1.9 s. It
+  competes for what threading already collected.
+
+**The governing number is `calls ≈ distinct`.** 7499 syscalls over **5363 distinct paths**
+(1.40×), and the gap is fully explained by `read`/`read_dir` touching paths that were also
+`kind`-checked. By this ticket's own test (Instrumentation, `distinct`), memoizing is done —
+the remaining 2759 negative probes are individual missing candidates inside *live* directories
+(`roles/etcd/vars/main.yml` where the role has no `vars/`), so no prefix or ancestor trick
+reaches them. What is left is **option C**, shrinking the candidate lists, with the correctness
+caveat that option C already carries.
+
+Unexplored: ext4 CPU is allocation churn, not syscalls — 27700 `Located` defs materialised for
+584 files, `Contribution.defs` cloned and re-stamped per caller. Never profiled at scale; WSL
+has no `perf`/`samply` and `perf_event_paranoid=2`, and Windows `cargo flamegraph` needs
+`CARGO_PROFILE_RELEASE_DEBUG=true` or every frame is `Unknown` — it then mis-attributed 4.4%
+to a `fetch_add` that executes twice, which is the other reason the padding question needed an
+A/B rather than a profile.
+
 ## Done when
 
 - [ ] `statx` and `readlink` counts on `scan demo` drop to roughly their distinct-path counts
