@@ -23,6 +23,7 @@ fn kind_name(k: ReferenceKind) -> &'static str {
         ReferenceKind::ImportPlaybook => "import_playbook",
         ReferenceKind::IncludeVars => "include_vars",
         ReferenceKind::IncludeVarsDir => "include_vars_dir",
+        ReferenceKind::VarsFiles => "vars_files",
     }
 }
 

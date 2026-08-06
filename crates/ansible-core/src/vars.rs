@@ -696,16 +696,25 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         }
     }
 
-    // Play-level vars_files — explicit paths written in the play.
+    // Play-level vars_files — explicit paths written in the play. A nested entry is
+    // first-found: Ansible loads only the winning alternative, so only it is indexed.
+    // A templated alternative abandons the whole entry — were it to resolve at runtime
+    // it would win, so indexing a later literal could credit the wrong file.
     if let Ast::Playbook(items) = &tree {
         for it in items {
             if let PlayItem::Play(p) = it {
-                for (entry, _) in &p.vars_files {
-                    if entry.contains("{{") {
-                        continue;
-                    }
-                    if let Some(f) = resolve_var_path(entry, &ctx, walk.cache) {
-                        read_var_file(&f, VarSource::VarsFiles, None, out, walk);
+                for entry in &p.vars_files {
+                    for (alt, _) in &entry.alternatives {
+                        if alt.contains("{{") {
+                            break;
+                        }
+                        let hit = crate::resolve::vars_files_candidates(alt, &ctx.file_dir)
+                            .into_iter()
+                            .find(|p| walk.cache.is_file(p));
+                        if let Some(f) = hit {
+                            read_var_file(&f, VarSource::VarsFiles, None, out, walk);
+                            break;
+                        }
                     }
                 }
             }
@@ -941,8 +950,10 @@ fn each_task(tree: &Ast, f: &mut impl FnMut(&Task)) {
     }
 }
 
-/// Resolve a `vars_files:` entry against the file dir, its `vars/`, the role `vars/` and the
-/// project root — where Ansible looks — returning the first path that exists.
+/// Resolve an `include_vars:` file entry against the file dir, its `vars/`, the role
+/// `vars/` and the project root, returning the first path that exists. `vars_files` no
+/// longer routes through here — it uses [`crate::resolve::vars_files_candidates`], the
+/// ported play-level search order.
 fn resolve_var_path(entry: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
     let mut cands = vec![ctx.file_dir.join(entry), ctx.file_dir.join("vars").join(entry)];
     if let Some(role) = &ctx.role_dir {
@@ -1479,6 +1490,67 @@ mod tests {
             .unwrap()
             .file
             .ends_with("vars/shared.yml"));
+    }
+
+    #[test]
+    fn vars_files_group_indexes_only_the_winner() {
+        let d = std::env::temp_dir().join("ansible-lsp-t016-vf-group");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // Both alternatives exist — Ansible loads only the first, so only it is indexed.
+        write(&d, "vars/site-local.yml", "from_local: 1\n");
+        write(&d, "vars/shared.yml", "from_shared: 2\n");
+        let play = d.join("play.yml");
+        std::fs::write(
+            &play,
+            "- hosts: all\n  vars_files:\n    - - vars/site-local.yml\n      - vars/shared.yml\n",
+        )
+        .unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().any(|x| x.name == "from_local"));
+        assert!(
+            !defs.iter().any(|x| x.name == "from_shared"),
+            "the shadowed alternative must not be indexed"
+        );
+    }
+
+    #[test]
+    fn vars_files_indexing_prefers_the_vars_subdir() {
+        let d = std::env::temp_dir().join("ansible-lsp-t016-vf-order");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // Same name in the play dir and its vars/ — Ansible loads the vars/ copy.
+        write(&d, "x.yml", "which: plain\n");
+        write(&d, "vars/x.yml", "which: vars_subdir\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  vars_files: [x.yml]\n").unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let def = defs.iter().find(|x| x.name == "which").unwrap();
+        assert!(def.file.ends_with("vars/x.yml"), "got {:?}", def.file);
+    }
+
+    #[test]
+    fn vars_files_templated_alternative_abandons_the_entry() {
+        let d = std::env::temp_dir().join("ansible-lsp-t016-vf-tmpl");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/fallback.yml", "from_fallback: 1\n");
+        let play = d.join("play.yml");
+        // Were the templated first alternative to resolve at runtime it would win, so
+        // crediting fallback.yml here could attribute variables to the wrong file.
+        std::fs::write(
+            &play,
+            "- hosts: all\n  vars_files:\n    - - \"vars/{{ env }}.yml\"\n      - vars/fallback.yml\n",
+        )
+        .unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(!defs.iter().any(|x| x.name == "from_fallback"));
     }
 }
 

@@ -22,6 +22,9 @@ pub enum SkipReason {
     /// Nothing to point at in this workspace (e.g. `ansible.builtin.*`, or a role
     /// installed outside it). Not an error, so never diagnosed.
     NotInWorkspace,
+    /// A missing alternative in a first-match `vars_files` list — absence is the
+    /// construct working as designed, so the group reference owns the verdict.
+    GroupAlternative,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +72,9 @@ pub fn rule_id(r: &Reference) -> &'static str {
     match (r.kind, r.templated) {
         (ReferenceKind::ImportPlaybook, true) => "templated-import",
         (ReferenceKind::IncludeVarsDir, _) => "missing-dir",
+        // Deliberately the same id as a single entry: a first-match group that resolves
+        // nothing is still "the file this play claims to load doesn't exist".
+        (ReferenceKind::VarsFiles, _) => "missing-file",
         _ => "missing-file",
     }
 }
@@ -171,7 +177,9 @@ pub fn resolve_with_in(
     literals: &HashMap<String, Vec<String>>,
     fs: &dyn Fs,
 ) -> Resolution {
-    if r.value.contains("{{") {
+    // A group's value is the joined alternatives list, not a path — substitution would
+    // build nonsense candidates from it. The group resolver handles templating itself.
+    if r.value.contains("{{") && r.vars_files_group.is_none() {
         if let Some(bases) = path_bases(r.kind, ctx) {
             let subs = substitute_literals(&r.value, literals);
             if !subs.is_empty() {
@@ -214,6 +222,9 @@ fn path_bases(kind: ReferenceKind, ctx: &FileContext) -> Option<Vec<PathBuf>> {
                 b.push(root.clone());
             }
             Some(b)
+        }
+        ReferenceKind::VarsFiles => {
+            Some(vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()])
         }
         _ => None,
     }
@@ -265,6 +276,12 @@ pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
 /// name against the same roots once per consuming file, so a memoizing `fs` is most of
 /// T-085's win.
 pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
+    // A first-match `vars_files` list resolves as a unit: first alternative that exists
+    // wins, and only the group — never a member — can be Missing.
+    if let Some(alts) = &r.vars_files_group {
+        return resolve_vars_files_group(alts, ctx, fs);
+    }
+
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
     // A templated static import is wrong whatever is on disk — Ansible templates the
@@ -287,6 +304,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     if templated {
         let bases = match r.kind {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
+            ReferenceKind::VarsFiles => vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()],
             _ => return Resolution::skipped(SkipReason::Templated),
         };
         let targets = crate::glob::candidates_in(&bases, &r.value, fs);
@@ -348,6 +366,26 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
                 fs,
             )
+        }
+
+        ReferenceKind::VarsFiles => {
+            let res = if substituted {
+                // An expansion is a complete path — the vars/ prepend does not apply.
+                Resolution::from_candidates(
+                    unique(values.iter().map(|v| normalise(Path::new(v)))),
+                    fs,
+                )
+            } else {
+                Resolution::from_candidates(vars_files_candidates(&r.value, &ctx.file_dir), fs)
+            };
+            match (res.status, r.grouped) {
+                (Status::Missing, true) => Resolution {
+                    status: Status::Skipped,
+                    skip_reason: Some(SkipReason::GroupAlternative),
+                    ..res
+                },
+                _ => res,
+            }
         }
 
         // The dir form runs the ported action-plugin semantics: one computed root
@@ -557,6 +595,71 @@ fn role_dir(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
 }
 
 /// `tasks_from: begin` and `tasks_from: begin.yml` are both legal.
+/// Where a `vars_files:` entry can land — ansible-core's
+/// `path_dwim_relative_stack(play.get_search_path(), 'vars', entry)` (`dataloader.py:345-390`,
+/// live-verified on 2.21.2) with the loader basedir statically equal to the play's own dir:
+/// `<play dir>/vars/<entry>` — skipped when the entry's first component is literally `vars`,
+/// so `vars/x.yml` never doubles into `vars/vars/` — then `<play dir>/<entry>`. An absolute
+/// (or `~`) entry is a single candidate with no `vars/` prepend. No role `vars/`, no project
+/// root, and no extension guessing (`foo` does not find `foo.yml`). Lexically normalised so
+/// `../` collapses before any existence check.
+///
+/// A miss is still only ever a warning: ansible-core 2.21.2 *silently skips* a missing
+/// `vars_files` file (its "we raise an error" comment is stale) — the play runs, the
+/// variables are just never set.
+/// First-found over a `vars_files` alternatives list. Resolves via the first alternative
+/// that exists; Missing only when none can. Any templated alternative makes the group
+/// undecidable — it might resolve at runtime — so the group defers rather than warns.
+fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> Resolution {
+    let mut tried = Vec::new();
+    let mut templated = false;
+    for alt in alts {
+        if alt.contains("{{") {
+            templated = true;
+            continue;
+        }
+        let cands = vars_files_candidates(alt, &ctx.file_dir);
+        let hit = cands.iter().find(|p| fs.is_file(p)).cloned();
+        tried.extend(cands);
+        if let Some(p) = hit {
+            return Resolution {
+                status: Status::Resolved,
+                targets: vec![p],
+                candidates: unique(tried.into_iter()),
+                skip_reason: None,
+            };
+        }
+    }
+    if templated {
+        return Resolution::skipped(SkipReason::Templated);
+    }
+    Resolution {
+        status: Status::Missing,
+        targets: Vec::new(),
+        candidates: unique(tried.into_iter()),
+        skip_reason: None,
+    }
+}
+
+pub fn vars_files_candidates(entry: &str, file_dir: &Path) -> Vec<PathBuf> {
+    if let Some(rest) = entry.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        return match home {
+            Some(h) => vec![normalise(&Path::new(&h).join(rest))],
+            None => vec![PathBuf::from(entry)],
+        };
+    }
+    if Path::new(entry).is_absolute() {
+        return vec![normalise(Path::new(entry))];
+    }
+    let mut out = Vec::new();
+    if entry.split('/').next() != Some("vars") {
+        out.push(normalise(&file_dir.join("vars").join(entry)));
+    }
+    out.push(normalise(&file_dir.join(entry)));
+    out
+}
+
 fn with_ext(dir: &Path, stem: &str) -> Vec<PathBuf> {
     if stem.ends_with(".yml") || stem.ends_with(".yaml") {
         return vec![dir.join(stem)];
@@ -625,6 +728,202 @@ mod tests {
 
     fn first(out: &[(Reference, Resolution)], kind: ReferenceKind) -> &Resolution {
         &out.iter().find(|(r, _)| r.kind == kind).expect("kind").1
+    }
+
+    fn t016_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ansible-lsp-t016-{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("vars")).unwrap();
+        d
+    }
+
+    #[test]
+    fn vars_files_candidate_order_vars_subdir_wins() {
+        let d = t016_dir("order");
+        std::fs::write(d.join("x.yml"), "a: 1\n").unwrap();
+        std::fs::write(d.join("vars/x.yml"), "a: 2\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [x.yml]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        // `<dir>/vars/` is probed before the dir itself — the order Ansible loads in.
+        assert_eq!(res.targets, vec![d.join("vars/x.yml")]);
+        assert_eq!(res.candidates, vec![d.join("vars/x.yml"), d.join("x.yml")]);
+    }
+
+    #[test]
+    fn vars_files_vars_prefixed_entry_skips_the_prepend() {
+        let d = t016_dir("guard");
+        std::fs::write(d.join("vars/x.yml"), "a: 1\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        // `vars/…` never doubles into `vars/vars/…`.
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [vars/x.yml]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.candidates, vec![d.join("vars/x.yml")]);
+
+        // The guard is upstream's literal string check — `./vars/…` does not trigger it.
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [./vars/x.yml]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(
+            res.candidates,
+            vec![d.join("vars/vars/x.yml"), d.join("vars/x.yml")]
+        );
+    }
+
+    #[test]
+    fn vars_files_parent_paths_normalise_before_the_check() {
+        let d = t016_dir("parent");
+        std::fs::create_dir_all(d.join("plays")).unwrap();
+        std::fs::create_dir_all(d.join("shared")).unwrap();
+        std::fs::write(d.join("shared/x.yml"), "a: 1\n").unwrap();
+        let file = d.join("plays/site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [../shared/x.yml]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.targets, vec![d.join("shared/x.yml")]);
+        for c in &res.candidates {
+            assert!(
+                !c.components().any(|p| p == std::path::Component::ParentDir),
+                "candidates are normalised before the check: {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vars_files_absolute_entry_is_one_candidate() {
+        let d = t016_dir("abs");
+        let target = d.join("abs.yml");
+        std::fs::write(&target, "a: 1\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let src = format!(
+            "- hosts: all\n  vars_files: ['{}']\n",
+            target.to_string_lossy()
+        );
+        let out = resolve_src(&file, &src);
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        // No `vars/` prepend for an absolute entry — exactly one candidate.
+        assert_eq!(res.candidates, vec![target.clone()]);
+        assert_eq!(res.targets, vec![target]);
+    }
+
+    #[test]
+    fn vars_files_no_role_vars_or_project_root_fallback() {
+        let d = t016_dir("bases");
+        std::fs::create_dir_all(d.join("playbooks")).unwrap();
+        // Planted where include_vars would look, but vars_files must not: project root.
+        std::fs::write(d.join("only-at-root.yml"), "a: 1\n").unwrap();
+        std::fs::write(d.join("ansible.cfg"), "").unwrap();
+        let file = d.join("playbooks/site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [only-at-root.yml]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Missing);
+        assert_eq!(
+            res.candidates,
+            vec![
+                d.join("playbooks/vars/only-at-root.yml"),
+                d.join("playbooks/only-at-root.yml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn vars_files_group_first_found_wins_and_all_missing_is_one_missing() {
+        let d = t016_dir("group");
+        std::fs::write(d.join("vars/b.yml"), "a: 1\n").unwrap();
+        std::fs::write(d.join("vars/c.yml"), "a: 2\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        // First existing alternative wins, even with a later one also present.
+        let out = resolve_src(
+            &file,
+            "- hosts: all\n  vars_files:\n    - - vars/a.yml\n      - vars/b.yml\n      - vars/c.yml\n",
+        );
+        let group = &out.iter().find(|(r, _)| r.vars_files_group.is_some()).unwrap().1;
+        assert_eq!(group.status, Status::Resolved);
+        assert_eq!(group.targets, vec![d.join("vars/b.yml")]);
+        // The missing alternative is the construct working as designed — never Missing.
+        let (_, a_res) = out.iter().find(|(r, _)| r.value == "vars/a.yml").unwrap();
+        assert_eq!(a_res.status, Status::Skipped);
+        assert_eq!(a_res.skip_reason, Some(SkipReason::GroupAlternative));
+
+        // None exists: exactly the group is Missing, naming every candidate tried.
+        let out = resolve_src(
+            &file,
+            "- hosts: all\n  vars_files:\n    - - vars/nope-a.yml\n      - vars/nope-b.yml\n",
+        );
+        let missing: Vec<_> = out.iter().filter(|(_, res)| res.status == Status::Missing).collect();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].0.vars_files_group.is_some());
+        assert_eq!(
+            missing[0].1.candidates,
+            vec![d.join("vars/nope-a.yml"), d.join("vars/nope-b.yml")]
+        );
+    }
+
+    #[test]
+    fn vars_files_group_with_templated_alternative_never_warns() {
+        let d = t016_dir("group-tmpl");
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(
+            &file,
+            "- hosts: all\n  vars_files:\n    - - \"{{ env }}.yml\"\n      - vars/nope.yml\n",
+        );
+        let group = &out.iter().find(|(r, _)| r.vars_files_group.is_some()).unwrap().1;
+        assert_eq!(group.status, Status::Skipped);
+        assert_eq!(group.skip_reason, Some(SkipReason::Templated));
+        assert!(out.iter().all(|(_, res)| res.status != Status::Missing));
+    }
+
+    #[test]
+    fn vars_files_templated_entry_globs_for_navigation() {
+        let d = t016_dir("glob");
+        std::fs::write(d.join("vars/prod.yml"), "a: 1\n").unwrap();
+        std::fs::write(d.join("vars/staging.yml"), "a: 2\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let out = resolve_src(&file, "- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n");
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.skip_reason, Some(SkipReason::Templated), "offer, never assert");
+        assert!(res.targets.contains(&d.join("vars/prod.yml")));
+        assert!(res.targets.contains(&d.join("vars/staging.yml")));
+    }
+
+    #[test]
+    fn resolve_with_substitutes_known_literals_for_vars_files() {
+        let d = t016_dir("subst");
+        std::fs::write(d.join("vars/prod.yml"), "a: 1\n").unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        let doc = Document::new("- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n".to_string());
+        let ctx = FileContext::discover(&file);
+        let r = extract(&doc.parse().unwrap())
+            .into_iter()
+            .find(|r| r.kind == ReferenceKind::VarsFiles)
+            .unwrap();
+        let literals = HashMap::from([("env".to_string(), vec!["prod".to_string()])]);
+        let res = resolve_with(&r, &ctx, &literals);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.skip_reason, Some(SkipReason::Templated), "navigation only");
+        assert_eq!(res.targets, vec![d.join("vars/prod.yml")]);
     }
 
     /// Bare module names are implicitly `ansible.legacy`: a workspace `library/` shadows

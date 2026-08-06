@@ -218,6 +218,19 @@ because it was written from reasoning instead of from a run — the same mistake
 first-match-wins and char-offset findings exist to prevent.
 → `task_conditions_attach_to_the_reference`, `demo/imported_semantics.yml`
 
+**`vars_files` searches two places, and a miss is silent.** An entry resolves against
+`<play dir>/vars/<entry>` — skipped when the entry already starts with the `vars`
+component, so it never doubles into `vars/vars/` — then `<play dir>/<entry>`. No role
+`vars/`, no project root, no extension guessing (`foo` never finds `foo.yml`); absolute
+and `~` entries are a single candidate; `../` collapses lexically first. A nested list is
+one-level first-found alternatives (deeper nesting is a runtime-fatal type error), and a
+**missing file is silently ignored** by ansible-core 2.21.2 — the loop's error was lost
+upstream and its "we raise an error" comment is stale, so the play runs with the
+variables simply never set. Live-verified against `vars/manager.py:320-383` and
+`dataloader.py:345-390`.
+→ `vars_files_candidate_order_vars_subdir_wins`, `vars_files_vars_prefixed_entry_skips_the_prepend`,
+`vars_files_no_role_vars_or_project_root_fallback`, `vars_files_group_first_found_wins_and_all_missing_is_one_missing`
+
 **A `set_fact` inside an imported playbook on the variable its import is gated on
 half-executes the playbook**, and because facts are host-scoped, hosts diverge. Confirmed
 by a live two-host run. **ansible-lint has no rule for this** — in 26.1.1 `import_playbook`

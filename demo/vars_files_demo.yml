@@ -1,0 +1,93 @@
+---
+# vars_files loads at play start, before any task runs — unlike include_vars, which loads
+# partway through. An entry resolves against exactly two places, in this order: the
+# playbook's own vars/ subdir, then the playbook dir itself (an entry already starting
+# with `vars/` skips the prepend, so it never doubles into vars/vars/). `../` collapses
+# before the check, an absolute path is taken as-is, and nothing else is searched — no
+# role vars/, no project root, no extension guessing. Verified against ansible-core
+# 2.21.2 (vars/manager.py, dataloader.py _path_dwim_relative_stack): a missing file is
+# SILENTLY skipped at runtime — the play still runs, the variables are just never set —
+# which is exactly why the extension warns about it.
+
+- name: vars_files demo — plain entries
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    # GOOD: resolves, Cmd+click jumps into it.
+    - vars/shared.yml
+
+    # GOOD: a plain name is probed under vars/ first — this is vars/shared.yml again,
+    # found via the other candidate.
+    - shared.yml
+
+    # BAD (missing-file): a plain entry is a straight claim that the file exists. Ansible
+    # would skip it silently and its variables would never be set, so this warns and the
+    # message lists every directory tried.
+    - vars/not_exists.yml
+
+    # BAD (missing-file): no extension guessing — `shared` does not find `shared.yml`.
+    - shared
+
+  tasks:
+    # Cmd+click shared_endpoint -> vars/shared.yml; hover shows
+    #   vars_files · vars/shared.yml = https://api.internal:8443
+    - name: Use a variable vars_files defined
+      ansible.builtin.debug:
+        msg: "{{ shared_endpoint }}"
+
+# ---------------------------------------------------------------------------------------
+# A NESTED list is the interesting case: it means "load the first of these that exists".
+# A missing earlier entry is correct code, not a break — which is why the check is per
+# GROUP, not per entry.
+- name: vars_files demo — first-match-wins groups
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    # NO HINT: vars/site-local.yml is absent on purpose — the point of the construct is that
+    # you can ship an optional override. vars/shared.yml exists, so the group is satisfied
+    # and nothing warns. Warning per entry here would flag working Ansible.
+    - - vars/site-local.yml
+      - vars/shared.yml
+
+    # BAD (missing-file): NONE of these exist, so the group resolves to nothing. One warning,
+    # anchored on the whole list rather than on any single entry — no entry is individually
+    # at fault. The message names all three.
+    - - vars/nope-a.yml
+      - vars/nope-b.yml
+      - vars/nope-c.yml
+
+  tasks:
+    # Only the FIRST existing alternative is loaded, so this comes from vars/shared.yml.
+    # vars/site-local.yml would have shadowed it had it existed.
+    - name: The winning alternative is the one that is indexed
+      ansible.builtin.debug:
+        msg: "{{ shared_endpoint }}"
+
+# ---------------------------------------------------------------------------------------
+# Templated entries, magic variables, and the bare-string shorthand.
+- name: vars_files demo — templated entries
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    # NO HINT: a templated entry is only knowable at runtime, so it never warns — the
+    # target may not even exist until an earlier play generates it. Hover offers every
+    # file the pattern could reach (a glob over vars/*.yml here).
+    - "vars/{{ env_name }}.yml"
+
+    # GOOD: {{ playbook_dir }} is knowable from convention, so this resolves and clicks.
+    - "{{ playbook_dir }}/vars/shared.yml"
+
+  tasks:
+    - name: Placeholder
+      ansible.builtin.debug:
+        msg: ok
+
+# The bare-string shorthand — not a list at all; Ansible wraps it. GOOD: resolves.
+- name: vars_files demo — bare string form
+  hosts: localhost
+  gather_facts: false
+  vars_files: vars/shared.yml
+  tasks:
+    - name: Same file, shorthand spelling
+      ansible.builtin.debug:
+        msg: "{{ shared_endpoint }}"

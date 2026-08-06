@@ -1,0 +1,14 @@
+---
+# The `../` form: a vars_files entry collapses lexically before the existence check, so a
+# playbook in a subdirectory reaches the repo's shared vars. GOOD: resolves to
+# ../vars/shared.yml and Cmd+click jumps there.
+
+- name: vars_files demo — parent path from a subdirectory
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/shared.yml
+  tasks:
+    - name: Defined one directory up
+      ansible.builtin.debug:
+        msg: "{{ shared_endpoint }}"

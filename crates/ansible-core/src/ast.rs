@@ -58,10 +58,23 @@ pub struct Play {
     pub handlers: Vec<Stmt>,
     /// `vars:` bound at play scope.
     pub vars: Vec<VarBinding>,
-    /// `vars_files:` entries — paths, flattened across the first-match list nesting.
-    pub vars_files: Vec<(String, Span)>,
+    /// `vars_files:` entries, one per written entry — a nested list stays one entry
+    /// with several first-match alternatives.
+    pub vars_files: Vec<VarsFilesEntry>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
+}
+
+/// One `vars_files:` entry: a scalar path, or a nested list meaning "load the first of
+/// these that exists".
+#[derive(Debug, Clone)]
+pub struct VarsFilesEntry {
+    /// The candidate paths in written order; a scalar entry is one alternative.
+    pub alternatives: Vec<(String, Span)>,
+    /// Anchor for a whole-entry diagnostic: the scalar's span, or the nested list's span
+    /// clamped to the last alternative's end (libyaml's block-sequence end mark can spill
+    /// past the last item).
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -181,19 +194,41 @@ fn is_looped(node: &Node) -> bool {
     })
 }
 
-/// `vars_files:` paths. An entry can be a scalar or a nested list ("use the first that
-/// exists"); flatten both so every candidate path is available.
-fn vars_files_of(value: &Node) -> Vec<(String, Span)> {
-    fn push(n: &Node, out: &mut Vec<(String, Span)>) {
+/// `vars_files:` entries. A bare scalar value is Ansible's one-element-list shorthand.
+/// Only scalars and one level of nesting are kept: anything deeper, or a non-scalar
+/// alternative, fails ansible-core's post-template `isinstance(str)` gate at runtime —
+/// it can never name a file, so it is no reference (a future ERROR-rule candidate).
+fn vars_files_of(value: &Node) -> Vec<VarsFilesEntry> {
+    fn scalar(n: &Node) -> Option<(String, Span)> {
         match n {
-            Node::Scalar { value, span } => out.push((value.clone(), *span)),
-            Node::Sequence { items, .. } => items.iter().for_each(|i| push(i, out)),
-            _ => {}
+            // An empty scalar is a null `vars_files:` key or a `-` with nothing after
+            // it — no path to reference.
+            Node::Scalar { value, span } if !value.is_empty() => Some((value.clone(), *span)),
+            _ => None,
         }
     }
-    let mut out = Vec::new();
-    push(value, &mut out);
-    out
+    fn entry(n: &Node) -> Option<VarsFilesEntry> {
+        match n {
+            Node::Scalar { .. } => {
+                let (v, s) = scalar(n)?;
+                Some(VarsFilesEntry { alternatives: vec![(v, s)], span: s })
+            }
+            Node::Sequence { items, span } => {
+                let alternatives: Vec<_> = items.iter().filter_map(scalar).collect();
+                let end = alternatives.last()?.1.end;
+                Some(VarsFilesEntry {
+                    alternatives,
+                    span: Span { start: span.start, end },
+                })
+            }
+            _ => None,
+        }
+    }
+    match value {
+        Node::Sequence { items, .. } => items.iter().filter_map(entry).collect(),
+        Node::Scalar { .. } => entry(value).into_iter().collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The `name: value` bindings under a node's `vars:` mapping.
@@ -404,6 +439,71 @@ mod tests {
 
     fn ast(src: &str) -> Ast {
         build(&Document::new(src.to_string()).parse().expect("valid yaml"))
+    }
+
+    fn vars_files(src: &str) -> Vec<VarsFilesEntry> {
+        let Ast::Playbook(items) = ast(src) else {
+            panic!("expected a playbook");
+        };
+        let PlayItem::Play(p) = &items[0] else {
+            panic!("expected a play");
+        };
+        p.vars_files.clone()
+    }
+
+    #[test]
+    fn vars_files_scalar_entries_are_one_alternative_each() {
+        let src = "- hosts: all\n  vars_files:\n    - vars/a.yml\n    - b.yml\n";
+        let vf = vars_files(src);
+        assert_eq!(vf.len(), 2);
+        for e in &vf {
+            assert_eq!(e.alternatives.len(), 1);
+            assert_eq!(e.span, e.alternatives[0].1);
+        }
+        assert_eq!(vf[0].alternatives[0].0, "vars/a.yml");
+        assert_eq!(vf[0].span.slice(src), "vars/a.yml");
+        assert_eq!(vf[1].span.slice(src), "b.yml");
+    }
+
+    #[test]
+    fn vars_files_bare_string_and_null_forms() {
+        let vf = vars_files("- hosts: all\n  vars_files: vars/a.yml\n");
+        assert_eq!(vf.len(), 1);
+        assert_eq!(vf[0].alternatives[0].0, "vars/a.yml");
+        assert!(vars_files("- hosts: all\n  vars_files:\n  tasks: []\n").is_empty());
+    }
+
+    #[test]
+    fn vars_files_nested_list_keeps_alternatives_and_group_span() {
+        let src = "- hosts: all\n  vars_files:\n    - - a.yml\n      - b.yml\n    - c.yml\n";
+        let vf = vars_files(src);
+        assert_eq!(vf.len(), 2);
+        assert_eq!(vf[0].alternatives.len(), 2);
+        assert_eq!(vf[0].alternatives[1].0, "b.yml");
+        // The group span covers the whole nested list from its first `-`, clamped to the
+        // last alternative — libyaml's block-sequence end mark would otherwise spill onto
+        // the next line.
+        assert_eq!(vf[0].span.slice(src), "- a.yml\n      - b.yml");
+        assert_eq!(vf[1].alternatives.len(), 1);
+    }
+
+    #[test]
+    fn vars_files_flow_style_groups() {
+        let src = "- hosts: all\n  vars_files: [[a.yml, b.yml], c.yml]\n";
+        let vf = vars_files(src);
+        assert_eq!(vf.len(), 2);
+        assert_eq!(vf[0].alternatives.len(), 2);
+        assert_eq!(vf[1].alternatives[0].0, "c.yml");
+    }
+
+    #[test]
+    fn vars_files_non_scalar_and_deeper_nesting_are_dropped() {
+        // A mapping entry, a doubly-nested list, and an empty inner list are all
+        // runtime-fatal (or empty) in Ansible — none can name a file, so no entry.
+        let src = "- hosts: all\n  vars_files:\n    - {a: b}\n    - - - deep.yml\n    - []\n    - ok.yml\n";
+        let vf = vars_files(src);
+        assert_eq!(vf.len(), 1);
+        assert_eq!(vf[0].alternatives[0].0, "ok.yml");
     }
 
     #[test]

@@ -776,6 +776,9 @@ impl Backend {
             .refs
             .iter()
             .filter(|(_, res)| res.status == Status::Resolved)
+            // A vars_files group anchor spans the whole nested list; painting it would
+            // double-decorate the winning alternative underneath.
+            .filter(|(r, _)| r.vars_files_group.is_none())
             .map(|(r, res)| {
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
                 let (el, ec) = a.doc.byte_to_lsp(r.span.end);
@@ -1193,6 +1196,27 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
         .map(|c| format!("  {}", shorten(c, ctx)))
         .collect::<Vec<_>>()
         .join("\n");
+    // Ansible (2.x) silently skips a missing vars_files file — the play runs, the
+    // variables are just never set — so these must not claim the play would fail.
+    if let Some(alts) = &r.vars_files_group {
+        let names = alts
+            .iter()
+            .map(|a| format!("`{a}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "none of the alternatives in this `vars_files` list exists: {names}. Ansible \
+             silently skips the whole entry, so none of their variables is ever set. \
+             Tried:\n{tried}"
+        );
+    }
+    if r.kind == ReferenceKind::VarsFiles {
+        return format!(
+            "no file found for `{}` — Ansible silently skips a missing `vars_files` \
+             entry, so its variables are never set. Tried:\n{tried}",
+            r.value
+        );
+    }
     format!("no file found for `{}`. Tried:\n{tried}", r.value)
 }
 
@@ -1487,6 +1511,11 @@ fn reference_hover(
             Some(SkipReason::Templated) => None,
             Some(SkipReason::NotInWorkspace) => Some(Md::new().line(
                 "Skipped".bold() + " — not in this workspace (a builtin, or installed outside it)",
+            )),
+            Some(SkipReason::GroupAlternative) => Some(Md::new().line(
+                "Absent".bold()
+                    + " — a first-match `vars_files` alternative; the list warns only when \
+                       none of its files exists",
             )),
             None => None,
         },
@@ -1812,16 +1841,7 @@ impl LanguageServer for Backend {
         let links = a
             .refs
             .iter()
-            .filter(|(_, res)| res.status == Status::Resolved)
-            // Exactly one target only. A link's target wins over the definition
-            // provider on Cmd+click, so emitting one for a multi-candidate templated
-            // path would silently drop the other candidates.
-            .filter(|(_, res)| res.targets.len() == 1)
-            // No links for modules: their provenance hover already carries labelled
-            // links to both files, and VS Code renders a link's tooltip as an extra
-            // hover line — the same path twice. Cmd+click still works via the
-            // definition provider.
-            .filter(|(r, _)| r.kind != ReferenceKind::Module)
+            .filter(|(r, res)| linkable(r, res))
             .filter_map(|(r, res)| {
                 let target = res.targets.first()?;
                 let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
@@ -1836,6 +1856,20 @@ impl LanguageServer for Backend {
             .collect();
         Ok(Some(links))
     }
+}
+
+/// Whether a reference gets a document link. Exactly one resolved target only — a link's
+/// target wins over the definition provider on Cmd+click, so emitting one for a
+/// multi-candidate templated path would silently drop the other candidates. No links for
+/// modules: their provenance hover already carries labelled links to both files, and VS
+/// Code renders a link's tooltip as an extra hover line — the same path twice. No link
+/// for a `vars_files` group anchor: it spans the whole nested list and would paint over
+/// the winning alternative's own link.
+fn linkable(r: &Reference, res: &Resolution) -> bool {
+    res.status == Status::Resolved
+        && res.targets.len() == 1
+        && r.kind != ReferenceKind::Module
+        && r.vars_files_group.is_none()
 }
 
 fn location_at(path: &Path) -> Option<Location> {
@@ -1869,6 +1903,156 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    /// T-016 against the real demo: exactly the labeled BAD cases warn — the missing
+    /// single, the no-extension miss, and the all-missing group anchored on the whole
+    /// nested list — while every GOOD/NO-HINT case stays silent.
+    #[test]
+    fn vars_files_demo_diagnoses_singles_and_groups() {
+        use tower_lsp::lsp_types::{Diagnostic, NumberOrString};
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let diags = super::Backend::diagnostics_of(&a);
+        let is_missing = |d: &&Diagnostic| {
+            matches!(&d.code, Some(NumberOrString::String(s)) if s == "missing-file")
+        };
+        let missing: Vec<_> = diags.iter().filter(is_missing).collect();
+        assert_eq!(missing.len(), 3, "exactly the labeled BAD cases:\n{missing:#?}");
+        assert!(missing.iter().any(|d| d.message.contains("vars/not_exists.yml")));
+        assert!(
+            missing.iter().any(|d| d.message.contains("`shared`")),
+            "the no-extension-guessing case warns"
+        );
+        let group = missing
+            .iter()
+            .find(|d| d.message.contains("vars/nope-a.yml"))
+            .expect("group diagnostic");
+        for alt in ["vars/nope-a.yml", "vars/nope-b.yml", "vars/nope-c.yml"] {
+            assert!(group.message.contains(alt), "group names all three:\n{}", group.message);
+        }
+        assert!(
+            group.range.end.line > group.range.start.line,
+            "anchored on the whole nested list, not one entry"
+        );
+        assert!(
+            !missing.iter().any(|d| d.message.contains("site-local")),
+            "a satisfied group stays silent"
+        );
+    }
+
+    /// T-016: the messages must describe what Ansible actually does with a missing
+    /// vars_files entry — silent skip — and never claim the play would fail.
+    #[test]
+    fn vars_files_messages_state_runtime_silence_not_error() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        for d in super::Backend::diagnostics_of(&a) {
+            if !matches!(&d.code, Some(NumberOrString::String(s)) if s == "missing-file") {
+                continue;
+            }
+            assert!(
+                d.message.contains("silently skips"),
+                "must state the runtime behavior: {}",
+                d.message
+            );
+            assert!(
+                !d.message.to_lowercase().contains("error") && !d.message.contains("fail"),
+                "must not claim Ansible errors: {}",
+                d.message
+            );
+        }
+    }
+
+    /// T-016: a resolved first-match group must not paint a link over the whole nested
+    /// list — the winning alternative carries its own.
+    #[test]
+    fn vars_files_group_anchor_is_not_linked() {
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let group = a
+            .refs
+            .iter()
+            .find(|(r, res)| {
+                r.vars_files_group.is_some()
+                    && res.status == ansible_core::resolve::Status::Resolved
+            })
+            .expect("a satisfied group in the demo");
+        assert!(!super::linkable(&group.0, &group.1));
+        let winner = a
+            .refs
+            .iter()
+            .find(|(r, res)| {
+                r.grouped
+                    && r.value == "vars/shared.yml"
+                    && res.status == ansible_core::resolve::Status::Resolved
+            })
+            .expect("the winning alternative");
+        assert!(super::linkable(&winner.0, &winner.1));
+    }
+
+    /// T-016: `# noqa: missing-file` on the group's first line suppresses the group
+    /// warning, same as any other missing-file site.
+    #[test]
+    fn noqa_suppresses_the_group_warning() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let dir = std::env::temp_dir().join("ansible-lsp-t016-noqa");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("site.yml");
+        let text = "- hosts: all\n  vars_files:\n    - - nope-a.yml  # noqa: missing-file\n      - nope-b.yml\n";
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let missing = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "missing-file"))
+            .count();
+        assert_eq!(missing, 0, "suppressed by the noqa on the group's first line");
+    }
+
+    /// T-016: the second `vars_files` site in the repo's demo must stay warning-free.
+    #[test]
+    fn cross_file_vars_demo_vars_files_stays_silent() {
+        let path = std::path::Path::new("../../demo/cross_file_vars.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        assert!(
+            a.refs
+                .iter()
+                .filter(|(r, _)| r.kind == ansible_core::references::ReferenceKind::VarsFiles)
+                .all(|(_, res)| res.status == ansible_core::resolve::Status::Resolved),
+            "vars/shared.yml resolves"
+        );
+    }
+
+    /// T-016 box: hovering a variable a vars_files file defines shows the vars_files
+    /// provenance and the value.
+    #[test]
+    fn vars_files_variable_hover_shows_provenance() {
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let byte = text.find("{{ shared_endpoint }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+            .expect("hover expected");
+        assert!(md.contains("vars_files"), "provenance label in: {md}");
+        assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
+        assert!(md.contains("https://api.internal:8443"), "value in: {md}");
+    }
 
     /// T-066 against the real demo: `network_mtu` reaches the playbook only through
     /// provisioner's meta dependency on network-base, so its hover line carries the

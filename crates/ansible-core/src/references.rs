@@ -20,6 +20,10 @@ pub enum ReferenceKind {
     /// `include_vars:` `dir:` target — a directory, resolved by `_set_root_dir` to one
     /// computed path; navigation targets are the files it loads.
     IncludeVarsDir,
+    /// A play-level `vars_files:` entry — a vars file loaded at play start. A nested list
+    /// is first-match-wins: each alternative is its own reference (`grouped`), plus one
+    /// group reference spanning the list that owns the missing/resolved verdict.
+    VarsFiles,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +57,13 @@ pub struct Reference {
     /// For the `IncludeVarsDir` kind: the full module args, so the resolver can run the
     /// real loading semantics (extensions, depth, filters) instead of re-parsing.
     pub include_vars: Option<Box<crate::include_vars::Params>>,
+    /// A first-match `vars_files` alternative: a miss is the construct working as
+    /// designed, so it never warns on its own — the group reference decides.
+    pub grouped: bool,
+    /// The group reference of a first-match `vars_files` list: every alternative, in
+    /// written order, so the group can resolve first-found and name them all when none
+    /// exists. `span` is the whole nested list.
+    pub vars_files_group: Option<Vec<String>>,
 }
 
 impl Reference {
@@ -71,6 +82,8 @@ impl Reference {
             repeated: false,
             task_name: None,
             include_vars: None,
+            grouped: false,
+            vars_files_group: None,
         }
     }
 }
@@ -126,6 +139,23 @@ fn play(p: &Play, out: &mut Vec<Reference>) {
         // A `roles:` entry inherits the play's identity, not a task's.
         r.task_name = p.name.clone();
         out.push(r);
+    }
+    for entry in &p.vars_files {
+        // Alternatives first: `reference_at` takes the first span hit, so a click inside
+        // an alternative must reach it before the enclosing group span.
+        for (value, span) in &entry.alternatives {
+            let mut r = Reference::new(ReferenceKind::VarsFiles, value, *span);
+            r.grouped = entry.alternatives.len() > 1;
+            r.task_name = p.name.clone();
+            out.push(r);
+        }
+        if entry.alternatives.len() > 1 {
+            let names: Vec<String> = entry.alternatives.iter().map(|(v, _)| v.clone()).collect();
+            let mut g = Reference::new(ReferenceKind::VarsFiles, &names.join(", "), entry.span);
+            g.task_name = p.name.clone();
+            g.vars_files_group = Some(names);
+            out.push(g);
+        }
     }
     for s in p
         .pre_tasks
@@ -297,6 +327,53 @@ mod tests {
 
     fn of(src: &str, kind: ReferenceKind) -> Vec<Reference> {
         refs(src).into_iter().filter(|r| r.kind == kind).collect()
+    }
+
+    #[test]
+    fn vars_files_singles_and_bare_string_extract() {
+        let src = "- name: web\n  hosts: all\n  vars_files:\n    - vars/a.yml\n    - b.yml\n";
+        let r = of(src, ReferenceKind::VarsFiles);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].value, "vars/a.yml");
+        assert_eq!(r[0].span.slice(src), "vars/a.yml");
+        assert!(!r[0].grouped);
+        assert!(r.iter().all(|r| r.vars_files_group.is_none()));
+        // A vars_files entry inherits the play's identity, like a roles: entry.
+        assert_eq!(r[0].task_name.as_deref(), Some("web"));
+
+        let bare = of("- hosts: all\n  vars_files: a.yml\n", ReferenceKind::VarsFiles);
+        assert_eq!(bare.len(), 1);
+        assert_eq!(bare[0].value, "a.yml");
+    }
+
+    #[test]
+    fn vars_files_group_emits_alternatives_then_anchor() {
+        let src = "- hosts: all\n  vars_files:\n    - - a.yml\n      - b.yml\n";
+        let r = of(src, ReferenceKind::VarsFiles);
+        assert_eq!(r.len(), 3);
+        assert!(r[0].grouped && r[1].grouped);
+        assert!(r[0].vars_files_group.is_none());
+        let g = &r[2];
+        assert_eq!(g.vars_files_group.as_deref(), Some(&["a.yml".to_string(), "b.yml".to_string()][..]));
+        assert_eq!(g.value, "a.yml, b.yml");
+        // Anchor spans the whole nested list; alternatives keep their own spans, and they
+        // come first so a click inside one never lands on the group.
+        assert!(g.span.start <= r[0].span.start && r[1].span.end <= g.span.end);
+
+        // A one-alternative "group" is just a single.
+        let single = of("- hosts: all\n  vars_files: [[only.yml]]\n", ReferenceKind::VarsFiles);
+        assert_eq!(single.len(), 1);
+        assert!(!single[0].grouped);
+    }
+
+    #[test]
+    fn vars_files_templated_alternative_taints_the_group() {
+        let src = "- hosts: all\n  vars_files:\n    - - \"{{ env }}.yml\"\n      - fallback.yml\n";
+        let r = of(src, ReferenceKind::VarsFiles);
+        let g = r.last().unwrap();
+        assert!(g.vars_files_group.is_some());
+        assert!(g.templated);
+        assert!(!r[1].templated, "the literal alternative itself is not templated");
     }
 
     #[test]
