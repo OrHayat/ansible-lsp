@@ -1,8 +1,8 @@
 # T-022 — `circular-include` warning
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | S    | T-020      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | S    | T-113 | T-020      |
 
 ## Problem
 

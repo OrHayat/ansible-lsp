@@ -1,8 +1,8 @@
 # T-024 — Execution tree as a TreeView
 
-| Status | Priority | Size | Depends on   |
-| ------ | -------- | ---- | ------------ |
-| open   | P3       | L    | replaces T-011 |
+| Status | Priority | Size | Epic  | Depends on     |
+| ------ | -------- | ---- | ----- | -------------- |
+| open   | P3       | L    | T-113 | replaces T-011 |
 
 ## Problem
 

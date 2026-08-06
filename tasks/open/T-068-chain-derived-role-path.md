@@ -1,8 +1,8 @@
 # T-068 — `role_path` from invocation chains, not folder shape
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | L    | T-020      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | L    | T-113 | T-020      |
 
 ## Problem
 

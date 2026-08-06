@@ -1,8 +1,8 @@
 # T-021 — `unused-file` / `unused-role` as faded hints
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | T-020, T-018, T-013 |
+| Status | Priority | Size | Epic  | Depends on          |
+| ------ | -------- | ---- | ----- | ------------------- |
+| open   | P3       | M    | T-113 | T-020, T-018, T-013 |
 
 ## Problem
 

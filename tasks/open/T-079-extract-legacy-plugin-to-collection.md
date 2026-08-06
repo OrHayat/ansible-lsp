@@ -1,8 +1,8 @@
 # T-079 — "Extract to collection": move a local plugin/module and rewrite every reference
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | L    | T-020, T-042/T-064 |
+| Status | Priority | Size | Epic  | Depends on         |
+| ------ | -------- | ---- | ----- | ------------------ |
+| open   | P3       | L    | T-113 | T-020, T-042/T-064 |
 
 ## Idea
 

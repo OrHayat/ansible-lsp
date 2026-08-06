@@ -141,6 +141,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | T-062 |
 | T-109 | [Keyword value enums](open/T-109-keyword-value-enums.md) | S    | T-107 |
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
+| T-113 | **epic** · [Workspace graph: the reverse index and what it unblocks](open/T-113-workspace-graph-the-reverse-index-and-what-it-unblocks.md) | L    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

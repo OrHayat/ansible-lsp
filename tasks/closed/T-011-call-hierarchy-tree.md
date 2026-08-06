@@ -1,8 +1,8 @@
 # T-011 — Execution tree via LSP call hierarchy
 
-| Status       | Priority | Size | Commits                  |
-| ------------ | -------- | ---- | ------------------------ |
-| **rejected** | P3       | L    | 9349187, reverted (-115) |
+| Status       | Priority | Size | Commits                  | Epic  |
+| ------------ | -------- | ---- | ------------------------ | ----- |
+| **rejected** | P3       | L    | 9349187, reverted (-115) | T-113 |
 
 ## What was wanted
 

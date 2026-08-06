@@ -1,8 +1,8 @@
 # T-054 — Find variable references (the reverse of go-to-definition)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | T-049, T-020 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| open   | P3       | M    | T-113 | T-049, T-020 |
 
 ## Problem
 
