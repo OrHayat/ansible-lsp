@@ -1,8 +1,8 @@
 # T-035 — Evaluate `when:` under a supplied run profile
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | L    | T-033      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | L    | T-121 | T-033      |
 
 ## Problem
 

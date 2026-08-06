@@ -1,8 +1,8 @@
 # T-031 — `import_playbook` + `when:`: say what it actually does
 
-| Status          | Priority | Size | Depends on |
-| --------------- | -------- | ---- | ---------- |
-| **partly done** | P2       | M    | T-029      |
+| Status          | Priority | Size | Epic  | Depends on |
+| --------------- | -------- | ---- | ----- | ---------- |
+| **partly done** | P2       | M    | T-121 | T-029      |
 
 ## Problem
 

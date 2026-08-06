@@ -1,8 +1,8 @@
 # T-029 — Hover showing the candidates tried
 
-| Status          | Priority | Size | Depends on |
-| --------------- | -------- | ---- | ---------- |
-| **partly done** | P3       | S    | —          |
+| Status          | Priority | Size | Epic  | Depends on |
+| --------------- | -------- | ---- | ----- | ---------- |
+| **partly done** | P3       | S    | T-121 | —          |
 
 ## Problem
 

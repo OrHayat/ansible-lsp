@@ -1,8 +1,8 @@
 # T-032 — Static `when:` evaluation
 
-| Status        | Priority | Size | Depends on |
-| ------------- | -------- | ---- | ---------- |
-| **partly done** | P2     | L    | —          |
+| Status          | Priority | Size | Epic  | Depends on |
+| --------------- | -------- | ---- | ----- | ---------- |
+| **partly done** | P2       | L    | T-121 | —          |
 
 ## Shipped
 

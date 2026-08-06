@@ -1,8 +1,8 @@
 # T-078 — `when:` explanation and module provenance fight over the module-name token
 
-| Status   | Priority | Size | Depends on |
-| -------- | -------- | ---- | ---------- |
-| **done** | P3       | S    | —          |
+| Status   | Priority | Size | Epic  | Depends on |
+| -------- | -------- | ---- | ----- | ---------- |
+| **done** | P3       | S    | T-121 | —          |
 
 ## Problem
 

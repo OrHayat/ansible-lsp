@@ -149,6 +149,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-118 | **epic** · [Collections and routing metadata](open/T-118-collections-and-routing-metadata.md) | L    | —    |
 | T-119 | [meta/runtime.yml has no schema validation anywhere](open/T-119-meta-runtime-yml-has-no-schema-validation-anywhere.md) | S    | T-064 |
 | T-120 | **epic** · [File references beyond includes](open/T-120-file-references-beyond-includes.md) | L    | —    |
+| T-121 | **epic** · [Conditional analysis](open/T-121-conditional-analysis.md) | L    | —    |
+| T-122 | [changed_when, failed_when and until are the same expression language](open/T-122-changed-when-failed-when-and-until-are-the-same-expression-l.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

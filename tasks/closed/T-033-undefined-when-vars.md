@@ -1,8 +1,8 @@
 # T-033 — Variables in `when:` that are defined nowhere
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | —        | L    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | —        | L    | T-121 | —          |
 
 **Split 2026-08-02.** The playbook-level unguarded class shipped as T-051's
 `var-undefined`; the rest became per-feature tickets: **T-060** (`suspicious-var`
