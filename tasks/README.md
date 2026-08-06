@@ -99,6 +99,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | T-076 |
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
+| T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](open/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -130,6 +131,7 @@ T-021 is now unblocked on that side.
 | T-071 | [`unconstrained-path-var`: the value set a path implies](open/T-071-unconstrained-path-var.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
+| T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](open/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
