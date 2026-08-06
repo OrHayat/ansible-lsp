@@ -1,8 +1,8 @@
 # T-046 — Harden the module/args split (ModuleArgsParser semantics)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-044      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-123 | T-044      |
 
 ## Problem
 

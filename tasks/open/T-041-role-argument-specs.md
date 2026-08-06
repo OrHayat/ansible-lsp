@@ -1,8 +1,8 @@
 # T-041 — `meta/argument_specs.yml` role signatures
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-123 | —          |
 
 ## Problem
 

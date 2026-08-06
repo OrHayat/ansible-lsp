@@ -1,8 +1,8 @@
 # T-057 — Parse module `DOCUMENTATION` / `RETURN` for input & output schema
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | L    | T-046      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | L    | T-123 | T-046      |
 
 ## Problem
 

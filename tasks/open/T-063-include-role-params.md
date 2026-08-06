@@ -1,8 +1,8 @@
 # T-063 — Port the full `include_role` / `import_role` parameter surface
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-123 | —          |
 
 The T-017 recipe applied to role includes: read the real implementation, model every
 parameter, pin behaviour with tests, and get the provable-failure diagnostics for free from

@@ -1,8 +1,8 @@
 # T-058 — Warn when a module ships no `DOCUMENTATION` / `RETURN`, with `# noqa` for legacy
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | S    | T-057, T-010 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| open   | P3       | S    | T-123 | T-057, T-010 |
 
 ## Problem
 
