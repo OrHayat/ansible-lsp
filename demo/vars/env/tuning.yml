@@ -1,0 +1,4 @@
+---
+# Loaded by `include_vars: { dir: vars/env }` in include_vars_demo.yml.
+env_workers: 8
+env_timeout: 30

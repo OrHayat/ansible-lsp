@@ -1,0 +1,4 @@
+---
+# Second file in the `vars/env/` directory. The point of the `dir:` form is that EVERY
+# matching file loads, so this one is indexed alongside tuning.yml.
+env_region: eu-west-1
