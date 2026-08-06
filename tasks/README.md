@@ -230,7 +230,11 @@ flipped that default to False making it unreachable, and PR #83259 (2.18) delete
 raise leaving the stale "we raise an error" comment. Reported as ansible/ansible#80483
 (open, filed by a core maintainer; #81419 closed as its duplicate); fix PR #80505 was
 approved then went stale unmerged. The play runs with the variables simply never set —
-live-verified against `vars/manager.py:320-383` and `dataloader.py:345-390`.
+live-verified against `vars/manager.py:320-383` and `dataloader.py:345-390`. Also
+live-verified: an entry that names a **directory** is fatal ("Is a directory" — even as a
+first-found alternative it fails instead of falling through), and a **dict** entry
+(`- dir: x`, include_vars-style) is fatal — `vars_files` has no options form, no regex, no
+dir loading; all of that is `include_vars` plugin surface this keyword never calls.
 → `vars_files_candidate_order_vars_subdir_wins`, `vars_files_vars_prefixed_entry_skips_the_prepend`,
 `vars_files_no_role_vars_or_project_root_fallback`, `vars_files_group_first_found_wins_and_all_missing_is_one_missing`
 
