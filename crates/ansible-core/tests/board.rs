@@ -30,32 +30,38 @@ impl Where {
     }
 }
 
-/// A ticket file: which folder it sits in, and the status its own header table claims.
+/// A ticket file: which folder it sits in, and what its own header table claims.
 struct Ticket {
     at: Where,
     file: String,
     status: String,
+    priority: String,
+    size: String,
 }
 
-/// A row in one of the README tables: which section it appears under, and where its link
-/// points.
+/// A row in one of the README tables: which section it appears under, where its link
+/// points, and the cells that duplicate the ticket header. `priority` is the `### P1`-style
+/// subsection (None under Downstream); `size`/`outcome` are the third cell, which is Size
+/// in Open tables and Outcome in the Closed one.
 struct Row {
     section: Where,
     link: String,
+    priority: Option<String>,
+    size: Option<String>,
+    outcome: Option<String>,
 }
 
-/// `| open   | P2       | S    | — |` -> `open`. The status is the first cell of the row
-/// after the header separator; `**rejected**` loses its emphasis so it compares as a word.
-fn status_of(text: &str) -> String {
-    let mut rows = text
+/// `| open   | P2       | S    | — |` -> ("open", "P2", "S"). The cells after the header
+/// separator; `**rejected**` loses its emphasis so it compares as a word.
+fn header_of(text: &str) -> (String, String, String) {
+    let cells: Vec<String> = text
         .lines()
         .filter(|l| l.trim_start().starts_with('|'))
-        .skip(2);
-    let cell = rows
-        .next()
-        .and_then(|l| l.split('|').nth(1))
+        .nth(2)
+        .map(|l| l.split('|').map(|c| c.trim().trim_matches('*').to_string()).collect())
         .unwrap_or_default();
-    cell.trim().trim_matches('*').to_string()
+    let get = |i: usize| cells.get(i).cloned().unwrap_or_default();
+    (get(1), get(2), get(3))
 }
 
 fn tickets() -> BTreeMap<String, Ticket> {
@@ -70,10 +76,8 @@ fn tickets() -> BTreeMap<String, Ticket> {
             let file = path.file_name().unwrap().to_string_lossy().to_string();
             let Some(id) = file.get(..5).filter(|s| s.starts_with("T-")) else { continue };
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            out.insert(
-                id.to_string(),
-                Ticket { at, file, status: status_of(&text) },
-            );
+            let (status, priority, size) = header_of(&text);
+            out.insert(id.to_string(), Ticket { at, file, status, priority, size });
         }
     }
     out
@@ -85,6 +89,7 @@ fn rows() -> BTreeMap<String, Vec<Row>> {
     let text = std::fs::read_to_string(tasks_dir().join("README.md")).unwrap_or_default();
     let mut out: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     let mut section = None;
+    let mut sub: Option<String> = None;
     for line in text.lines() {
         if let Some(heading) = line.strip_prefix("## ") {
             section = match heading.trim() {
@@ -92,6 +97,14 @@ fn rows() -> BTreeMap<String, Vec<Row>> {
                 "Closed" => Some(Where::Closed),
                 _ => None,
             };
+            sub = None;
+            continue;
+        }
+        if let Some(heading) = line.strip_prefix("### ") {
+            sub = ["P1", "P2", "P3"]
+                .iter()
+                .find(|p| heading.starts_with(**p))
+                .map(|p| p.to_string());
             continue;
         }
         let Some(section) = section else { continue };
@@ -108,7 +121,16 @@ fn rows() -> BTreeMap<String, Vec<Row>> {
             .and_then(|(_, rest)| rest.split_once(')'))
             .map(|(p, _)| p.to_string())
             .unwrap_or_default();
-        out.entry(id.to_string()).or_default().push(Row { section, link });
+        let third = line
+            .split('|')
+            .nth(3)
+            .map(|c| c.trim().trim_matches('*').to_string())
+            .filter(|c| !c.is_empty());
+        let (priority, size, outcome) = match section {
+            Where::Open => (sub.clone(), third, None),
+            Where::Closed => (None, None, third),
+        };
+        out.entry(id.to_string()).or_default().push(Row { section, link, priority, size, outcome });
     }
     out
 }
@@ -147,6 +169,29 @@ fn board_agrees_with_the_folders() {
                         t.at.dir(),
                         t.file
                     ));
+                }
+                // Size, priority and outcome duplicate the ticket header — the cells that
+                // go stale when a header is hand-edited without `board sync` (T-081).
+                if let Some(p) = r.priority.as_deref().filter(|p| *p != t.priority) {
+                    problems.push(format!(
+                        "{id}  sits in the README's {p} table but its header says {} — run `board sync {id}`",
+                        t.priority
+                    ));
+                }
+                if let Some(s) = r.size.as_deref().filter(|s| *s != t.size) {
+                    problems.push(format!(
+                        "{id}  README row says size {s} but the header says {} — run `board sync {id}`",
+                        t.size
+                    ));
+                }
+                if let Some(o) = r.outcome.as_deref() {
+                    let first = o.split_whitespace().next().unwrap_or_default();
+                    if first != t.status {
+                        problems.push(format!(
+                            "{id}  README outcome `{o}` disagrees with the header status `{}` — run `board sync {id}`",
+                            t.status
+                        ));
+                    }
                 }
             }
         }

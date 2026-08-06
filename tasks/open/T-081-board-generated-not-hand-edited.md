@@ -87,6 +87,11 @@ away true information to satisfy a checker, so the checker learned the word inst
 Verified by simulating the failure it exists for: `git mv`ing an open ticket to `closed/` and
 changing nothing else fails with all three edits named.
 
+Extended after the CLI landed: the check now also compares the cells that duplicate the
+ticket header — which P-table the row sits in, its Size cell, the Closed table's Outcome —
+so a header hand-edited without `board sync` fails the build too. Verified the same way:
+flipping T-071's header to P2/M failed with both cells named.
+
 ## Landed second: the lifecycle CLI (`crates/board`)
 
 `cargo run -p board -- new|close|reopen|list|show`, std-only so it runs the same on Windows

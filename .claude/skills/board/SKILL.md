@@ -38,8 +38,7 @@ Exit codes: 0 ok, 1 bad usage, 2 operation failed (message on stderr).
   the boxes are the definition of done, not the README or TODO.md.
 - **Edit a ticket** → body text: just edit the file. Status: `close`/`reopen`, never the
   status line by hand. Header fields (priority/size/depends): edit the file's header table,
-  then run `sync T-0NN` — without sync the README row goes stale and the check will NOT
-  catch it.
+  then run `sync T-0NN` — the drift check fails until you do.
 
 ## Conventions that bite
 
