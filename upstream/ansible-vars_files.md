@@ -45,6 +45,22 @@ Fragile even then — it fired only on per-host calls, never during the pre-play
    entirely, leaving the loop's "If none are found, we raise an error" comment orphaned —
    it still sits in 2.21.2 (`vars/manager.py:342-344`) above code that raises nothing.
 
+## What changed, case by case
+
+Only the *none-found* cases regressed. A first-found list with any existing alternative
+was silent in every version — that is the construct working (`break` skips the `for/else`
+that held the raise):
+
+| case                                        | pre-2.15    | 2.15+ (incl. 2.21.2) |
+| ------------------------------------------- | ----------- | -------------------- |
+| first-found list, some alternative exists   | nothing ✓   | nothing ✓            |
+| first-found list, **none** exists           | fatal error | **silent** ✗         |
+| plain entry, missing                        | fatal error | **silent** ✗         |
+
+(Ansible never had a warning state for this — it went straight from fatal to silent. The
+separate `display.warning` for a templated entry with an undefined variable is a different
+branch and still exists.)
+
 ## The docs still promise the error
 
 `playbook_guide/playbooks_conditionals.html` (Conditional Imports), **current** docs as of
