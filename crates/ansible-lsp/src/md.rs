@@ -31,6 +31,8 @@ impl Inline {
         Inline(format!("_{}_", self.0))
     }
 
+    /// Only tests peek inside — production callers go through [`Md::render`].
+    #[cfg(test)]
     pub fn as_str(&self) -> &str {
         &self.0
     }
