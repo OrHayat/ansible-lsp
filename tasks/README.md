@@ -152,6 +152,10 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-121 | **epic** · [Conditional analysis](open/T-121-conditional-analysis.md) | L    | —    |
 | T-122 | [changed_when, failed_when and until are the same expression language](open/T-122-changed-when-failed-when-and-until-are-the-same-expression-l.md) | M    | —    |
 | T-123 | **epic** · [Module and role contracts](open/T-123-module-and-role-contracts.md) | L    | —    |
+| T-124 | **epic** · [LSP protocol surface](open/T-124-lsp-protocol-surface.md) | L    | —    |
+| T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | S    | —    |
+| T-126 | [Semantic tokens instead of client-side decorations](open/T-126-semantic-tokens-instead-of-client-side-decorations.md) | M    | —    |
+| T-127 | [A completion provider](open/T-127-a-completion-provider.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
