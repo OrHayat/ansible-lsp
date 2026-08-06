@@ -1,8 +1,8 @@
 # T-023 — `shadowed-file` / `duplicate-role` hints
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | M    | T-120 | —          |
 
 ## Problem
 

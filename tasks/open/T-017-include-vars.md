@@ -1,8 +1,8 @@
 # T-017 — `include_vars`
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-120 | —          |
 
 ## Problem
 

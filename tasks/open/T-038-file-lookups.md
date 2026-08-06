@@ -1,8 +1,8 @@
 # T-038 — Resolve file-hitting lookups
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-120 | —          |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-040 — Jinja `{% include %}` / `{% import %}` / `{% extends %}` in templates
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | L    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | L    | T-120 | —          |
 
 ## Problem
 

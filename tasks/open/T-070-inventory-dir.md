@@ -1,8 +1,8 @@
 # T-070 — `inventory_dir` from real inventory sources
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | M    | T-120 | —          |
 
 ## Problem
 

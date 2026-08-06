@@ -1,8 +1,8 @@
 # T-034 — Templating that looks dynamic but isn't
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-015      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-120 | T-015      |
 
 ## Problem
 

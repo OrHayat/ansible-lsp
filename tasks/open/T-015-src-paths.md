@@ -1,8 +1,8 @@
 # T-015 — `template:`/`copy:` `src:` + the local-vs-remote table
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | L    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | L    | T-120 | —          |
 
 ## Problem
 
