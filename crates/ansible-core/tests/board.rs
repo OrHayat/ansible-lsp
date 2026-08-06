@@ -35,8 +35,13 @@ struct Ticket {
     at: Where,
     file: String,
     status: String,
+    kind: String,
     priority: String,
     size: String,
+    /// The `Epic` column — the child's half of the epic link. Empty for most tickets.
+    epic: String,
+    /// The `## Children` checklist — the epic's half. `(id, ticked)`, in file order.
+    children: Vec<(String, bool)>,
 }
 
 /// A row in one of the README tables: which section it appears under, where its link
@@ -51,17 +56,43 @@ struct Row {
     outcome: Option<String>,
 }
 
-/// `| open   | P2       | S    | — |` -> ("open", "P2", "S"). The cells after the header
-/// separator; `**rejected**` loses its emphasis so it compares as a word.
-fn header_of(text: &str) -> (String, String, String) {
-    let cells: Vec<String> = text
-        .lines()
-        .filter(|l| l.trim_start().starts_with('|'))
-        .nth(2)
-        .map(|l| l.split('|').map(|c| c.trim().trim_matches('*').to_string()).collect())
-        .unwrap_or_default();
-    let get = |i: usize| cells.get(i).cloned().unwrap_or_default();
-    (get(1), get(2), get(3))
+/// `| open | bug | P2 | S | — |` -> ("open", "P2", "S"). Columns are matched by header
+/// name, not position: `Kind` and `Epic` were added after most of these tickets were
+/// written, and a positional read would take `Kind` for the priority. A ticket with no
+/// such column yields `""`, which only the status check can trip on.
+/// `**rejected**` loses its emphasis so it compares as a word.
+fn field(text: &str, name: &str) -> String {
+    let row = |n: usize| -> Vec<String> {
+        text.lines()
+            .filter(|l| l.trim_start().starts_with('|'))
+            .nth(n)
+            .map(|l| l.split('|').map(|c| c.trim().trim_matches('*').to_string()).collect())
+            .unwrap_or_default()
+    };
+    let (head, values) = (row(0), row(2));
+    head.iter()
+        .position(|h| h == name)
+        .and_then(|i| values.get(i).cloned())
+        .unwrap_or_default()
+}
+
+/// The `- [ ] T-0NN — Title` lines under an epic's `## Children` heading, as
+/// `(id, ticked)`. Empty for every ticket that isn't an epic.
+fn children_of(text: &str) -> Vec<(String, bool)> {
+    text.lines()
+        .skip_while(|l| !l.starts_with("## Children"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter_map(|l| {
+            let ticked = l.starts_with("- [x]");
+            if !ticked && !l.starts_with("- [ ]") {
+                return None;
+            }
+            let id = l.get(6..11)?;
+            id.starts_with("T-")
+                .then(|| (id.to_string(), ticked))
+        })
+        .collect()
 }
 
 fn tickets() -> BTreeMap<String, Ticket> {
@@ -76,8 +107,18 @@ fn tickets() -> BTreeMap<String, Ticket> {
             let file = path.file_name().unwrap().to_string_lossy().to_string();
             let Some(id) = file.get(..5).filter(|s| s.starts_with("T-")) else { continue };
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            let (status, priority, size) = header_of(&text);
-            out.insert(id.to_string(), Ticket { at, file, status, priority, size });
+            let kind = field(&text, "Kind");
+            out.insert(id.to_string(), Ticket {
+                at,
+                file,
+                status: field(&text, "Status"),
+                // No Kind column == written before kinds existed == a plain task.
+                kind: if kind.is_empty() { "task".into() } else { kind },
+                priority: field(&text, "Priority"),
+                size: field(&text, "Size"),
+                epic: field(&text, "Epic"),
+                children: children_of(&text),
+            });
         }
     }
     out
@@ -224,6 +265,97 @@ fn board_agrees_with_the_folders() {
         problems.is_empty(),
         "the board and tasks/{{open,closed}}/ disagree ({} problems).\n\
          Status is the folder — fix tasks/README.md (or the ticket's status line) to match:\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+}
+
+/// The epic link is written in two places — the child's `Epic` column and the parent's
+/// `## Children` checklist — so it has two chances to go stale. `board new -e` and
+/// `board adopt` write both together; a hand-edit writes one. This is the failure mode for
+/// the other.
+///
+/// The checklist is a convenience, never the truth: state is the folder, exactly as for
+/// status. A box that disagrees with the folder is drift, not a second opinion.
+#[test]
+fn epics_agree_with_their_children() {
+    let tickets = tickets();
+    let mut problems: Vec<String> = Vec::new();
+
+    for (id, t) in &tickets {
+        // --- the child's half -----------------------------------------------------------
+        if !t.epic.is_empty() && t.epic != "—" {
+            match tickets.get(&t.epic) {
+                None => problems.push(format!(
+                    "{id}  names epic {}, which has no ticket file",
+                    t.epic
+                )),
+                Some(p) if p.kind != "epic" => problems.push(format!(
+                    "{id}  names epic {} but that ticket's kind is `{}`, not `epic`",
+                    t.epic, p.kind
+                )),
+                Some(p) if !p.children.iter().any(|(c, _)| c == id) => problems.push(format!(
+                    "{id}  names epic {} but {} has no `- [ ] {id}` line — \
+                     run `board adopt {id} -e {}`",
+                    t.epic, t.epic, t.epic
+                )),
+                Some(_) => {}
+            }
+        }
+
+        // --- the epic's half ------------------------------------------------------------
+        if t.kind != "epic" && !t.children.is_empty() {
+            problems.push(format!(
+                "{id}  has a ## Children list but its kind is `{}` — only epics have children",
+                t.kind
+            ));
+        }
+        for (child, ticked) in &t.children {
+            match tickets.get(child) {
+                None => problems.push(format!(
+                    "{id}  lists child {child}, which has no ticket file"
+                )),
+                Some(c) if c.epic != *id => problems.push(format!(
+                    "{id}  lists child {child}, but {child}'s Epic column says `{}` — \
+                     the link must name both ways",
+                    if c.epic.is_empty() { "—" } else { &c.epic }
+                )),
+                // The box is derived state; the folder decides.
+                Some(c) if *ticked != (c.at == Where::Closed) => problems.push(format!(
+                    "{id}  has {child} ticked `[{}]` but the file is in tasks/{}/ — \
+                     run `board {} {child}`",
+                    if *ticked { 'x' } else { ' ' },
+                    c.at.dir(),
+                    if *ticked { "reopen" } else { "close" },
+                )),
+                Some(_) => {}
+            }
+        }
+
+        // A closed epic over open children is the drift `board close` refuses to create;
+        // it can still arrive by hand-editing or by reopening a child.
+        if t.kind == "epic" && t.at == Where::Closed && t.status != "rejected" {
+            let open: Vec<&str> = t
+                .children
+                .iter()
+                .filter(|(c, _)| tickets.get(c).is_some_and(|c| c.at == Where::Open))
+                .map(|(c, _)| c.as_str())
+                .collect();
+            if !open.is_empty() {
+                problems.push(format!(
+                    "{id}  is a closed epic with open {}: {}",
+                    if open.len() == 1 { "child" } else { "children" },
+                    open.join(", ")
+                ));
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "epics and their children disagree ({} problems).\n\
+         The link is two-way — the child's `Epic` column and the epic's `## Children` list \
+         must name each other, and a tick must match the folder:\n  {}",
         problems.len(),
         problems.join("\n  ")
     );

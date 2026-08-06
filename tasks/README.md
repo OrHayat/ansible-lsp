@@ -7,12 +7,13 @@ below in sync, and strikes a closed ticket out of other tickets' Blocked-by cell
 (`~~T-0NN~~` = no longer blocking):
 
 ```
-cargo run -p board -- new "Title" -p P1|P2|P3 -s S|M|L [-b T-020,T-062]
+cargo run -p board -- new "Title" -p P1|P2|P3 -s S|M|L [-k bug|epic] [-e T-090] [-b T-020,T-062]
 cargo run -p board -- close T-0NN [--rejected]
 cargo run -p board -- reopen T-0NN
-cargo run -p board -- sync T-0NN        # after hand-editing priority/size/blocked-by
-cargo run -p board -- list [-p P1] [-s S] [--unblocked] [--closed]
-cargo run -p board -- show T-0NN
+cargo run -p board -- sync T-0NN        # after hand-editing priority/size/kind/blocked-by
+cargo run -p board -- list [-p P1] [-s S] [-k bug] [-e T-090] [--unblocked] [--closed]
+cargo run -p board -- show T-0NN        # an epic also lists its children
+cargo run -p board -- upstream [NAME]   # the dossiers in upstream/
 ```
 
 ```
@@ -26,10 +27,27 @@ Conventions:
 | -------- | -------------------------------------------------------------------------- |
 | Priority | **P1** the tool lies or goes silent · **P2** coverage/usability · **P3** nice |
 | Size     | **S** <½ day · **M** ~1 day · **L** multi-day                              |
+| Kind     | `task` (default) · `bug` we shipped it wrong · `epic` a parent for others   |
 | Status   | `open` · `done` · `rejected`                                               |
 
 IDs are never reused, including by rejected tickets — T-011 stays burned so the reasoning
 in it stays findable.
+
+**Kind** is a column in each ticket's header table, read by name — the tickets written
+before it existed have no such column and count as `task`. Non-task kinds carry a badge in
+the tables below (`**bug** ·`); tasks stay unbadged, so those rows never had to change.
+
+**Epics** link both ways: the child's header table names its `Epic`, and the epic file
+carries a `## Children` checklist the CLI ticks on close and unticks on reopen. The link is
+*not* a blocker — a child is workable the moment it's filed, and `list --unblocked` still
+shows it. Epics group work; `Depends on` gates it. Closing an epic with open children is
+refused (`--rejected` drops it anyway), because a closed parent over open children is
+exactly the drift the `board.rs` test exists to catch.
+
+**Upstream findings are not tickets.** A bug in `ansible/ansible` is a prose dossier in
+[`upstream/`](../upstream/), indexed by `board upstream` — never also a `tasks/` ticket, so
+one finding never has two homes. What *we* do about it is an ordinary ticket that cites the
+dossier.
 
 ## Where the project actually is
 
