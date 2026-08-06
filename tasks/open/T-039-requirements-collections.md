@@ -1,8 +1,8 @@
 # T-039 — `requirements.yml` ↔ installed-collections cross-check
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-118 | —          |
 
 ## Problem
 

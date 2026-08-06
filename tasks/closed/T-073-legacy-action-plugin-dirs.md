@@ -1,8 +1,8 @@
 # T-073 — Legacy `action_plugins/` dirs are invisible to the action-plugin check
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P3       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P3       | S    | T-118 | —          |
 
 Escape #3 from the T-029 module-hover discussion: pre-collections plugin dirs can inject or
 shadow an action plugin outside the collection tree the twin check searches.

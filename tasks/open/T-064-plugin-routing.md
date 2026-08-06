@@ -1,8 +1,8 @@
 # T-064 — Plugin routing: redirects, deprecations, tombstones (+ rename autofix)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-118 | —          |
 
 ## Problem
 

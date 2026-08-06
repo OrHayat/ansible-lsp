@@ -146,6 +146,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-114 | **epic** · [Jinja and templating model](open/T-114-jinja-and-templating-model.md) | L    | —    |
 | T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | —    |
 | T-116 | [Undefined propagation: the Marker model](open/T-116-undefined-propagation-the-marker-model.md) | M    | —    |
+| T-118 | **epic** · [Collections and routing metadata](open/T-118-collections-and-routing-metadata.md) | L    | —    |
+| T-119 | [meta/runtime.yml has no schema validation anywhere](open/T-119-meta-runtime-yml-has-no-schema-validation-anywhere.md) | S    | T-064 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

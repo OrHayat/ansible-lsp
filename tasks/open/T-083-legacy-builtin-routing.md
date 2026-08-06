@@ -1,8 +1,8 @@
 # T-083 — `ansible.legacy` is unmodelled and `ansible.builtin` skips the routing table
 
-| Status | Priority | Size | Depends on           |
-| ------ | -------- | ---- | -------------------- |
-| open   | P1       | M    | refs T-042/1, T-064  |
+| Status | Priority | Size | Epic  | Depends on          |
+| ------ | -------- | ---- | ----- | ------------------- |
+| open   | P1       | M    | T-118 | refs T-042/1, T-064 |
 
 Raised from an outside review, then checked against this repo's code. The review is quoted
 first and unedited, because the parts of it that turned out to be already-correct here matter

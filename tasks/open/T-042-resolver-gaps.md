@@ -1,8 +1,8 @@
 # T-042 — Close resolver gaps: collections keyword, collection roles, `*_from`
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | S    | T-118 | —          |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-072 — Network modules: one platform action plugin handles the whole family
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P3       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P3       | S    | T-118 | —          |
 
 Escape #2 from the T-029 module-hover discussion: the same-name twin check false-negatives
 on every network module.

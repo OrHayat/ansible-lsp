@@ -1,8 +1,8 @@
 # T-080 — Resolution-aware FQCN suggestion that exempts local (`ansible.legacy`) modules
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | T-042/T-064, T-025, T-010 |
+| Status | Priority | Size | Epic  | Depends on                |
+| ------ | -------- | ---- | ----- | ------------------------- |
+| open   | P3       | M    | T-118 | T-042/T-064, T-025, T-010 |
 
 ## Idea
 
