@@ -1,8 +1,8 @@
 # T-076 — Var-index re-walks shared files once per consumer
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-131 | —          |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | S    | T-118 | —          |
 
 Found while building T-072, which needed the same lookup and had to route around this one.
 

@@ -1,8 +1,8 @@
 # T-075 — The startup scan blocks all requests
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | M    | T-131 | —          |
 
 ## Problem
 

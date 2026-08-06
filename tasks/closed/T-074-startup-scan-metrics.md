@@ -1,8 +1,8 @@
 # T-074 — Startup scan metrics
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P3       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P3       | S    | T-131 | —          |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-084 — Cold `ansible --version` blocks startup for seconds
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | S    | T-131 | —          |
 
 **Outcome: A shipped, B and C rejected on measurement.** Detect is off the pump and costs
 1 ms, because the subprocess it was scoped to avoid is never reached on a working install.

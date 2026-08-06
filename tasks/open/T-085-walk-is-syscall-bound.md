@@ -1,8 +1,8 @@
 # T-085 — The var walk is syscall-bound, and 4× of the syscalls are repeats
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | T-076 (landed) |
+| Status | Priority | Size | Epic  | Depends on     |
+| ------ | -------- | ---- | ----- | -------------- |
+| open   | P2       | M    | T-131 | T-076 (landed) |
 
 ## Problem
 
