@@ -1,8 +1,8 @@
 # T-036 — Parse the YAML that Ansible parses (lenient oracle, maybe a swap)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | L    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | L    | T-090 | —          |
 
 ## Problem
 

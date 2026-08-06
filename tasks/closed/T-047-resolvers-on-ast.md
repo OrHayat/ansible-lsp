@@ -1,8 +1,8 @@
 # T-047 — Move the resolvers onto the AST
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | L    | T-044      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | L    | T-090 | T-044      |
 
 ## Problem
 

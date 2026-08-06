@@ -600,6 +600,11 @@ impl Board {
                     .next_back()
                     .map_or(end, |i| i + 1);
                 lines.insert(at, entry);
+                // The first child of an empty section lands directly on the next heading's
+                // line, which would leave the list glued to it.
+                if lines.get(at + 1).is_some_and(|l| l.starts_with("## ")) {
+                    lines.insert(at + 1, String::new());
+                }
             }
             None => {
                 let at = lines
@@ -1404,6 +1409,10 @@ prose that must survive
         assert!(
             epic.contains("- [ ] T-005 — Wrong extension order"),
             "epic lists it: {epic}"
+        );
+        assert!(
+            !epic.contains("Wrong extension order\n## "),
+            "a blank line separates the list from the next heading: {epic}"
         );
 
         let shown = go(&d, &["show", "T-004"]).unwrap();

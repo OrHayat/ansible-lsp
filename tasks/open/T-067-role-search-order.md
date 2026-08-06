@@ -1,8 +1,8 @@
 # T-067 — Role search order doesn't match Ansible's
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | M    | T-090 | —          |
 
 ## Problem
 

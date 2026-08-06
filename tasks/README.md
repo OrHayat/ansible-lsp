@@ -90,6 +90,15 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
 | T-086 | [`plugin_twin` matches a POSIX substring, so it finds nothing on Windows](open/T-086-plugin-twin-windows-separators.md) | S | — |
+| T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
+| T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](open/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | S    | —          |
+| T-092 | **bug** · [Includes inside handlers/ resolve against tasks/](open/T-092-includes-inside-handlers-resolve-against-tasks.md) | S    | —          |
+| T-093 | **bug** · [Bare module names only try .py](open/T-093-bare-module-names-only-try-py.md) | S    | —          |
+| T-094 | **bug** · [short_key treats any dotted include_tasks as an include](open/T-094-short-key-treats-any-dotted-include-tasks-as-an-include.md) | S    | —          |
+| T-095 | **bug** · [Templated import_playbook is reported missing](open/T-095-templated-import-playbook-is-reported-missing.md) | S    | —          |
+| T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | —          |
+| T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | S    | —          |
+| T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 
 ### P2 — coverage and usability
 
