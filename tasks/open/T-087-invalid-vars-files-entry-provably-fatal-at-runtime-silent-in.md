@@ -1,8 +1,8 @@
 # T-087 — Invalid vars_files entry: provably fatal at runtime, silent in the editor
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | S    | T-099 | —          |
 
 ## Problem
 

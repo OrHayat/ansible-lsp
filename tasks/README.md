@@ -99,6 +99,13 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | —          |
 | T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | S    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
+| T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
+| T-100 | [Unknown key in a roles: entry silently becomes a variable](open/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | S    | —          |
+| T-101 | [Dynamic includes reject keywords imports accept](open/T-101-dynamic-includes-reject-keywords-imports-accept.md) | S    | —          |
+| T-102 | [Duplicate YAML mapping key](open/T-102-duplicate-yaml-mapping-key.md) | S    | —          |
+| T-103 | [A static field carrying a template is used literally](open/T-103-a-static-field-carrying-a-template-is-used-literally.md) | S    | —          |
+| T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
+| T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -126,6 +133,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M | — |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
 | T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](open/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | S    | —    |
+| T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | T-062 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -148,7 +156,6 @@ T-021 is now unblocked on that side.
 | T-025 | [Settings — toggle rules, override severity](open/T-025-settings.md) | M | —      |
 | T-026 | [Neovim lspconfig entry](open/T-026-neovim.md)                  | S    | —          |
 | T-027 | [Differential harness vs the legacy plugin](open/T-027-differential-harness.md) | M | — |
-| T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M   | —          |
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
 | T-054 | [Find variable references](open/T-054-variable-references.md)    | M    | T-049, T-020 |

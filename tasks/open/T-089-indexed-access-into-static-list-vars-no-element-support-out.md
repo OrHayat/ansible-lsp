@@ -1,8 +1,8 @@
 # T-089 — Indexed access into static list vars: no element support, out-of-bounds unflagged
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | M    | T-099 | —          |
 
 ## Problem
 

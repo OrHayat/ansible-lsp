@@ -1,8 +1,8 @@
 # T-028 — `notify:` -> handler resolution
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | M    | T-099 | —          |
 
 ## Problem
 
