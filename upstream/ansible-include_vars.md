@@ -1,6 +1,6 @@
 # Upstream issues to file against ansible/ansible — `include_vars`
 
-Local drafts, not filed yet. Both live-verified on ansible-core 2.21.2 (Homebrew ansible
+Local drafts, not filed yet. All live-verified on ansible-core 2.21.2 (Homebrew ansible
 14.2.0); the action plugin is byte-identical between 2.21.2 and 2.22.0.dev0, and issue 1 was
 also confirmed present in 2.20.4. Line numbers below are from the 2.21.2 tree.
 
@@ -120,3 +120,78 @@ role-level copies, and `hash_behaviour` applies a second time.
 **Note for maintainers.** Fixing the comparison is a behavior change — nine years of
 playbooks have run with `main.yml` included. The alternative is deleting the dead guard and
 the comment, making the actual behavior intentional.
+
+---
+
+## Issue 3 — in a role, a missing `dir: vars/...` silently walks the **cwd** and loads contents from the **playbook dir**
+
+**Component:** `lib/ansible/plugins/action/include_vars.py`
+
+**Summary.** `_set_root_dir` resolves a role-relative `dir:` that starts with `vars/` only
+when the joined path exists (`plugins/action/include_vars.py:159-164`):
+
+```python
+if self.source_dir.split('/')[0] == 'vars':
+    path_to_use = (
+        path.join(self._task._role._role_path, self.source_dir)
+    )
+    if path.exists(path_to_use):
+        self.source_dir = path_to_use
+```
+
+When `<role>/<dir>` does *not* exist there is no error and no fallback assignment —
+`source_dir` just stays the relative string, and every later use resolves it against a
+*different* base:
+
+- the existence check (`:108`) and the directory walk (`_traverse_dir_depth`) resolve it
+  against the **process cwd**
+- the per-file loads go through the `DataLoader`, whose basedir is the **playbook dir**
+  (`_load_files`)
+
+So the cwd's directory listing decides *which* filenames load, while the playbook dir
+supplies their *contents*. Nothing in the docs ("relative to the role or playbook") predicts
+any of the three observable outcomes below.
+
+**Reproduction.** Role `r` has no `vars/env`; the playbook dir does; a separate directory
+`elsewhere/` holds a same-named tree:
+
+```
+repro/play.yml                       - hosts: localhost
+                                       gather_facts: false
+                                       roles: [r]
+repro/roles/r/tasks/main.yml         - include_vars: { dir: vars/env }
+                                     - debug: ...
+repro/roles/r/vars/main.yml          placeholder: 1
+repro/vars/env/leak.yml              marker: loaded_from_playbook_dir
+repro/vars/env/only_in_playbookdir.yml   marker2: also_playbook_dir
+elsewhere/vars/env/leak.yml          marker: loaded_from_cwd
+```
+
+**Actual output (2.21.2)** — the same task, three results chosen by the shell's cwd:
+
+1. **cwd = `elsewhere/`** (cwd has `vars/env/leak.yml`): task **succeeds**, and
+
+   ```
+   marker=loaded_from_playbook_dir marker2=UNDEF files=['vars/env/leak.yml']
+   ```
+
+   The file list came from the cwd walk (`leak.yml` only — `only_in_playbookdir.yml` is
+   skipped although it sits in the directory the contents were read from), the value came
+   from the playbook dir, and `ansible_included_var_files` reports a still-relative path.
+
+2. **cwd = any directory without `vars/env`**: `"vars/env directory does not exist"` — even
+   though the playbook dir has the directory and both files.
+
+3. **cwd has a file the playbook dir lacks** (delete `repro/vars/env/`): `"Could not find or
+   access '<playbook_dir>/vars/env/leak.yml'"` — an error naming a path that was never
+   walked.
+
+**Expected.** Either a role-scoped error ("`<role>/vars/env` does not exist"), or a
+documented fallback that uses **one** base for both the walk and the load.
+
+**Suggested fix.** Fail when the role-relative dir is missing — the fallback is
+undocumented, and because filenames and contents come from two different trees it is hard
+to construct a playbook that depends on it *correctly*: any run that "works" through this
+path is loading a file list from one directory and values from another. If compatibility
+still forbids that, resolving the walk from the loader's basedir (matching the load) at
+least makes the two halves agree.

@@ -71,7 +71,8 @@ pub enum Outcome {
     /// The task fails at runtime; `message` mirrors the plugin's error text.
     Failed { message: String },
     /// In a role, `dir:` starts with `vars/`, and `<role>/<dir>` doesn't exist: the value
-    /// is left unresolved and walks `<cwd>/<dir>` at runtime — statically unknowable.
+    /// is left unresolved — the walk then lists `<cwd>/<dir>` but contents load from the
+    /// playbook dir (upstream/ansible-include_vars.md issue 3). Statically unknowable.
     CwdFallback { relative: String },
     /// Relative `file:` — resolution is `_find_needle`, not this module's job.
     NeedsNeedle { file: String },
