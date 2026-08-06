@@ -95,12 +95,21 @@ fn children_of(text: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-fn tickets() -> BTreeMap<String, Ticket> {
-    let mut out = BTreeMap::new();
+/// Every ticket file on disk, in folder order, **including** two that claim the same id.
+/// Keyed collections lose the duplicate silently, so the list is what gets collected and
+/// `one_file_per_ticket_id` runs over it before anything else trusts the map.
+fn ticket_files() -> Vec<(String, Ticket)> {
+    let mut out = Vec::new();
     for at in [Where::Open, Where::Closed] {
         let dir = tasks_dir().join(at.dir());
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        entries.sort();
+        for path in entries {
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
@@ -108,7 +117,7 @@ fn tickets() -> BTreeMap<String, Ticket> {
             let Some(id) = file.get(..5).filter(|s| s.starts_with("T-")) else { continue };
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let kind = field(&text, "Kind");
-            out.insert(id.to_string(), Ticket {
+            out.push((id.to_string(), Ticket {
                 at,
                 file,
                 status: field(&text, "Status"),
@@ -118,10 +127,43 @@ fn tickets() -> BTreeMap<String, Ticket> {
                 size: field(&text, "Size"),
                 epic: field(&text, "Epic"),
                 children: children_of(&text),
-            });
+            }));
         }
     }
     out
+}
+
+fn tickets() -> BTreeMap<String, Ticket> {
+    ticket_files().into_iter().collect()
+}
+
+/// Two files claiming one id is the one failure the rest of this file cannot see: every
+/// other check reads a map keyed by id, and a map keeps exactly one of them. The board CLI
+/// never creates this — it derives the filename from the title — but hand-writing a ticket
+/// file, or guessing a name the CLI truncated (`slug` caps at 60 chars), does.
+///
+/// Silently keeping one means the other's contents are invisible: no README row is demanded
+/// for it, its epic link is unchecked, and it will not be found by `board show`.
+#[test]
+fn one_file_per_ticket_id() {
+    let mut by_id: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (id, t) in ticket_files() {
+        by_id.entry(id).or_default().push(format!("tasks/{}/{}", t.at.dir(), t.file));
+    }
+    let dupes: Vec<String> = by_id
+        .iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|(id, files)| format!("{id}  {}", files.join("\n       ")))
+        .collect();
+
+    assert!(
+        dupes.is_empty(),
+        "{} ticket id{} claimed by more than one file. Every other check here reads a map \
+         keyed by id and would silently ignore all but one — delete or rename the extras:\n  {}",
+        dupes.len(),
+        if dupes.len() == 1 { " is" } else { "s are" },
+        dupes.join("\n  ")
+    );
 }
 
 /// Every `| T-0NN | … |` row in the README, tagged with the `## Open` / `## Closed` section
