@@ -131,6 +131,7 @@ T-021 is now unblocked on that side.
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
 | T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](open/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | S    | —          |
+| T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
