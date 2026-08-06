@@ -83,7 +83,7 @@ What *we* do about an upstream bug is an ordinary ticket that cites the dossier 
 - **Close** → `close T-0NN` (or `--rejected` for decided-against). This also strikes
   `~~T-0NN~~` through the id in other tickets' Blocked-by cells — struck means no longer
   blocking. Close only when every `- [ ]` box in the ticket's "Done when" section is checked;
-  the boxes are the definition of done, not the README or TODO.md.
+  the boxes are the definition of done, not the README.
 - **Edit a ticket** → body text: just edit the file. Status: `close`/`reopen`, never the
   status line by hand. Header fields (priority/size/depends): edit the file's header table,
   then run `sync T-0NN` — the drift check fails until you do.
