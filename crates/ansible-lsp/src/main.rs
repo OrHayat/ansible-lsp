@@ -1,5 +1,9 @@
 //! Thin LSP shim over `ansible-core`. All logic lives in the core crate.
 
+mod md;
+
+use md::{Md, Prose};
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -898,18 +902,20 @@ impl Backend {
                 continue;
             };
             let line = document.line_of(d.span.start);
-            let label = format!("{}:{line}", short_path(&d.file));
-            // A clickable link to the definition — file URI with a line fragment.
-            let loc = Url::from_file_path(&d.file)
-                .ok()
-                .map(|u| format!("[{label}]({u}#L{line})"))
-                .unwrap_or_else(|| format!("`{label}`"));
-            lines.push(format!("- `{token}` = `{v}` — {} · {loc}", source_label(d.source)));
+            lines.push(
+                md::code(&token)
+                    + " = "
+                    + md::code(&v)
+                    + " — "
+                    + source_label(d.source).md()
+                    + " · "
+                    + def_link(&d.file, line),
+            );
         }
         if lines.is_empty() {
             return None;
         }
-        let mut md = String::new();
+        let mut out = Md::new();
         if !res.targets.is_empty() {
             let t = res
                 .targets
@@ -917,13 +923,12 @@ impl Backend {
                 .map(|p| short_path(p))
                 .collect::<Vec<_>>()
                 .join(", ");
-            md.push_str(&format!("**→ `{t}`**\n\n"));
+            out = out.line(("→ ".md() + md::code(&t)).bold());
         }
-        md.push_str("Substituting:\n");
-        md.push_str(&lines.join("\n"));
+        let out = out.line("Substituting:".md()).items(lines);
         let (sl, sc) = doc.byte_to_lsp(r.span.start);
         let (el, ec) = doc.byte_to_lsp(r.span.end);
-        Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
+        Some((out.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
 
     fn variable_hover_at(
@@ -959,7 +964,7 @@ impl Backend {
             // first like a stack trace (the defining role's requirer at the top). Only
             // non-obvious routes carry `via`; direct roles/includes stay bare. Unbounded
             // like Ansible's own dep_chain — length is capped by the visited set.
-            let via_lines: Vec<String> = d
+            let via_lines: Vec<md::Inline> = d
                 .via
                 .iter()
                 .rev()
@@ -975,12 +980,7 @@ impl Backend {
                         .and_then(|r| r.file_name())
                         .and_then(|s| s.to_str())
                         .unwrap_or("?");
-                    let vlabel = format!("{}:{vline}", short_path(vf));
-                    let link = match Url::from_file_path(vf) {
-                        Ok(u) => format!("[{vlabel}]({u}#L{vline})"),
-                        Err(()) => format!("`{vlabel}`"),
-                    };
-                    format!("  - dependency of `{role}` — {link}")
+                    "dependency of ".md() + md::code(role) + " — " + def_link(vf, vline)
                 })
                 .collect();
             let document: &Document = if d.file == *path {
@@ -992,54 +992,52 @@ impl Backend {
             };
             let text = document.text.as_str();
             let line = document.line_of(d.span.start);
-            let label = format!("{}:{line}", short_path(&d.file));
-            // Clickable link to the definition (file URI + line fragment).
-            let loc = Url::from_file_path(&d.file)
-                .ok()
-                .map(|u| format!("[{label}]({u}#L{line})"))
-                .unwrap_or_else(|| format!("`{label}`"));
-            let mark = if multiple && i == 0 { "  ← effective" } else { "" };
+            let mark = if multiple && i == 0 { "  ← effective".md() } else { md::empty() };
             // A conditionally-defined var (task under a `when:`) reads as "only when …" —
             // that's how "web01 but not web02" shows up without any inventory.
-            let cond = d
-                .condition
-                .as_ref()
-                .map(|c| format!(" _(only when `{}`)_", c.trim()))
-                .unwrap_or_default();
-            match def_value(d, text) {
-                Some(v) => lines.push(format!(
-                    "- {} · {loc} = `{v}`{cond}{mark}",
-                    source_label(d.source)
-                )),
-                None => lines.push(format!("- {} · {loc}{cond}{mark}", source_label(d.source))),
-            }
-            lines.extend(via_lines);
+            let cond = match &d.condition {
+                Some(c) => {
+                    " ".md() + ("(only when ".md() + md::code(c.trim()) + ")").italic()
+                }
+                None => md::empty(),
+            };
+            let head = source_label(d.source).md() + " · " + def_link(&d.file, line);
+            let head = match def_value(d, text) {
+                Some(v) => head + " = " + md::code(&v),
+                None => head,
+            };
+            lines.push((false, head + cond + mark));
+            lines.extend(via_lines.into_iter().map(|v| (true, v)));
         }
+        let name = md::code(&use_.name).bold();
         let header = if multiple {
-            format!("**`{}`** — {} definitions", use_.name, defs.len())
+            name + " — " + md::text(&defs.len().to_string()) + " definitions"
         } else {
-            format!("**`{}`**", use_.name)
+            name
         };
-        let mut md = format!("{header}\n\n{}", lines.join("\n"));
+        let mut md = lines
+            .into_iter()
+            .fold(Md::new().line(header).gap(), |doc, (nested, l)| {
+                if nested { doc.subitem(l) } else { doc.item(l) }
+            });
         // A host-scoped winner (group_vars/<group>, host_vars/<host>) is only in effect for
         // matching hosts — we can't verify that without inventory. A role-default winner can
         // still be overridden by inventory we don't index. Otherwise only `-e` can.
         let caveat = if defs[0].source.host_scoped() {
-            "_Host-scoped: in effect only for matching hosts; `-e` can override._"
+            Some("Host-scoped: in effect only for matching hosts; `-e` can override.")
         } else if defs[0].source == vars::VarSource::RoleDefaults {
-            "_Inventory (per-host) or `-e` can still override._"
+            Some("Inventory (per-host) or `-e` can still override.")
         } else if multiple {
-            "_`-e` extra-vars can still override._"
+            Some("`-e` extra-vars can still override.")
         } else {
-            ""
+            None
         };
-        if !caveat.is_empty() {
-            md.push_str("\n\n");
-            md.push_str(caveat);
+        if let Some(c) = caveat {
+            md = md.line(c.italic());
         }
         let (sl, sc) = doc.byte_to_lsp(use_.span.start);
         let (el, ec) = doc.byte_to_lsp(use_.span.end);
-        Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
+        Some((md.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
 }
 
@@ -1102,6 +1100,16 @@ fn template_idents(value: &str) -> Vec<String> {
 }
 
 /// The last few components of a path, for a compact "where it's defined" label.
+/// A definition's location as a clickable `file:line`, falling back to a code span when the
+/// path can't be expressed as a URL. Both variable hovers and the provenance chain want this.
+fn def_link(file: &Path, line: usize) -> md::Inline {
+    let label = format!("{}:{line}", short_path(file));
+    match Url::from_file_path(file) {
+        Ok(u) => md::link(&label, &u, Some(line)),
+        Err(()) => md::code(&label),
+    }
+}
+
 fn short_path(p: &Path) -> String {
     let comps: Vec<_> = p.components().collect();
     let start = comps.len().saturating_sub(3);
@@ -1116,31 +1124,57 @@ fn short_path(p: &Path) -> String {
 /// (or verbatim when it doesn't match a known shape), plus the reminder that an import's
 /// `when:` fans out onto the whole imported file.
 fn when_hover(r: &Reference) -> String {
-    let raw = |c: &str| format!("`{}`", c.trim());
-    let mut s = String::from("**`when:`**");
-    if let [only] = r.conditions.as_slice() {
+    let doc = Md::new().line(md::code("when:").bold());
+    let doc = if let [only] = r.conditions.as_slice() {
         // A single clause is the whole condition, so keep the "runs unless / only if"
         // framing that says what it decides.
-        let line = condition::classify(only).label().unwrap_or_else(|| raw(only));
-        s.push_str(&format!("\n\n{line}"));
+        doc.line(labelled(only))
     } else {
         // Listed clauses are ANDed. Say so, and state each as a bare requirement rather
         // than as its own "runs only if" sentence, which would read as standalone.
-        s.push_str("\n\nRuns only when **all** hold:");
-        for c in &r.conditions {
-            let line = condition::classify(c).requirement().unwrap_or_else(|| raw(c));
-            s.push_str(&format!("\n- {line}"));
-        }
-    }
+        doc.line("Runs only when ".md() + "all".bold() + " hold:")
+            .items(r.conditions.iter().map(|c| required(c)))
+    };
     if r.kind == ReferenceKind::ImportPlaybook {
-        s.push_str(
-            "\n\n_The condition is copied onto every task in the imported playbook and \
-             re-checked per task._",
-        );
+        return doc
+            .line(
+                "The condition is copied onto every task in the imported playbook and \
+                 re-checked per task."
+                    .italic(),
+            )
+            .render();
     }
-    s
+    doc.render()
 }
 
+/// One clause as a whole-condition sentence, or the expression itself when no shape
+/// matches — which is the common case, and the reason the value needs a code span that
+/// survives a backtick inside it.
+fn labelled(c: &str) -> md::Inline {
+    condition::classify(c)
+        .label()
+        .map(|l| md::text(&l))
+        .unwrap_or_else(|| md::code(c.trim()))
+}
+
+/// One clause as a bare requirement, for ANDing with its siblings.
+fn required(c: &str) -> md::Inline {
+    condition::classify(c)
+        .requirement()
+        .map(|l| md::text(&l))
+        .unwrap_or_else(|| md::code(c.trim()))
+}
+
+/// A path as it appears in a tooltip: project-relative, forward slashes, code span. Every
+/// hover use of [`shorten`] is this, so the pairing is one call rather than two.
+fn path_span(p: &Path, ctx: &FileContext) -> md::Inline {
+    md::code(&shorten(p, ctx))
+}
+
+/// A **diagnostic** message, not a hover — LSP defines `Diagnostic.message` as plain text,
+/// so nothing here is markdown and `md` deliberately stays out of it. The backticks are a
+/// quoting convention the editor shows literally. (T-082 lists this among the hover
+/// producers; it isn't one.)
 fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
     // Listing a candidate path with `{{ }}` still in it explains nothing. The real
     // problem is that a static import is expanded before play variables exist.
@@ -1177,7 +1211,7 @@ fn shorten(p: &Path, ctx: &FileContext) -> String {
 /// Ansible install itself), and whether the name hit `plugins/modules/` (ships to the
 /// target host) or `plugins/action/` (runs on the controller). The raw path dump the
 /// generic hover would show forces reading several 100-char paths to learn these facts.
-fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<String> {
+fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md> {
     let won = res.targets.first()?;
     let s = won.to_string_lossy().replace('\\', "/");
     let in_workspace = ctx.project_root.as_ref().is_some_and(|r| won.starts_with(r));
@@ -1217,24 +1251,29 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<St
     };
     // One line per file, label first, the path as the link text — which file each link
     // opens must be readable without clicking.
-    let entry = |label: &str, p: &Path| {
+    let entry = |label: &'static str, p: &Path| {
         let shown = short_plugin_path(p, ctx);
-        let link = Url::from_file_path(p)
-            .ok()
-            .map(|u| format!("[{shown}]({u})"))
-            .unwrap_or_else(|| format!("`{shown}`"));
-        format!("\n- {label}: {link}")
+        let target = match Url::from_file_path(p) {
+            Ok(u) => md::link(&shown, &u, None),
+            Err(()) => md::code(&shown),
+        };
+        label.md() + ": " + target
     };
     // Lead with the fact that matters: where this task's code runs. An action plugin —
     // the winner itself or a same-name twin — executes on the controller; otherwise the
     // `normal` handler ships the module to the target host.
-    let mut md = format!(
-        "`{collection}` — from {origin} · {}",
-        if is_action || twin.is_some() {
-            "runs on the controller (action plugin)"
-        } else {
-            "runs on the target host"
-        }
+    let mut doc = Md::new().line(
+        // `origin` is authored prose and one arm carries its own code span
+        // (``a `library/` dir…``), so it is markdown already, not a value to escape.
+        md::code(&collection)
+            + " — from "
+            + origin.md()
+            + " · "
+            + if is_action || twin.is_some() {
+                "runs on the controller (action plugin)".md()
+            } else {
+                "runs on the target host".md()
+            },
     );
     // A winner whose final name differs from what the task wrote got there through a
     // rename table (core's 2.10 split table, or a collection's own). Make the hop
@@ -1243,24 +1282,18 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<St
         let stem = won.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
         let resolved_as = format!("{collection}.{stem}");
         if resolved_as != r.value {
-            md.push_str(&format!("\n\n`{}` → redirected to `{resolved_as}`", r.value));
+            doc = doc.line(
+                md::code(&r.value) + " → redirected to " + md::code(&resolved_as),
+            );
         }
     }
     // The file that runs is listed first.
-    match (is_action, &twin) {
-        (true, t) => {
-            md.push_str(&entry("action plugin", won));
-            if let Some(t) = t {
-                md.push_str(&entry("module", t));
-            }
-        }
-        (false, Some(t)) => {
-            md.push_str(&entry("action plugin", t));
-            md.push_str(&entry("module", won));
-        }
-        (false, None) => md.push_str(&entry("module", won)),
-    }
-    Some(md)
+    Some(match (is_action, &twin) {
+        (true, Some(t)) => doc.item(entry("action plugin", won)).item(entry("module", t)),
+        (true, None) => doc.item(entry("action plugin", won)),
+        (false, Some(t)) => doc.item(entry("action plugin", t)).item(entry("module", won)),
+        (false, None) => doc.item(entry("module", won)),
+    })
 }
 
 /// A module path cut to its meaningful tail: project-relative inside the workspace,
@@ -1319,53 +1352,42 @@ fn plugin_twin(won: &Path, is_action: bool) -> Option<PathBuf> {
 }
 
 /// Every candidate tried, in order, marking the one that won.
-fn tried_list(res: &Resolution, ctx: &FileContext) -> String {
+fn tried_list(res: &Resolution, ctx: &FileContext) -> Md {
     let won = res.targets.first();
-    let mut s = String::from("**Tried:**");
-    for c in &res.candidates {
-        if Some(c) == won {
-            s.push_str(&format!("\n- ✓ `{}` — won", shorten(c, ctx)));
-        } else {
-            s.push_str(&format!("\n- `{}`", shorten(c, ctx)));
-        }
-    }
-    s
+    Md::new()
+        .line("Tried:".bold())
+        .items(res.candidates.iter().map(|c| {
+            if Some(c) == won {
+                "✓ ".md() + path_span(c, ctx) + " — won"
+            } else {
+                path_span(c, ctx)
+            }
+        }))
 }
 
 /// One compact line saying a reference is guarded, to sit under whatever the reference
 /// hover already says. The full `when:` block belongs on the `when:` clause; here the guard
 /// is a property of the edge — "this include may not be taken" — so it must not crowd out
 /// the target or the provenance it appends to.
-fn guard_line(r: &Reference) -> String {
-    let raw = |c: &str| format!("`{}`", c.trim());
-    let mut s = match r.conditions.as_slice() {
-        [only] => format!(
-            "_Conditional_ : {}",
-            condition::classify(only).label().unwrap_or_else(|| raw(only))
-        ),
-        many => {
-            let mut s = String::from("_Conditional_ — runs only when **all** hold:");
-            for c in many {
-                s.push_str(&format!(
-                    "\n- {}",
-                    condition::classify(c).requirement().unwrap_or_else(|| raw(c))
-                ));
-            }
-            s
-        }
+fn guard_line(r: &Reference) -> Md {
+    let doc = match r.conditions.as_slice() {
+        [only] => Md::new().line("Conditional".italic() + " : " + labelled(only)),
+        many => Md::new()
+            .line("Conditional".italic() + " — runs only when " + "all".bold() + " hold:")
+            .items(many.iter().map(|c| required(c))),
     };
     if r.kind == ReferenceKind::ImportPlaybook {
-        s.push_str("\n\n_…and copied onto every task in the imported playbook._");
+        return doc.line("…and copied onto every task in the imported playbook.".italic());
     }
-    s
+    doc
 }
 
 /// Where a resolved reference points, in one line. What the verbose `Tried:` dump says
 /// implicitly with a ✓, for the case where the dump isn't wanted but something has to
 /// anchor the guard line above.
-fn target_line(res: &Resolution, ctx: &FileContext) -> Option<String> {
+fn target_line(res: &Resolution, ctx: &FileContext) -> Option<Md> {
     let t = res.targets.first()?;
-    Some(format!("**→ `{}`**", shorten(t, ctx)))
+    Some(Md::new().line(("→ ".md() + path_span(t, ctx)).bold()))
 }
 
 /// Hover markdown for a reference: the resolved target and every candidate tried, in
@@ -1379,27 +1401,26 @@ fn reference_hover(
     res: &Resolution,
     ctx: &FileContext,
     show_tried: bool,
-) -> Option<String> {
+) -> Option<Md> {
     if r.kind == ReferenceKind::Module && res.status == Status::Resolved {
-        let mut md = module_hover(r, res, ctx)?;
-        if show_tried {
-            md.push_str(&format!("\n\n{}", tried_list(res, ctx)));
-        }
-        return Some(md);
+        let doc = module_hover(r, res, ctx)?;
+        return Some(if show_tried {
+            doc.concat(tried_list(res, ctx))
+        } else {
+            doc
+        });
     }
     match res.status {
         // A templated pattern that glob-matched: every target is equally possible until
         // runtime, so there is no winner to mark — list them all.
         Status::Resolved if res.skip_reason == Some(SkipReason::Templated) => {
             let n = res.targets.len();
-            let mut s = format!(
-                "**{n} possible target{}:**",
-                if n == 1 { "" } else { "s" },
-            );
-            for t in &res.targets {
-                s.push_str(&format!("\n- `{}`", shorten(t, ctx)));
-            }
-            Some(s)
+            let plural = if n == 1 { " possible target:" } else { " possible targets:" };
+            Some(
+                Md::new()
+                    .line((md::text(&n.to_string()) + plural).bold())
+                    .items(res.targets.iter().map(|t| path_span(t, ctx))),
+            )
         }
         Status::Resolved => Some(tried_list(res, ctx)),
         Status::Missing => None,
@@ -1407,13 +1428,14 @@ fn reference_hover(
             // No candidates means no known-value substitution happened either — nothing
             // else will hover this, so say why it goes nowhere. With candidates, the
             // substitution hover already explains the `{{ }}`.
-            Some(SkipReason::Templated) if res.candidates.is_empty() => {
-                Some("**Skipped** — value only known at runtime; no file matches".into())
-            }
+            Some(SkipReason::Templated) if res.candidates.is_empty() => Some(
+                Md::new()
+                    .line("Skipped".bold() + " — value only known at runtime; no file matches"),
+            ),
             Some(SkipReason::Templated) => None,
-            Some(SkipReason::NotInWorkspace) => {
-                Some("**Skipped** — not in this workspace (a builtin, or installed outside it)".into())
-            }
+            Some(SkipReason::NotInWorkspace) => Some(Md::new().line(
+                "Skipped".bold() + " — not in this workspace (a builtin, or installed outside it)",
+            )),
             None => None,
         },
     }
@@ -1505,20 +1527,16 @@ fn hover_at(
             .then(|| reference_hover(r, &res, &ctx, settings.candidates_on_resolved))
             .flatten();
         let guard = (!r.conditions.is_empty()).then(|| guard_line(r));
-        let md = match (body, guard) {
-            (Some(b), Some(g)) => Some(format!("{b}\n\n{g}")),
-            (Some(b), None) => Some(b),
+        let doc = match (body, guard) {
+            (Some(b), g) => Some(b.maybe(g)),
             // Nothing else wanted the hover, so the guard needs its own anchor: where the
             // edge goes, then the condition on it. Not the `Tried:` dump — that stays
             // behind `candidatesOnResolved`.
-            (None, Some(g)) => Some(match target_line(&res, &ctx) {
-                Some(t) => format!("{t}\n\n{g}"),
-                None => g,
-            }),
+            (None, Some(g)) => Some(target_line(&res, &ctx).unwrap_or_default().concat(g)),
             (None, None) => None,
         };
-        if let Some(md) = md {
-            return Some((md, range(r.span)));
+        if let Some(doc) = doc {
+            return Some((doc.render(), range(r.span)));
         }
     }
 
@@ -1820,7 +1838,7 @@ mod tests {
                 .0
         };
         let mtu = hover("network_mtu");
-        assert!(mtu.contains("dependency of `provisioner`"), "no breadcrumb in: {mtu}");
+        assert!(plain(&mtu).contains("dependency of provisioner"), "no breadcrumb in: {mtu}");
         assert!(mtu.contains("provisioner/meta/main.yml"), "wrong edge in: {mtu}");
         assert!(!hover("provisioner_user").contains("dependency of"));
     }
@@ -1864,8 +1882,8 @@ mod tests {
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
         assert!(md.contains("chain-c/vars/settings.yml"), "wrong file:\n{md}");
-        assert!(md.contains("dependency of `chain-b`"), "missing inner hop:\n{md}");
-        assert!(md.contains("dependency of `chain-a`"), "missing outer hop:\n{md}");
+        assert!(plain(&md).contains("dependency of chain-b"), "missing inner hop:\n{md}");
+        assert!(plain(&md).contains("dependency of chain-a"), "missing outer hop:\n{md}");
     }
 
     /// T-029 against the real demo: a templated path whose variables have no known value
@@ -1884,7 +1902,7 @@ mod tests {
         let hover = |value: &str| {
             let r = refs.iter().find(|r| r.value == value).expect("ref in demo");
             let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-            super::reference_hover(r, &res, &ctx, false)
+            super::reference_hover(r, &res, &ctx, false).map(crate::Md::render)
         };
 
         let md = hover("{{ protocol }}_target/check.yml").expect("hover expected");
@@ -1927,8 +1945,8 @@ mod tests {
         if res.status != ansible_core::resolve::Status::Resolved {
             return; // install detected but builtins not resolvable in this layout
         }
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
-        assert!(md.contains("`ansible.builtin`"), "collection in: {md}");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
+        assert!(plain(&md).contains("ansible.builtin"), "collection in: {md}");
         assert!(md.contains("the Ansible install"), "origin in: {md}");
         assert!(
             md.contains("runs on the controller (action plugin)"),
@@ -1944,12 +1962,12 @@ mod tests {
             md.contains("[…/ansible/plugins/action/debug.py]("),
             "install path cut to its site-packages tail, truncation marked: {md}"
         );
-        assert!(!md.contains("**Tried:**"), "no path dump without the setting: {md}");
+        assert!(!plain(&md).contains("Tried:"), "no path dump without the setting: {md}");
 
         // The setting appends the dump rather than replacing the provenance.
-        let md = super::reference_hover(r, &res, &ctx, true).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, true).expect("hover expected").render();
         assert!(md.contains("- module: ["), "links kept with the setting: {md}");
-        assert!(md.contains("**Tried:**"), "path dump with the setting: {md}");
+        assert!(plain(&md).contains("Tried:"), "path dump with the setting: {md}");
     }
 
     /// T-073: a bare module with a same-name action plugin in a cfg `action_plugins` dir
@@ -1968,11 +1986,61 @@ mod tests {
         let refs = ansible_core::references::extract(&nodes);
         let r = refs.iter().find(|r| r.value == "stage_files").expect("bare ref");
         let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
         assert!(norm.contains("plugins/action/stage_files.py"), "cfg-dir plugin linked in: {md}");
+    }
+
+    /// A tooltip with its inline markdown stripped, so an assertion can be about what the
+    /// hover *says* rather than how it is punctuated (T-082). A test named for provenance
+    /// should not fail because a label gained emphasis.
+    ///
+    /// Structural checks — that a path is *linked*, that a block is present at all — still
+    /// read the raw markdown, because there the punctuation is the behaviour.
+    fn plain(md: &str) -> String {
+        md.replace("**", "").replace('`', "")
+    }
+
+    /// T-082: a `when:` carrying markdown syntax must reach the tooltip as the user wrote
+    /// it. Both halves of the bug, in one fixture:
+    ///
+    /// - a **backtick** ends a naive `` format!("`{c}`") `` span early, so the rest of the
+    ///   expression escapes its code formatting;
+    /// - **asterisks** in a value that `classify` *does* label go in unfenced, and would
+    ///   render as emphasis — silently deleting the characters from what is shown.
+    ///
+    /// Neither is exotic: unmatched conditions are echoed verbatim, which is the common
+    /// case, and `regex_search` patterns are full of both.
+    #[test]
+    fn a_condition_carrying_markdown_survives_into_the_tooltip() {
+        let hover = |when: &str| {
+            let src = format!(
+                "- hosts: all\n  tasks:\n    - include_tasks: x.yml\n      when: {when}\n"
+            );
+            let doc = ansible_core::parse::Document::new(src);
+            let nodes = doc.parse().expect("fixture parses");
+            let refs = ansible_core::references::extract(&nodes);
+            let r = refs
+                .iter()
+                .find(|r| !r.conditions.is_empty())
+                .expect("conditional reference");
+            super::when_hover(r)
+        };
+
+        // Unlabelled — the expression is echoed, so it needs a fence wider than its own
+        // backticks. The whole expression must sit inside one span.
+        let md = hover(r#"msg | regex_search("`a`*b*")"#);
+        assert!(md.contains(r#"``msg | regex_search("`a`*b*")``"#), "fenced whole in: {md}");
+
+        // Labelled — `classify` recognises the `| default(…)` shape and interpolates the
+        // value into English, which goes in *unfenced*. There the asterisks must be
+        // escaped rather than eaten by emphasis.
+        let md = hover(r#"deploy | default('a') == '*prod*'"#);
+        assert!(md.contains("runs only if deploy = "), "labelled in: {md}");
+        assert!(md.contains(r"\*prod\*"), "asterisks escaped in: {md}");
+        assert!(!md.contains("= *prod*"), "would render as emphasis in: {md}");
     }
 
     /// T-078 against the real demo: on a task carrying both a module and a `when:`, the
@@ -2002,7 +2070,7 @@ mod tests {
             };
 
             let kw = hover(when_kw + 1);
-            assert!(kw.contains("`when:`"), "condition explained on the keyword: {kw}");
+            assert!(plain(&kw).contains("when:"), "condition explained on the keyword: {kw}");
             assert!(kw.contains("cmd_result.rc == 0"), "clause spelled out in: {kw}");
 
             // Whatever the module name hovers, it is the module's own hover and not the
@@ -2010,13 +2078,13 @@ mod tests {
             // being an Ansible install to resolve into; that it isn't the `when:` text
             // does not — see the sibling test for the provenance half.)
             let m = hover(module);
-            assert!(!m.contains("`when:`"), "condition must not claim the module token: {m}");
+            assert!(!plain(&m).contains("when:"), "condition must not claim the module token: {m}");
 
             // The condition's *value* belongs to the variables written in it, so hover
             // agrees with Cmd+click instead of restating the guard.
             let v = hover(cond_var);
             assert!(v.contains("cmd_result"), "registration shown in: {v}");
-            assert!(!v.contains("`when:`"), "keyword hover must not leak onto its value: {v}");
+            assert!(!plain(&v).contains("when:"), "keyword hover must not leak onto its value: {v}");
         }
     }
 
@@ -2042,7 +2110,7 @@ mod tests {
         let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings)
             .expect("when hover expected")
             .0;
-        assert!(kw.contains("`when:`"), "condition on its keyword in: {kw}");
+        assert!(plain(&kw).contains("when:"), "condition on its keyword in: {kw}");
     }
 
     /// T-073 contrast: a plain module with no action plugin in any legacy dir (nor an
@@ -2060,7 +2128,7 @@ mod tests {
         let refs = ansible_core::references::extract(&nodes);
         let r = refs.iter().find(|r| r.value == "purge_cache").expect("bare ref");
         let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         assert!(md.contains("runs on the target host"), "target label in: {md}");
         assert!(!md.contains("action plugin"), "no phantom action plugin in: {md}");
     }
@@ -2078,7 +2146,7 @@ mod tests {
         let refs = ansible_core::references::extract(&nodes);
         let r = refs.iter().find(|r| r.value == "deploy_report").expect("bare ref");
         let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("action_plugins/deploy_report.py"), "role-local plugin linked in: {md}");
@@ -2100,8 +2168,8 @@ mod tests {
         let r = refs.iter().find(|r| r.value == "ping").expect("bare ref");
         let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
         assert_eq!(res.status, ansible_core::resolve::Status::Resolved);
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
-        assert!(md.contains("`ansible.legacy`"), "legacy label in: {md}");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
+        assert!(plain(&md).contains("ansible.legacy"), "legacy label in: {md}");
         assert!(md.contains("library/ping.py]("), "library path linked in: {md}");
     }
 
@@ -2123,9 +2191,9 @@ mod tests {
         if res.status != ansible_core::resolve::Status::Resolved {
             return; // community.docker not installed here — nothing to mark
         }
-        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected");
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         assert!(
-            md.contains("redirected to `community.docker.docker_container`"),
+            plain(&md).contains("redirected to community.docker.docker_container"),
             "redirect hop marked in: {md}"
         );
     }

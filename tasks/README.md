@@ -118,7 +118,6 @@ T-021 is now unblocked on that side.
 | T-072 | [Network modules: one platform action plugin per family](open/T-072-network-platform-action-plugins.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
-| T-082 | [Hover markdown is assembled by hand](open/T-082-hover-markdown-built-by-hand.md) | M | — |
 
 ### Downstream — not this repo's code
 
@@ -164,6 +163,7 @@ T-021 is now unblocked on that side.
 | T-075 | [Startup scan blocks all requests](closed/T-075-scan-blocks-requests.md) | done |
 | T-084 | [Cold `ansible --version` blocks startup](closed/T-084-cold-ansible-detect.md) | done — A only, B/C rejected on measurement |
 | T-081 | [The board is hand-edited, and it has drifted](closed/T-081-board-generated-not-hand-edited.md) | done — check only, no generator |
+| T-082 | [Hover markdown is assembled by hand](closed/T-082-hover-markdown-built-by-hand.md) | done |
 
 ## Settled — don't re-derive these
 
