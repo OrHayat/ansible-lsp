@@ -111,6 +111,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | T-107      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | S    | T-107      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
+| T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -142,6 +143,9 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-109 | [Keyword value enums](open/T-109-keyword-value-enums.md) | S    | T-107 |
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
 | T-113 | **epic** · [Workspace graph: the reverse index and what it unblocks](open/T-113-workspace-graph-the-reverse-index-and-what-it-unblocks.md) | L    | —    |
+| T-114 | **epic** · [Jinja and templating model](open/T-114-jinja-and-templating-model.md) | L    | —    |
+| T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | —    |
+| T-116 | [Undefined propagation: the Marker model](open/T-116-undefined-propagation-the-marker-model.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
