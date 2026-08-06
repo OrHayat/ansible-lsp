@@ -1,8 +1,8 @@
 # T-088 — Unknown play keyword: Ansible refuses the play, the editor says nothing
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | S    | T-106 | —          |
 
 ## Problem
 

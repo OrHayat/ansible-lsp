@@ -1,8 +1,8 @@
 # T-044 — Semantic AST (Play / Block / Task / Role)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | L    | T-036      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | L    | T-106 | T-036      |
 
 ## Problem
 

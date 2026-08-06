@@ -1,8 +1,8 @@
 # T-045 — Keyword schema from Ansible's FieldAttributes
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | M    | T-106 | —          |
 
 ## Problem
 
