@@ -80,7 +80,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-015 | [`src:` + local-vs-remote table](open/T-015-src-paths.md) | L    | 385  |
 | T-019 | [Package as a .vsix](open/T-019-package-vsix.md)          | M    | —    |
 | T-020 | [Reverse index](open/T-020-reverse-index.md)              | M    | —    |
-| T-016 | [`vars_files`](open/T-016-vars-files.md)                  | M    | 75   |
 | T-017 | [`include_vars`](open/T-017-include-vars.md)              | M    | 30   |
 | T-034 | [Templating that only looks dynamic](open/T-034-statically-knowable-templating.md) | M | 21 |
 | T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
@@ -178,6 +177,7 @@ T-021 is now unblocked on that side.
 | T-084 | [Cold `ansible --version` blocks startup](closed/T-084-cold-ansible-detect.md) | done — A only, B/C rejected on measurement |
 | T-082 | [Hover markdown is assembled by hand](closed/T-082-hover-markdown-built-by-hand.md) | done |
 | T-072 | [Network modules: one platform action plugin per family](closed/T-072-network-platform-action-plugins.md) | done |
+| T-016 | [`vars_files`](closed/T-016-vars-files.md)                     | done     |
 
 ## Settled — don't re-derive these
 
