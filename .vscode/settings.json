@@ -1,5 +1,9 @@
 {
   // 0 = one scan task per CPU core. Raise it if the workspace is on a network share,
   // a VM mount or WSL's /mnt/c, where the scan waits on the filesystem instead of working.
-  "ansibleLsp.scan.concurrency": 0
+  "ansibleLsp.scan.concurrency": 0,
+
+  "files.watcherExclude": {
+    "**/target/**": true
+  }
 }
