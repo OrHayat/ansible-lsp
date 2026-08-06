@@ -60,6 +60,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
+| T-086 | [`plugin_twin` matches a POSIX substring, so it finds nothing on Windows](open/T-086-plugin-twin-windows-separators.md) | S | — |
 
 ### P2 — coverage and usability
 
@@ -116,7 +117,6 @@ T-021 is now unblocked on that side.
 | T-058 | [Warn when a module ships no `DOCUMENTATION`](open/T-058-module-doc-missing-warn.md) | S | T-057, T-010 |
 | T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
 | T-071 | [`unconstrained-path-var`: the value set a path implies](open/T-071-unconstrained-path-var.md) | S | — |
-| T-072 | [Network modules: one platform action plugin per family](open/T-072-network-platform-action-plugins.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
 
@@ -164,6 +164,7 @@ T-021 is now unblocked on that side.
 | T-075 | [Startup scan blocks all requests](closed/T-075-scan-blocks-requests.md) | done |
 | T-084 | [Cold `ansible --version` blocks startup](closed/T-084-cold-ansible-detect.md) | done — A only, B/C rejected on measurement |
 | T-082 | [Hover markdown is assembled by hand](closed/T-082-hover-markdown-built-by-hand.md) | done |
+| T-072 | [Network modules: one platform action plugin per family](closed/T-072-network-platform-action-plugins.md) | done |
 
 ## Settled — don't re-derive these
 

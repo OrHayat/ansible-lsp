@@ -1,0 +1,47 @@
+---
+# Network modules: one action plugin per PLATFORM, not per module. (T-072)
+#
+# Every other module gets its controller-side twin by NAME — plugins/action/foo.py beside
+# plugins/modules/foo.py (see action_plugins.yml). Network device modules can't work that
+# way: a switch has no Python, so nothing can be shipped to it. Instead the collection ships
+# ONE plugin named after the prefix before the first `_`, and it handles the whole family
+# while holding the persistent device connection.
+#
+#   cisco.ios.ios_config  ─┐
+#   cisco.ios.ios_facts   ─┼─→ cisco/ios/plugins/action/ios.py
+#   ...every other ios_*  ─┘
+#
+# Ansible needs BOTH halves to be true (task_executor.py:939-947,961-962):
+#   1. the prefix is in NETWORK_GROUP_MODULES  (config/base.yml:1779-1788, 22 platforms,
+#      overridable by ansible.cfg `network_group_modules`)
+#   2. an action plugin named <collection>.<prefix> actually exists
+#
+# --- GOOD: the platform plugin handles it ------------------------------------------------
+# Hover `cisco.ios.ios_config`. Prefix `ios` is a listed platform and ios.py exists, so this
+# runs on the CONTROLLER and the hover should name and link that plugin.
+- name: Network module — handled by the ios platform plugin
+  cisco.ios.ios_config:
+    lines:
+      - hostname edge-01
+
+# Same plugin, different module: hovering this must point at the same ios.py, which is what
+# "one per platform" means.
+- name: Same family, same platform plugin
+  cisco.ios.ios_facts:
+    gather_subset:
+      - interfaces
+
+# --- GOOD: prefix not listed, so the decoy plugin is ignored ------------------------------
+# Hover `demo.charlie.link_status`. A plugin named after its prefix DOES exist
+# (demo/charlie/plugins/action/link.py) — but `link` is not a platform, so Ansible ignores
+# it and the module ships to the TARGET host. Checking only for <prefix>.py gets this wrong.
+- name: Not a network module — runs on the target despite a same-prefix plugin
+  demo.charlie.link_status:
+    interface: eth0
+
+# --- GOOD: no prefix, no platform, plain module -------------------------------------------
+# The flat contrast: no underscore at all, so the prefix is the whole name and there is
+# nothing named `relay` in plugins/action/. Runs on the target host.
+- name: Plain collection module — target host
+  demo.charlie.relay:
+    msg: hello

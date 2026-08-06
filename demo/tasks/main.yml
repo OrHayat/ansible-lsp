@@ -133,6 +133,13 @@
 - name: "legacy action-plugin locations live in action_plugins.yml"
   ansible.builtin.include_tasks: action_plugins.yml
 
+# ----------------------------------------------------- NETWORK MODULES (one per platform)
+# Network device modules get no same-name twin: one plugin per PLATFORM, named after the
+# prefix before the first `_`, handles the whole family. Examples in network_modules.yml.
+
+- name: "network platform action plugins live in network_modules.yml"
+  ansible.builtin.include_tasks: network_modules.yml
+
 # ----------------------------------------------------- VARIABLE GO-TO-DEFINITION
 # Cmd+click a {{ variable }} or a when: name to jump to where it's defined in the
 # same file (play vars, set_fact, register). Examples in variables.yml.

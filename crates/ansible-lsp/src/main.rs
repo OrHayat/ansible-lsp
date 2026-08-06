@@ -1249,6 +1249,12 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
     } else {
         legacy_action_twin(bare, ctx).or_else(|| plugin_twin(won, is_action).filter(|p| p.is_file()))
     };
+    // Ansible's order is same-name twin, then the platform plugin, then ship it to the
+    // host — so this is only consulted once the twin search has come up empty.
+    let platform = match (is_action, &twin) {
+        (false, None) => network_platform_twin(won, bare, ctx),
+        _ => None,
+    };
     // One line per file, label first, the path as the link text — which file each link
     // opens must be readable without clicking.
     let entry = |label: &'static str, p: &Path| {
@@ -1269,12 +1275,25 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
             + " — from "
             + origin.md()
             + " · "
-            + if is_action || twin.is_some() {
+            + if is_action || twin.is_some() || platform.is_some() {
                 "runs on the controller (action plugin)".md()
             } else {
                 "runs on the target host".md()
             },
     );
+    // Why a module with no twin of its own still runs on the controller. Without this line
+    // the platform plugin's filename (`ios.py` for an `ios_config:` task) looks like a
+    // mismatch rather than the whole point.
+    if let Some(p) = &platform {
+        let prefix = p.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+        doc = doc.line(
+            "handled by the ".md()
+                + md::code(&prefix)
+                + " platform plugin, which serves every "
+                + md::code(&format!("{prefix}_*"))
+                + " module in this collection",
+        );
+    }
     // A winner whose final name differs from what the task wrote got there through a
     // rename table (core's 2.10 split table, or a collection's own). Make the hop
     // visible: it is otherwise an unmarked seam in the Tried list.
@@ -1292,7 +1311,10 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
         (true, Some(t)) => doc.item(entry("action plugin", won)).item(entry("module", t)),
         (true, None) => doc.item(entry("action plugin", won)),
         (false, Some(t)) => doc.item(entry("action plugin", t)).item(entry("module", won)),
-        (false, None) => doc.item(entry("module", won)),
+        (false, None) => match &platform {
+            Some(p) => doc.item(entry("platform action plugin", p)).item(entry("module", won)),
+            None => doc.item(entry("module", won)),
+        },
     })
 }
 
@@ -1332,6 +1354,36 @@ fn legacy_action_twin(name: &str, ctx: &FileContext) -> Option<PathBuf> {
         .into_iter()
         .map(|d| d.join(&file))
         .find(|p| p.is_file())
+}
+
+/// The platform action plugin handling a whole `<prefix>_*` network family, for a module
+/// with no same-name twin. Network collections ship one plugin per *platform* rather than
+/// per module — it owns the persistent device connection, and a switch has no Python to
+/// receive a module — so the task runs on the controller regardless. (T-072)
+///
+/// `task_executor.py:939-947,961-962` requires **both** halves: the prefix must be a
+/// configured platform *and* the plugin must exist. Testing only for the file mislabels any
+/// non-network `<x>_*` module that happens to have an `<x>.py` beside it.
+fn network_platform_twin(won: &Path, bare: &str, ctx: &FileContext) -> Option<PathBuf> {
+    let prefix = bare.split('_').next()?;
+    if !ctx.config.is_network_platform(prefix) {
+        return None;
+    }
+    // Ansible looks up `<module collection>.<prefix>`, so the plugin is the winner's own
+    // collection sibling: `<coll>/plugins/modules/ios_config.py` -> `<coll>/plugins/action/
+    // ios.py`. Matched on path *components*, not by string replace — the winner arrives
+    // with native separators, so a `/plugins/modules/` substring search finds nothing on
+    // Windows.
+    let dir = won.parent()?;
+    let named = |p: Option<&Path>, want| p.and_then(Path::file_name).and_then(|s| s.to_str()) == Some(want);
+    if named(Some(dir), "modules") && named(dir.parent(), "plugins") {
+        let p = dir.with_file_name("action").join(format!("{prefix}.py"));
+        return p.is_file().then_some(p);
+    }
+    // Not a collection layout. Upstream drops the namespace here and looks for a bare
+    // `<prefix>`, which is the pre-collections search (T-073). The core package's own
+    // `ansible/modules/` never lands here — it ships no network modules.
+    legacy_action_twin(prefix, ctx)
 }
 
 fn plugin_twin(won: &Path, is_action: bool) -> Option<PathBuf> {
@@ -1991,6 +2043,73 @@ mod tests {
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
         assert!(norm.contains("plugins/action/stage_files.py"), "cfg-dir plugin linked in: {md}");
+    }
+
+    /// The hover for one module reference in the demo's network fixture.
+    fn network_hover(module: &str) -> String {
+        let path = std::path::Path::new("../../demo/tasks/network_modules.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(format!(
+            "- hosts: all\n  tasks:\n    - {module}:\n        x: 1\n"
+        ));
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == module).expect("module ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        super::reference_hover(r, &res, &ctx, false)
+            .expect("hover expected")
+            .render()
+            .replace('\\', "/")
+    }
+
+    /// T-072: a network module has no same-name twin — one action plugin per *platform*
+    /// serves the whole `<prefix>_*` family — so the hover must find `ios.py` for an
+    /// `ios_config:` task and say the task runs on the controller.
+    #[test]
+    fn hover_names_the_network_platform_plugin() {
+        for module in ["cisco.ios.ios_config", "cisco.ios.ios_facts"] {
+            let md = network_hover(module);
+            assert!(
+                md.contains("runs on the controller (action plugin)"),
+                "controller label for {module} in: {md}"
+            );
+            assert!(
+                md.contains("- platform action plugin: ["),
+                "platform plugin listed and linked for {module} in: {md}"
+            );
+            assert!(
+                md.contains("cisco/ios/plugins/action/ios.py"),
+                "the platform plugin, not a same-name file, for {module} in: {md}"
+            );
+            assert!(
+                plain(&md).contains("handled by the ios platform plugin"),
+                "explains the name mismatch for {module} in: {md}"
+            );
+        }
+    }
+
+    /// The other half of `task_executor.py:961-962`'s AND. `demo.charlie.link_status` has a
+    /// `link.py` sitting in `plugins/action/` exactly where `ios.py` sits for `ios_config` —
+    /// but `link` is not a configured platform, so Ansible ignores it and the module ships
+    /// to the target host. An implementation that only probes for `<prefix>.py` passes the
+    /// two `ios_*` cases above and gets this one wrong. (T-072)
+    #[test]
+    fn a_same_prefix_plugin_is_not_a_platform_plugin() {
+        let md = network_hover("demo.charlie.link_status");
+        assert!(
+            md.contains("runs on the target host"),
+            "an unlisted prefix does not move the task to the controller: {md}"
+        );
+        assert!(
+            !md.contains("platform action plugin"),
+            "the decoy plugin must not be claimed: {md}"
+        );
+        assert!(
+            !md.contains("plugins/action/link.py"),
+            "and must not be linked: {md}"
+        );
     }
 
     /// A tooltip with its inline markdown stripped, so an assertion can be about what the
