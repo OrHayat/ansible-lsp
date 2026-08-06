@@ -34,6 +34,8 @@ COMMANDS
       -s, --size     <S|M|L>      filter
       -k, --kind <task|bug|epic>  filter
       -e, --epic     <T-0NN>      only that epic's children
+      --no-epic                   only tickets under no epic (epics
+                                  themselves are never listed)
       --unblocked                 only tickets with no open blockers
       --closed                    list closed tickets instead
   adopt <T-0NN> -e <T-0NN>        put an existing ticket under an epic —
@@ -397,6 +399,7 @@ impl Board {
         let mut size = None;
         let mut kind = None;
         let mut epic = None;
+        let mut no_epic = false;
         let mut unblocked = false;
         let mut closed = false;
         let mut it = args.iter();
@@ -406,6 +409,7 @@ impl Board {
                 "-s" | "--size" => size = it.next().cloned(),
                 "-k" | "--kind" => kind = it.next().cloned(),
                 "-e" | "--epic" => epic = it.next().cloned(),
+                "--no-epic" => no_epic = true,
                 "--unblocked" => unblocked = true,
                 "--closed" => closed = true,
                 _ => return Err(Error::Usage(format!("unexpected argument `{a}`"))),
@@ -427,6 +431,10 @@ impl Board {
                 continue;
             }
             if epic.as_deref().is_some_and(|e| e != t.epic) {
+                continue;
+            }
+            // An epic is not its own orphan — it has no parent by definition.
+            if no_epic && (t.kind == "epic" || !(t.epic.is_empty() || t.epic == "—")) {
                 continue;
             }
             if unblocked
@@ -1527,6 +1535,29 @@ prose that must survive
         let epic = std::fs::read_to_string(d.join("open/T-004-big-thing.md")).unwrap();
         assert!(!epic.contains("T-001"), "line dropped: {epic}");
         assert!(epic.contains("- [x] T-003"), "the other child stayed: {epic}");
+    }
+
+    /// Whether a ticket should have an epic is a judgement call, so this is a report and
+    /// never an assertion — but the *data* has to be one command, or it gets grepped for
+    /// by hand and the epics get counted as their own orphans.
+    #[test]
+    fn list_no_epic_reports_the_unparented() {
+        let d = fixture("noepic");
+        go(&d, &["new", "Big thing", "-p", "P1", "-s", "L", "-k", "epic"]).unwrap();
+        go(&d, &["adopt", "T-001", "-e", "T-004"]).unwrap();
+
+        let out = go(&d, &["list", "--no-epic"]).unwrap();
+        assert!(!out.contains("T-001"), "adopted, so not orphaned: {out}");
+        assert!(out.contains("T-002"), "unparented: {out}");
+        assert!(!out.contains("T-004"), "an epic is not its own orphan: {out}");
+
+        // Composes with the other filters rather than replacing them.
+        let closed = go(&d, &["list", "--no-epic", "--closed"]).unwrap();
+        assert!(closed.contains("T-003"), "closed and unparented: {closed}");
+        assert!(!closed.contains("T-002"), "T-002 is open: {closed}");
+
+        go(&d, &["adopt", "T-002", "-e", "T-004"]).unwrap();
+        assert_eq!(go(&d, &["list", "--no-epic"]).unwrap(), "no tickets match\n");
     }
 
     #[test]
