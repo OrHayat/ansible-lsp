@@ -45,6 +45,14 @@ Fragile even then — it fired only on per-host calls, never during the pre-play
    entirely, leaving the loop's "If none are found, we raise an error" comment orphaned —
    it still sits in 2.21.2 (`vars/manager.py:342-344`) above code that raises nothing.
 
+## The docs still promise the error
+
+`playbook_guide/playbooks_conditionals.html` (Conditional Imports), **current** docs as of
+2026-08: *"If no files in the list are found, Ansible raises an error."* The 2.9 docs said
+the same ("…an error is raised") and the code agreed; since 2.15 the code doesn't. So this
+is not only a behavior regression — the shipping behavior contradicts the shipping
+documentation.
+
 ## Live repro (2.21.2)
 
 ```yaml
@@ -79,5 +87,8 @@ Fragile even then — it fired only on per-host calls, never during the pre-play
 > For anyone tracing it: the pre-2.15 raise was gated on `include_delegate_to and host`;
 > #80171 flipped that default to False (making the raise unreachable), and #83259 removed
 > the dead code — the loop's "If none are found, we raise an error" comment in
-> `vars/manager.py` still describes the removed behavior. Would a rebase of #80505 (which
-> had two approvals) be welcome?
+> `vars/manager.py` still describes the removed behavior. Note the current docs
+> (playbooks_conditionals, "Selecting variables files based on facts") still state "If no
+> files in the list are found, Ansible raises an error" — so the shipped behavior now
+> contradicts the shipped documentation. Would a rebase of #80505 (which had two
+> approvals) be welcome?
