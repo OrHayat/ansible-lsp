@@ -1,8 +1,8 @@
 # T-059 — Call sites must satisfy the callee's required vars (`var-unpassed`)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | L    | T-051      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | L    | T-112 | T-051      |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-049 — Variable uses with byte-accurate spans
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | M    | T-112 | —          |
 
 ## Problem
 

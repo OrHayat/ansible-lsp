@@ -1,8 +1,8 @@
 # T-052 — Variable hover: where it's defined, and its value
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | S    | T-048, T-049 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| done   | P2       | S    | T-112 | T-048, T-049 |
 
 ## Problem
 

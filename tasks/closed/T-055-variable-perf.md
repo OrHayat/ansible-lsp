@@ -1,8 +1,8 @@
 # T-055 — Performance: cache the cross-file variable index; fix per-call line scans
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | T-048, T-050, T-052 |
+| Status | Priority | Size | Epic  | Depends on          |
+| ------ | -------- | ---- | ----- | ------------------- |
+| done   | P2       | M    | T-112 | T-048, T-050, T-052 |
 
 ## Problem
 

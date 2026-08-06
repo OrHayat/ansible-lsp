@@ -1,8 +1,8 @@
 # T-060 — `suspicious-var`: guarded, undefined, and one edit from a real name
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | M    | T-062      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | M    | T-112 | T-062      |
 
 Split out of T-033 (its SILENT class) — the corpus research lives there.
 

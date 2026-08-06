@@ -1,8 +1,8 @@
 # T-062 — Index ini inventories and extension-less group_vars/host_vars
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | M    | T-112 | —          |
 
 ## Problem
 

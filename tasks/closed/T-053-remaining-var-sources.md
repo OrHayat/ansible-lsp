@@ -1,8 +1,8 @@
 # T-053 — Remaining variable-definition sources: include_vars and role params
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | T-048      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | M    | T-112 | T-048      |
 
 ## Problem
 

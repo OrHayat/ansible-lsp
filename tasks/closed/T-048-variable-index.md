@@ -1,8 +1,8 @@
 # T-048 — Variable definition index (in-file + cross-file)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | L    | T-044      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | L    | T-112 | T-044      |
 
 ## Problem
 

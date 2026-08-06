@@ -1,8 +1,8 @@
 # T-050 — Go-to-definition (and link colour) for variables
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | M    | T-048, T-049 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| done   | P1       | M    | T-112 | T-048, T-049 |
 
 ## Problem
 

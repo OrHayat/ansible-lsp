@@ -1,8 +1,8 @@
 # T-051 — Variable definedness diagnostic
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | M    | T-048, T-049 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| open   | P1       | M    | T-112 | T-048, T-049 |
 
 ## Problem
 

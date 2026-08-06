@@ -110,6 +110,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-107 | [Per-class keyword sets from FieldAttribute](open/T-107-per-class-keyword-sets-from-fieldattribute.md) | M    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | T-107      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | S    | T-107      |
+| T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 
 ### P2 — coverage and usability
 

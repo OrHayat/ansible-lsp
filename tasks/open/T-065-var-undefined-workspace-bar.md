@@ -1,8 +1,8 @@
 # T-065 — `var-undefined`: raise the bar to workspace-wide absence (the 656 fix)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P1       | M    | T-051      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P1       | M    | T-112 | T-051      |
 
 ## Problem
 

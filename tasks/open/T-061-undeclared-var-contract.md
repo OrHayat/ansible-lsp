@@ -1,8 +1,8 @@
 # T-061 — `undeclared-var`: surface the playbook's required `-e` inputs
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | T-062      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | S    | T-112 | T-062      |
 
 Split out of T-033 (its LOUD class) — the corpus research lives there.
 

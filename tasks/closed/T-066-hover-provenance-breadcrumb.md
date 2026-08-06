@@ -1,8 +1,8 @@
 # T-066 — Hover provenance breadcrumb for non-obvious definition routes
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | S    | T-018      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | S    | T-112 | T-018      |
 
 ## Problem
 

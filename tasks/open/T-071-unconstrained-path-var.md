@@ -1,8 +1,8 @@
 # T-071 — `unconstrained-path-var`: surface the value set a templated path implies
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | S    | T-112 | —          |
 
 Born from a T-029 hover discussion: the disk defines a contract nothing documents.
 

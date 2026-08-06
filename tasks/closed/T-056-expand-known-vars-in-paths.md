@@ -1,8 +1,8 @@
 # T-056 — Expand known-value variables in templated paths (navigation only)
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | T-048, T-034 |
+| Status | Priority | Size | Epic  | Depends on   |
+| ------ | -------- | ---- | ----- | ------------ |
+| done   | P2       | M    | T-112 | T-048, T-034 |
 
 ## Problem
 
