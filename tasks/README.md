@@ -10,6 +10,7 @@ below in sync, and strikes a closed ticket out of other tickets' Blocked-by cell
 cargo run -p board -- new "Title" -p P1|P2|P3 -s S|M|L [-b T-020,T-062]
 cargo run -p board -- close T-0NN [--rejected]
 cargo run -p board -- reopen T-0NN
+cargo run -p board -- sync T-0NN        # after hand-editing priority/size/blocked-by
 cargo run -p board -- list [-p P1] [-s S] [--unblocked] [--closed]
 cargo run -p board -- show T-0NN
 ```

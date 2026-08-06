@@ -23,6 +23,9 @@ COMMANDS
   close <T-0NN>                   move to tasks/closed/, outcome done
       --rejected                  outcome rejected instead
   reopen <T-0NN>                  move back to tasks/open/
+  sync <T-0NN>                    re-derive the README row from the ticket's
+                                  header table (after editing priority/size/
+                                  blocked-by in the file)
   list                            open tickets, one line each
       -p, --priority <P1|P2|P3>   filter
       -s, --size     <S|M|L>      filter
@@ -83,6 +86,7 @@ fn run(args: &[String]) -> Result<String, Error> {
         Some("new") => board.new_ticket(&rest[1..]),
         Some("close") => board.close(&rest[1..]),
         Some("reopen") => board.reopen(&rest[1..]),
+        Some("sync") => board.sync(&rest[1..]),
         Some("list") => board.list(&rest[1..]),
         Some("show") => board.show(&rest[1..]),
         Some("help") | Some("-h") | Some("--help") => Ok(format!("{USAGE}\n")),
@@ -242,6 +246,49 @@ impl Board {
             t.priority,
             if self.dry { "(dry run — nothing written)\n" } else { "" },
             f = t.file,
+        ))
+    }
+
+    /// Rebuild the ticket's README row from its own header table. The row's short title is
+    /// editorial and survives; everything else — which table, size, blockers, outcome — is
+    /// re-derived from the file.
+    fn sync(&self, args: &[String]) -> Result<String, Error> {
+        let (id, flags) = one_id(args)?;
+        if let Some(f) = flags.first() {
+            return Err(Error::Usage(format!("unexpected argument `{f}`")));
+        }
+        let t = self.ticket(&id)?;
+        let folder = if t.open { "open" } else { "closed" };
+
+        let mut lines = self.readme()?;
+        let needle = format!("/{})", t.file);
+        let title = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with('|') && l.contains(&needle))
+            .map(|i| cell(&lines.remove(i), 2))
+            .and_then(|c| {
+                c.split_once('[')
+                    .and_then(|(_, r)| r.split_once("]("))
+                    .map(|(t, _)| t.to_string())
+            })
+            .unwrap_or_else(|| t.title.clone());
+        let link = format!("[{title}]({folder}/{})", t.file);
+
+        if t.open {
+            let deps = self.blockers_cell(&id_tokens(&t.depends));
+            let deps = if deps == "—" && t.depends != "—" { t.depends.clone() } else { deps };
+            let row = [id.as_str(), link.as_str(), t.size.as_str(), deps.as_str()];
+            self.insert_open_row(&mut lines, &t.priority, &row)?;
+        } else {
+            let outcome = if t.status == "rejected" { "**rejected**".into() } else { t.status.clone() };
+            self.append_closed_row(&mut lines, &[&id, &link, &outcome])?;
+        }
+        self.save_readme(&lines)?;
+
+        Ok(format!(
+            "README: {id} row rebuilt under {}\n{}",
+            if t.open { format!("### {}", t.priority) } else { "## Closed".into() },
+            if self.dry { "(dry run — nothing written)\n" } else { "" }
         ))
     }
 
@@ -828,6 +875,24 @@ prose that must survive
         go(&d, &["close", "T-002"]).unwrap();
         let after = go(&d, &["list", "--unblocked"]).unwrap();
         assert!(after.contains("T-001"), "unblocked once T-002 closed: {after}");
+    }
+
+    #[test]
+    fn sync_rederives_the_row_after_hand_edits() {
+        let d = fixture("sync");
+        let path = d.join("open/T-002-b.md");
+        let edited = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("| P2       | M    | —", "| P1       | L    | T-003");
+        std::fs::write(&path, edited).unwrap();
+        go(&d, &["sync", "T-002"]).unwrap();
+        let readme = std::fs::read_to_string(d.join("README.md")).unwrap();
+        let p1 = readme.split("### P1").nth(1).unwrap().split("### P2").next().unwrap();
+        assert!(p1.contains("[Beta](open/T-002-b.md)"), "row moved to P1, title kept: {p1}");
+        assert!(p1.contains("| L"), "size updated: {p1}");
+        assert!(p1.contains("~~T-003~~"), "closed blocker struck: {p1}");
+        let p2 = readme.split("### P2").nth(1).unwrap().split("## Closed").next().unwrap();
+        assert!(!p2.contains("T-002-b.md"), "old row gone: {p2}");
     }
 
     #[test]
