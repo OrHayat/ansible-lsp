@@ -1,8 +1,8 @@
 # T-003 — `ansible.cfg` roots
 
-| Status | Priority | Size | Commit  |
-| ------ | -------- | ---- | ------- |
-| done   | P2       | S    | d722abb |
+| Status | Priority | Size | Commit  | Epic  |
+| ------ | -------- | ---- | ------- | ----- |
+| done   | P2       | S    | d722abb | T-090 |
 
 ## Problem
 

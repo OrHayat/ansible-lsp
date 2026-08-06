@@ -1,8 +1,8 @@
 # T-043 — Docs stale after the parser swap
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | S    | T-036      |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | S    | T-130 | T-036      |
 
 ## Problem
 

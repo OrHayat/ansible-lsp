@@ -1,8 +1,8 @@
 # T-016 — `vars_files`
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | M    | T-120 | —          |
 
 ## Problem
 

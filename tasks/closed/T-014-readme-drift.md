@@ -1,8 +1,8 @@
 # T-014 — README is stale
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | S    | T-130 | —          |
 
 ## Problem
 

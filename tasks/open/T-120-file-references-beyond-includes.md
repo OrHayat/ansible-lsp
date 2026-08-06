@@ -46,6 +46,8 @@ depending on which task rendered it — so it offers candidates rather than one 
 - [ ] T-038 — Resolve file-hitting lookups
 - [ ] T-040 — Jinja `{% include %}` / `{% import %}` / `{% extends %}` in templates
 - [ ] T-070 — `inventory_dir` from real inventory sources
+- [x] T-007 — Templated path globbing
+- [x] T-016 — `vars_files`
 
 ## Done when
 

@@ -1,8 +1,8 @@
 # T-004 — Roles: `include_role`, `roles:`, `tasks_from`
 
-| Status | Priority | Size | Commit  |
-| ------ | -------- | ---- | ------- |
-| done   | P1       | M    | d722abb |
+| Status | Priority | Size | Commit  | Epic  |
+| ------ | -------- | ---- | ------- | ----- |
+| done   | P1       | M    | d722abb | T-090 |
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # T-001 — YAML crate spike
 
-| Status | Priority | Size | Commit |
-| ------ | -------- | ---- | ------ |
-| done   | P1       | S    | pre-history (spike) |
+| Status | Priority | Size | Commit              | Epic  |
+| ------ | -------- | ---- | ------------------- | ----- |
+| done   | P1       | S    | pre-history (spike) | T-090 |
 
 ## Problem
 

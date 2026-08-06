@@ -1,8 +1,8 @@
 # T-008 — Teal decoration for resolvable references
 
-| Status | Priority | Size | Commit  |
-| ------ | -------- | ---- | ------- |
-| done   | P1       | S    | 0135475 |
+| Status | Priority | Size | Commit  | Epic  |
+| ------ | -------- | ---- | ------- | ----- |
+| done   | P1       | S    | 0135475 | T-124 |
 
 ## Problem
 

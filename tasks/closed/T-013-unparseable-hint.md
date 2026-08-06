@@ -1,8 +1,8 @@
 # T-013 — Hint on unparseable files
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P1       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P1       | S    | T-090 | —          |
 
 ## Problem
 

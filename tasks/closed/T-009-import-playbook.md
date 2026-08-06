@@ -1,8 +1,8 @@
 # T-009 — `import_playbook`
 
-| Status | Priority | Size | Commits          |
-| ------ | -------- | ---- | ---------------- |
-| done   | P2       | M    | a2cc995, d6a2e85 |
+| Status | Priority | Size | Commits          | Epic  |
+| ------ | -------- | ---- | ---------------- | ----- |
+| done   | P2       | M    | a2cc995, d6a2e85 | T-090 |
 
 ## Problem
 

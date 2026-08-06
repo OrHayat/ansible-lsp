@@ -37,6 +37,14 @@ the same argument applied one layer up.
 - [ ] T-096 — project_root stands in for the playbook dir
 - [ ] T-097 — include_vars searches paths Ansible never tries
 - [ ] T-098 — ansible.cfg discovery ignores env overrides and the CWD rule
+- [x] T-001 — YAML crate spike
+- [x] T-003 — `ansible.cfg` roots
+- [x] T-004 — Roles: `include_role`, `roles:`, `tasks_from`
+- [x] T-005 — FQCN module and action-plugin navigation
+- [x] T-006 — `missing-file` diagnostics + repo-wide scan
+- [x] T-009 — `import_playbook`
+- [x] T-013 — Hint on unparseable files
+- [x] T-018 — `meta/main.yml` dependencies
 
 ## Done when
 

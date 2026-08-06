@@ -1,8 +1,8 @@
 # T-007 — Templated path globbing
 
-| Status | Priority | Size | Commits          |
-| ------ | -------- | ---- | ---------------- |
-| done   | P2       | M    | 9f33fe1, 0135475 |
+| Status | Priority | Size | Commits          | Epic  |
+| ------ | -------- | ---- | ---------------- | ----- |
+| done   | P2       | M    | 9f33fe1, 0135475 | T-120 |
 
 ## Problem
 

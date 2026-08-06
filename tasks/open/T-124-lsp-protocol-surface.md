@@ -38,6 +38,8 @@ protocol feature is adopted for data that does not fit its model.
 - [ ] T-125 — Inlay hints: the setting is parsed but gates nothing
 - [ ] T-126 — Semantic tokens instead of client-side decorations
 - [ ] T-127 — A completion provider
+- [x] T-008 — Teal decoration for resolvable references
+- [x] T-082 — Hover markdown is assembled by hand, in eight places
 
 ## Done when
 

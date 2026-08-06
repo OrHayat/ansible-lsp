@@ -1,8 +1,8 @@
 # T-005 — FQCN module and action-plugin navigation
 
-| Status | Priority | Size | Commit  |
-| ------ | -------- | ---- | ------- |
-| done   | P2       | M    | d722abb |
+| Status | Priority | Size | Commit  | Epic  |
+| ------ | -------- | ---- | ------- | ----- |
+| done   | P2       | M    | d722abb | T-090 |
 
 ## Problem
 

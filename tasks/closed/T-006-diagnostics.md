@@ -1,8 +1,8 @@
 # T-006 — `missing-file` diagnostics + repo-wide scan
 
-| Status | Priority | Size | Commit  |
-| ------ | -------- | ---- | ------- |
-| done   | P1       | M    | 9f33fe1 |
+| Status | Priority | Size | Commit  | Epic  |
+| ------ | -------- | ---- | ------- | ----- |
+| done   | P1       | M    | 9f33fe1 | T-090 |
 
 ## Problem
 

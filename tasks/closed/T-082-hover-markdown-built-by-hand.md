@@ -1,8 +1,8 @@
 # T-082 — Hover markdown is assembled by hand, in eight places
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P3       | M    | T-124 | —          |
 
 ## Problem
 

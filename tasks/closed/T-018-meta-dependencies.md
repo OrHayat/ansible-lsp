@@ -1,8 +1,8 @@
 # T-018 — `meta/main.yml` dependencies
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| done   | P2       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P2       | S    | T-090 | —          |
 
 ## Problem
 
