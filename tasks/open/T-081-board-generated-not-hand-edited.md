@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Depends on |
 | ------ | -------- | ---- | ---------- |
-| done   | P2       | S    | —          |
+| open   | P2       | S    | —          |
 
 ## Problem
 
@@ -57,11 +57,15 @@ part of the ticket, not a prerequisite for it.
 - [x] a script reports every disagreement between `tasks/{open,closed}/` and the README tables,
       and exits non-zero when there is one
 - [x] the 27 existing disagreements are fixed, so the check passes on a clean tree
-- [x] closing a ticket no longer requires hand-editing a README row, or the check catches it when
-      someone forgets
+- [ ] closing a ticket no longer requires hand-editing a README row, or the check catches it when
+      someone forgets — **the check half is done; the row is still hand-edited**
 - [x] the hand-written prose sections survive whatever the tool does to the tables
 
-## Outcome — the check only; no generator
+## Landed: the check. Still open: the generator
+
+Closed once on the strength of the third box's `or` clause, then reopened — the title says
+*generated*, and it isn't. What follows is what exists today; the remaining work is the
+generate half described in Approach.
 
 `crates/ansible-core/tests/board.rs`, run by plain `cargo test`. Not a script in `scripts/`:
 the closest precedent is T-085's "a door only works if there is no window" guard in `fs.rs`,
@@ -83,6 +87,24 @@ away true information to satisfy a checker, so the checker learned the word inst
 Verified by simulating the failure it exists for: `git mv`ing an open ticket to `closed/` and
 changing nothing else fails with all three edits named.
 
-The **generate** half is deliberately not built. With the check green the remaining cost of
-closing a ticket is one README row, and a generator that rewrites table blocks is a
-prose-eating risk for that one line of savings. Reconsider if the board drifts again.
+## What the generator still has to do
+
+Rewrite the Open and Closed table blocks from the ticket headers, leaving every prose section
+untouched. The check makes this safe to attempt, which was the whole argument for building it
+first: a generator can now be judged by whether the check still passes and the prose still
+reads, instead of by inspection.
+
+Two things it needs that the check already worked out:
+
+- **Where the data lives.** Every ticket's own header table carries status, priority, size and
+  the depends/refs column; the README's copy is the duplicate. `board.rs` parses both sides
+  already — `tickets()` and `rows()` are the two halves a generator would reuse.
+- **What it must not touch.** Marker comments around each table block, so "Where the project
+  actually is", the per-section notes and "Settled — don't re-derive these" are out of reach by
+  construction rather than by regex care.
+
+The open question is the columns the README carries that the headers don't, or carry only
+sometimes — the P1/P2/P3 grouping, the reference counts in the P2 table (`385`, `2669`, `48`),
+the `Blocked by` vs `Refs` split. Those are editorial and would have to move into the headers
+first, or be preserved by the generator rather than regenerated. That inventory is part of this
+ticket, as the Approach section already says.
