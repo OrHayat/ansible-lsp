@@ -1,8 +1,8 @@
 # T-081 — The board is hand-edited, and it has drifted
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | S    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | S    | T-130 | —          |
 
 ## Problem
 

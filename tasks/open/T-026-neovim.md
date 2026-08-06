@@ -1,8 +1,8 @@
 # T-026 — Neovim lspconfig entry
 
-| Status | Priority | Size | Target      |
-| ------ | -------- | ---- | ----------- |
-| open   | P3       | S    | ~Sept 2026  |
+| Status | Priority | Size | Target     | Epic  |
+| ------ | -------- | ---- | ---------- | ----- |
+| open   | P3       | S    | ~Sept 2026 | T-130 |
 
 ## Problem
 

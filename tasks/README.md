@@ -190,6 +190,7 @@ T-021 is now unblocked on that side.
 | T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
 | T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](open/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | S    | —          |
 | T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | M    | —          |
+| T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 
 ### Downstream — not this repo's code
 

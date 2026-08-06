@@ -1,8 +1,8 @@
 # T-025 — Settings: toggle rules, override severity
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P3       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P3       | M    | T-130 | —          |
 
 ## Problem
 

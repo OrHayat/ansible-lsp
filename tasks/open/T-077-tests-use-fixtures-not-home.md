@@ -1,8 +1,8 @@
 # T-077 — Real-repo tests read a caller's home dir; move to inline fixtures
 
-| Status | Priority | Size | Depends on |
-| ------ | -------- | ---- | ---------- |
-| open   | P2       | M    | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| open   | P2       | M    | T-130 | —          |
 
 ## Problem
 
