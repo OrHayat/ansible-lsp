@@ -224,10 +224,13 @@ component, so it never doubles into `vars/vars/` — then `<play dir>/<entry>`. 
 `vars/`, no project root, no extension guessing (`foo` never finds `foo.yml`); absolute
 and `~` entries are a single candidate; `../` collapses lexically first. A nested list is
 one-level first-found alternatives (deeper nesting is a runtime-fatal type error), and a
-**missing file is silently ignored** by ansible-core 2.21.2 — the loop's error was lost
-upstream and its "we raise an error" comment is stale, so the play runs with the
-variables simply never set. Live-verified against `vars/manager.py:320-383` and
-`dataloader.py:345-390`.
+**missing file is silently ignored** by ansible-core 2.21.2 — a known upstream regression,
+not a design: the raise was gated on `include_delegate_to and host`, PR #80171 (2.15)
+flipped that default to False making it unreachable, and PR #83259 (2.18) deleted the dead
+raise leaving the stale "we raise an error" comment. Reported as ansible/ansible#80483
+(open, filed by a core maintainer; #81419 closed as its duplicate); fix PR #80505 was
+approved then went stale unmerged. The play runs with the variables simply never set —
+live-verified against `vars/manager.py:320-383` and `dataloader.py:345-390`.
 → `vars_files_candidate_order_vars_subdir_wins`, `vars_files_vars_prefixed_entry_skips_the_prepend`,
 `vars_files_no_role_vars_or_project_root_fallback`, `vars_files_group_first_found_wins_and_all_missing_is_one_missing`
 
