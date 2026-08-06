@@ -1,8 +1,18 @@
 # Board
 
-Mini issue tracker. One markdown file per ticket. **Status is the folder** — closing a
-ticket is `git mv tasks/open/T-0NN-*.md tasks/closed/`, so `ls tasks/open` is always the
-real backlog and `git log` records when each one moved.
+Mini issue tracker. One markdown file per ticket. **Status is the folder** — `ls tasks/open`
+is always the real backlog and `git log` records when each one moved. Lifecycle edits go
+through the board CLI (T-081), which moves the file, flips its status line, keeps the tables
+below in sync, and strikes a closed ticket out of other tickets' Blocked-by cells
+(`~~T-0NN~~` = no longer blocking):
+
+```
+cargo run -p board -- new "Title" -p P1|P2|P3 -s S|M|L [-b T-020,T-062]
+cargo run -p board -- close T-0NN [--rejected]
+cargo run -p board -- reopen T-0NN
+cargo run -p board -- list [-p P1] [-s S] [--unblocked] [--closed]
+cargo run -p board -- show T-0NN
+```
 
 ```
 tasks/open/     not done

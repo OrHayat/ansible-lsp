@@ -57,8 +57,8 @@ part of the ticket, not a prerequisite for it.
 - [x] a script reports every disagreement between `tasks/{open,closed}/` and the README tables,
       and exits non-zero when there is one
 - [x] the 27 existing disagreements are fixed, so the check passes on a clean tree
-- [ ] closing a ticket no longer requires hand-editing a README row, or the check catches it when
-      someone forgets — **the check half is done; the row is still hand-edited**
+- [x] closing a ticket no longer requires hand-editing a README row, or the check catches it when
+      someone forgets — `board close` moves the file, flips the status line and moves the row
 - [x] the hand-written prose sections survive whatever the tool does to the tables
 
 ## Landed: the check. Still open: the generator
@@ -86,6 +86,20 @@ away true information to satisfy a checker, so the checker learned the word inst
 
 Verified by simulating the failure it exists for: `git mv`ing an open ticket to `closed/` and
 changing nothing else fails with all three edits named.
+
+## Landed second: the lifecycle CLI (`crates/board`)
+
+`cargo run -p board -- new|close|reopen|list|show`, std-only so it runs the same on Windows
+and macOS. `close`/`reopen` do all three manual edits in one command and additionally strike
+(`~~T-0NN~~`) / un-strike the closed ticket in other tickets' Blocked-by cells, so "is this
+ticket workable" is readable off the board — `list --unblocked` computes it. Rows are edited
+surgically (insert/move/remove one line), so hand-written table data — the P2 refs counts,
+T-084's outcome note — survives untouched. Verified by a close/reopen round-trip against a
+copy of this real board: the ticket file comes back byte-identical and the only README
+residue is the reopened row's position in its table.
+
+Not the generator the title asks for — that still needs the editorial-column question below
+answered. The check stays the judge either way.
 
 ## What the generator still has to do
 
