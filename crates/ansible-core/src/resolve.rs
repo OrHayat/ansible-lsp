@@ -215,6 +215,31 @@ pub fn resolve_with_in(
     resolve_in(r, ctx, fs)
 }
 
+/// The task search path for one reference.
+///
+/// [`FileContext::task_search_dirs`] ends with `project_root`, which measurement says is
+/// **not** a place Ansible looks — a file only at the repo root gives a hard error, while
+/// the role's `tasks/`, the role root, the file's own dir and the *playbook's* dir all
+/// resolve (T-096, `scratchpad/t096*.sh` against 2.21.2). That entry is standing in for the
+/// playbook dir, and it is right only when the playbook happens to sit at the repo root.
+///
+/// In a playbook file the playbook dir is known exactly — it is `file_dir` (T-095), already
+/// earlier in the list — so the stand-in is surplus and drops out. Elsewhere the invoking
+/// playbook is unknowable from the file alone (a role called from three playbooks has three
+/// answers), so it stays as the approximation until T-020 gives the real edges; removing it
+/// blind would strand every reference that resolves correctly today because the playbook
+/// *is* at the root.
+///
+/// `file_dir` is kept even when it equals `project_root`: they are one deduped entry for a
+/// playbook at the repo root, and dropping it would remove the file's own directory.
+fn task_bases(r: &Reference, ctx: &FileContext) -> Vec<PathBuf> {
+    let mut dirs = ctx.task_search_dirs();
+    if r.in_playbook {
+        dirs.retain(|d| *d == ctx.file_dir || Some(d.as_path()) != ctx.project_root.as_deref());
+    }
+    dirs
+}
+
 /// The base directories a path-shaped reference is resolved against. `None` for name-shaped
 /// kinds (role/module/tasks_from), which aren't file paths to substitute into.
 fn path_bases(kind: ReferenceKind, ctx: &FileContext) -> Option<Vec<PathBuf>> {
@@ -324,7 +349,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
 
     if templated {
         let bases = match r.kind {
-            ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
+            ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => task_bases(r, ctx),
             ReferenceKind::VarsFiles => vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()],
             // A non-magic variable survived, so only `-e` or a `vars:` on this line can
             // supply it — neither is on disk, and globbing would offer files Ansible
@@ -365,7 +390,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
             }
             Resolution::from_candidates(
                 unique(
-                    ctx.task_search_dirs()
+                    task_bases(r, ctx)
                         .iter()
                         .map(|b| normalise(&b.join(&r.value))),
                 ),
@@ -1610,6 +1635,58 @@ mod tests {
             res.candidates.is_empty(),
             "must not imply it went looking for a braces-named file"
         );
+    }
+
+    /// T-096: a playbook does not search the project root. Measured against 2.21.2 — a file
+    /// only at the repo root is a hard error, while the playbook's own dir resolves. Our
+    /// `project_root` entry was standing in for the playbook dir; in a playbook file that
+    /// dir is `file_dir`, already in the list, so the stand-in is surplus.
+    ///
+    /// Both directions matter. Dropping a candidate can only ever turn Resolved into
+    /// Missing, so the test has to show the *right* file still resolves as well as the
+    /// wrong one no longer doing so.
+    #[test]
+    fn a_playbook_does_not_search_the_project_root() {
+        let d = t016_dir("t096");
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::create_dir_all(d.join("playbooks")).unwrap();
+        let play = d.join("playbooks/site.yml");
+        std::fs::write(&play, "").unwrap();
+
+        // A playbook is decided by CONTENT, not by filename — `ast::build` needs play
+        // keywords. A bare task list in a file called site.yml is a task file, and
+        // Ansible agrees ("A playbook must be a list of plays").
+        let pb = |inc: &str| format!("- hosts: all\n  tasks:\n    - include_tasks: {inc}\n");
+
+        // Only at the repo root: Ansible errors, so we must not claim it resolves.
+        std::fs::write(d.join("root_only.yml"), "").unwrap();
+        let out = resolve_src(&play, &pb("root_only.yml"));
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Missing, "tried {:#?}", res.candidates);
+
+        // Beside the playbook: still resolves, via file_dir.
+        std::fs::write(d.join("playbooks/beside.yml"), "").unwrap();
+        let out = resolve_src(&play, &pb("beside.yml"));
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("playbooks/beside.yml")]);
+
+        // A playbook AT the root: file_dir and project_root are the same directory, and
+        // the dedupe leaves one entry. Dropping it would remove the file's own dir.
+        let at_root = d.join("site.yml");
+        std::fs::write(&at_root, "").unwrap();
+        let out = resolve_src(&at_root, &pb("root_only.yml"));
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+
+        // A task file is case 3: the invoking playbook is unknown, so project_root stays
+        // as the approximation until T-020. Unchanged by this ticket, pinned so the
+        // difference is deliberate rather than accidental.
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        let task = d.join("tasks/t.yml");
+        std::fs::write(&task, "").unwrap();
+        let out = resolve_src(&task, "- include_tasks: root_only.yml\n");
+        assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
     }
 
     /// In a playbook file `playbook_dir` is that file's own directory — not a guess, and
