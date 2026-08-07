@@ -1411,20 +1411,32 @@ fn network_platform_twin(won: &Path, bare: &str, ctx: &FileContext) -> Option<Pa
 }
 
 fn plugin_twin(won: &Path, is_action: bool) -> Option<PathBuf> {
-    let s = won.to_str()?;
-    if is_action {
-        return Some(PathBuf::from(s.replace("/plugins/action/", "/plugins/modules/")));
+    // Matched on path *components*, not by string replace — `won` arrives with native
+    // separators, so a `/plugins/modules/` substring search finds nothing on Windows.
+    let (own_kind, twin_kind) = if is_action { ("action", "modules") } else { ("modules", "action") };
+    let own_dir = nearest_ancestor_named(won, own_kind)?;
+    let file = won.strip_prefix(own_dir).ok()?;
+    // Collection/install layout: `.../plugins/modules/x.py` <-> `.../plugins/action/x.py`.
+    if is_named(own_dir.parent(), "plugins") {
+        return Some(own_dir.with_file_name(twin_kind).join(file));
     }
-    if s.contains("/plugins/modules/") {
-        return Some(PathBuf::from(s.replace("/plugins/modules/", "/plugins/action/")));
+    // Core modules sit outside plugins/: `.../ansible/modules/x.py` ->
+    // `.../ansible/plugins/action/x.py`. An action winner has no such second shape.
+    (!is_action).then(|| own_dir.with_file_name("plugins").join("action").join(file))
+}
+
+/// The closest directory above `file` carrying this name — the `modules/` a module sits
+/// under, even one subdir deeper in a collection. None: no such ancestor.
+fn nearest_ancestor_named<'a>(file: &'a Path, name: &str) -> Option<&'a Path> {
+    let mut dir = file.parent()?;
+    while !is_named(Some(dir), name) {
+        dir = dir.parent()?;
     }
-    // Core: `.../ansible/modules/x.py` -> `.../ansible/plugins/action/x.py`.
-    let i = s.rfind("/modules/")?;
-    Some(PathBuf::from(format!(
-        "{}/plugins/action/{}",
-        &s[..i],
-        &s[i + "/modules/".len()..]
-    )))
+    Some(dir)
+}
+
+fn is_named(dir: Option<&Path>, name: &str) -> bool {
+    dir.and_then(Path::file_name).is_some_and(|n| n == name)
 }
 
 /// Every candidate tried, in order, marking the one that won.
@@ -2227,6 +2239,65 @@ mod tests {
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
         assert!(norm.contains("plugins/action/stage_files.py"), "cfg-dir plugin linked in: {md}");
+    }
+
+    /// T-086: a collection module with a same-name `plugins/action/` twin runs on the
+    /// controller. The old lookup was a POSIX substring replace on a native path, so on
+    /// Windows it found nothing and the hover claimed the target host.
+    #[test]
+    fn hover_finds_collection_action_plugin_twin() {
+        let path = std::path::Path::new("../../demo/tasks/action_plugins.yml")
+            .canonicalize()
+            .unwrap();
+        let doc = ansible_core::parse::Document::new(
+            "- hosts: all\n  tasks:\n    - demo.charlie.beacon:\n        msg: hi\n".into(),
+        );
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value == "demo.charlie.beacon").expect("module ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
+        let norm = md.replace('\\', "/");
+        assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
+        assert!(norm.contains("- action plugin:") && norm.contains("- module:"), "both files listed in: {md}");
+        assert!(norm.contains("charlie/plugins/action/beacon.py"), "collection twin linked in: {md}");
+    }
+
+    /// T-086, both layouts, native paths by construction. `plugin_twin` doesn't stat, so
+    /// the paths need not exist.
+    #[test]
+    fn plugin_twin_walks_components() {
+        use std::path::PathBuf;
+        let coll: PathBuf =
+            ["c", "ansible_collections", "demo", "charlie", "plugins"].iter().collect();
+        assert_eq!(
+            super::plugin_twin(&coll.join("modules").join("beacon.py"), false),
+            Some(coll.join("action").join("beacon.py"))
+        );
+        assert_eq!(
+            super::plugin_twin(&coll.join("action").join("beacon.py"), true),
+            Some(coll.join("modules").join("beacon.py"))
+        );
+        // Core install layout: no `plugins/` above `modules/`.
+        let core: PathBuf = ["sp", "ansible"].iter().collect();
+        assert_eq!(
+            super::plugin_twin(&core.join("modules").join("debug.py"), false),
+            Some(core.join("plugins").join("action").join("debug.py"))
+        );
+    }
+
+    /// A path with neither shape yields None — never the input echoed back, which the old
+    /// no-match `str::replace` did, making the hover list the same file as both halves.
+    #[test]
+    fn plugin_twin_rejects_shapeless_paths() {
+        use std::path::PathBuf;
+        let odd: PathBuf = ["x", "library", "stage_files.py"].iter().collect();
+        assert_eq!(super::plugin_twin(&odd, false), None);
+        assert_eq!(super::plugin_twin(&odd, true), None);
+        // An action winner outside plugins/action/ has no modules/ twin to invent.
+        let stray: PathBuf = ["x", "action_plugins", "deploy_report.py"].iter().collect();
+        assert_eq!(super::plugin_twin(&stray, true), None);
     }
 
     /// The hover for one module reference in the demo's network fixture.

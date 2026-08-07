@@ -24,6 +24,15 @@
   purge_cache:
     path: /var/cache/build
 
+# --- Modern location: a same-name twin inside the collection -----------------------------
+# Hover `demo.charlie.beacon`. The collection ships plugins/action/beacon.py beside
+# plugins/modules/beacon.py, so the task runs on the controller and the hover links both
+# halves. (T-086: this lookup used to be a POSIX substring match and found nothing on
+# Windows.)
+- name: Controller-side via the collection's own same-name action plugin
+  demo.charlie.beacon:
+    msg: hello
+
 # --- Legacy location: an ansible.cfg `action_plugins` dir --------------------------------
 # Hover `stage_files`. The module is demo/library/stage_files.py, but
 # ./plugins/action/stage_files.py (a cfg-declared action_plugins dir) intercepts it and runs

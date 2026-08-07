@@ -89,7 +89,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
-| T-086 | [`plugin_twin` matches a POSIX substring, so it finds nothing on Windows](open/T-086-plugin-twin-windows-separators.md) | S | — |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](open/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | S    | —          |
 | T-092 | **bug** · [Includes inside handlers/ resolve against tasks/](open/T-092-includes-inside-handlers-resolve-against-tasks.md) | S    | —          |
@@ -192,6 +191,7 @@ T-021 is now unblocked on that side.
 | T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](open/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | S    | —          |
 | T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | M    | —          |
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
+| T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -239,6 +239,7 @@ T-021 is now unblocked on that side.
 | T-082 | [Hover markdown is assembled by hand](closed/T-082-hover-markdown-built-by-hand.md) | done |
 | T-072 | [Network modules: one platform action plugin per family](closed/T-072-network-platform-action-plugins.md) | done |
 | T-016 | [`vars_files`](closed/T-016-vars-files.md)                     | done     |
+| T-086 | [`plugin_twin` matches a POSIX substring, so it finds nothing on Windows](closed/T-086-plugin-twin-windows-separators.md) | done     |
 
 ## Settled — don't re-derive these
 

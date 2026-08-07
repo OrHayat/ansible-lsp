@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P1       | S    | T-118 | —          |
+| done   | P1       | S    | T-118 | —          |
 
 Found while building T-072, which needed the same lookup and had to route around this one.
 
@@ -59,10 +59,32 @@ the same latent break — `module_hover`'s own `s.find("/ansible_collections/")`
 `s.contains("/plugins/action/")` are on the normalised string and are fine, but the codebase
 should be swept rather than assumed.
 
+## Audit result (done-when 3)
+
+The sweep found one more real stray and a bonus bug in `plugin_twin` itself, both fixed:
+
+- **Fixed** — `plugin_twin`'s `is_action` arm used `str::replace`, which returns the input
+  unchanged on no-match; the caller's `.is_file()` filter then passed (the winner *is* a
+  file) and the hover listed the same path as both "action plugin" and "module". The
+  component walk returns `None` on shape mismatch; `plugin_twin_rejects_shapeless_paths`
+  pins it.
+- **Fixed** — `resolve.rs` split-table test asserted
+  `.to_string_lossy().contains("community/docker/…")` on a native path (would fail on
+  Windows iff `community.docker` is installed). Now normalised via `posix_display`, like
+  the sibling assertion already was.
+
+Everything else is safe: `module_hover` searches run on the pre-normalised `s`;
+`short_plugin_path` goes through `posix_display` first; the `ends_with("a/b")` checks
+throughout are `Path::ends_with`, which is component-based; `include_vars.rs`'s
+`starts_with('/')` is deliberate (POSIX control-node semantics, documented in place);
+the `split('/')`/`strip_prefix("~/")` calls in glob/config/resolve/include_vars act on
+authored YAML/cfg strings, never on filesystem paths; the JS harnesses only slice
+`file://` URIs, which are POSIX by construction.
+
 ## Done when
 
-- [ ] a collection module with a same-name twin hovers "runs on the controller" and links
+- [x] a collection module with a same-name twin hovers "runs on the controller" and links
       the plugin, in a test that runs (not skips) on Windows
-- [ ] the core `ansible/modules/` shape still resolves its twin
-- [ ] remaining native-path substring searches audited, and either fixed or recorded here as
+- [x] the core `ansible/modules/` shape still resolves its twin
+- [x] remaining native-path substring searches audited, and either fixed or recorded here as
       safe with the reason

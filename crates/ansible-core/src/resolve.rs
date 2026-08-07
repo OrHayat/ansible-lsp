@@ -964,8 +964,7 @@ mod tests {
         let res = first(&out, ReferenceKind::Module);
         match res.status {
             Status::Resolved => assert!(
-                res.targets[0]
-                    .to_string_lossy()
+                crate::posix_display(&res.targets[0])
                     .contains("community/docker/plugins/modules/docker_container.py"),
                 "got {:?}",
                 res.targets
