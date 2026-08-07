@@ -47,6 +47,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [ ] T-083 — `ansible.legacy` is unmodelled and `ansible.builtin` skips the routing table
 - [ ] T-119 — meta/runtime.yml has no schema validation anywhere
 - [x] T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
+- [ ] T-133 — NotInWorkspace hover lumps three different situations into one vague message
 
 ## Done when
 
