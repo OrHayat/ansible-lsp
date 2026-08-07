@@ -19,6 +19,38 @@ pub struct AnsibleConfig {
     /// deliberate "no platforms". Like every list key it *replaces* the default rather
     /// than extending it, so the two cases can't be collapsed into an empty `Vec`.
     pub network_group_modules: Option<Vec<String>>,
+    /// What a duplicate YAML mapping key does. `DUPLICATE_YAML_DICT_KEY`'s ini name is
+    /// `duplicate_dict_key`; the env var keeps the longer spelling. T-102.
+    pub duplicate_dict_key: DuplicateDictKey,
+}
+
+/// `DUPLICATE_YAML_DICT_KEY` (`config/base.yml:1361-1375`). Exactly three values, lowercase
+/// — live-verified on ansible-core 2.21.2, where `False` (which the option's own
+/// description still suggests), `IGNORE` and any other spelling abort every ansible command
+/// with `Invalid value ... Valid values are: error, warn, ignore`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DuplicateDictKey {
+    /// Warn and keep the last value. Ansible's default.
+    #[default]
+    Warn,
+    /// Refuse to load the file; the play never starts.
+    Error,
+    /// Keep the last value silently.
+    Ignore,
+}
+
+impl DuplicateDictKey {
+    /// `None` for a spelling Ansible would reject. Callers fall back to the default rather
+    /// than refusing to serve — a language server that goes dark over one bad config line
+    /// is worse than one that analyses with the shipped default.
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "warn" => Some(Self::Warn),
+            "error" => Some(Self::Error),
+            "ignore" => Some(Self::Ignore),
+            _ => None,
+        }
+    }
 }
 
 /// `NETWORK_GROUP_MODULES`' shipped default (`config/base.yml:1779-1788`). Network device
@@ -63,6 +95,11 @@ impl AnsibleConfig {
                     "network_group_modules" => {
                         cfg.network_group_modules = Some(name_list(value.trim()));
                     }
+                    "duplicate_dict_key" => {
+                        if let Some(v) = DuplicateDictKey::parse(value.trim()) {
+                            cfg.duplicate_dict_key = v;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -73,6 +110,13 @@ impl AnsibleConfig {
         // so there is nothing to observe later.
         if let Ok(v) = std::env::var("ANSIBLE_NETWORK_GROUP_MODULES") {
             cfg.network_group_modules = Some(name_list(&v));
+        }
+        // Note the spelling: the env var is DUPLICATE_YAML_DICT_KEY, the ini key is not.
+        if let Some(v) = std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY")
+            .ok()
+            .and_then(|v| DuplicateDictKey::parse(&v))
+        {
+            cfg.duplicate_dict_key = v;
         }
         cfg
     }
@@ -144,6 +188,42 @@ mod tests {
 
     fn cfg(text: &str) -> AnsibleConfig {
         AnsibleConfig::load_in(Path::new("/p"), &CfgFs(text.into()))
+    }
+
+    /// T-102. All three spellings, plus the two ways a value can be absent. Live-verified
+    /// against ansible-core 2.21.2 — see [`DuplicateDictKey`] for what it rejects.
+    #[test]
+    fn duplicate_dict_key_reads_all_three_values() {
+        if std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").is_ok() {
+            return; // the env layer wins over everything asserted here
+        }
+        use DuplicateDictKey::*;
+        // Unset anywhere, and set in another section, both mean Ansible's default.
+        assert_eq!(cfg("[defaults]\nroles_path = ./roles\n").duplicate_dict_key, Warn);
+        assert_eq!(cfg("[galaxy]\nduplicate_dict_key = error\n").duplicate_dict_key, Warn);
+
+        assert_eq!(cfg("[defaults]\nduplicate_dict_key = warn\n").duplicate_dict_key, Warn);
+        assert_eq!(cfg("[defaults]\nduplicate_dict_key = error\n").duplicate_dict_key, Error);
+        assert_eq!(cfg("[defaults]\nduplicate_dict_key = ignore\n").duplicate_dict_key, Ignore);
+    }
+
+    /// Ansible aborts on a bad value; we cannot go dark over one config line, so the
+    /// shipped default stands. The divergence is deliberate — a server that refuses to
+    /// analyse is worse than one that analyses with `warn`.
+    #[test]
+    fn an_invalid_duplicate_dict_key_falls_back_rather_than_failing() {
+        if std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").is_ok() {
+            return;
+        }
+        // `False` is what the option's own description suggests, and Ansible rejects it.
+        for bad in ["False", "false", "IGNORE", "Error", "bogus", ""] {
+            let text = format!("[defaults]\nduplicate_dict_key = {bad}\n");
+            assert_eq!(
+                cfg(&text).duplicate_dict_key,
+                DuplicateDictKey::Warn,
+                "{bad:?} should fall back to the default"
+            );
+        }
     }
 
     /// T-072. The env override is exercised by its own integration test, which needs a
