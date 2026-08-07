@@ -466,6 +466,36 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     }
 }
 
+/// `MODULE_IGNORE_EXTS` (`constants.py:62` REJECT_EXTS + `.yaml/.yml/.ini`,
+/// `base.yml:1799-1801`): suffixes both module finders refuse even on a basename match —
+/// compiled artifacts, backups, docs.
+const MODULE_IGNORE_EXTS: &[&str] =
+    &[".pyc", ".pyo", ".swp", ".bak", "~", ".rpm", ".md", ".txt", ".rst", ".yaml", ".yml", ".ini"];
+
+/// The files in `dir` Ansible would accept as module `name`: modules can be any
+/// executable, so `name` bare or with any one extension counts (T-093). Sorted, first
+/// wins: exactly the FQCN finder (`loader.py:704-719`); the legacy finder takes
+/// `os.listdir` order, which is filesystem-arbitrary, so sorted stands in as the
+/// deterministic pick there too.
+fn module_files_named(dir: &Path, name: &str, fs: &dyn Fs) -> Vec<PathBuf> {
+    let mut hits: Vec<PathBuf> = fs
+        .read_dir(dir)
+        .into_iter()
+        .filter(|(p, kind)| *kind == crate::fs::Kind::File && is_module_named(p, name))
+        .map(|(p, _)| p)
+        .collect();
+    hits.sort();
+    hits
+}
+
+/// `splitext(file) == name` (`loader.py:907-908`) — the whole filename, or everything
+/// before its last dot — minus the ignore list.
+fn is_module_named(p: &Path, name: &str) -> bool {
+    let Some(f) = p.file_name().and_then(|f| f.to_str()) else { return false };
+    let stem = f.rsplit_once('.').map_or(f, |(s, _)| s);
+    stem == name && !MODULE_IGNORE_EXTS.iter().any(|ext| f.ends_with(ext))
+}
+
 /// Module resolution with redirect chasing — the loader's `while` loop
 /// (`loader.py:740-748`) transcribed: resolve the current name; if nothing on disk but a
 /// routing table renames it, follow the rename and try again. The visited set is the
@@ -491,6 +521,10 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
 /// that isn't installed here, not a typo. The one loader step deliberately not modelled:
 /// the `_<name>` deprecated-alias retry (`loader.py:940-953`) — hits are rare and Ansible
 /// deprecation-warns each one itself. Deprecations/tombstones in the tables are T-064.
+///
+/// In `plugins/modules/` and the legacy dirs a module matches with ANY extension or none —
+/// modules are executables shipped to the target, not controller classes, so their loader
+/// has no `.py` suffix (`loader.py:786-788`; T-093). `plugins/action/` stays `.py`-only.
 fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     let mut trail: Vec<PathBuf> = Vec::new();
     let mut visited: Vec<String> = vec![value.to_string()];
@@ -499,10 +533,18 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
         let parts: Vec<&str> = name.split('.').collect();
         let (res, redirect) = match parts[..] {
             [bare] => {
-                let file = format!("{bare}.py");
-                let mut candidates: Vec<PathBuf> =
-                    ctx.legacy_module_dirs().iter().map(|d| d.join(&file)).collect();
+                let mut candidates: Vec<PathBuf> = Vec::new();
+                for dir in ctx.legacy_module_dirs() {
+                    let found = module_files_named(&dir, bare, fs);
+                    if found.is_empty() {
+                        // Keep the dir in the trail so diagnostics still name it.
+                        candidates.push(dir.join(format!("{bare}.py")));
+                    } else {
+                        candidates.extend(found);
+                    }
+                }
                 if let Some(pkg) = &AnsibleInstall::detect().package_dir {
+                    let file = format!("{bare}.py");
                     candidates.push(pkg.join("modules").join(&file));
                     candidates.push(pkg.join("plugins/action").join(&file));
                 }
@@ -513,17 +555,19 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 (res, redirect)
             }
             [ns, coll, module] => {
-                let mut candidates: Vec<PathBuf> = ctx
-                    .collection_roots()
-                    .iter()
-                    .flat_map(|root| {
-                        let base = root.join(ns).join(coll).join("plugins");
-                        [
-                            base.join("modules").join(format!("{module}.py")),
-                            base.join("action").join(format!("{module}.py")),
-                        ]
-                    })
-                    .collect();
+                let mut candidates: Vec<PathBuf> = Vec::new();
+                for root in ctx.collection_roots() {
+                    let base = root.join(ns).join(coll).join("plugins");
+                    let found = module_files_named(&base.join("modules"), module, fs);
+                    if found.is_empty() {
+                        candidates.push(base.join("modules").join(format!("{module}.py")));
+                    } else {
+                        candidates.extend(found);
+                    }
+                    // Action plugins are controller-side Python classes, so their loader
+                    // hard-requires `.py` (`loader.py:782-784`) — no glob here.
+                    candidates.push(base.join("action").join(format!("{module}.py")));
+                }
                 // ansible.builtin lives in the ansible package, not a collection tree.
                 if (ns, coll) == ("ansible", "builtin") {
                     if let Some(p) = AnsibleInstall::detect().builtin_module(module) {
@@ -1039,6 +1083,80 @@ mod tests {
         // 2-part names are never valid Ansible; pinned unextracted until T-042's ERROR.
         let out = resolve_src(&file, "- builtin.debug:\n    msg: hi\n");
         assert!(out.iter().all(|(r, _)| r.kind != ReferenceKind::Module));
+    }
+
+    /// Modules are any executable: the legacy finder caches every library/ file by its
+    /// splitext base name (`loader.py:899-927`), so `.ps1`, `.sh` and extensionless all
+    /// run under Ansible — only `.py` resolved before T-093.
+    #[test]
+    fn legacy_modules_match_any_extension() {
+        let d = t016_dir("modext");
+        std::fs::create_dir_all(d.join("library")).unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+
+        std::fs::write(d.join("library/winmod.ps1"), "# powershell\n").unwrap();
+        let out = resolve_src(&file, "- winmod:\n    path: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("library/winmod.ps1")]);
+
+        std::fs::write(d.join("library/rawmod"), "#!/bin/sh\n").unwrap();
+        let out = resolve_src(&file, "- rawmod:\n    path: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("library/rawmod")]);
+
+        // MODULE_IGNORE_EXTS: a doc file sharing the base name is never the module.
+        std::fs::write(d.join("library/notes.md"), "").unwrap();
+        let out = resolve_src(&file, "- notes:\n    path: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "got {:#?}", res.targets);
+    }
+
+    /// The ambiguous case pinned: several files share the base name, sorted order picks
+    /// the first — the extensionless one, "shortest match first" (`loader.py:712`).
+    #[test]
+    fn ambiguous_module_match_takes_sorted_first() {
+        let d = t016_dir("modambig");
+        std::fs::create_dir_all(d.join("library")).unwrap();
+        let file = d.join("site.yml");
+        std::fs::write(&file, "").unwrap();
+        std::fs::write(d.join("library/both"), "#!/bin/sh\n").unwrap();
+        std::fs::write(d.join("library/both.ps1"), "").unwrap();
+        std::fs::write(d.join("library/both.py"), "").unwrap();
+
+        let out = resolve_src(&file, "- both:\n    path: x\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("library/both")]);
+        // The losers stay in the trail.
+        assert!(res.candidates.contains(&d.join("library/both.ps1")), "{:#?}", res.candidates);
+        assert!(res.candidates.contains(&d.join("library/both.py")), "{:#?}", res.candidates);
+    }
+
+    /// The demo tree's non-Python modules (T-093): bash in `library/` and in a
+    /// collection's `plugins/modules/` — pinned against the checked-in fixtures so the
+    /// demo can't go stale. The FQCN finder fuzzy-matches extensions exactly like the
+    /// legacy one (`loader.py:704-719`); only action plugins are `.py`-bound.
+    #[test]
+    fn demo_non_python_modules_resolve() {
+        let demo = PathBuf::from("../../demo").canonicalize().unwrap();
+        let file = demo.join("playbook.yml");
+
+        let out = resolve_src(&file, "- sweep:\n    paths: /var/tmp\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(res.targets[0].ends_with("demo/library/sweep.sh"), "got {:?}", res.targets);
+
+        let out = resolve_src(&file, "- demo.charlie.pulse:\n    interval: 5\n");
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(
+            res.targets[0].ends_with("demo/charlie/plugins/modules/pulse.sh"),
+            "got {:?}",
+            res.targets
+        );
     }
 
     /// Chained renames across collections' own `meta/runtime.yml` tables resolve to the

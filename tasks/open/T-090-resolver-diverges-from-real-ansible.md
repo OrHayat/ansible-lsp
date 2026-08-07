@@ -31,7 +31,7 @@ the same argument applied one layer up.
 - [x] T-047 — Move the resolvers onto the AST
 - [ ] T-091 — with_ext misses .json and extensionless, and tasks_from flips the order
 - [x] T-092 — Includes inside handlers/ resolve against tasks/
-- [ ] T-093 — Bare module names only try .py
+- [x] T-093 — Bare module names only try .py
 - [x] T-094 — short_key treats any dotted include_tasks as an include
 - [ ] T-095 — Templated import_playbook is reported missing
 - [ ] T-096 — project_root stands in for the playbook dir

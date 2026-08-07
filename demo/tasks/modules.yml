@@ -46,6 +46,19 @@
     path: /etc/ssl/cert.pem
     state: present
 
+# ------------------------------------- ANY EXECUTABLE IS A MODULE (T-093)
+# Modules aren't required to be Python — they're files shipped to the target and run.
+# Both of these are bash. Ctrl+click opens the .sh source: `sweep` lives in
+# demo/library/ (legacy dir, any extension matches), `demo.charlie.pulse` in the
+# collection's plugins/modules/ (the FQCN finder globs extensions the same way).
+- name: Bash module in library/ — resolves to sweep.sh
+  sweep:
+    paths: /var/tmp
+
+- name: Bash module in a collection — resolves to pulse.sh
+  demo.charlie.pulse:
+    interval: 5
+
 # ------------------------------------------------------ ACTION LOOKALIKES (T-094)
 # Ansible recognises exactly three spellings of include_tasks: bare,
 # `ansible.builtin.`, `ansible.legacy.`. This key merely ENDS in the name — it's an
