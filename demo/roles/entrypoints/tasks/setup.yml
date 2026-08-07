@@ -1,0 +1,6 @@
+---
+# DEAD under `tasks_from: setup` — the extensionless `setup` is probed first and wins.
+# Reachable only by asking for it in full: `tasks_from: setup.yml`.
+- name: BAD setup.yml loses to the extensionless setup
+  ansible.builtin.debug:
+    msg: if you ever see this, the tasks_from flip broke

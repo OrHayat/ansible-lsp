@@ -1,0 +1,6 @@
+---
+# The live default entry point. `main.yaml` next door is never loaded: the default
+# entry point probes .yml, .yaml, .json, then bare, and stops at the first hit.
+- name: GOOD main.yml is the default entry point
+  ansible.builtin.debug:
+    msg: loaded from tasks/main.yml

@@ -437,7 +437,8 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
 
         ReferenceKind::Role => match role_dir(&r.value, ctx, fs) {
             Some(dir) => {
-                let res = Resolution::from_candidates(with_ext(&dir.join("tasks"), "main"), fs);
+                let probe = RoleExts::default().candidates(&dir.join("tasks"), "main", false);
+                let res = Resolution::from_candidates(probe, fs);
                 // `roles/cib-batch` has only begin/commit/abort.yml and no main.yml —
                 // legal, because every caller passes tasks_from. Warning here would
                 // fire on 16 working references in this repo alone.
@@ -459,7 +460,8 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
             let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx, fs)) else {
                 return Resolution::skipped(SkipReason::NotInWorkspace);
             };
-            Resolution::from_candidates(with_ext(&role.join("tasks"), &r.value), fs)
+            let probe = RoleExts::default().candidates(&role.join("tasks"), &r.value, true);
+            Resolution::from_candidates(probe, fs)
         }
 
         ReferenceKind::Module => resolve_module(&r.value, ctx, fs),
@@ -704,14 +706,64 @@ pub fn vars_files_candidates(entry: &str, file_dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn with_ext(dir: &Path, stem: &str) -> Vec<PathBuf> {
-    if stem.ends_with(".yml") || stem.ends_with(".yaml") {
-        return vec![dir.join(stem)];
+/// The extensions a role file may carry, in probe order.
+///
+/// A value rather than a constant so a test can hold the *wrong* list next to the right
+/// one — pinning "`.json` is in here" from both sides, instead of by hand-reverting the
+/// code and trusting the reverter. [`Default`] is the only list production ever uses:
+/// hardcoded in `Role._load_role_yaml` (`role/__init__.py:421-422`) and deliberately
+/// *not* `C.YAML_FILENAME_EXTENSIONS`, "to maintain portability" — so a plugin adding an
+/// extension elsewhere cannot change what a role loads. There is no config key for this
+/// and there should be no way to reach one from here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RoleExts(&'static [&'static str]);
+
+impl Default for RoleExts {
+    fn default() -> Self {
+        Self(&[".yml", ".yaml", ".json"])
     }
-    vec![
-        dir.join(format!("{stem}.yml")),
-        dir.join(format!("{stem}.yaml")),
-    ]
+}
+
+impl RoleExts {
+    /// The role files `stem` could name in `dir`, in the order Ansible probes them.
+    ///
+    /// The extensionless form is always a candidate; which end it sits on is the whole
+    /// question, because `find_vars_files` breaks on the first hit
+    /// (`dataloader.py:483-491`) and never merges — every later candidate is dead, not
+    /// shadowed. The default entry point appends `''` **last**, so `main.yml` beats a bare
+    /// `main`; any `*_from:` inserts it **first** (`role/__init__.py:426-431`), so the
+    /// literal name given wins over `<name>.yml`. Hence `bare_first`, set from whether the
+    /// reference carried a `*_from`.
+    ///
+    /// A stem that already ends in an extension gets the suffixes appended anyway
+    /// (`setup.yml.json`) — Ansible builds the same nonsense candidates, and with `''`
+    /// first the literal always wins before they are reached.
+    ///
+    /// A directory is not a hit here: roles pass `allow_dir=False`, which skips a matching
+    /// directory and keeps probing (`dataloader.py:484-488`), and [`Fs::is_file`] agrees.
+    ///
+    /// One allocation per candidate and one for the vec: the suffix is appended into the
+    /// `PathBuf`'s own buffer, which is sized up front, so there is no throwaway
+    /// `format!` string and no realloc on the way.
+    fn candidates(self, dir: &Path, stem: &str, bare_first: bool) -> Vec<PathBuf> {
+        let joined = |ext: &str| {
+            let mut p = PathBuf::with_capacity(dir.as_os_str().len() + 1 + stem.len() + ext.len());
+            p.push(dir);
+            p.push(stem);
+            // Straight onto the filename — `push` would insert a separator.
+            p.as_mut_os_string().push(ext);
+            p
+        };
+        let mut out = Vec::with_capacity(self.0.len() + 1);
+        if bare_first {
+            out.push(joined(""));
+        }
+        out.extend(self.0.iter().map(|e| joined(e)));
+        if !bare_first {
+            out.push(joined(""));
+        }
+        out
+    }
 }
 
 fn unique(paths: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -1586,6 +1638,129 @@ mod tests {
         let res = first(&out, ReferenceKind::TasksFrom);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
         assert!(res.targets[0].ends_with("roles/cib-batch/tasks/begin.yml"));
+    }
+
+    /// The T-091 demo keeps its promises: every GOOD line in
+    /// `demo/tasks/role_entrypoints.yml` lands on the file its comment names, and the one
+    /// BAD line misses. A hand-made fixture can silently lack the file it describes —
+    /// T-092's shipped without `handlers/restart.yml` — so the demo is asserted, not
+    /// trusted.
+    #[test]
+    fn demo_role_entry_points_resolve_as_documented() {
+        let file = Path::new("../../demo/tasks/role_entrypoints.yml")
+            .canonicalize()
+            .unwrap();
+        let src = std::fs::read_to_string(&file).unwrap();
+        let out = resolve_src(&file, &src);
+        let from: Vec<&Resolution> = out
+            .iter()
+            .filter(|(r, _)| r.kind == ReferenceKind::TasksFrom)
+            .map(|(_, res)| res)
+            .collect();
+
+        // The default entry point: main.yml wins, main.yaml is dead.
+        let role = first(&out, ReferenceKind::Role);
+        assert_eq!(role.status, Status::Resolved, "tried {:#?}", role.candidates);
+        assert!(
+            role.targets[0].ends_with("entrypoints/tasks/main.yml"),
+            "main.yml must win over main.yaml: {:?}",
+            role.targets
+        );
+
+        // In file order: report -> .json, setup -> extensionless, setup.yml -> the
+        // shadowed file, legacy -> nothing, legacy.jamil -> the file itself.
+        let want = [
+            Some("entrypoints/tasks/report.json"),
+            Some("entrypoints/tasks/setup"),
+            Some("entrypoints/tasks/setup.yml"),
+            None,
+            Some("entrypoints/tasks/legacy.jamil"),
+        ];
+        assert_eq!(from.len(), want.len(), "demo lost a tasks_from example");
+        for (res, want) in from.iter().zip(want) {
+            match want {
+                Some(end) => {
+                    assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+                    assert!(res.targets[0].ends_with(end), "want {end}, got {:?}", res.targets);
+                }
+                // `.jamil` is not a role extension, so the bare name reaches nothing.
+                None => assert_eq!(res.status, Status::Missing, "got {:?}", res.targets),
+            }
+        }
+    }
+
+    /// T-091: role files carry `.yml`, `.yaml`, `.json` or no extension at all, and
+    /// which end of that list the extensionless form sits on flips with `*_from`
+    /// (`role/__init__.py:421-431`). One tree pins both ends, and pins that the loser
+    /// of a shadowing pair is dead rather than also loaded — `find_vars_files` breaks
+    /// on the first hit.
+    #[test]
+    fn role_file_extension_order_flips_with_tasks_from() {
+        let d = t016_dir("role-exts");
+        let tasks = d.join("roles/r/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        for f in ["main.yml", "main.yaml", "setup", "setup.yml", "data.json"] {
+            std::fs::write(tasks.join(f), "").unwrap();
+        }
+        std::fs::create_dir_all(d.join("roles/bare/tasks")).unwrap();
+        std::fs::write(d.join("roles/bare/tasks/main"), "").unwrap();
+        let play = d.join("site.yml");
+        std::fs::write(&play, "").unwrap();
+
+        // Default entry point: `''` last, so main.yml wins and main.yaml is unreachable.
+        let out = resolve_src(&play, "- include_role:\n    name: r\n");
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.targets, vec![tasks.join("main.yml")]);
+        assert_eq!(
+            res.candidates,
+            ["main.yml", "main.yaml", "main.json", "main"].map(|f| tasks.join(f))
+        );
+
+        // With a tasks_from: `''` first, so the literal name beats setup.yml.
+        let out = resolve_src(&play, "- include_role: { name: r, tasks_from: setup }\n");
+        let res = first(&out, ReferenceKind::TasksFrom);
+        assert_eq!(res.targets, vec![tasks.join("setup")]);
+        assert_eq!(
+            res.candidates,
+            ["setup", "setup.yml", "setup.yaml", "setup.json"].map(|f| tasks.join(f))
+        );
+
+        // Both axes driven directly, so the pre-T-091 behaviour stays pinned in the
+        // suite instead of living in whoever remembers to revert the code. The old list
+        // is the only difference; the fixture and the probe are the same ones above.
+        let old = RoleExts(&[".yml", ".yaml"]);
+        let hit = |exts: RoleExts, stem: &str, bare_first: bool| {
+            exts.candidates(&tasks, stem, bare_first)
+                .into_iter()
+                .find(|p| p.is_file())
+        };
+        // `.json` is reachable only because the list says so.
+        assert_eq!(hit(old, "data", true), None, "the old list must miss data.json");
+        assert_eq!(
+            hit(RoleExts::default(), "data", true),
+            Some(tasks.join("data.json"))
+        );
+        // And the flip is the only thing deciding the setup pair, under either list.
+        for exts in [old, RoleExts::default()] {
+            assert_eq!(hit(exts, "setup", true), Some(tasks.join("setup")), "{exts:?}");
+            assert_eq!(
+                hit(exts, "setup", false),
+                Some(tasks.join("setup.yml")),
+                "{exts:?}"
+            );
+        }
+
+        // .json and the extensionless form resolve at both ends of the flip.
+        let out = resolve_src(&play, "- include_role: { name: r, tasks_from: data }\n");
+        assert_eq!(
+            first(&out, ReferenceKind::TasksFrom).targets,
+            vec![tasks.join("data.json")]
+        );
+        let out = resolve_src(&play, "- include_role:\n    name: bare\n");
+        assert_eq!(
+            first(&out, ReferenceKind::Role).targets,
+            vec![d.join("roles/bare/tasks/main")]
+        );
     }
 
     #[test]

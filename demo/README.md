@@ -10,6 +10,7 @@ mic key on this Mac).
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
 | `tasks/conditions.yml` | `when:` analysis — every verdict and every warning rule |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
+| `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |
 | `tasks/unparseable_silenced.yml` | the same break, quieted with `# noqa: unparseable` |
@@ -68,6 +69,9 @@ if it warned:
   sources, until T-070.)
 - **a role with no `tasks/main.yml` but a `tasks_from:`** — legal. `roles/cib-batch` in the
   real repo is exactly this and real working references depend on it.
+- **a shadowed role file** (`roles/entrypoints/tasks/main.yaml`, dead because `main.yml` is
+  probed first) — Ansible says nothing and neither do we. The file is real and loads fine on
+  its own; that it is unreachable *here* is T-023's hint to draw, not a missing-file error.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.
 - **61% of `when:` conditions** — real boolean logic, unguarded comparisons, unknown filters.
   Guessing would make the analysis untrustworthy.

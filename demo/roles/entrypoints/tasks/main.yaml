@@ -1,0 +1,7 @@
+---
+# DEAD FILE, on purpose. `main.yml` is probed first and `find_vars_files` breaks on the
+# first hit (dataloader.py:483-491), so nothing in here ever runs. Not merged, not
+# second — unreachable. Ansible says nothing about it; flagging it is T-023's job.
+- name: BAD main.yaml is shadowed by main.yml and never runs
+  ansible.builtin.debug:
+    msg: if you ever see this, the probe order broke

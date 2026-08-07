@@ -1,0 +1,48 @@
+---
+# Which file a role entry point actually loads (T-091). Role files may be .yml, .yaml,
+# .json or carry no extension at all — a list hardcoded in Role._load_role_yaml
+# (role/__init__.py:421-422) rather than taken from YAML_FILENAME_EXTENSIONS, "to
+# maintain portability". The probe stops at the first hit and never merges, so in every
+# shadowing pair below exactly one file is live and the other is dead.
+#
+# The order flips depending on how the file is asked for:
+#
+#   default entry point   main.yml, main.yaml, main.json, main
+#   with a tasks_from     <name>, <name>.yml, <name>.yaml, <name>.json
+#
+# — so the default prefers the extension, and a tasks_from prefers the literal name.
+
+- name: GOOD default entry point loads tasks/main.yml, not tasks/main.yaml
+  ansible.builtin.include_role:
+    name: entrypoints
+
+- name: GOOD tasks_from finds a .json file
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: report
+
+- name: GOOD tasks_from prefers the extensionless tasks/setup over tasks/setup.yml
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: setup
+
+# Asking for the loser by its full name is the only way to reach it.
+- name: GOOD the shadowed file is reachable when named in full
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: setup.yml
+
+# tasks/legacy.jamil exists, but .jamil is not a role extension: this probes
+# legacy, legacy.yml, legacy.yaml, legacy.json and finds none of them. Ansible fails
+# the play outright here ("Could not find specified file in role: tasks/legacy").
+- name: BAD tasks_from cannot reach an unknown extension
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: legacy
+
+# Same file, named in full — the extensionless slot is probed first, so the literal
+# name lands in it and the file loads. The extension never has to mean anything.
+- name: GOOD the same file resolves when its extension is spelled out
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: legacy.jamil

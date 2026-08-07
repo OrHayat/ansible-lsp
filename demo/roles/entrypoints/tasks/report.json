@@ -1,0 +1,8 @@
+[
+  {
+    "name": "GOOD .json is a role extension, same as .yml and .yaml",
+    "ansible.builtin.debug": {
+      "msg": "loaded from tasks/report.json"
+    }
+  }
+]

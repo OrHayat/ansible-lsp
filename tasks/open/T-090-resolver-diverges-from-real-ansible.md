@@ -29,7 +29,7 @@ the same argument applied one layer up.
 - [ ] T-067 — Role search order doesn't match Ansible's
 - [x] T-036 — Parse the YAML that Ansible parses (lenient oracle, maybe a swap)
 - [x] T-047 — Move the resolvers onto the AST
-- [ ] T-091 — with_ext misses .json and extensionless, and tasks_from flips the order
+- [x] T-091 — with_ext misses .json and extensionless, and tasks_from flips the order
 - [x] T-092 — Includes inside handlers/ resolve against tasks/
 - [x] T-093 — Bare module names only try .py
 - [x] T-094 — short_key treats any dotted include_tasks as an include

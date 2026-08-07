@@ -90,7 +90,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
-| T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](open/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | S    | —          |
 | T-095 | **bug** · [Templated import_playbook is reported missing](open/T-095-templated-import-playbook-is-reported-missing.md) | S    | —          |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | —          |
 | T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | S    | —          |
@@ -190,6 +189,8 @@ T-021 is now unblocked on that side.
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
+| T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](open/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | M    | —          |
+| T-135 | [Four resolve entry points are a cartesian product of two optional axes](open/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -241,6 +242,7 @@ T-021 is now unblocked on that side.
 | T-094 | **bug** · [short_key treats any dotted include_tasks as an include](closed/T-094-short-key-treats-any-dotted-include-tasks-as-an-include.md) | done     |
 | T-092 | **bug** · [Includes inside handlers/ resolve against tasks/](closed/T-092-includes-inside-handlers-resolve-against-tasks.md) | done     |
 | T-093 | **bug** · [Bare module names only try .py](closed/T-093-bare-module-names-only-try-py.md) | done     |
+| T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](closed/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | done     |
 
 ## Settled — don't re-derive these
 

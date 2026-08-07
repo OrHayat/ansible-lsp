@@ -1,0 +1,7 @@
+---
+# No extension, and that is legal. With a `tasks_from:` the extensionless form is probed
+# FIRST (role/__init__.py:429-431), so this file wins over setup.yml next door — the
+# opposite of the default entry point's order.
+- name: GOOD the extensionless file wins under tasks_from
+  ansible.builtin.debug:
+    msg: loaded from tasks/setup

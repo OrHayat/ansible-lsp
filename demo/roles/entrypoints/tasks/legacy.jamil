@@ -1,0 +1,9 @@
+---
+# `.jamil` is not one of the three role extensions, so `tasks_from: legacy` can never
+# reach this file — Ansible probes legacy, legacy.yml, legacy.yaml, legacy.json and
+# fails. `tasks_from: legacy.jamil` DOES reach it: the extensionless slot is probed
+# first, and the literal name given lands in it. The content is loaded as YAML
+# regardless of what the extension says.
+- name: GOOD an unknown extension is reachable only by its full name
+  ansible.builtin.debug:
+    msg: loaded from tasks/legacy.jamil
