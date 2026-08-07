@@ -18,6 +18,26 @@ the task (`playbook/task.py:99`). The value follows the invoker, not the file:
 So both resolutions and missing-file **warnings** built on the shape guess can be wrong,
 and a wrong warning is the tool lying.
 
+## The three cases, for `roles/a/tasks/x.yml`
+
+| Who invoked it | `role_path` | Folder guess |
+| -------------- | ----------- | ------------ |
+| role `a` itself — its own `tasks/main.yml` includes it | `roles/a` | **right** |
+| role `b` includes it cross-role | **`roles/b`** — the invoker's dir | **wrong** |
+| a play includes it directly, no role in the chain | **undefined** — the run crashes | **wrong, and hides a crash** |
+
+**The point is not that case 1 is hard — it is that from inside the file all three look
+identical.** `x.yml` cannot tell whether `a`, `b`, or a bare play is running it, so we cannot
+tell when the guess applies. Shipping it means being right most of the time and confidently
+wrong the rest, with no way to know which — the reason the expansion is disabled rather than
+kept as a heuristic.
+
+Case 3 is why this ticket is worth more than a correction. Once the chains are known it stops
+being "we cannot answer" and becomes a **new diagnostic**: this file uses `role_path`, a known
+chain reaches it with no role context, so that chain crashes at runtime. That is rule 2 below,
+and it fires on positive evidence only — a templated include makes edges unknowable, so
+"no chain found" proves nothing and stays silent.
+
 ## Design
 
 Role context is computed per **chain**, walking the reverse index (T-020) from
