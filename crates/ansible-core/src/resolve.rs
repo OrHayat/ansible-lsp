@@ -904,39 +904,57 @@ mod tests {
         d
     }
 
+    /// [`resolve_src`] against an in-memory tree: no directories built, nothing left behind,
+    /// and no unique-name rule to get wrong (T-134).
+    ///
+    /// `super::resolve_in` is spelled out because the local helper of the same name — which
+    /// takes a file and a value — shadows the crate function inside this module.
+    fn mem_src(file: &str, src: &str, fs: &dyn Fs) -> Vec<(Reference, Resolution)> {
+        let file = Path::new(file);
+        let doc = Document::new(src.to_string());
+        let ctx = FileContext::discover_with(file, fs, |root| {
+            crate::config::AnsibleConfig::load_in(root, fs)
+        });
+        extract(&doc.parse().unwrap())
+            .into_iter()
+            .map(|r| {
+                let res = super::resolve_in(&r, &ctx, fs);
+                (r, res)
+            })
+            .collect()
+    }
+
     #[test]
     fn handler_includes_anchor_at_handlers_not_tasks() {
         // T-092: an include written in a role's handlers/ loads from handlers/ —
         // `'handlers' if isinstance(original_task, Handler) else 'tasks'`
         // (included_file.py:172) — with the role's tasks/ as a later legal fallback
         // (dataloader.py:311-313), not the primary base.
-        let d = t016_dir("handlers");
-        std::fs::create_dir_all(d.join("roles/r/handlers")).unwrap();
-        std::fs::create_dir_all(d.join("roles/r/tasks")).unwrap();
-        // The same basename in both dirs pins which one wins.
-        std::fs::write(d.join("roles/r/handlers/restart.yml"), "").unwrap();
-        std::fs::write(d.join("roles/r/tasks/restart.yml"), "").unwrap();
-        // Only in tasks/: reachable from a handler include via the fallback.
-        std::fs::write(d.join("roles/r/tasks/shared.yml"), "").unwrap();
-        let handler_file = d.join("roles/r/handlers/main.yml");
-        std::fs::write(&handler_file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            // The same basename in both dirs pins which one wins.
+            ("/p/roles/r/handlers/restart.yml", ""),
+            ("/p/roles/r/tasks/restart.yml", ""),
+            // Only in tasks/: reachable from a handler include via the fallback.
+            ("/p/roles/r/tasks/shared.yml", ""),
+            ("/p/roles/r/handlers/main.yml", ""),
+            ("/p/roles/r/tasks/main.yml", ""),
+        ]);
+        let handler_file = "/p/roles/r/handlers/main.yml";
 
-        let out = resolve_src(&handler_file, "- include_tasks: restart.yml\n");
+        let out = mem_src(handler_file, "- include_tasks: restart.yml\n", &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Resolved);
-        assert_eq!(res.targets, vec![d.join("roles/r/handlers/restart.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/roles/r/handlers/restart.yml")]);
 
-        let out = resolve_src(&handler_file, "- include_tasks: shared.yml\n");
+        let out = mem_src(handler_file, "- include_tasks: shared.yml\n", &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("roles/r/tasks/shared.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/roles/r/tasks/shared.yml")]);
 
         // Includes written under tasks/ still anchor at tasks/.
-        let task_file = d.join("roles/r/tasks/main.yml");
-        std::fs::write(&task_file, "").unwrap();
-        let out = resolve_src(&task_file, "- include_tasks: restart.yml\n");
+        let out = mem_src("/p/roles/r/tasks/main.yml", "- include_tasks: restart.yml\n", &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
-        assert_eq!(res.targets, vec![d.join("roles/r/tasks/restart.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/roles/r/tasks/restart.yml")]);
     }
 
     /// The demo fixture for T-092 keeps its promise: the files its comments point at
@@ -970,56 +988,56 @@ mod tests {
 
     #[test]
     fn vars_files_candidate_order_vars_subdir_wins() {
-        let d = t016_dir("order");
-        std::fs::write(d.join("x.yml"), "a: 1\n").unwrap();
-        std::fs::write(d.join("vars/x.yml"), "a: 2\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [x.yml]\n");
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/x.yml", "a: 1\n"),
+            ("/p/vars/x.yml", "a: 2\n"),
+            ("/p/site.yml", ""),
+        ]);
+        let out = mem_src("/p/site.yml", "- hosts: all\n  vars_files: [x.yml]\n", &fs);
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
         // `<dir>/vars/` is probed before the dir itself — the order Ansible loads in.
-        assert_eq!(res.targets, vec![d.join("vars/x.yml")]);
-        assert_eq!(res.candidates, vec![d.join("vars/x.yml"), d.join("x.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/vars/x.yml")]);
+        assert_eq!(
+            res.candidates,
+            vec![PathBuf::from("/p/vars/x.yml"), PathBuf::from("/p/x.yml")]
+        );
     }
 
     #[test]
     fn vars_files_vars_prefixed_entry_skips_the_prepend() {
-        let d = t016_dir("guard");
-        std::fs::write(d.join("vars/x.yml"), "a: 1\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[("/p/vars/x.yml", "a: 1\n"), ("/p/site.yml", "")]);
 
         // `vars/…` never doubles into `vars/vars/…`.
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [vars/x.yml]\n");
+        let out = mem_src("/p/site.yml", "- hosts: all\n  vars_files: [vars/x.yml]\n", &fs);
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
-        assert_eq!(res.candidates, vec![d.join("vars/x.yml")]);
+        assert_eq!(res.candidates, vec![PathBuf::from("/p/vars/x.yml")]);
 
         // The guard is upstream's literal string check — `./vars/…` does not trigger it.
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [./vars/x.yml]\n");
+        let out = mem_src("/p/site.yml", "- hosts: all\n  vars_files: [./vars/x.yml]\n", &fs);
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(
             res.candidates,
-            vec![d.join("vars/vars/x.yml"), d.join("vars/x.yml")]
+            vec![PathBuf::from("/p/vars/vars/x.yml"), PathBuf::from("/p/vars/x.yml")]
         );
     }
 
     #[test]
     fn vars_files_parent_paths_normalise_before_the_check() {
-        let d = t016_dir("parent");
-        std::fs::create_dir_all(d.join("plays")).unwrap();
-        std::fs::create_dir_all(d.join("shared")).unwrap();
-        std::fs::write(d.join("shared/x.yml"), "a: 1\n").unwrap();
-        let file = d.join("plays/site.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [../shared/x.yml]\n");
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/shared/x.yml", "a: 1\n"),
+            ("/p/plays/site.yml", ""),
+        ]);
+        let out = mem_src(
+            "/p/plays/site.yml",
+            "- hosts: all\n  vars_files: [../shared/x.yml]\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
-        assert_eq!(res.targets, vec![d.join("shared/x.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/shared/x.yml")]);
         for c in &res.candidates {
             assert!(
                 !c.components().any(|p| p == std::path::Component::ParentDir),
