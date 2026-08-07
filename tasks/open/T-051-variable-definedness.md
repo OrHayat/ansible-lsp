@@ -36,6 +36,23 @@ ruling out everything that could legitimately supply it:
   role_uuid
   role_names          role_name is in MAGIC, the plural is not
   ```
+
+  For definedness the prefix rule is enough and no *value* is needed. Recording one anyway,
+  because it was asked twice and lived only in a session log: **`ansible_playbook_python`
+  is derivable.** `ansible --version` prints
+
+  ```
+  python version = 3.12.3 (main, ...) [GCC 13.3.0] (/path/to/bin/python)
+  ```
+
+  and the interpreter is the last parenthesised group. `install.rs:155-181` already runs
+  that command and splits each line on `=`, so it is one more match arm plus a
+  `rsplit_once('(')`. On the filesystem fast path (no subprocess, T-084) it would have to be
+  inferred from `package_dir` — `.../lib/python3.12/site-packages/ansible` → `<prefix>/bin/python`,
+  or `<prefix>/Scripts/python.exe` on Windows — which is convention rather than fact. And it
+  is the install *we* detect, not necessarily the one invoked, so it carries the same
+  launch-time uncertainty as `-e` and `$CWD`. Nothing needs this today; it is written down so
+  the next person does not re-derive it.
 - A `register`/`set_fact` anywhere reachable (already in the def index, so covered).
 - **Caller-injected** vars: a role/included file can receive vars from whoever includes it, and
   that caller isn't visible from the file alone. If the file is an include target (not a
