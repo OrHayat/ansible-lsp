@@ -53,10 +53,16 @@ impl Node {
 
     /// Key lookup. Makes `include_role: { name: x, tasks_from: y }` work: the pair
     /// are siblings in the *same* mapping node, not nearby lines.
+    ///
+    /// Searches from the end, because a duplicate key is legal YAML and Ansible's
+    /// constructor assigns it twice — last one wins, first value discarded before any play
+    /// sees it. Taking the first would analyse the dead value: a duplicated `include_tasks:`
+    /// would link the wrong file, a duplicated `when:` would explain the wrong condition.
     pub fn get(&self, key: &str) -> Option<&Node> {
         match self {
             Node::Mapping { entries, .. } => entries
                 .iter()
+                .rev()
                 .find(|(k, _)| k.as_str() == Some(key))
                 .map(|(_, v)| v),
             _ => None,
@@ -194,6 +200,31 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A duplicate mapping key is legal YAML and Ansible keeps the LAST value (verified
+    /// against ansible-core 2.21.2, which warns and runs with `8080`). Both entries reach
+    /// the tree, so `get` has to pick the one the play actually sees.
+    #[test]
+    fn duplicate_key_resolves_to_the_last_value_like_ansible() {
+        let src = "vars:\n  http_port: 80\n  http_port: 8080\n";
+        let doc = Document::new(src.to_string());
+        let nodes = doc.parse().expect("valid yaml");
+        let vars = nodes[0].get("vars").expect("vars");
+
+        assert_eq!(vars.entries().len(), 2, "both entries stay in the tree");
+        assert_eq!(vars.get("http_port").and_then(Node::as_str), Some("8080"));
+    }
+
+    /// The span must follow the value, or the diagnostic underlines the dead line.
+    #[test]
+    fn duplicate_key_span_points_at_the_winning_occurrence() {
+        let src = "- include_tasks: dead.yml\n  include_tasks: live.yml\n";
+        let doc = Document::new(src.to_string());
+        let nodes = doc.parse().expect("valid yaml");
+        let v = nodes[0].items()[0].get("include_tasks").expect("include_tasks");
+
+        assert_eq!(v.span().slice(src), "live.yml");
+    }
 
     /// Non-ASCII before the target must not shift the target's byte offset — the classic
     /// char-vs-byte marker trap.

@@ -297,10 +297,12 @@ fn import_entry_vars(node: &Node) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The value of an `import_playbook` key, bare or FQCN.
+/// The value of an `import_playbook` key, bare or FQCN. Searched from the end for the same
+/// reason as [`Node::get`]: on a duplicate key Ansible imports the last one.
 fn import_playbook_value(node: &Node) -> Option<&Node> {
     node.entries()
         .iter()
+        .rev()
         .find(|(k, _)| k.as_str().map(keywords::core_action) == Some("import_playbook"))
         .map(|(_, v)| v)
 }
@@ -547,6 +549,29 @@ mod tests {
             panic!("second item should be an import");
         };
         assert_eq!(imp.file.as_deref(), Some("other.yml"));
+    }
+
+    /// A duplicate key is legal YAML and Ansible keeps the last. Live-verified on
+    /// ansible-core 2.21.2: with both `first.yml` and `last.yml` on one entry it warns,
+    /// then runs only the tasks from `last.yml`.
+    #[test]
+    fn duplicate_import_playbook_takes_the_last() {
+        let a = ast("- import_playbook: first.yml\n  import_playbook: last.yml\n");
+        let Ast::Playbook(items) = a else { panic!("expected a playbook") };
+        let PlayItem::Import(imp) = &items[0] else { panic!("expected an import") };
+        assert_eq!(imp.file.as_deref(), Some("last.yml"));
+    }
+
+    /// Same rule one level down: the `vars:` on the entry is a mapping too, so a repeated
+    /// name there resolves to the last value.
+    #[test]
+    fn duplicate_entry_var_takes_the_last() {
+        let a = ast("- import_playbook: \"{{ env }}.yml\"\n  vars:\n    env: dead\n    env: live\n");
+        let Ast::Playbook(items) = a else { panic!("expected a playbook") };
+        let PlayItem::Import(imp) = &items[0] else { panic!("expected an import") };
+        // Both pairs are carried; the resolver folds them into a map, which is last-wins.
+        let folded: std::collections::HashMap<_, _> = imp.vars.iter().cloned().collect();
+        assert_eq!(folded.get("env").map(String::as_str), Some("live"));
     }
 
     #[test]
