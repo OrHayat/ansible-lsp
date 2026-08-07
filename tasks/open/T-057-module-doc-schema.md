@@ -64,6 +64,25 @@ modules), which is what T-058 handles.
 `doc_fragments` — shared option blocks pulled from other files and merged in. `ansible-doc`
 does this merge; a faithful parser must too, or common options (e.g. connection args) go missing.
 
+**Non-Python modules (post T-093):** resolution can now land on `.ps1`, `.sh` or an
+extensionless file, where there is no in-file `DOCUMENTATION` constant. The doc sources are:
+
+- **`.ps1`** — the same-name `.py` doc stub beside it ("this is a windows documentation
+  stub. actual code lives in the .ps1 file of the same name" — every `ansible.windows`
+  module ships the pair), or a sidecar `.yml` (2.14+). The *enforced* contract is the
+  `$spec` hashtable fed to `Ansible.Basic.AnsibleModule` inside the `.ps1`; we do not
+  parse PowerShell — the doc stub/sidecar is the source, same as `ansible-doc`.
+- **any module** — sidecar docs: a same-name `.yml`/`.yaml` next to the file with the
+  same `DOCUMENTATION:`/`RETURN:` sections (2.14+). Mechanics in `utils/plugin_docs.py`:
+  `find_plugin_docfile` (":311-328") — a resolved file whose suffix isn't in
+  `DOC_EXTENSIONS` (`.py`/`.yml`/`.yaml`, `constants.py:66-68`) gets `_find_adjacent`,
+  which tries the same name with each doc extension in that order, so a `.py` stub
+  outranks a `.yml` sidecar. `get_plugin_docs` (":354-356") retries adjacent files even
+  for a `.py` whose in-file `DOCUMENTATION` is empty.
+- **`.sh` / extensionless** — usually nothing: old-style modules have no spec runtime and
+  rarely docs (upstream's only shell module, `old_style_modules_posix/library/helloworld.sh`,
+  has none). No doc source found → no schema, which is exactly T-058's hint, never an error.
+
 ## Approach
 
 - Locate the module file the way go-to-def already does (FQCN → collection path / `ansible_source`).
@@ -95,8 +114,9 @@ build it, just don't lose that `returned:` carries this.
 - Docs can lag code — everything derived from them is a **hint**, never a hard error. Absence of
   a field ≠ error (dynamic returns exist). This is the whole reason T-058 exists.
 - `EXAMPLES` is not a contract — ignore for validation.
-- `RETURN`/`DOCUMENTATION` can themselves be pulled from a sidecar `.py`/adjacent file in some
-  collections; start with the in-file constant.
+- Doc-source order when several exist (in-file constant, `.py` stub, sidecar `.yml`) should
+  match `ansible-doc`; start with the in-file constant, add the others per the non-Python
+  section above.
 - Nested access (`result.results[0].item`) needs `contains:` traversal and list handling.
 
 ## Done when
@@ -109,6 +129,10 @@ build it, just don't lose that `returned:` carries this.
 - [ ] engine-injected common keys (`failed`, `changed`, `msg`, …) are never flagged, even when
       absent from the module's `RETURN` — pinned test
 - [ ] schemas are cached per module file (rarely change), not re-parsed per request
+- [ ] a `.ps1` module gets its schemas from the same-name `.py` doc stub or sidecar `.yml` —
+      pinned test
+- [ ] a doc-less non-Python module (bare `.sh` in `library/`) yields no schema and no false
+      error — the T-058 hint is the only signal
 - [ ] modules missing the docstrings degrade to nothing (→ T-058), never a false error
 
 Docs: https://docs.ansible.com/ansible/latest/dev_guide/developing_modules_documenting.html
