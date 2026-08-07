@@ -21,6 +21,29 @@ directly and via a `meta` dependency. Ansible runs it twice unless `allow_duplic
 is set in the role's `meta/main.yml` — which is the default, so usually it runs *once* and the
 second entry is a silent no-op. Either way the author's intent is unclear.
 
+Pinned against ansible-core 2.21.2:
+
+```yaml
+# playbook.yml
+- hosts: webservers
+  roles:
+    - foo
+    - foo
+
+# roles/foo/meta/main.yml
+allow_duplicates: true
+```
+
+`allow_duplicates: true` → the role's tasks run twice (`ok=2`); `false` → once (`ok=1`).
+Ansible prints **nothing** either way, at any verbosity.
+
+Note this is a sequence with a repeated item, not a duplicate mapping key — so
+`DUPLICATE_YAML_DICT_KEY` never fires here and T-102 does not cover it. Both entries survive
+parsing intact; nothing is shadowed at the YAML level. That is what makes the message hard to
+word: unlike a duplicate key, there is no discarded value to point at, and with
+`allow_duplicates: true` the repetition is the documented way to run a parameterised role
+more than once.
+
 ## Approach
 
 Both are HINT severity, both anchored at the reference. Neither is a bug on its own — the code
