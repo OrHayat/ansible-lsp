@@ -154,6 +154,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-128 | **epic** · [ansible-lint parity](open/T-128-ansible-lint-parity.md) | L    | —    |
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
+| T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -369,8 +370,30 @@ is why all 48 conditional imports here use it. Never recommend `include_playbook
 alternatives are `meta: end_play`, restructuring into a task file, or `--skip-tags`.
 → T-031
 
-**Not every `{{ }}` is a runtime unknown.** `playbook_dir` is guessable from convention;
-treating it as opaque left real references dead. (`inventory_dir` no longer substitutes —
+**Not every `{{ }}` is a runtime unknown.** `playbook_dir` is *known exactly* in a playbook
+file and only guessable outside one; treating it as opaque left real references dead.
+
+**In a playbook file it is that file's own directory** — not the project root, not the
+playbook named on the command line, and not affected by nesting depth. Ansible stamps each
+play with the dir of the file it was parsed from (`playbook_include.py:124-125`, guarded by
+`if _included_path is None` so the innermost file wins) and restores it per play before
+execution (`playbook_executor.py:115-119`, reading `play._included_path or pb._basedir`).
+Live-verified four ways: run directly, imported once, imported two levels deep, and run from
+a different cwd — a three-level nest yields three different values, one per file. It is also
+*defended* behaviour, not incidental: commit `ffdba96668` (Cammarata, 2015-09-29) added it to
+fix ansible#12524, a 1.9.3→2.0.0 regression where `_basedir` leaked between sibling imported
+playbooks and `varnish/main.yml` looked for its template under `memcached/templates/`.
+
+**Outside a playbook it is the *invoking* playbook's directory**, so a role called from three
+playbooks has three values and the file alone cannot know. There the two old guesses
+(`<root>`, `<root>/playbooks`) remain until T-137 derives the real set from invocation chains
+— removing them without the index would strand four real references whose `../` paths cannot
+be globbed. The guessing was not harmless: with both `<root>/x.yml` and
+`<root>/playbooks/x.yml` present it resolved to the first tried and reported it Resolved,
+which for a playbook in a subdirectory was the file Ansible would never load.
+→ `playbook_dir_in_a_playbook_is_its_own_directory`, `playbook_dir_tries_every_plausible_location`
+
+(`inventory_dir` no longer substitutes —
 it is per-host, from inventory sources, and borrowed the playbook guesses wrongly; T-070.) The general rule: expand what the file
 already states, glob what it doesn't, and never expand a `vars:`/`set_fact` literal — those
 sit under 22 precedence levels, so expanding one invents certainty. `scan` prints the

@@ -27,6 +27,9 @@ role hop, name → dir uses the existing resolver (post-T-067 order) — no new 
 
 - `{{ role_path }}` expands to the **set** of chain-derived role dirs (deduped; usually
   size 1). Missing-file check: try each, a hit on any counts — the `playbook_dir` policy.
+  Copy that *policy*, not its **inputs**: `playbook_dir`'s candidate set outside a playbook
+  file is still two guesses (`<root>`, `<root>/playbooks`), which T-137 replaces with
+  chain-derived dirs using this same walk. Build one, build both.
 - Memoize context per file; cycle-guard the walk (T-022 machinery).
 
 Two diagnostics:

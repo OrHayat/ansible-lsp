@@ -1,0 +1,12 @@
+---
+# DECOY. Same basename as demo/plays/local_target.yml, sitting at the project root.
+# `demo/plays/playbook_dir_demo.yml` must NOT resolve to this file: playbook_dir there is
+# demo/plays/, so Ansible would never load this one. Before T-095 the resolver guessed the
+# project root first and landed here, reporting it Resolved — confidently wrong.
+- name: The wrong copy
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirm which copy ran
+      ansible.builtin.debug:
+        msg: demo/local_target.yml — the decoy at the project root

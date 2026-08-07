@@ -104,7 +104,7 @@ pub fn rule_id(r: &Reference) -> &'static str {
 /// `{{ role_path }}/x.yml` is a COMPLETE path, so it must not then be joined onto the
 /// task search dirs. Joining only looked correct while the roots happened to be absolute
 /// — with a relative root it appended, producing `demo/tasks/demo/tasks/x.yml`.
-fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
+fn expand_magic(value: &str, ctx: &FileContext, in_playbook: bool) -> (Vec<String>, bool, bool) {
     let mut out = vec![value.to_string()];
 
     let apply = |name: &str, dirs: Vec<PathBuf>, out: &mut Vec<String>| {
@@ -138,13 +138,26 @@ fn expand_magic(value: &str, ctx: &FileContext) -> (Vec<String>, bool, bool) {
     // `role_path` deliberately not substituted — see the doc comment above (T-067/T-068).
     // Left templated, it falls through to the glob path and can never produce a warning.
 
-    // Ambiguous. The project root covers a top-level playbook; `<root>/playbooks` covers
-    // the convention this repo actually uses.
-    let playbook_dirs: Vec<PathBuf> = ctx
-        .project_root
-        .iter()
-        .flat_map(|r| [r.clone(), r.join("playbooks")])
-        .collect();
+    // In a playbook file this is not ambiguous at all: `playbook_dir` is that file's own
+    // directory. Ansible stamps each play with the dir of the file it was parsed from
+    // (`playbook_include.py:124-125`, guarded so the innermost wins) and restores it per
+    // play at run time (`playbook_executor.py:115-119`), which is why a three-level nest
+    // gives three different values. It is also defended behaviour: `ffdba96668` fixed
+    // ansible#12524, a 2.0 regression where the basedir leaked between sibling imports.
+    //
+    // Outside a playbook — task file, handler, role — it is the *invoking* playbook's
+    // directory, so one file can have several values and none is derivable from the file
+    // alone. The two guesses below stay until T-137 derives the real set from invocation
+    // chains (needs T-020): they resolve four real `~/app/ansible` references that would
+    // otherwise lose navigation entirely, since globbing cannot handle the `../` in them.
+    let playbook_dirs: Vec<PathBuf> = if in_playbook {
+        vec![ctx.file_dir.clone()]
+    } else {
+        ctx.project_root
+            .iter()
+            .flat_map(|r| [r.clone(), r.join("playbooks")])
+            .collect()
+    };
     apply("playbook_dir", playbook_dirs, &mut out);
     // `inventory_dir` deliberately not substituted. It is per-host — the directory of the
     // inventory source that first defined the host (`inventory/data.py:197-202`), set by
@@ -307,7 +320,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
     // `{{ role_path }}` and friends are known here, so substitute before deciding this
     // is unknowable. A value that becomes fully literal is then resolved — and diagnosed
     // — like any other path.
-    let (values, templated, substituted) = expand_magic(&value, ctx);
+    let (values, templated, substituted) = expand_magic(&value, ctx, r.in_playbook);
 
     if templated {
         let bases = match r.kind {
@@ -1597,6 +1610,90 @@ mod tests {
             res.candidates.is_empty(),
             "must not imply it went looking for a braces-named file"
         );
+    }
+
+    /// In a playbook file `playbook_dir` is that file's own directory — not a guess, and
+    /// specifically not the project root. Ansible stamps each play with the dir of the
+    /// file it was parsed from and restores it per play at run time
+    /// (`playbook_include.py:124-125`, `playbook_executor.py:115-119`); verified live to
+    /// three levels of nesting, and defended upstream by `ffdba96668` / ansible#12524.
+    ///
+    /// The decoy is the point. With the old two-guess expansion (`<root>` first, then
+    /// `<root>/playbooks`) this resolved to the root copy — a file Ansible would never
+    /// load — and reported it Resolved. Being confidently wrong is worse than missing.
+    #[test]
+    fn playbook_dir_in_a_playbook_is_its_own_directory() {
+        let d = t016_dir("playbook-dir");
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::create_dir_all(d.join("playbooks")).unwrap();
+        // Same basename in both places; only the sibling one is reachable.
+        std::fs::write(d.join("common.yml"), "").unwrap();
+        std::fs::write(d.join("playbooks/common.yml"), "").unwrap();
+        let play = d.join("playbooks/site.yml");
+        std::fs::write(&play, "").unwrap();
+
+        let out = resolve_src(&play, "- import_playbook: \"{{ playbook_dir }}/common.yml\"\n");
+        let res = first(&out, ReferenceKind::ImportPlaybook);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(
+            res.targets,
+            vec![d.join("playbooks/common.yml")],
+            "must be the playbook's own dir, not the project root"
+        );
+
+        // A task file is the case that genuinely cannot know: `playbook_dir` there is the
+        // INVOKING playbook's dir. The two guesses stay until T-137 derives them from
+        // invocation chains, so the root copy is still reachable from one.
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        let task = d.join("tasks/t.yml");
+        std::fs::write(&task, "").unwrap();
+        let out = resolve_src(&task, "- include_tasks: \"{{ playbook_dir }}/common.yml\"\n");
+        assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
+    }
+
+    /// The demo's `playbook_dir` decoy is real, and it points the right way. `demo/plays/`
+    /// and `demo/` both hold a `local_target.yml`; a playbook in `demo/plays/` must reach
+    /// the sibling. Before T-095 this resolved to the project-root copy and called it
+    /// Resolved — a file Ansible would never load. The decoy only proves anything if both
+    /// copies actually exist, so the test checks that first.
+    #[test]
+    fn demo_playbook_dir_resolves_beside_the_playbook_not_at_the_root() {
+        let file = Path::new("../../demo/plays/playbook_dir_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let root = file.parent().unwrap().parent().unwrap().to_path_buf();
+        assert!(root.join("local_target.yml").is_file(), "decoy missing");
+        assert!(
+            root.join("plays/local_target.yml").is_file(),
+            "sibling missing — the decoy proves nothing without it"
+        );
+
+        let src = std::fs::read_to_string(&file).unwrap();
+        let out = resolve_src(&file, &src);
+        let by_value: Vec<(String, Resolution)> = out
+            .into_iter()
+            .filter(|(r, _)| r.kind == ReferenceKind::ImportPlaybook)
+            .map(|(r, res)| (r.value, res))
+            .collect();
+        let find = |v: &str| {
+            by_value
+                .iter()
+                .find(|(val, _)| val == v)
+                .unwrap_or_else(|| panic!("demo lost {v}"))
+                .1
+                .clone()
+        };
+
+        let good = find("{{ playbook_dir }}/local_target.yml");
+        assert_eq!(good.status, Status::Resolved, "tried {:#?}", good.candidates);
+        assert_eq!(
+            good.targets,
+            vec![root.join("plays/local_target.yml")],
+            "must be the sibling, not the project-root decoy"
+        );
+
+        // Only at the root, so from a playbook in plays/ it is genuinely unreachable.
+        assert_eq!(find("{{ playbook_dir }}/root_only.yml").status, Status::Missing);
     }
 
     /// The T-095 demo keeps its promises. `demo/playbook.yml` now claims two templated

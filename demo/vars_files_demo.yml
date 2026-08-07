@@ -74,7 +74,9 @@
     # file the pattern could reach (a glob over vars/*.yml here).
     - "vars/{{ env_name }}.yml"
 
-    # GOOD: {{ playbook_dir }} is knowable from convention, so this resolves and clicks.
+    # GOOD: this file IS a playbook, so playbook_dir is exactly its own directory — not a
+    # convention, not a guess. Ansible stamps each play with the dir of the file it was
+    # parsed from and restores it per play before the play runs. Resolves and clicks.
     - "{{ playbook_dir }}/vars/shared.yml"
 
   tasks:

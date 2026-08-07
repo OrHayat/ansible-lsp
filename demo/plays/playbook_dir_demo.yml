@@ -1,0 +1,29 @@
+---
+# `playbook_dir` inside a playbook that is NOT at the project root.
+#
+# This file lives in demo/plays/, and the project root is demo/. That difference is the
+# whole point: `playbook_dir` here is demo/plays/ — this file's own directory — and NOT
+# the project root.
+#
+# Ansible stamps every play with the directory of the file it was parsed from
+# (playbook_include.py:124-125, guarded so the innermost file wins) and restores it per
+# play before running (playbook_executor.py:115-119). Verified live to three levels of
+# nesting: run directly, imported once, imported twice, and from a different cwd — always
+# this file's own dir. It is defended behaviour too: commit ffdba96668 added it in 2015 to
+# fix ansible#12524, where the basedir leaked between sibling imported playbooks and one
+# playbook looked for its template in another's directory.
+
+- name: GOOD — resolves next to THIS file, not at the project root
+  # `local_target.yml` exists in BOTH demo/plays/ and demo/. Only the sibling is
+  # reachable. Cmd+click must land in demo/plays/ — if it opens demo/local_target.yml the
+  # resolver has fallen back to guessing the project root, which is what it used to do:
+  # it took the first guess that existed and reported it Resolved, so this line silently
+  # pointed at a file Ansible would never load.
+  import_playbook: "{{ playbook_dir }}/local_target.yml"
+
+- name: BAD — provably missing, because in a playbook the directory is known exactly
+  # demo/root_only.yml DOES exist, but it is not next to this file, and nothing else can
+  # supply playbook_dir. So this is a real miss and warns. Note the asymmetry with
+  # tasks/main.yml: there the same shape stays quiet, because a task file cannot know
+  # which playbook invoked it and a warning would be a guess.
+  import_playbook: "{{ playbook_dir }}/root_only.yml"

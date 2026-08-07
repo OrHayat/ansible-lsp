@@ -1,0 +1,12 @@
+---
+# Exists ONLY at the project root, with no twin in demo/plays/. That is what makes the
+# BAD line in demo/plays/playbook_dir_demo.yml a real miss rather than a guess: from a
+# playbook in demo/plays/, `{{ playbook_dir }}/root_only.yml` is demo/plays/root_only.yml,
+# which does not exist, and no other value of playbook_dir is possible for that file.
+- name: Only at the root
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Placeholder
+      ansible.builtin.debug:
+        msg: demo/root_only.yml

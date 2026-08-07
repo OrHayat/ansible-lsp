@@ -105,10 +105,14 @@
 - name: QUIET — used to WARN off the guessed value; returns chain-verified in T-068
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/no_such_file.yml"
 
-- name: "GOOD — playbook_dir is ambiguous, so every plausible location is tried"
-  # Which playbook is running is a genuine runtime fact. Substituting one guess for it
-  # produced 4 FALSE warnings on the real repo, whose playbooks live in <root>/playbooks/
-  # while the project root is <root>. Now both are candidates and a hit on either counts.
+- name: "GOOD — in a TASK file playbook_dir is ambiguous, so every location is tried"
+  # This file is not a playbook, and that changes what playbook_dir means. Here it is the
+  # dir of whichever playbook INVOKED this file — a role called from three playbooks has
+  # three values — so it stays a guess: <root> and <root>/playbooks, a hit on either
+  # counts. Substituting a single guess produced 4 FALSE warnings on the real repo, whose
+  # playbooks live in <root>/playbooks/ while the project root is <root>.
+  # T-137 replaces the guess with the real set, derived from the call graph.
+  # Contrast with playbook.yml, where the value is exact.
   ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/sibling.yml"
 
 # ----------------------------------------------------------------- when: ANALYSIS

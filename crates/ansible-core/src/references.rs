@@ -68,6 +68,11 @@ pub struct Reference {
     /// before anything else, because at parse time it is one of only two sources Ansible
     /// can read (the other, `-e`, is invisible to us) — T-095.
     pub entry_vars: Vec<(String, String)>,
+    /// This reference is written in a playbook file, not a task/handler file. It decides
+    /// what `{{ playbook_dir }}` is: in a playbook it is that file's own directory,
+    /// exactly; elsewhere it is the invoking playbook's, which the file cannot know
+    /// (T-137).
+    pub in_playbook: bool,
 }
 
 impl Reference {
@@ -89,6 +94,7 @@ impl Reference {
             grouped: false,
             vars_files_group: None,
             entry_vars: Vec::new(),
+            in_playbook: false,
         }
     }
 }
@@ -118,10 +124,22 @@ pub fn meta_dependencies(nodes: &[Node]) -> Vec<Reference> {
 /// context are read from structure instead of re-detected key by key.
 pub fn extract(nodes: &[Node]) -> Vec<Reference> {
     let mut out = Vec::new();
-    match ast::build(nodes) {
-        Ast::Playbook(items) => items.iter().for_each(|it| play_item(it, &mut out)),
-        Ast::Tasks(stmts) => stmts.iter().for_each(|s| stmt(s, &mut out)),
-        Ast::Other => {}
+    // Which of the two shapes the file is decides what `{{ playbook_dir }}` means for
+    // everything in it, so it is stamped once here rather than threaded through every
+    // constructor below. T-095.
+    let in_playbook = match ast::build(nodes) {
+        Ast::Playbook(items) => {
+            items.iter().for_each(|it| play_item(it, &mut out));
+            true
+        }
+        Ast::Tasks(stmts) => {
+            stmts.iter().for_each(|s| stmt(s, &mut out));
+            false
+        }
+        Ast::Other => false,
+    };
+    for r in &mut out {
+        r.in_playbook = in_playbook;
     }
     out
 }

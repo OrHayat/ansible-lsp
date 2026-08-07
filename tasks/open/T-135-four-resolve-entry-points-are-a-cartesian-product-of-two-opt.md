@@ -25,6 +25,41 @@ inside `resolve_ref`).
 Nothing is wrong today. Every one of the four is correct and tested. This is the API's shape
 making the *next* change expensive.
 
+## It has now cost something twice
+
+Both times the workaround was to smuggle a resolver input in through a side channel, because
+adding a parameter would have meant four more functions:
+
+**`RoleExts` (T-091).** The role extension list became a value with a `Default`, reachable
+only from inside `resolve_ref`. Tests can drive it directly, but nothing can drive it
+end-to-end through `resolve`, so the list is pinned at unit level and the call-site wiring is
+pinned separately. Complete coverage, split across two tests instead of one.
+
+**`Reference::in_playbook` (T-095).** `{{ playbook_dir }}` means "this file's own directory"
+in a playbook and "the invoking playbook's directory" anywhere else, so the resolver needs to
+know which shape the file is. That is a property of the **file**, and it is currently stored
+on every `Reference` in that file — N identical bools.
+
+The other homes are all closed:
+
+- `FileContext` is out on correctness, not taste: `cache.rs:272-280` keys its cache on
+  `file.parent()`, so `site.yml` and `tasks.yml` in one directory share an instance. A
+  per-file field there would be read by the wrong file.
+- `extract` returning `{ in_playbook, refs }` makes extraction honest but changes nothing:
+  `resolve_in` still receives a lone `&Reference`, so the flag has to be copied back onto
+  each one. 24 call sites of churn for the same field.
+- Recomputing in the resolver is impossible — `extract(nodes)` has the tree but not the
+  path, `resolve_in` has the path but not the tree. That one bit is the only thing that
+  has to cross, and `Reference` is the only channel.
+
+So `in_playbook` is on `Reference` because **`resolve_in`'s unit of work is one reference and
+nothing else is file-scoped**. With `Resolver` it becomes a field alongside `fs`, built once
+per file, and the flag comes off `Reference` in the same change. T-137 later widens it to a
+`Vec<PathBuf>` of chain-derived dirs, which is a field on a per-file struct and would be
+absurd duplicated per reference.
+
+Both cleanups are part of this ticket's payoff, not follow-ups.
+
 ## Approach
 
 A params struct, so an axis costs a field instead of a function:
@@ -34,10 +69,16 @@ pub struct Resolver<'a> {
     pub fs: &'a dyn Fs,
     pub literals: Option<&'a HashMap<String, Vec<String>>>,
     pub exts: RoleExts,
+    /// The file being resolved is a playbook, so `{{ playbook_dir }}` is `ctx.file_dir`
+    /// exactly. Per file, which is why it does not belong on `Reference` (T-095), and
+    /// why T-137 can widen it to a set without touching every reference.
+    pub in_playbook: bool,
 }
 
 impl Default for Resolver<'static> {
-    fn default() -> Self { Self { fs: &StdFs, literals: None, exts: RoleExts::default() } }
+    fn default() -> Self {
+        Self { fs: &StdFs, literals: None, exts: RoleExts::default(), in_playbook: false }
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -75,4 +116,5 @@ the LSP crate should be reviewable as one thing.
 - [ ] one public entry point; `resolve_in` / `resolve_with` / `resolve_with_in` are gone
 - [ ] a new optional input costs a field, not a function
 - [ ] `RoleExts` is reachable end-to-end from a test, without a hand-revert
+- [ ] `in_playbook` is off `Reference` and on the params struct, set once per file
 - [ ] no per-request allocation added on the LSP paths

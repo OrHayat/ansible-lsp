@@ -1,0 +1,10 @@
+---
+# The one `{{ playbook_dir }}/local_target.yml` must reach, because it sits next to the
+# playbook that names it. Its twin at demo/local_target.yml is the decoy.
+- name: Reached via playbook_dir from demo/plays/
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirm which copy ran
+      ansible.builtin.debug:
+        msg: demo/plays/local_target.yml — the sibling copy
