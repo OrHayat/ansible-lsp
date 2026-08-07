@@ -1,8 +1,8 @@
 # T-102 — Duplicate YAML mapping key
 
-| Status          | Kind | Priority | Size | Epic  | Depends on |
-| --------------- | ---- | -------- | ---- | ----- | ---------- |
-| **partly done** | task | P1       | S    | T-099 | —          |
+| Status | Kind | Priority | Size | Epic  | Depends on |
+| ------ | ---- | -------- | ---- | ----- | ---------- |
+| done   | task | P1       | S    | T-099 | —          |
 
 ## Problem
 
@@ -32,7 +32,7 @@ libyaml reports every key event with a mark; collecting duplicates per mapping i
 in `parse_libyaml.rs`, not a second parse. This is the cheapest rule on the board — the
 information is already flowing through the parser and is currently dropped.
 
-Four things have landed; only the JSON tiering is left.
+What landed, in order:
 
 **Last-wins is now correct.** `Node::get` took the *first* occurrence while Ansible takes the
 last, so on a duplicate key we resolved and explained the value Ansible discarded — a
@@ -72,26 +72,32 @@ severities and returns nothing at all for `Ignore`; `# noqa: duplicate-key` supp
 Checked against the fixture rather than reasoned about: the rule reports the same four keys
 on the same four lines Ansible warns about (23 `hosts`, 29 `http_port`, 37 `when`, 42 `name`).
 
-**The JSON path warns anyway, unlike Ansible** (decided; the earlier line here said to match
-the asymmetry). Ansible tries `json.loads` before YAML (`parsing/utils/yaml.py:41`, comment:
-*"Fixes issues with extra vars json strings"*), so a JSON-content file never reaches the
-constructor where the duplicate check lives, and no severity — not even `error` — fires
-there. That exemption is collateral from a shared helper, not a decision about playbooks, and
-the data loss is identical. So: emit at **HINT** for JSON files, with a message saying why
-Ansible is quiet, and honour `ignore`. Severity stays fixed at HINT there, because painting
-it red would claim a play won't start when it starts fine.
+**The JSON path reports anyway, unlike Ansible** (decided; the original line here said to
+match the asymmetry). Ansible tries `json.loads` before YAML (`parsing/utils/yaml.py:41`,
+comment: *"Fixes issues with extra vars json strings"*), so a JSON-content file never reaches
+the constructor where the duplicate check lives, and no severity — not even `error` — fires
+there. That exemption is collateral from a helper shared with `-e` extra-vars, not a decision
+about playbooks, and the data loss is identical.
 
-Deciding "is this JSON" means actually parsing it — a trailing comma makes a file invalid
-JSON but valid YAML, and the warning flips on that alone (verified). `serde_json` is already
-a workspace dependency. Only run it on files that *have* a duplicate, so a clean workspace
-scan never pays for it. Known gap: CPython accepts bare `NaN`/`Infinity`, `serde_json` does
-not, so such a file would be JSON to Ansible and YAML to us. Worth measuring prevalence with
-`scan` before spending anything on it — JSON-content `.yml` files are expected to be
-vanishingly rare.
+So JSON behaves **exactly** like YAML — same severity from `duplicate_dict_key`, and `ignore`
+still silences it — with one sentence appended saying Ansible does not report this one and
+why. No separate severity tier: the duplicate is equally real, and a reader who wants the
+distinction gets it from the message rather than from a colour.
+
+`parse::Loader` (`Yaml`/`Json`) records which parser Ansible would use, decided by an actual
+`serde_json` parse because no heuristic reproduces it — `[{"a":1,"a":2}]` and the same text
+with a trailing comma differ by one byte, and Ansible warns about only the second (verified).
+It lives on `Document`, **not** `FileContext`, because `FileContext` is memoized per
+*directory* (`cache.rs:272`) while a loader is per file — `demo/plays/` already holds one of
+each. Gated on the first non-space byte so the common case is a single comparison.
+
+Known gap: CPython's `json` accepts bare `NaN`/`Infinity`, `serde_json` rejects them, so such
+a file is JSON to Ansible and YAML to us. Left alone deliberately — JSON-content `.yml` files
+are already a curiosity, and `scan` can measure it if that ever stops being true.
 
 ## Done when
 
 - [x] duplicate keys in a mapping produce one diagnostic per later occurrence
 - [x] severity follows `DUPLICATE_YAML_DICT_KEY`, and `ignore` suppresses entirely
-- [ ] the JSON path still reports, at HINT, saying why Ansible is silent there
+- [x] the JSON path still reports, saying why Ansible is silent there
 - [x] a fixture covers duplicates in `vars:`, in a task, and at play level

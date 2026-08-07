@@ -7,3 +7,4 @@ rust-version.workspace = true
 [dependencies]
 libyaml-safer.workspace = true
 regex.workspace = true
+serde_json.workspace = true

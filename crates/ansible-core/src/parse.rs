@@ -17,6 +17,27 @@ impl Span {
 
 pub use crate::parse_libyaml::DuplicateKey;
 
+/// Ansible's own test is "did `json.loads` succeed", and no heuristic reproduces it — a
+/// trailing comma is invalid JSON and valid YAML, and flips the answer on that alone. So run
+/// a real JSON parse.
+///
+/// Gated on the first non-space byte, which keeps the common case to one comparison: a JSON
+/// document that is not an object or array holds no mapping, so it cannot carry a duplicate
+/// key — the only thing this distinction currently decides.
+///
+/// Known gap: CPython's `json` accepts bare `NaN`/`Infinity`/`-Infinity` and `serde_json`
+/// rejects them, so such a file is JSON to Ansible and YAML to us.
+fn detect_loader(text: &str) -> Loader {
+    let t = text.trim_start();
+    if !t.starts_with('{') && !t.starts_with('[') {
+        return Loader::Yaml;
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(_) => Loader::Json,
+        Err(_) => Loader::Yaml,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Node {
     Scalar {
@@ -86,18 +107,40 @@ impl Node {
     }
 }
 
+/// Which parser Ansible reads a file's *contents* with. `from_yaml` tries `json.loads`
+/// before YAML (`parsing/utils/yaml.py:41`), so contents that parse as JSON are read as JSON
+/// whatever the file is named — and never reach the YAML constructor, where the duplicate-key
+/// check lives. Independent of the `.yml`/`.yaml`/`.json` *extension* order, which decides
+/// which file to open, not how to read it.
+///
+/// Per file, not per directory — which is why this lives on [`Document`] and not on
+/// `FileContext`, whose cache keys on the directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Loader {
+    #[default]
+    Yaml,
+    Json,
+}
+
 /// A parsed source file: the text plus a line index, so byte<->line/col is cheap.
 pub struct Document {
     pub text: String,
     /// Byte offset at which each line begins.
     line_starts: Vec<usize>,
+    loader: Loader,
 }
 
 impl Document {
     pub fn new(text: String) -> Self {
         let mut line_starts = vec![0];
         line_starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
-        Self { text, line_starts }
+        let loader = detect_loader(&text);
+        Self { text, line_starts, loader }
+    }
+
+    /// Which parser Ansible would read this file's contents with. See [`Loader`].
+    pub fn loader(&self) -> Loader {
+        self.loader
     }
 
     /// 0-based line and 0-based UTF-16 column, for the LSP boundary.
@@ -207,6 +250,27 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Which parser Ansible reads the contents with — "did `json.loads` succeed", not the
+    /// extension and not a shape heuristic. Every case here is live-verified on 2.21.2.
+    #[test]
+    fn loader_follows_a_real_json_parse() {
+        let of = |s: &str| Document::new(s.to_string()).loader();
+
+        // Ordinary YAML, including flow style that merely looks JSON-ish.
+        assert_eq!(of("- hosts: localhost\n"), Loader::Yaml);
+        assert_eq!(of("{a: 1, b: 2}\n"), Loader::Yaml, "unquoted keys are not JSON");
+        assert_eq!(of(""), Loader::Yaml);
+
+        // Strict JSON, whatever the file is called.
+        assert_eq!(of("[{\"p\": 80, \"p\": 8080}]\n"), Loader::Json);
+        assert_eq!(of("  \n\t{\"a\": 1}\n"), Loader::Json, "leading space is fine");
+
+        // The pair that proves a heuristic can't do this: one comma apart, and Ansible
+        // warns about the second and not the first.
+        assert_eq!(of("[{\"a\": 1, \"a\": 2}]"), Loader::Json);
+        assert_eq!(of("[{\"a\": 1, \"a\": 2},]"), Loader::Yaml, "trailing comma → YAML");
+    }
 
     /// A duplicate mapping key is legal YAML and Ansible keeps the LAST value (verified
     /// against ansible-core 2.21.2, which warns and runs with `8080`). Both entries reach

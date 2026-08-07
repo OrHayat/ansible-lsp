@@ -107,7 +107,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-138 | [The installed ansible-core version is never detected, but rules need it](open/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | S    | —          |
 | T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | T-138      |
-| T-102 | [Duplicate YAML mapping key](open/T-102-duplicate-yaml-mapping-key.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -246,6 +245,7 @@ T-021 is now unblocked on that side.
 | T-093 | **bug** · [Bare module names only try .py](closed/T-093-bare-module-names-only-try-py.md) | done     |
 | T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](closed/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | done     |
 | T-095 | **bug** · [Templated import_playbook is reported missing](closed/T-095-templated-import-playbook-is-reported-missing.md) | done     |
+| T-102 | [Duplicate YAML mapping key](closed/T-102-duplicate-yaml-mapping-key.md) | done     |
 
 ## Settled — don't re-derive these
 

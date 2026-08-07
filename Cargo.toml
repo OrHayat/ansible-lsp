@@ -16,3 +16,7 @@ libyaml-safer = "0.3"
 # Unicode-aware \d/\w/case-folding like Python's; lookaround/backrefs are still absent in
 # both. that gap would need fancy-regex, and no real filename pattern uses them.
 regex = "1"
+# Not for serialising anything: Ansible tries `json.loads` on every file before YAML
+# (`parsing/utils/yaml.py:41`), and "did a JSON parser accept this" is the only test that
+# reproduces which files skip its duplicate-key check. See `parse::Loader` (T-102).
+serde_json = "1"

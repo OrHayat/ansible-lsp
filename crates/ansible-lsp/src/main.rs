@@ -14,7 +14,7 @@ use ansible_core::config::DuplicateDictKey;
 use ansible_core::fs::{Counting, StdFs};
 use ansible_core::condition;
 use ansible_core::mutation;
-use ansible_core::parse::{Document, Node, Span};
+use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
 use ansible_core::vars;
@@ -469,11 +469,22 @@ impl Backend {
     /// Severity is the user's, via `duplicate_dict_key`: `error` genuinely refuses to load
     /// the file, `warn` is Ansible's default, and `ignore` means they have asked for
     /// silence and get it. Suppressible per-line with `# noqa: duplicate-key`.
+    ///
+    /// A JSON-content file behaves identically — the key is just as dead — but says so,
+    /// because Ansible itself is silent there: `json.loads` runs before the YAML
+    /// constructor that owns the check, so not even `error` fires. That exemption is
+    /// collateral from a helper shared with `-e` extra-vars, not a decision about
+    /// playbooks, so the editor is the only place the loss is visible at all.
     fn duplicate_key_diagnostics(a: &Analysis) -> Vec<Diagnostic> {
         let severity = match a.ctx.config.duplicate_dict_key {
             DuplicateDictKey::Ignore => return Vec::new(),
             DuplicateDictKey::Error => DiagnosticSeverity::ERROR,
             DuplicateDictKey::Warn => DiagnosticSeverity::WARNING,
+        };
+        let unreported = match a.doc.loader() {
+            Loader::Yaml => "",
+            Loader::Json => " Ansible does not report this one: the contents parse as JSON, \
+                             so its duplicate-key check never runs.",
         };
         a.doc
             .duplicate_keys()
@@ -490,7 +501,7 @@ impl Backend {
                     code: Some(NumberOrString::String("duplicate-key".into())),
                     message: format!(
                         "Duplicate mapping key `{}` — this value wins and the one on line {} \
-                         is discarded.",
+                         is discarded.{unreported}",
                         d.key,
                         first_line + 1
                     ),
@@ -1962,6 +1973,63 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    /// T-102 end to end, against the two checked-in fixtures. The YAML file must report
+    /// exactly what real ansible reported (four keys, four lines, live-verified on 2.21.2);
+    /// the JSON file must report the same way *and* say Ansible doesn't. Severity follows
+    /// `duplicate_dict_key` for both, and `ignore` silences both.
+    #[test]
+    fn duplicate_keys_report_identically_in_json_but_say_ansible_does_not() {
+        use ansible_core::config::DuplicateDictKey;
+        use tower_lsp::lsp_types::DiagnosticSeverity;
+
+        let load = |rel: &str| {
+            let path = std::path::Path::new(rel).canonicalize().unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            super::Backend::analyze_text(text, &path).unwrap()
+        };
+        let mut yaml = load("../../demo/duplicate_keys.yml");
+        let mut json = load("../../demo/plays/duplicate_keys_json.yml");
+        assert_eq!(yaml.doc.loader(), ansible_core::parse::Loader::Yaml);
+        assert_eq!(json.doc.loader(), ansible_core::parse::Loader::Json);
+
+        // The fixture's own comments claim these four; ansible printed exactly them.
+        let d = super::Backend::duplicate_key_diagnostics(&yaml);
+        let lines: Vec<u32> = d.iter().map(|d| d.range.start.line + 1).collect();
+        assert_eq!(lines, [23, 29, 37, 42], "must match the live ansible run");
+        assert!(d.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+        assert!(
+            d.iter().all(|d| !d.message.contains("parse as JSON")),
+            "the YAML file must not carry the JSON note"
+        );
+        assert!(d[1].message.contains("`http_port`") && d[1].message.contains("line 28"));
+
+        // Same rule, same severity, one extra sentence.
+        let j = super::Backend::duplicate_key_diagnostics(&json);
+        assert_eq!(j.len(), 1);
+        assert_eq!(j[0].severity, Some(DiagnosticSeverity::WARNING), "not a lesser tier");
+        assert!(j[0].message.contains("Ansible does not report this one"), "{}", j[0].message);
+
+        // `error` promotes both; `ignore` silences both.
+        for cfg in [DuplicateDictKey::Error, DuplicateDictKey::Ignore] {
+            yaml.ctx.config.duplicate_dict_key = cfg;
+            json.ctx.config.duplicate_dict_key = cfg;
+            let (y, j) = (
+                super::Backend::duplicate_key_diagnostics(&yaml),
+                super::Backend::duplicate_key_diagnostics(&json),
+            );
+            match cfg {
+                DuplicateDictKey::Error => {
+                    assert!(
+                        y.iter().chain(&j).all(|d| d.severity == Some(DiagnosticSeverity::ERROR)),
+                        "error must reach the JSON file too"
+                    );
+                    assert_eq!((y.len(), j.len()), (4, 1));
+                }
+                _ => assert!(y.is_empty() && j.is_empty(), "ignore means silence everywhere"),
+            }
+        }
+    }
 
     /// T-016 against the real demo: exactly the labeled BAD cases warn — the missing
     /// single, the no-extension miss, and the all-missing group anchored on the whole
