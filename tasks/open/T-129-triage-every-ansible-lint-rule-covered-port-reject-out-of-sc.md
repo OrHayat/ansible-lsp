@@ -16,6 +16,29 @@ That is a good datapoint and it is also the only one. We do not know how much of
 ship, or plan to ship, duplicates a rule a user already gets. Nor which of its ~50 rules are
 cheap wins over the AST we already have.
 
+**The source is now on this machine** — `~/ansible_lint_source`, shallow clone of
+`ansible/ansible-lint` at `0492235` (2026-08-06). Triage against that commit and record it,
+rather than against a released version number nobody can reproduce from.
+
+### Already found while cloning it (T-095)
+
+`import_playbook` resolution, `utils.py:604-663` — the direct counterpart of our `resolve.rs`:
+
+- it joins the **raw** value onto the parent dir (`lintable.path.parent / v`), so a templated
+  `import_playbook: "{{ env }}-setup.yml"` is looked up with the braces still in it and of
+  course misses. Same naive join we ship today, so on this reference we are at parity, not
+  behind.
+- the miss is a `_logger.error(f"Failed to find {v} playbook.")` — **not** a rule match. No
+  rule id, no line number, nothing to `# noqa` or configure. Worth noting as a category the
+  bucket table doesn't have: things ansible-lint reports *outside* the rule system, which a
+  rule-by-rule read will miss entirely. Check for others.
+- it then `return []`s, so the imported playbook is **not linted at all** and nothing says
+  so. Every rule that would have fired inside it silently doesn't.
+
+That last point is a **port** candidate on its own, and an editor-shaped one: "this import
+resolves nowhere, so everything downstream of it is unchecked" is a thing a graph-holding
+tool can say and a per-file linter cannot.
+
 ## Approach
 
 Go through the rule list once and put every rule in exactly one bucket:
@@ -46,7 +69,8 @@ Candidates that look like `port` before reading: `no-free-form`, `risky-file-per
 
 ## Done when
 
-- [ ] every ansible-lint rule is in exactly one bucket, with the version triaged against
+- [ ] every ansible-lint rule is in exactly one bucket, with the commit triaged against
+- [ ] the non-rule diagnostics (`_logger.error` and friends) are triaged too, not just rules
 - [ ] each **covered** entry names our rule id, so duplication is visible
 - [ ] each **reject** entry carries its reason, in the style of the board's rejected tickets
 - [ ] the **port** bucket becomes children of T-128 — one ticket per cluster, not per rule

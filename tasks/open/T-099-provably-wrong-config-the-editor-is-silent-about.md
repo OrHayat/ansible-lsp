@@ -38,6 +38,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-103 — A static field carrying a template is used literally
 - [ ] T-104 — hostvars cannot see play, role or task vars
 - [ ] T-105 — delegate_to: empty template, and hosts not in inventory
+- [ ] T-136 — A var an import_playbook needs is defined by a source that cannot reach it
 
 ## Done when
 
