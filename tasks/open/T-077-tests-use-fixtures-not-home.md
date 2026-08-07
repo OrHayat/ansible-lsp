@@ -60,6 +60,10 @@ Two got stronger in the move, because a real tree could only be asserted loosely
 case now pins an exact count of 3 and that a non-matching sibling dir is excluded; the
 `workspace` one asserts its fixture exists, so it can never silently become a no-op again.
 
+**Write the remaining ones as `MemFs` trees, not `testing::tree`.** T-134 landed the shared
+in-memory `Fs` after these six shipped as tempdirs, so these six are the rewrite it predicted;
+don't add more. `tree`/`project` stay only for callers that hardcode `StdFs`.
+
 **Remaining: 25 sites** — `resolve.rs` 23, `condition.rs` 1, `mutation.rs` 1. The `resolve.rs`
 bulk is `let Some(root) = repo() else { return };` at the top of ~18 tests. Each is
 self-describing (it names the paths it needs and what it expects), so the trees can be built

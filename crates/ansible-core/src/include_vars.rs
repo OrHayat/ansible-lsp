@@ -407,59 +407,7 @@ fn read_names(path: &Path, fs: &dyn Fs) -> Result<Vec<String>, Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-
-    /// In-memory tree: path -> content. Directories exist implicitly as prefixes.
-    struct MemFs(BTreeMap<PathBuf, String>);
-
-    impl MemFs {
-        fn new(files: &[(&str, &str)]) -> Self {
-            Self(files.iter().map(|(p, c)| (PathBuf::from(p), c.to_string())).collect())
-        }
-    }
-
-    impl Fs for MemFs {
-        fn kind(&self, p: &Path) -> Option<crate::fs::Kind> {
-            if self.0.contains_key(p) {
-                Some(crate::fs::Kind::File)
-            } else if self.0.keys().any(|k| k.starts_with(p) && k != p) {
-                Some(crate::fs::Kind::Dir)
-            } else {
-                None
-            }
-        }
-        fn read(&self, p: &Path) -> Option<String> {
-            self.0.get(p).cloned()
-        }
-        fn read_dir(&self, p: &Path) -> Vec<(PathBuf, crate::fs::Kind)> {
-            self.0
-                .keys()
-                .filter(|k| k.parent() == Some(p))
-                .map(|k| (k.clone(), crate::fs::Kind::File))
-                .collect()
-        }
-        /// Nothing in an in-memory tree is a symlink, so a path is its own identity.
-        fn canonical(&self, p: &Path) -> Option<PathBuf> {
-            self.exists(p).then(|| p.to_path_buf())
-        }
-        fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-            let mut dirs: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
-            dirs.insert(root.to_path_buf(), Vec::new());
-            for k in self.0.keys().filter(|k| k.starts_with(root)) {
-                let dir = k.parent().unwrap().to_path_buf();
-                // Every intermediate dir between root and the file exists too.
-                let mut d = dir.clone();
-                while d != *root {
-                    dirs.entry(d.clone()).or_default();
-                    d = d.parent().unwrap().to_path_buf();
-                }
-                dirs.entry(dir)
-                    .or_default()
-                    .push(k.file_name().unwrap().to_str().unwrap().to_string());
-            }
-            dirs.into_iter().collect()
-        }
-    }
+    use crate::testing::MemFs;
 
     fn in_role<'a>() -> Ctx<'a> {
         Ctx { role_path: Some(Path::new("/repo/roles/db")), task_dir: Path::new("/repo/roles/db/tasks") }

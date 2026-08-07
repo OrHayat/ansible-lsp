@@ -190,8 +190,8 @@ T-021 is now unblocked on that side.
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
-| T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](open/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | M    | —          |
 | T-135 | [Four resolve entry points are a cartesian product of two optional axes](open/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | S    | —          |
+| T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](open/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | M    | —          |
 
 ### Downstream — not this repo's code
 

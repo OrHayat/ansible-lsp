@@ -7,32 +7,17 @@
 //! here there is nothing else to leak into.
 
 use ansible_core::config::AnsibleConfig;
-use ansible_core::fs::{Fs, Kind};
-use std::path::{Path, PathBuf};
-
-struct CfgFs(&'static str);
-
-impl Fs for CfgFs {
-    fn kind(&self, _p: &Path) -> Option<Kind> {
-        Some(Kind::File)
-    }
-    fn read(&self, _p: &Path) -> Option<String> {
-        Some(self.0.to_string())
-    }
-    fn read_dir(&self, _p: &Path) -> Vec<(PathBuf, Kind)> {
-        Vec::new()
-    }
-    fn walk(&self, _root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-        Vec::new()
-    }
-    fn canonical(&self, p: &Path) -> Option<PathBuf> {
-        Some(p.to_path_buf())
-    }
-}
+use ansible_core::testing::CfgFs;
+use std::path::Path;
 
 #[test]
 fn the_env_var_overrides_both_the_cfg_key_and_the_default() {
-    let cfg = || AnsibleConfig::load_in(Path::new("/p"), &CfgFs("[defaults]\nnetwork_group_modules = ios\n"));
+    let cfg = || {
+        AnsibleConfig::load_in(
+            Path::new("/p"),
+            &CfgFs::some("[defaults]\nnetwork_group_modules = ios\n"),
+        )
+    };
 
     // Baseline: the cfg key is in force.
     assert!(cfg().is_network_platform("ios"));
@@ -47,26 +32,8 @@ fn the_env_var_overrides_both_the_cfg_key_and_the_default() {
     assert!(!c.is_network_platform("ios"), "env replaces the cfg key wholesale");
 
     // It applies with no ansible.cfg at all — the early return for a missing file used to
-    // skip every layer above the default.
-    struct NoFile;
-    impl Fs for NoFile {
-        fn kind(&self, _p: &Path) -> Option<Kind> {
-            None
-        }
-        fn read(&self, _p: &Path) -> Option<String> {
-            None
-        }
-        fn read_dir(&self, _p: &Path) -> Vec<(PathBuf, Kind)> {
-            Vec::new()
-        }
-        fn walk(&self, _root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-            Vec::new()
-        }
-        fn canonical(&self, _p: &Path) -> Option<PathBuf> {
-            None
-        }
-    }
-    let c = AnsibleConfig::load_in(Path::new("/p"), &NoFile);
+    // skip every layer above the default. `CfgFs::none` is what `NoFile` used to be.
+    let c = AnsibleConfig::load_in(Path::new("/p"), &CfgFs::none());
     assert!(c.is_network_platform("junos"), "env honoured without an ansible.cfg");
     assert!(!c.is_network_platform("ios"));
 

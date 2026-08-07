@@ -164,30 +164,10 @@ fn expand_list(value: &str, base: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// One `ansible.cfg` and nothing else — all `load_in` ever reads.
-    struct CfgFs(String);
-
-    impl Fs for CfgFs {
-        fn kind(&self, _p: &Path) -> Option<crate::fs::Kind> {
-            Some(crate::fs::Kind::File)
-        }
-        fn read(&self, _p: &Path) -> Option<String> {
-            Some(self.0.clone())
-        }
-        fn read_dir(&self, _p: &Path) -> Vec<(PathBuf, crate::fs::Kind)> {
-            Vec::new()
-        }
-        fn walk(&self, _root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-            Vec::new()
-        }
-        fn canonical(&self, p: &Path) -> Option<PathBuf> {
-            Some(p.to_path_buf())
-        }
-    }
+    use crate::testing::CfgFs;
 
     fn cfg(text: &str) -> AnsibleConfig {
-        AnsibleConfig::load_in(Path::new("/p"), &CfgFs(text.into()))
+        AnsibleConfig::load_in(Path::new("/p"), &CfgFs::some(text))
     }
 
     /// T-102. All three spellings, plus the two ways a value can be absent. Live-verified

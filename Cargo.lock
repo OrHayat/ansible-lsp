@@ -15,6 +15,7 @@ dependencies = [
 name = "ansible-core"
 version = "0.1.0"
 dependencies = [
+ "ansible-core",
  "libyaml-safer",
  "regex",
  "serde_json",

@@ -11,31 +11,12 @@
 //! threads leaks into whatever else is reading config at that moment.
 
 use ansible_core::config::{AnsibleConfig, DuplicateDictKey};
-use ansible_core::fs::{Fs, Kind};
-use std::path::{Path, PathBuf};
+use ansible_core::testing::CfgFs;
+use std::path::Path;
 
-struct CfgFs(Option<&'static str>);
-
-impl Fs for CfgFs {
-    fn kind(&self, _p: &Path) -> Option<Kind> {
-        self.0.map(|_| Kind::File)
-    }
-    fn read(&self, _p: &Path) -> Option<String> {
-        self.0.map(str::to_string)
-    }
-    fn read_dir(&self, _p: &Path) -> Vec<(PathBuf, Kind)> {
-        Vec::new()
-    }
-    fn walk(&self, _root: &Path) -> Vec<(PathBuf, Vec<String>)> {
-        Vec::new()
-    }
-    fn canonical(&self, p: &Path) -> Option<PathBuf> {
-        Some(p.to_path_buf())
-    }
-}
-
-fn with(cfg: Option<&'static str>) -> DuplicateDictKey {
-    AnsibleConfig::load_in(Path::new("/p"), &CfgFs(cfg)).duplicate_dict_key
+fn with(cfg: Option<&str>) -> DuplicateDictKey {
+    let fs = cfg.map(CfgFs::some).unwrap_or_else(CfgFs::none);
+    AnsibleConfig::load_in(Path::new("/p"), &fs).duplicate_dict_key
 }
 
 #[test]

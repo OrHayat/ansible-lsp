@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P3       | M    | —          |
+| **partly done** | task | P3 | M | — |
 
 ## Problem
 
@@ -49,9 +49,36 @@ reads the crate's own sources, `demo_*` tests assert the checked-in `demo/` tree
 promises, and anything exercising `StdFs` itself — symlinks, `read_dir` kinds — has nothing to
 fake against.
 
+## Progress
+
+`crates/ansible-core/src/testing.rs` is the shared module. `MemFs` moved there from
+`include_vars.rs` and grew `with_dirs`, so a directory holding no files — a role with an empty
+`tasks/` — is expressible; the prefix rule alone cannot see one. `walk` seeds those explicit
+dirs before walking the files. `include_vars`'s ~30 tests run on it unchanged.
+
+`CfgFs` is now one implementation instead of three (`config.rs`, `network_group_modules_env.rs`,
+and `duplicate_dict_key_env.rs` added during T-102). `NoFile` is gone — it was `CfgFs::none()`
+all along, and that case matters: an env override has to apply with no `ansible.cfg` present.
+
+Integration tests in `tests/` compile against the crate as a dependency, so `#[cfg(test)]`
+alone doesn't reach them. The module is gated `#[cfg(any(test, feature = "test-fixtures"))]`
+with a self dev-dependency turning the feature on for that build — nothing test-only reaches
+a release build.
+
+`testing.rs` needed an entry in `fs.rs`'s `EXEMPT` list: `no_filesystem_call_bypasses_the_seam`
+skips each file's content after an in-body `#[cfg(test)]`, and this file's `cfg` sits on the
+`mod` in `lib.rs`, so it read as production code.
+
+**Ordering against T-077, settled:** the helper landed first, as this ticket asked — but
+T-077's first six conversions had already shipped as tempdir trees (`c6bcc3a`), so those six
+are the ones this ticket predicted would need rewriting. T-077's *remaining* ~25 should be
+written as `MemFs` trees directly and must not use `testing::tree`. `tree`/`project` stay for
+the paths that hardcode `StdFs` — `FileContext::discover` has an `_with` variant, but not
+every caller does.
+
 ## Done when
 
-- [ ] one `MemFs`, reachable from every test module, with empty directories expressible
+- [x] one `MemFs`, reachable from every test module, with empty directories expressible
 - [ ] `resolve.rs`'s fixture tests build no directories, and `t016_dir` is gone
-- [ ] `CfgFs`/`NoFile` are the shared helper rather than per-file re-implementations
-- [ ] T-077's ordering is settled in writing, so its fixtures aren't built twice
+- [x] `CfgFs`/`NoFile` are the shared helper rather than per-file re-implementations
+- [x] T-077's ordering is settled in writing, so its fixtures aren't built twice

@@ -8,3 +8,13 @@ rust-version.workspace = true
 libyaml-safer.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+
+# `testing` is `#[cfg(test)]`, which unit tests get for free but integration tests in `tests/`
+# do not — they compile against the crate as an ordinary dependency. The feature exposes the
+# same module to them, and the self dev-dependency below turns it on for that build only, so
+# nothing test-only reaches a release build. T-134.
+[features]
+test-fixtures = []
+
+[dev-dependencies]
+ansible-core = { path = ".", features = ["test-fixtures"] }

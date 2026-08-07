@@ -14,7 +14,7 @@ pub mod parse_libyaml;
 pub mod references;
 pub mod resolve;
 pub mod splitter;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod testing;
 pub mod vars;
 pub mod workspace;
