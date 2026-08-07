@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | —          |
+| done   | bug  | P1       | M    | T-090 | —          |
 
 ## Symptom
 
@@ -137,6 +137,21 @@ already knows which names those are.
 Shares its shape with T-061's `-e` contract; whoever lands second reuses the first one's
 lookup.
 
+**The escape hatch is `# noqa`, and the message must say so.** "I do pass `-e env=prod`" is a
+legitimate answer to this warning, and the author is the only one who can give it. The
+mechanism already exists and already works here — `rule_id` returns `templated-import`
+(`resolve.rs:73`) and `diagnostics_of` filters on `is_suppressed(r.span.start, rule_id(r))`
+(`main.rs:472`), so `# noqa: templated-import` silences it today. What is missing is that
+**nothing tells the user**. A warning that cannot be turned off by the person who knows the
+answer is a warning that gets the whole tool disabled, so the message ends with the line to
+add:
+
+```yaml
+- import_playbook: "{{ env }}-setup.yml"  # noqa: templated-import
+```
+
+Needs a test pinning the suppression, since it is now load-bearing rather than incidental.
+
 **2. RESOLVED / navigable — expandable.** A literal `vars:` on the import entry, or a known
 literal from T-056, expands the path. Offer the candidates like any other reference. Reading
 that `vars:` is new plumbing: `references.rs` currently keeps only the import's value, not its
@@ -157,9 +172,25 @@ into the glob path (it is currently the `_ =>` arm at `resolve.rs:308`, so it ha
 bases), new reference plumbing to read a sibling `vars:`, flipping a test that pins the bug,
 rewriting a Settled entry, and updating the demo. Five files, one of them the trust anchor.
 
-`import_tasks` has the same parse-time shape (`helpers.py:169`) and its own error text names
-the legal sources outright: "vars/vars_files or extra-vars … not facts or inventory". Same
-three tiers apply; do it in the same pass.
+## `import_tasks` is NOT the same — leave it alone
+
+An earlier draft said "same three tiers, do it in the same pass". Live run, 2.21.2:
+
+| `import_tasks: "{{ env }}-tasks.yml"` with | result |
+| ------------------------------------------ | ------ |
+| play `vars:` | **runs** |
+| `-e env=prod` | **runs** |
+| `set_fact` in an earlier task | exit 4, `Error when evaluating variable in import path` |
+| nothing | exit 4 |
+
+`import_tasks` is expanded inside a play, so **play vars and `vars_files` reach it** — exactly
+what its own error text says ("vars/vars_files or extra-vars … not facts or inventory"). Its
+legal source set is far wider than `import_playbook`'s, and it globs happily today
+(`task_search_dirs`) without warning. Making it warn would false-positive on every templated
+`import_tasks` fed by ordinary play vars — of which the corpus has plenty.
+
+So: **no change to `import_tasks` in this ticket.** The only shared fact is that `set_fact`
+reaches neither, which is T-136's territory if anyone wants it there.
 
 ## Watch out
 
@@ -180,11 +211,42 @@ three tiers apply; do it in the same pass.
 ## Done when
 
 - [x] a live run of all cases is recorded here, and the table above matches it
-- [ ] a templated `import_playbook` no longer says "missing file"; it says what can supply it
-- [ ] the message names the provable harm — it cannot be syntax-checked or linted standalone
-- [ ] a magic-variable template (`{{ playbook_dir }}`) does **not** warn; it passes clean
-- [ ] it never claims the run will fail — `-e` is invisible to us
-- [ ] one expandable from a literal `vars:` on the entry resolves and offers candidates
-- [ ] a literal missing `import_playbook` still warns exactly as it does today
-- [ ] `import_tasks` gets the same three tiers
-- [ ] the Settled entry is rewritten with the correction and the old reasoning kept
+- [x] a templated `import_playbook` no longer says "missing file"; it says what can supply it
+- [x] the message names the provable harm — it cannot be syntax-checked or linted standalone
+- [x] a magic-variable template (`{{ playbook_dir }}`) does **not** warn; it passes clean
+- [x] it never claims the run will fail — `-e` is invisible to us
+- [x] one expandable from a literal `vars:` on the entry resolves and offers candidates
+- [x] a literal missing `import_playbook` still warns exactly as it does today
+- [x] the message names `# noqa: templated-import` as the answer for "I do pass `-e`",
+      and a test pins that the suppression works
+- [x] ~~`import_tasks` gets the same three tiers~~ — live run says its sources are wider
+      (play vars work); leave it unchanged, see above
+- [x] the Settled entry is rewritten with the correction and the old reasoning kept
+
+## What shipped
+
+`ast.rs` — `Import` gains `vars: Vec<(String, String)>`, the literal scalars of a `vars:` on
+the import entry. `references.rs` — `Reference::entry_vars` carries them to the resolver.
+`resolve.rs` — the early "templated import is always Missing" arm is gone; entry vars are
+substituted first, then `expand_magic`, and only a value still holding a **non-magic**
+variable warns. Two bugs fell out of the reordering that the old arm had been hiding:
+
+- the `ImportPlaybook` match arm ignored `substituted`, so an expanded `{{ playbook_dir }}`
+  was computed and thrown away and the braces were joined onto `file_dir` instead. The
+  magic-variable form could never have resolved even with the early arm removed.
+- a `vars:` on the entry was never read anywhere in the codebase.
+
+`main.rs` — `message_for` rewritten: names both working sources, the `--syntax-check` harm,
+and `# noqa: templated-import`.
+
+Tests: `templated_import_playbook_resolves_when_parse_time_can_supply_it` (both working
+forms plus the warning case, one tree), `demo_import_playbook_forms_resolve_as_documented`
+(the demo is asserted, not trusted), `templated_import_message_names_the_fix_and_noqa_silences_it`
+(message content + the suppression it advertises). The existing
+`templated_import_playbook_is_reported_not_skipped` still passes — its assertion was always
+right, only its stated reasoning was false, so its doc comment was rewritten rather than the
+test flipped.
+
+`demo/playbook.yml` gained the three new forms next to the old one. Corpus impact: none — the
+board's scan reports 73/73 `import_playbook` resolved and 0 missing, so it contains no
+templated ones.

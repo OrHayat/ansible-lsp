@@ -33,7 +33,7 @@ the same argument applied one layer up.
 - [x] T-092 — Includes inside handlers/ resolve against tasks/
 - [x] T-093 — Bare module names only try .py
 - [x] T-094 — short_key treats any dotted include_tasks as an include
-- [ ] T-095 — Templated import_playbook is reported missing
+- [x] T-095 — Templated import_playbook is reported missing
 - [ ] T-096 — project_root stands in for the playbook dir
 - [ ] T-097 — include_vars searches paths Ansible never tries
 - [ ] T-098 — ansible.cfg discovery ignores env overrides and the CWD rule

@@ -106,8 +106,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | S    | T-107      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 | T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | —          |
-| T-095 | **bug** · [Templated import_playbook is reported missing](open/T-095-templated-import-playbook-is-reported-missing.md) | M    | —          |
-| T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | T-095      |
+| T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 
 ### P2 — coverage and usability
 
@@ -244,6 +243,7 @@ T-021 is now unblocked on that side.
 | T-092 | **bug** · [Includes inside handlers/ resolve against tasks/](closed/T-092-includes-inside-handlers-resolve-against-tasks.md) | done     |
 | T-093 | **bug** · [Bare module names only try .py](closed/T-093-bare-module-names-only-try-py.md) | done     |
 | T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](closed/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | done     |
+| T-095 | **bug** · [Templated import_playbook is reported missing](closed/T-095-templated-import-playbook-is-reported-missing.md) | done     |
 
 ## Settled — don't re-derive these
 
@@ -312,9 +312,36 @@ by a live two-host run. **ansible-lint has no rule for this** — in 26.1.1 `imp
 appears only in `fqcn.py`. So `when-import-var-mutated` is novel, not a reimplementation.
 → `mutation.rs`, `finds_the_real_lustre_case`
 
-**A templated `import_playbook` can never resolve** — a static import expands before variables
-exist. The only place `{{ }}` means "wrong" rather than "unknown".
-→ `templated_import_playbook_is_reported_not_skipped`
+**A templated `import_playbook` resolves from exactly two sources, and neither is a file on
+disk.** ~~It can never resolve — a static import expands before variables exist. The only
+place `{{ }}` means "wrong" rather than "unknown".~~ **Corrected in T-095**, by running it
+rather than reading it. The import *is* templated, at parse time, from
+`self.vars | variable_manager.get_vars()` called with no play, host or task
+(`playbook_include.py:69-83`). Live-verified against ansible-core 2.21.2:
+
+| `env` supplied by | Result |
+| ----------------- | ------ |
+| `-e env=prod` | runs |
+| `vars:` on the import entry | runs |
+| a magic variable (`{{ playbook_dir }}`) | runs, and passes `--syntax-check` |
+| `group_vars/all.yml` | `'env' is undefined`, exit 4 |
+| `set_fact` in a preceding play | `'env' is undefined`, exit 4 |
+| nothing | `'env' is undefined`, exit 4 |
+
+The failure is fatal to the **whole file**, not the import: no `PLAY` banner prints, and a
+play written *above* the import never runs, because the file is parsed in full first.
+
+So the warning stays, but not for the old reason. What is provable is that
+`ansible-playbook --syntax-check` takes no user arguments and exits 4 — the file cannot be
+checked or linted standalone no matter what anyone passes at run time. What is *not*
+provable is that the run fails: `-e` is invisible to us, which is why the message offers
+`# noqa: templated-import` instead of insisting.
+
+`import_tasks` is **not** the same and was deliberately left alone: it expands inside a play,
+so play `vars:` and `vars_files` reach it (verified) — only `set_fact` and inventory don't.
+→ `templated_import_playbook_is_reported_not_skipped`,
+`templated_import_playbook_resolves_when_parse_time_can_supply_it`,
+`templated_import_message_names_the_fix_and_noqa_silences_it`
 
 **A 3-part dotted name is a module only as a mapping key.** `example.atlassian.net` appears in
 this repo's YAML as a URL, shaped exactly like an FQCN.

@@ -1179,14 +1179,20 @@ fn path_span(p: &Path, ctx: &FileContext) -> md::Inline {
 /// quoting convention the editor shows literally. (T-082 lists this among the hover
 /// producers; it isn't one.)
 fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
-    // Listing a candidate path with `{{ }}` still in it explains nothing. The real
-    // problem is that a static import is expanded before play variables exist.
+    // Listing a candidate path with `{{ }}` still in it explains nothing, and the old
+    // wording here ("cannot resolve") was false: with `-e` it resolves and runs. What IS
+    // certain is that the file cannot be checked on its own — `--syntax-check` takes no
+    // user arguments and exits 4. Say that, name the only two sources that work, and name
+    // the escape hatch, because "I do pass -e" is a legitimate answer only the author has.
+    // Live-verified against ansible-core 2.21.2; T-095.
     if r.templated && r.kind == ReferenceKind::ImportPlaybook {
         return format!(
-            "`import_playbook` is expanded before play variables exist, so `{}` cannot \
-             resolve. Only extra-vars (-e) are available here — play vars, host vars and \
-             set_fact are not. Use one import per case with `when:`, or a dynamic \
-             `include_tasks` inside a play.",
+            "`{}` is resolved when this file is parsed, before any play or host exists. \
+             Only extra-vars (`-e`) or a `vars:` on this line can supply it — play vars, \
+             group_vars, host_vars and `set_fact` cannot. So this playbook fails \
+             `--syntax-check` and any lint of it, whatever you pass at run time. Supply \
+             the value here, split it into one import per case with `when:`, or — if it \
+             really does come from `-e` — silence this with `# noqa: templated-import`.",
             r.value
         );
     }
@@ -2029,6 +2035,47 @@ mod tests {
             .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "missing-file"))
             .count();
         assert_eq!(missing, 0, "suppressed by the noqa on the group's first line");
+    }
+
+    /// T-095: the message must name the two sources that work, the provable harm, and the
+    /// escape hatch — and the escape hatch must actually work, since the message now sends
+    /// people to it. "I do pass `-e`" is a legitimate answer only the author can give.
+    #[test]
+    fn templated_import_message_names_the_fix_and_noqa_silences_it() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let dir = std::env::temp_dir().join("ansible-lsp-t095");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ansible.cfg"), "[defaults]\n").unwrap();
+        let path = dir.join("site.yml");
+        let is_t095 = |d: &tower_lsp::lsp_types::Diagnostic| {
+            matches!(&d.code, Some(NumberOrString::String(s)) if s == "templated-import")
+        };
+
+        let text = "- import_playbook: \"{{ env }}-setup.yml\"\n";
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let d = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .find(is_t095)
+            .expect("templated-import diagnostic");
+        for want in ["-e", "vars:", "--syntax-check", "noqa: templated-import"] {
+            assert!(d.message.contains(want), "message must name {want:?}: {}", d.message);
+        }
+        // The old wording claimed it could never resolve. With `-e` it resolves and runs.
+        assert!(
+            !d.message.contains("cannot resolve"),
+            "the false claim must be gone: {}",
+            d.message
+        );
+
+        let text = "- import_playbook: \"{{ env }}-setup.yml\"  # noqa: templated-import\n";
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        assert!(
+            !super::Backend::diagnostics_of(&a).iter().any(is_t095),
+            "the noqa the message advertises has to work"
+        );
     }
 
     /// T-016: the second `vars_files` site in the repo's demo must stay warning-free.

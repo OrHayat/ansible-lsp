@@ -64,6 +64,10 @@ pub struct Reference {
     /// written order, so the group can resolve first-found and name them all when none
     /// exists. `span` is the whole nested list.
     pub vars_files_group: Option<Vec<String>>,
+    /// Literal `vars:` written on an `import_playbook` entry. Substituted into the value
+    /// before anything else, because at parse time it is one of only two sources Ansible
+    /// can read (the other, `-e`, is invisible to us) — T-095.
+    pub entry_vars: Vec<(String, String)>,
 }
 
 impl Reference {
@@ -84,6 +88,7 @@ impl Reference {
             include_vars: None,
             grouped: false,
             vars_files_group: None,
+            entry_vars: Vec::new(),
         }
     }
 }
@@ -177,6 +182,7 @@ fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
         r.conditions = i.when.clone();
         r.condition_span = i.when_span;
         r.condition_key_span = when_key_span(&i.directives);
+        r.entry_vars = i.vars.clone();
         out.push(r);
     }
 }

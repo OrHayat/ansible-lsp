@@ -18,10 +18,30 @@
   import_playbook: not_here.yml
 
 - name: BAD — templated, and this one warns unlike other templated paths
-  # A static import is expanded before variables exist, so a variable here can
-  # never resolve. Everywhere else `{{ }}` means "runtime unknown, stay quiet";
-  # here it means the line is wrong.
+  # Expanded when THIS FILE is parsed — before any play, host or fact exists. Only
+  # `-e` or a `vars:` on the entry can supply it; group_vars and set_fact cannot,
+  # and the whole file then fails to parse (verified: exit 4, no PLAY banner).
+  # So unlike other templated paths this one warns — not because it can never
+  # resolve (with `-e env=prod` it runs fine) but because the file can't be
+  # `--syntax-check`ed on its own.
   import_playbook: "{{ env }}-setup.yml"
+
+- name: SILENCED — the same line, when you really do pass -e
+  # The only person who knows whether `-e env=prod` is always passed is the author,
+  # so the warning is suppressible and the message says so.
+  import_playbook: "{{ env }}-setup.yml"  # noqa: templated-import
+
+- name: GOOD — templated, but supplied right here
+  # `vars:` on the import entry is `self.vars`, read before the variable manager is
+  # consulted — one of the two things that works. Resolves and does not warn.
+  import_playbook: "{{ target }}.yml"
+  vars:
+    target: imported
+
+- name: GOOD — a magic variable needs no play, so it resolves
+  # `playbook_dir` comes from `_get_magic_variables`, which needs no play or host.
+  # This form passes `--syntax-check` with nothing passed at launch.
+  import_playbook: "{{ playbook_dir }}/imported.yml"
 
 - name: "GOOD — resolves; note what the when: actually does"
   # Ansible copies this condition onto EVERY task in EVERY play of the imported

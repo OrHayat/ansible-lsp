@@ -284,30 +284,50 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
 
     // A templated target is only knowable at runtime. Offer every file the pattern
     // could reach, but never warn — an untrustworthy warning is worse than none.
-    // A templated static import is wrong whatever is on disk — Ansible templates the
-    // string before looking, so it can never reach a file literally named `{{ x }}.yml`.
-    // Don't touch the filesystem; report the templating itself.
-    if r.templated && r.kind == ReferenceKind::ImportPlaybook {
-        return Resolution {
-            status: Status::Missing,
-            targets: Vec::new(),
-            candidates: Vec::new(),
-            skip_reason: None,
-        };
-    }
+
+    // A `vars:` on an `import_playbook` entry is not a runtime unknown: it is a literal in
+    // this file, and one of exactly two sources Ansible can read when it expands the import
+    // at parse time (`playbook_include.py:71` — `self.vars` before the merge). Substituting
+    // it first is what lets the one spelling that provably works resolve like any other
+    // path, instead of being warned about. T-095.
+    let value = if r.entry_vars.is_empty() {
+        r.value.clone()
+    } else {
+        let literals: HashMap<String, Vec<String>> = r
+            .entry_vars
+            .iter()
+            .map(|(k, v)| (k.clone(), vec![v.clone()]))
+            .collect();
+        substitute_literals(&r.value, &literals)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| r.value.clone())
+    };
 
     // `{{ role_path }}` and friends are known here, so substitute before deciding this
     // is unknowable. A value that becomes fully literal is then resolved — and diagnosed
     // — like any other path.
-    let (values, templated, substituted) = expand_magic(&r.value, ctx);
+    let (values, templated, substituted) = expand_magic(&value, ctx);
 
     if templated {
         let bases = match r.kind {
             ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => ctx.task_search_dirs(),
             ReferenceKind::VarsFiles => vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()],
+            // A non-magic variable survived, so only `-e` or a `vars:` on this line can
+            // supply it — neither is on disk, and globbing would offer files Ansible
+            // cannot reach. It stays a warning, but for the real reason: the playbook
+            // can't be syntax-checked standalone. Live-verified, T-095.
+            ReferenceKind::ImportPlaybook => {
+                return Resolution {
+                    status: Status::Missing,
+                    targets: Vec::new(),
+                    candidates: Vec::new(),
+                    skip_reason: None,
+                }
+            }
             _ => return Resolution::skipped(SkipReason::Templated),
         };
-        let targets = crate::glob::candidates_in(&bases, &r.value, fs);
+        let targets = crate::glob::candidates_in(&bases, &value, fs);
         return Resolution {
             status: if targets.is_empty() {
                 Status::Skipped
@@ -342,15 +362,28 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
 
         // Relative to the importing playbook, then the project root. No role or
         // collection paths apply at play level.
-        ReferenceKind::ImportPlaybook => Resolution::from_candidates(
-            unique(
-                [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
-                    .into_iter()
-                    .flatten()
-                    .map(|b| normalise(&b.join(&r.value))),
-            ),
-            fs,
-        ),
+        ReferenceKind::ImportPlaybook => {
+            // `{{ playbook_dir }}/x.yml` expands to complete paths, so the search bases
+            // must not be joined onto them — the same rule the task kinds follow. Without
+            // this the expansion was silently dropped and the braces were joined onto
+            // `file_dir`, so the one templated form Ansible resolves at parse time was
+            // reported missing (T-095).
+            if substituted {
+                return Resolution::from_candidates(
+                    unique(values.iter().map(|v| normalise(Path::new(v)))),
+                    fs,
+                );
+            }
+            Resolution::from_candidates(
+                unique(
+                    [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
+                        .into_iter()
+                        .flatten()
+                        .map(|b| normalise(&b.join(&value))),
+                ),
+                fs,
+            )
+        }
 
         // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
         // project root — the places Ansible looks for a vars file.
@@ -1546,9 +1579,11 @@ mod tests {
         }
     }
 
-    /// Unlike include_tasks, a templated static import cannot work — report it, and
-    /// report it without consulting the filesystem: a file literally named
-    /// `{{ env }}-setup.yml` would resolve here but Ansible could never reach it.
+    /// Still reported, still without consulting the filesystem — but NOT because it
+    /// "cannot work". With `-e env=prod` it resolves and runs (live-verified, 2.21.2).
+    /// It is reported because only `-e` or a `vars:` on the line can supply the value,
+    /// so the file cannot be `--syntax-check`ed on its own whatever is passed at run
+    /// time. Globbing would offer files Ansible can't reach, hence no candidates. T-095.
     #[test]
     fn templated_import_playbook_is_reported_not_skipped() {
         let Some(root) = repo() else { return };
@@ -1562,6 +1597,70 @@ mod tests {
             res.candidates.is_empty(),
             "must not imply it went looking for a braces-named file"
         );
+    }
+
+    /// The T-095 demo keeps its promises. `demo/playbook.yml` now claims two templated
+    /// imports resolve and one does not; a fixture that only *says* so is worth nothing.
+    #[test]
+    fn demo_import_playbook_forms_resolve_as_documented() {
+        let file = Path::new("../../demo/playbook.yml").canonicalize().unwrap();
+        let src = std::fs::read_to_string(&file).unwrap();
+        let by_value: Vec<(String, Resolution)> = resolve_src(&file, &src)
+            .into_iter()
+            .filter(|(r, _)| r.kind == ReferenceKind::ImportPlaybook)
+            .map(|(r, res)| (r.value, res))
+            .collect();
+        let find = |v: &str| {
+            by_value
+                .iter()
+                .find(|(val, _)| val == v)
+                .unwrap_or_else(|| panic!("demo lost {v}"))
+                .1
+                .clone()
+        };
+
+        // Supplied on the line, and by a magic variable: both resolve to imported.yml.
+        for v in ["{{ target }}.yml", "{{ playbook_dir }}/imported.yml"] {
+            let res = find(v);
+            assert_eq!(res.status, Status::Resolved, "{v} — tried {:#?}", res.candidates);
+            assert!(res.targets[0].ends_with("imported.yml"), "{v} -> {:?}", res.targets);
+        }
+        // Nothing at parse time can supply this one, so it still warns.
+        assert_eq!(find("{{ env }}-setup.yml").status, Status::Missing);
+    }
+
+    /// T-095: the two templated `import_playbook` forms Ansible really does resolve at
+    /// parse time, against one tree. Both were reported missing before — the first because
+    /// the magic expansion was computed and then thrown away, the second because a `vars:`
+    /// on the entry was never read at all.
+    #[test]
+    fn templated_import_playbook_resolves_when_parse_time_can_supply_it() {
+        let d = t016_dir("t095");
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::write(d.join("prod-setup.yml"), "").unwrap();
+        let play = d.join("site.yml");
+        std::fs::write(&play, "").unwrap();
+
+        // `playbook_dir` is a magic variable — available with no play or host, so
+        // `--syntax-check` passes on it. It must resolve, not warn.
+        let out = resolve_src(&play, "- import_playbook: \"{{ playbook_dir }}/prod-setup.yml\"\n");
+        let res = first(&out, ReferenceKind::ImportPlaybook);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("prod-setup.yml")]);
+
+        // A literal `vars:` on the entry is `self.vars` — read before the merge, so it
+        // works where group_vars and set_fact cannot.
+        let out = resolve_src(
+            &play,
+            "- import_playbook: \"{{ env }}-setup.yml\"\n  vars:\n    env: prod\n",
+        );
+        let res = first(&out, ReferenceKind::ImportPlaybook);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("prod-setup.yml")]);
+
+        // Same file, same value, no `vars:` — nothing here can supply it, so it warns.
+        let out = resolve_src(&play, "- import_playbook: \"{{ env }}-setup.yml\"\n");
+        assert_eq!(first(&out, ReferenceKind::ImportPlaybook).status, Status::Missing);
     }
 
     #[test]

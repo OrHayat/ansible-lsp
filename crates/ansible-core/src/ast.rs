@@ -38,6 +38,12 @@ pub struct Import {
     /// Span of the `import_playbook` value.
     pub span: Span,
     pub file: Option<String>,
+    /// Literal `name: value` pairs from a `vars:` written on the import entry itself.
+    /// Only scalars — they are the only substitutable form. This is one of exactly two
+    /// sources that can supply a templated `import_playbook` (the other is `-e`), because
+    /// the import is expanded at parse time from `self.vars | variable_manager.get_vars()`
+    /// with no play, host or task (`playbook_include.py:69-83`). T-095.
+    pub vars: Vec<(String, String)>,
     /// A `when:` on a static import is copied onto every imported task — see
     /// [`crate::condition`]. ANDed clauses; empty if absent.
     pub when: Vec<String>,
@@ -274,10 +280,21 @@ fn build_play_item(node: &Node) -> Option<PlayItem> {
             file: v.as_str().map(str::to_owned),
             when: when.map(clauses).unwrap_or_default(),
             when_span: when.map(|w| w.span()),
+            vars: import_entry_vars(node),
             directives: collect_directives(node, keywords::is_play_directive),
         }));
     }
     Some(PlayItem::Play(build_play(node)))
+}
+
+/// Literal scalars from a `vars:` on an `import_playbook` entry. Non-scalar values are
+/// dropped rather than guessed: a nested structure can't be substituted into a path.
+fn import_entry_vars(node: &Node) -> Vec<(String, String)> {
+    let Some(vars) = node.get("vars") else { return Vec::new() };
+    vars.entries()
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str()?.to_owned(), v.as_str()?.to_owned())))
+        .collect()
 }
 
 /// The value of an `import_playbook` key, bare or FQCN.
