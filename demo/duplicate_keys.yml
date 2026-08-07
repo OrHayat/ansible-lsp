@@ -44,5 +44,6 @@
 # --------------------------------------------------------------- the JSON trap
 # `plays/duplicate_keys_json.yml` is the same mistake in JSON. Ansible tries `json.loads`
 # on every file before YAML (`parsing/utils/yaml.py:41`), so the YAML constructor — and its
-# duplicate check — never runs. Last wins, no warning, at any verbosity. We match that
-# asymmetry rather than improve on it.
+# duplicate check — never runs. Last wins, no warning, at any verbosity — not even with
+# `duplicate_dict_key = error`. We report it anyway, at HINT, since the dead value is just
+# as dead; the message says why Ansible is quiet there (T-102).

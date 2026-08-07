@@ -15,6 +15,8 @@ impl Span {
     }
 }
 
+pub use crate::parse_libyaml::DuplicateKey;
+
 #[derive(Debug, Clone)]
 pub enum Node {
     Scalar {
@@ -194,6 +196,11 @@ impl Document {
     /// caller may say so more firmly than the old strict-1.2 "may still be valid" hedge.
     pub fn parse_error(&self) -> Option<Span> {
         crate::parse_libyaml::parse_lenient_error(&self.text)
+    }
+
+    /// Every repeated mapping key, one entry per later occurrence. See [`DuplicateKey`].
+    pub fn duplicate_keys(&self) -> Vec<DuplicateKey> {
+        crate::parse_libyaml::duplicate_keys(&self.text)
     }
 }
 

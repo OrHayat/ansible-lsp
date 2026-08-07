@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::cache::ScanCache;
+use ansible_core::config::DuplicateDictKey;
 use ansible_core::fs::{Counting, StdFs};
 use ansible_core::condition;
 use ansible_core::mutation;
@@ -449,6 +450,7 @@ impl Backend {
             return;
         };
         let mut diagnostics = Self::diagnostics_of(&a);
+        diagnostics.extend(Self::duplicate_key_diagnostics(&a));
         diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
         if let Ok(path) = uri.to_file_path() {
             diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
@@ -457,6 +459,45 @@ impl Backend {
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
             .await;
+    }
+
+    /// A key written twice in one mapping. Legal YAML, so the file loads and runs — the
+    /// earlier value is simply gone before any play sees it, which is why an editor is the
+    /// only place this is catchable. Anchored on the *later* occurrence, matching both
+    /// Ansible's own warning and the value the rest of the tool now reads (T-102).
+    ///
+    /// Severity is the user's, via `duplicate_dict_key`: `error` genuinely refuses to load
+    /// the file, `warn` is Ansible's default, and `ignore` means they have asked for
+    /// silence and get it. Suppressible per-line with `# noqa: duplicate-key`.
+    fn duplicate_key_diagnostics(a: &Analysis) -> Vec<Diagnostic> {
+        let severity = match a.ctx.config.duplicate_dict_key {
+            DuplicateDictKey::Ignore => return Vec::new(),
+            DuplicateDictKey::Error => DiagnosticSeverity::ERROR,
+            DuplicateDictKey::Warn => DiagnosticSeverity::WARNING,
+        };
+        a.doc
+            .duplicate_keys()
+            .into_iter()
+            .filter(|d| !a.doc.is_suppressed(d.span.start, "duplicate-key"))
+            .map(|d| {
+                let (sl, sc) = a.doc.byte_to_lsp(d.span.start);
+                let (el, ec) = a.doc.byte_to_lsp(d.span.end);
+                let (first_line, _) = a.doc.byte_to_lsp(d.first.start);
+                Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(severity),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("duplicate-key".into())),
+                    message: format!(
+                        "Duplicate mapping key `{}` — this value wins and the one on line {} \
+                         is discarded.",
+                        d.key,
+                        first_line + 1
+                    ),
+                    ..Default::default()
+                }
+            })
+            .collect()
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {

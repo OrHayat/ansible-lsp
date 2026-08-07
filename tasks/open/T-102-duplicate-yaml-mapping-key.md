@@ -1,8 +1,8 @@
 # T-102 — Duplicate YAML mapping key
 
-| Status | Kind | Priority | Size | Epic  | Depends on |
-| ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-099 | —          |
+| Status          | Kind | Priority | Size | Epic  | Depends on |
+| --------------- | ---- | -------- | ---- | ----- | ---------- |
+| **partly done** | task | P1       | S    | T-099 | —          |
 
 ## Problem
 
@@ -32,7 +32,7 @@ libyaml reports every key event with a mark; collecting duplicates per mapping i
 in `parse_libyaml.rs`, not a second parse. This is the cheapest rule on the board — the
 information is already flowing through the parser and is currently dropped.
 
-Two things already landed, ahead of the diagnostic itself:
+Four things have landed; only the JSON tiering is left.
 
 **Last-wins is now correct.** `Node::get` took the *first* occurrence while Ansible takes the
 last, so on a duplicate key we resolved and explained the value Ansible discarded — a
@@ -46,17 +46,52 @@ underlines the later one and the value the rest of the tool reads is that same o
 is `demo/plays/duplicate_keys_json.yml`. Both live-verified against ansible-core 2.21.2 —
 four warnings, each anchored at the later occurrence, and silence for the JSON file.
 
-Still to do: `config.rs` does not read the setting. The ini key is **`duplicate_dict_key`**
-under `[defaults]` (not `duplicate_yaml_dict_key`, which is only the env var's name), so it
-is one field plus one match arm following `network_group_modules` — including reading
-`ANSIBLE_DUPLICATE_YAML_DICT_KEY` *outside* the `if let Some(text)` block, since env beats
-the ini file whether or not a config was found. Note T-098 caps how right this can be: we
-only ever read `project_root/ansible.cfg`, so we may read the setting correctly from the
-wrong file.
+**The setting is read.** `AnsibleConfig::duplicate_dict_key` is a `DuplicateDictKey` enum
+(`Warn` default, `Error`, `Ignore`). Mind the two spellings: the ini key is
+`duplicate_dict_key` under `[defaults]`, the env var is `ANSIBLE_DUPLICATE_YAML_DICT_KEY`.
+Precedence is env > ini > default, live-verified in both directions (cfg `error` + env
+`ignore` runs silently; cfg `ignore` + env `error` refuses the file), and the env var applies
+with no `ansible.cfg` present — `tests/duplicate_dict_key_env.rs`.
+
+Values are case-sensitive and exactly `error`/`warn`/`ignore`. Anything else — including the
+`False` that the option's own description still recommends — aborts *every* ansible command
+with `Invalid value ... Valid values are: error, warn, ignore`. We deliberately diverge and
+fall back to the layer below instead: a language server that goes dark over one config line
+is worse than one that analyses with the shipped default.
+
+T-098 caps how right this can be: we only ever read `project_root/ansible.cfg`, so we may
+read the setting correctly from the wrong file.
+
+**The rule fires.** `parse_libyaml::duplicate_keys` walks the event stream `build` already
+produces — a second walk, not a second parse — and mirrors `build`'s key/value pairing so it
+cannot report a duplicate the tree doesn't have. Scoped per mapping, so sibling tasks sharing
+a key don't collide, and it returns the loser's span as well as the winner's because the
+message names both. `main.rs::duplicate_key_diagnostics` maps `Error`/`Warn` onto the LSP
+severities and returns nothing at all for `Ignore`; `# noqa: duplicate-key` suppresses a line.
+
+Checked against the fixture rather than reasoned about: the rule reports the same four keys
+on the same four lines Ansible warns about (23 `hosts`, 29 `http_port`, 37 `when`, 42 `name`).
+
+**The JSON path warns anyway, unlike Ansible** (decided; the earlier line here said to match
+the asymmetry). Ansible tries `json.loads` before YAML (`parsing/utils/yaml.py:41`, comment:
+*"Fixes issues with extra vars json strings"*), so a JSON-content file never reaches the
+constructor where the duplicate check lives, and no severity — not even `error` — fires
+there. That exemption is collateral from a shared helper, not a decision about playbooks, and
+the data loss is identical. So: emit at **HINT** for JSON files, with a message saying why
+Ansible is quiet, and honour `ignore`. Severity stays fixed at HINT there, because painting
+it red would claim a play won't start when it starts fine.
+
+Deciding "is this JSON" means actually parsing it — a trailing comma makes a file invalid
+JSON but valid YAML, and the warning flips on that alone (verified). `serde_json` is already
+a workspace dependency. Only run it on files that *have* a duplicate, so a clean workspace
+scan never pays for it. Known gap: CPython accepts bare `NaN`/`Infinity`, `serde_json` does
+not, so such a file would be JSON to Ansible and YAML to us. Worth measuring prevalence with
+`scan` before spending anything on it — JSON-content `.yml` files are expected to be
+vanishingly rare.
 
 ## Done when
 
-- [ ] duplicate keys in a mapping produce one diagnostic per later occurrence
-- [ ] severity follows `DUPLICATE_YAML_DICT_KEY` from `ansible.cfg`
-- [ ] the JSON path does not warn, matching Ansible
+- [x] duplicate keys in a mapping produce one diagnostic per later occurrence
+- [x] severity follows `DUPLICATE_YAML_DICT_KEY`, and `ignore` suppresses entirely
+- [ ] the JSON path still reports, at HINT, saying why Ansible is silent there
 - [x] a fixture covers duplicates in `vars:`, in a task, and at play level

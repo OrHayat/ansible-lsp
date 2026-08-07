@@ -16,19 +16,7 @@ use crate::parse::{Node, Span};
 /// Parse `text` into one [`Node`] per document. `None` if libyaml itself can't scan it —
 /// i.e. broken for Ansible too, not merely stricter-than-Ansible.
 pub fn parse_lenient(text: &str) -> Option<Vec<Node>> {
-    let mut parser = Parser::new();
-    let mut input = text.as_bytes();
-    parser.set_input_string(&mut input);
-
-    let mut events: Vec<Event> = Vec::new();
-    loop {
-        let ev = parser.parse().ok()?;
-        let done = matches!(ev.data, EventData::StreamEnd);
-        events.push(ev);
-        if done {
-            break;
-        }
-    }
+    let events = events(text)?;
 
     let mut docs = Vec::new();
     let mut i = 0;
@@ -45,6 +33,104 @@ pub fn parse_lenient(text: &str) -> Option<Vec<Node>> {
         }
     }
     Some(docs)
+}
+
+/// The whole event stream, or `None` if libyaml can't scan the text.
+fn events(text: &str) -> Option<Vec<Event>> {
+    let mut parser = Parser::new();
+    let mut input = text.as_bytes();
+    parser.set_input_string(&mut input);
+
+    let mut events: Vec<Event> = Vec::new();
+    loop {
+        let ev = parser.parse().ok()?;
+        let done = matches!(ev.data, EventData::StreamEnd);
+        events.push(ev);
+        if done {
+            break;
+        }
+    }
+    Some(events)
+}
+
+/// A key written more than once in one mapping. Legal YAML: the constructor assigns the key
+/// twice, so [`first`](Self::first)'s value is unreachable before any play sees the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateKey {
+    pub key: String,
+    /// The later occurrence — the one Ansible keeps, anchors its warning on, and the one
+    /// [`Node::get`] returns.
+    pub span: Span,
+    /// The earlier occurrence, whose value is discarded.
+    pub first: Span,
+}
+
+/// Every repeated mapping key in `text`, one entry per *later* occurrence — so a key written
+/// three times yields two. Empty if libyaml can't scan the text at all.
+///
+/// A second walk of the same event stream rather than a second parse. It deliberately mirrors
+/// [`build`]'s shape: the key/value pairing must be identical, or the rule would report a
+/// duplicate the tree doesn't have.
+pub fn duplicate_keys(text: &str) -> Vec<DuplicateKey> {
+    let Some(events) = events(text) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < events.len() {
+        match events[i].data {
+            EventData::DocumentStart { .. } => i = scan_dupes(&events, i + 1, text, &mut out),
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// Walk the node at event `i` recording duplicates; returns the index just past it.
+fn scan_dupes(events: &[Event], i: usize, text: &str, out: &mut Vec<DuplicateKey>) -> usize {
+    match &events[i].data {
+        EventData::SequenceStart { .. } => {
+            let mut j = i + 1;
+            while !matches!(events[j].data, EventData::SequenceEnd) {
+                j = scan_dupes(events, j, text, out);
+            }
+            j + 1
+        }
+        EventData::MappingStart { .. } => {
+            // Per mapping, not per file: the same key in two sibling tasks is not a duplicate.
+            let mut seen: Vec<(&str, Span)> = Vec::new();
+            let mut j = i + 1;
+            while !matches!(events[j].data, EventData::MappingEnd) {
+                let key = match &events[j].data {
+                    EventData::Scalar { value, .. } => Some((
+                        value.as_str(),
+                        unquote(
+                            Span {
+                                start: events[j].start_mark.index as usize,
+                                end: events[j].end_mark.index as usize,
+                            },
+                            text,
+                        ),
+                    )),
+                    // A non-scalar key (`? [a, b]`) has no name to compare.
+                    _ => None,
+                };
+                let after_key = scan_dupes(events, j, text, out);
+                let after_val = scan_dupes(events, after_key, text, out);
+                if let Some((name, span)) = key {
+                    match seen.iter().find(|(n, _)| *n == name) {
+                        Some((_, first)) => out.push(DuplicateKey {
+                            key: name.to_owned(),
+                            span,
+                            first: *first,
+                        }),
+                        None => seen.push((name, span)),
+                    }
+                }
+                j = after_val;
+            }
+            j + 1
+        }
+        _ => i + 1,
+    }
 }
 
 /// Where libyaml's scan failed, as a byte span, or `None` if it parses. Mirrors
@@ -139,6 +225,56 @@ fn unquote(mut span: Span, text: &str) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three placements the demo fixture covers, in one file. Live-verified on
+    /// ansible-core 2.21.2: four warnings, each anchored at the later occurrence.
+    #[test]
+    fn finds_duplicates_at_every_level() {
+        let src = "- hosts: webservers\n  hosts: localhost\n  vars:\n    p: 80\n    p: 8080\n  \
+                   tasks:\n    - when: false\n      when: true\n";
+        let d = duplicate_keys(src);
+        let names: Vec<&str> = d.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(names, ["hosts", "p", "when"]);
+        // Anchored on the winner, and naming the loser.
+        assert_eq!(d[1].span.slice(src), "p");
+        assert_eq!(&src[d[1].span.start..d[1].span.start + 7], "p: 8080");
+        assert_eq!(&src[d[1].first.start..d[1].first.start + 5], "p: 80");
+    }
+
+    /// Per mapping, not per file — otherwise every playbook with two tasks would light up.
+    #[test]
+    fn the_same_key_in_sibling_mappings_is_not_a_duplicate() {
+        let src = "- name: one\n  debug: a\n- name: two\n  debug: b\n";
+        assert_eq!(duplicate_keys(src), []);
+        // Nesting is its own scope too: an inner `name:` does not collide with the outer.
+        let src = "- name: outer\n  include_role:\n    name: inner\n";
+        assert_eq!(duplicate_keys(src), []);
+    }
+
+    /// One entry per *later* occurrence, so three writes give two — matching Ansible, which
+    /// warns twice. Each names the original as the discarded one.
+    #[test]
+    fn a_key_written_three_times_reports_twice() {
+        let src = "a: 1\na: 2\na: 3\n";
+        let d = duplicate_keys(src);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|d| d.first.start == 0), "both point back at the first");
+        assert!(d[0].span.start < d[1].span.start);
+    }
+
+    /// Flow style is the same mapping, and JSON is flow style — this is the file Ansible
+    /// stays silent about, which is why the rule reports it separately (T-102).
+    #[test]
+    fn flow_and_json_mappings_are_scanned_too() {
+        assert_eq!(duplicate_keys("{a: 1, a: 2}\n").len(), 1);
+        assert_eq!(duplicate_keys("[{\"p\": 80, \"p\": 8080}]\n").len(), 1);
+    }
+
+    /// A file libyaml can't scan has no mappings to speak of; the unparseable hint owns it.
+    #[test]
+    fn unparseable_input_yields_nothing_rather_than_panicking() {
+        assert_eq!(duplicate_keys("- name: Block form with a file: parameter\n"), []);
+    }
 
     #[test]
     fn accepts_the_underindented_scalar_class() {

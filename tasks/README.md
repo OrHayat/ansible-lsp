@@ -95,7 +95,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](open/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | S    | —          |
 | T-101 | [Dynamic includes reject keywords imports accept](open/T-101-dynamic-includes-reject-keywords-imports-accept.md) | S    | —          |
-| T-102 | [Duplicate YAML mapping key](open/T-102-duplicate-yaml-mapping-key.md) | S    | —          |
 | T-103 | [A static field carrying a template is used literally](open/T-103-a-static-field-carrying-a-template-is-used-literally.md) | S    | —          |
 | T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
@@ -108,6 +107,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-138 | [The installed ansible-core version is never detected, but rules need it](open/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | S    | —          |
 | T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | T-138      |
+| T-102 | [Duplicate YAML mapping key](open/T-102-duplicate-yaml-mapping-key.md) | S    | —          |
 
 ### P2 — coverage and usability
 
