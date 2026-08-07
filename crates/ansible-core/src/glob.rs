@@ -155,16 +155,32 @@ mod tests {
         assert!(candidates(&base, "{{ a }}_{{ b }}.yml").is_empty());
     }
 
+    /// A templated directory segment expands to every sibling that matches, which is the
+    /// case navigation offers candidates for instead of warning. Built inline rather than
+    /// read from a private repo under `$HOME` (T-077).
     #[test]
-    fn finds_real_matches_in_the_repo() {
-        let Ok(home) = std::env::var("HOME") else { return };
-        let tasks = PathBuf::from(home).join("app/ansible/roles/sync-state/tasks");
-        if !tasks.is_dir() {
-            return;
-        }
-        // Three protocol dirs each hold _converge_one_ap.yml.
-        let hits = candidates(&[tasks], "{{ proto }}_access_point/_converge_one_ap.yml");
-        assert!(hits.len() >= 2, "expected several protocol dirs, got {hits:?}");
+    fn a_templated_directory_segment_matches_every_sibling() {
+        let root = crate::testing::tree(
+            "glob-protocols",
+            &[
+                ("tasks/http_access_point/_converge_one_ap.yml", ""),
+                ("tasks/ftp_access_point/_converge_one_ap.yml", ""),
+                ("tasks/nfs_access_point/_converge_one_ap.yml", ""),
+                // Same directory shape, different leaf: must not be swept up by the pattern.
+                ("tasks/http_access_point/other.yml", ""),
+                // Matches the leaf but not the directory pattern.
+                ("tasks/unrelated/_converge_one_ap.yml", ""),
+            ],
+        );
+        let hits = candidates(
+            &[root.join("tasks")],
+            "{{ proto }}_access_point/_converge_one_ap.yml",
+        );
+        assert_eq!(hits.len(), 3, "one per protocol dir, got {hits:?}");
         assert!(hits.iter().all(|p| p.ends_with("_converge_one_ap.yml")));
+        assert!(
+            !hits.iter().any(|p| p.to_string_lossy().contains("unrelated")),
+            "the directory segment must constrain the match too: {hits:?}"
+        );
     }
 }

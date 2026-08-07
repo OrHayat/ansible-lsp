@@ -257,20 +257,25 @@ mod tests {
         assert!(!c.is_network_platform("ios"));
     }
 
+    /// A real-shaped config off the real filesystem, not the `CfgFs` stub: the `~` and `./`
+    /// expansions are the point, and they run against actual paths. Built inline rather than
+    /// read from a private repo under `$HOME` (T-077); `~` still needs `HOME`, so that one
+    /// assertion — and only it — is skipped where the variable is unset, as on Windows.
     #[test]
-    fn reads_the_real_repo_config() {
-        let Ok(home) = std::env::var("HOME") else {
-            return;
-        };
-        let root = PathBuf::from(&home).join("app/ansible");
-        if !root.join("ansible.cfg").is_file() {
-            return;
-        }
+    fn a_colon_list_expands_tilde_and_dot_against_the_project_root() {
+        let root = crate::testing::project(
+            "cfg-colon-list",
+            "[defaults]\nroles_path = ~/ansible/roles:./roles\ncollections_path = ./collections\n",
+            &[("roles/.keep", ""), ("collections/.keep", "")],
+        );
         let cfg = AnsibleConfig::load(&root);
-        // `roles_path = ~/ansible/roles:./roles`
-        assert_eq!(cfg.roles_path.len(), 2);
-        assert_eq!(cfg.roles_path[0], PathBuf::from(&home).join("ansible/roles"));
-        assert_eq!(cfg.roles_path[1], root.join("roles"));
+
+        assert_eq!(cfg.roles_path.len(), 2, "a colon splits entries: {:?}", cfg.roles_path);
+        assert_eq!(cfg.roles_path[1], root.join("roles"), "`./` is project-root relative");
         assert!(cfg.collections_path.contains(&root.join("collections")));
+
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(cfg.roles_path[0], PathBuf::from(home).join("ansible/roles"));
+        }
     }
 }

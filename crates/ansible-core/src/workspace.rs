@@ -266,23 +266,36 @@ fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
 mod tests {
     use super::*;
 
+    /// A task file two levels inside a role's `tasks/` must still anchor at `tasks/`, not at
+    /// its own directory — otherwise `query/exists.yml` resolves to
+    /// `tasks/query/query/exists.yml` and the tool invents a missing-file warning on a
+    /// working playbook (T-092).
+    ///
+    /// Built inline, not read from `$HOME`: the home-dir version skipped silently for anyone
+    /// without that private repo — so it asserted nothing on a clean checkout — and panicked
+    /// outright on Windows, where `HOME` is unset (T-077).
     #[test]
     fn nested_task_file_resolves_against_role_tasks_dir() {
-        let home = std::env::var("HOME").unwrap();
-        let f = format!("{home}/app/ansible/roles/lustre-snapshot/tasks/query/timestamp.yml");
-        if !Path::new(&f).exists() {
-            return;
-        }
-        let c = FileContext::discover(Path::new(&f));
-        assert!(c.role_dir.as_ref().unwrap().ends_with("roles/lustre-snapshot"));
+        // `roles_path` is set explicitly: the conventional `roles/` dir alone would satisfy
+        // the last assertion, so without it that line would prove nothing.
+        let root = crate::testing::project(
+            "nested-role",
+            "[defaults]\nroles_path = ./roles\n",
+            &[("roles/snapshot/tasks/query/timestamp.yml", "")],
+        );
+        let f = root.join("roles/snapshot/tasks/query/timestamp.yml");
+
+        let c = FileContext::discover(&f);
+        assert!(c.role_dir.as_ref().unwrap().ends_with("roles/snapshot"));
         assert!(
             c.role_anchor_dir
                 .as_ref()
                 .unwrap()
-                .ends_with("roles/lustre-snapshot/tasks")
+                .ends_with("roles/snapshot/tasks"),
+            "anchored at {:?}, not the role's tasks/",
+            c.role_anchor_dir
         );
-        assert!(c.project_root.as_ref().unwrap().ends_with("app/ansible"));
-        // roles_path from ansible.cfg must be in play, not just the conventional dir.
-        assert!(c.roles_roots().iter().any(|r| r.ends_with("ansible/roles")));
+        assert!(c.project_root.as_ref().unwrap().ends_with("ansible-lsp-nested-role"));
+        assert!(c.roles_roots().iter().any(|r| r.ends_with("ansible-lsp-nested-role/roles")));
     }
 }

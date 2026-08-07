@@ -1353,27 +1353,48 @@ mod tests {
         assert!(substitute_literals("{{ other }}.yml", &lit).is_empty());
     }
 
-    /// The four references in this repo that do NOT resolve relative to the including
-    /// file. All are live, working Ansible.
+    /// One tree for the anchoring cases, since they only differ in shape. Built inline
+    /// rather than read from a private repo under `$HOME` (T-077) — the role names are
+    /// generic because it is the *shape* each case pins, not the name.
+    /// `name` per caller, not shared: the tree is wiped on creation, so two tests using one
+    /// name would delete each other's files under the parallel harness.
+    fn anchors_tree(name: &str) -> PathBuf {
+        crate::testing::project(
+            name,
+            "[defaults]\nroles_path = ./roles\n",
+            &[
+                // Nested inside tasks/: anchors at the role's tasks/, not at query/.
+                ("roles/snapshot/tasks/query/timestamp.yml", ""),
+                ("roles/snapshot/tasks/query/exists.yml", ""),
+                // Climbs out of the role entirely, into a sibling top-level dir.
+                ("roles/ad/tasks/join.yml", ""),
+                ("playbooks/tasks/select-available-node.yml", ""),
+                // A subdir file naming its own subdir: doubles up if the anchor is wrong.
+                ("roles/dashboard/tasks/sanity-tests/main.yml", ""),
+                ("roles/dashboard/tasks/sanity-tests/database-tests.yml", ""),
+                // Three protocol dirs, each with its own copy of the same leaf name.
+                ("roles/sync-state/tasks/http_access_point/reconcile.yml", ""),
+                ("roles/sync-state/tasks/http_access_point/_converge_one_ap.yml", ""),
+                ("roles/sync-state/tasks/ftp_access_point/_converge_one_ap.yml", ""),
+                ("roles/sync-state/tasks/nfs_access_point/_converge_one_ap.yml", ""),
+            ],
+        )
+    }
+
+    /// Includes that do NOT resolve relative to the including file — each shape taken from a
+    /// live, working playbook the resolver got wrong before.
     #[test]
-    fn real_repo_regressions() {
-        let Some(root) = repo() else { return };
+    fn includes_that_do_not_resolve_relative_to_the_including_file() {
+        let root = anchors_tree("anchors-not-relative");
         let cases = [
-            (
-                "roles/lustre-snapshot/tasks/query/timestamp.yml",
-                "query/exists.yml",
-            ),
+            ("roles/snapshot/tasks/query/timestamp.yml", "query/exists.yml"),
             (
                 "roles/ad/tasks/join.yml",
                 "../../playbooks/tasks/select-available-node.yml",
             ),
             (
-                "roles/dashboard-docker/tasks/sanity-tests/main.yml",
+                "roles/dashboard/tasks/sanity-tests/main.yml",
                 "sanity-tests/database-tests.yml",
-            ),
-            (
-                "roles/dashboard-docker/tasks/sanity-tests/main.yml",
-                "sanity-tests/celery-tests.yml",
             ),
         ];
         for (from, target) in cases {
@@ -1387,11 +1408,11 @@ mod tests {
         }
     }
 
-    /// Mirror image: target sits next to the caller, inside a `tasks/` subdirectory.
+    /// Mirror image: the target sits next to the caller inside a `tasks/` subdirectory.
     /// Three `_converge_one_ap.yml` exist; each caller must reach its own.
     #[test]
     fn sibling_include_inside_a_tasks_subdirectory() {
-        let Some(root) = repo() else { return };
+        let root = anchors_tree("anchors-sibling");
         let from = root.join("roles/sync-state/tasks/http_access_point/reconcile.yml");
         let res = resolve_in(&from, "_converge_one_ap.yml");
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
@@ -1404,7 +1425,7 @@ mod tests {
 
     #[test]
     fn missing_file_reports_every_candidate_tried() {
-        let Some(root) = repo() else { return };
+        let root = anchors_tree("anchors-missing");
         let res = resolve_in(
             &root.join("roles/sync-state/tasks/http_access_point/reconcile.yml"),
             "definitely_not_here.yml",

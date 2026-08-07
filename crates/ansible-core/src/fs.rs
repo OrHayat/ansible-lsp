@@ -372,7 +372,12 @@ mod tests {
         // `install.rs` is exempt on purpose: it describes the *machine's* Ansible
         // installation, not workspace state. It is detected once behind a `OnceLock` and
         // caches its own routing tables, so there is no per-scan `Fs` to hand it.
-        const EXEMPT: &[&str] = &["fs.rs", "install.rs"];
+        //
+        // `testing.rs` builds fixture trees on disk, which is the same exemption the
+        // `#[cfg(test)]` split below grants every other file's tests — it needs naming here
+        // only because its `cfg(test)` sits on the `mod` in `lib.rs`, so the file has no
+        // in-body marker to split on. It is never compiled into a release build.
+        const EXEMPT: &[&str] = &["fs.rs", "install.rs", "testing.rs"];
         const BANNED: &[&str] = &[
             "std::fs::",
             ".is_file()",
