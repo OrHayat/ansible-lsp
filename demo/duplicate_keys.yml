@@ -1,0 +1,48 @@
+---
+# BAD — duplicate mapping keys. Every one of these is valid YAML, so the file loads and
+# runs; the parser just assigns the key twice and the FIRST value is gone before Ansible
+# ever sees the play. Ansible warns per later occurrence:
+#
+#   [WARNING]: Found duplicate mapping key 'http_port'.
+#   Origin: /path/duplicate_keys.yml:29:5
+#   Using last defined value only.
+#
+# Severity is the user's to set — `DUPLICATE_YAML_DICT_KEY` in ansible.cfg, default `warn`,
+# also `error` (the play refuses to start) and `ignore`. Verified against ansible-core 2.21.2.
+#
+# NOT YET FLAGGED: T-102 is open, so the server is currently as silent as the ticket says.
+# This file is the fixture that ticket asks for — the three places it must cover, in order.
+#
+# Not to be confused with the same role listed twice in a `roles:` list (T-023): that is a
+# sequence, both entries survive, and no duplicate-key warning exists for it.
+
+# ------------------------------------------------------------------- play level
+- name: BAD — two `hosts:`, the first silently discarded
+  hosts: webservers
+  gather_facts: false
+  hosts: localhost              # wins — the play targets localhost, not webservers
+
+  # --------------------------------------------------------------------- vars:
+  vars:
+    app_root: /srv/app
+    http_port: 80
+    http_port: 8080             # wins — the 80 above never existed
+
+  tasks:
+    # ------------------------------------------------------------ inside a task
+    - name: BAD — two `when:`, so the first guard is dead code
+      ansible.builtin.debug:
+        msg: "port={{ http_port }} root={{ app_root }}"
+      when: false
+      when: true                # wins — the task runs, the `false` gate is gone
+
+    - name: BAD — two `name:`, the recap shows only the second
+      ansible.builtin.debug:
+        msg: "the task above me is not called what it says"
+      name: BAD — two `name:`, and this is the one that prints
+
+# --------------------------------------------------------------- the JSON trap
+# `plays/duplicate_keys_json.yml` is the same mistake in JSON. Ansible tries `json.loads`
+# on every file before YAML (`parsing/utils/yaml.py:41`), so the YAML constructor — and its
+# duplicate check — never runs. Last wins, no warning, at any verbosity. We match that
+# asymmetry rather than improve on it.

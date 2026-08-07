@@ -1,0 +1,14 @@
+[
+  {
+    "name": "BAD in YAML, SILENT in JSON — a .yml file whose contents are JSON",
+    "hosts": "localhost",
+    "gather_facts": false,
+    "vars": { "http_port": 80, "http_port": 8080 },
+    "tasks": [
+      {
+        "name": "duplicate key above, and Ansible says nothing at all",
+        "ansible.builtin.debug": { "msg": "port={{ http_port }}" }
+      }
+    ]
+  }
+]
