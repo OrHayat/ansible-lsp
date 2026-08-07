@@ -1046,80 +1046,89 @@ mod tests {
         }
     }
 
+    /// The one tree here that can't use a bare `/p` root: "is this absolute" is
+    /// platform-defined, and on Windows a rooted path with no drive prefix is *relative*, so
+    /// `/p/abs.yml` would take the prepend branch and prove the opposite of the point.
     #[test]
     fn vars_files_absolute_entry_is_one_candidate() {
-        let d = t016_dir("abs");
-        let target = d.join("abs.yml");
-        std::fs::write(&target, "a: 1\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
+        let root = if cfg!(windows) { "C:/p" } else { "/p" };
+        let abs = format!("{root}/abs.yml");
+        let site = format!("{root}/site.yml");
+        let fs = crate::testing::MemFs::new(&[(&abs, "a: 1\n"), (&site, "")]);
 
-        let src = format!(
-            "- hosts: all\n  vars_files: ['{}']\n",
-            target.to_string_lossy()
+        let out = mem_src(
+            &site,
+            &format!("- hosts: all\n  vars_files: ['{abs}']\n"),
+            &fs,
         );
-        let out = resolve_src(&file, &src);
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
         // No `vars/` prepend for an absolute entry — exactly one candidate.
-        assert_eq!(res.candidates, vec![target.clone()]);
-        assert_eq!(res.targets, vec![target]);
+        assert_eq!(res.candidates, vec![PathBuf::from(&abs)]);
+        assert_eq!(res.targets, vec![PathBuf::from(&abs)]);
     }
 
     #[test]
     fn vars_files_no_role_vars_or_project_root_fallback() {
-        let d = t016_dir("bases");
-        std::fs::create_dir_all(d.join("playbooks")).unwrap();
-        // Planted where include_vars would look, but vars_files must not: project root.
-        std::fs::write(d.join("only-at-root.yml"), "a: 1\n").unwrap();
-        std::fs::write(d.join("ansible.cfg"), "").unwrap();
-        let file = d.join("playbooks/site.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [only-at-root.yml]\n");
+        let fs = crate::testing::MemFs::new(&[
+            // Planted where include_vars would look, but vars_files must not: project root.
+            ("/p/only-at-root.yml", "a: 1\n"),
+            ("/p/ansible.cfg", ""),
+            ("/p/playbooks/site.yml", ""),
+        ]);
+        let out = mem_src(
+            "/p/playbooks/site.yml",
+            "- hosts: all\n  vars_files: [only-at-root.yml]\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Missing);
         assert_eq!(
             res.candidates,
             vec![
-                d.join("playbooks/vars/only-at-root.yml"),
-                d.join("playbooks/only-at-root.yml"),
+                PathBuf::from("/p/playbooks/vars/only-at-root.yml"),
+                PathBuf::from("/p/playbooks/only-at-root.yml"),
             ]
         );
     }
 
     #[test]
     fn vars_files_group_first_found_wins_and_all_missing_is_one_missing() {
-        let d = t016_dir("group");
-        std::fs::write(d.join("vars/b.yml"), "a: 1\n").unwrap();
-        std::fs::write(d.join("vars/c.yml"), "a: 2\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/vars/b.yml", "a: 1\n"),
+            ("/p/vars/c.yml", "a: 2\n"),
+            ("/p/site.yml", ""),
+        ]);
 
         // First existing alternative wins, even with a later one also present.
-        let out = resolve_src(
-            &file,
+        let out = mem_src(
+            "/p/site.yml",
             "- hosts: all\n  vars_files:\n    - - vars/a.yml\n      - vars/b.yml\n      - vars/c.yml\n",
+            &fs,
         );
         let group = &out.iter().find(|(r, _)| r.vars_files_group.is_some()).unwrap().1;
         assert_eq!(group.status, Status::Resolved);
-        assert_eq!(group.targets, vec![d.join("vars/b.yml")]);
+        assert_eq!(group.targets, vec![PathBuf::from("/p/vars/b.yml")]);
         // The missing alternative is the construct working as designed — never Missing.
         let (_, a_res) = out.iter().find(|(r, _)| r.value == "vars/a.yml").unwrap();
         assert_eq!(a_res.status, Status::Skipped);
         assert_eq!(a_res.skip_reason, Some(SkipReason::GroupAlternative));
 
         // None exists: exactly the group is Missing, naming every candidate tried.
-        let out = resolve_src(
-            &file,
+        let out = mem_src(
+            "/p/site.yml",
             "- hosts: all\n  vars_files:\n    - - vars/nope-a.yml\n      - vars/nope-b.yml\n",
+            &fs,
         );
         let missing: Vec<_> = out.iter().filter(|(_, res)| res.status == Status::Missing).collect();
         assert_eq!(missing.len(), 1);
         assert!(missing[0].0.vars_files_group.is_some());
         assert_eq!(
             missing[0].1.candidates,
-            vec![d.join("vars/nope-a.yml"), d.join("vars/nope-b.yml")]
+            vec![
+                PathBuf::from("/p/vars/nope-a.yml"),
+                PathBuf::from("/p/vars/nope-b.yml")
+            ]
         );
     }
 
