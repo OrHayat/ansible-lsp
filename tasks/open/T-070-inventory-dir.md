@@ -23,6 +23,16 @@ the host (`inventory/data.py:197-202`); `add_host`-created hosts get `None`
   variance and `-i` overrides mean absence proves nothing).
 - No key in cfg → stay templated. Never model the machine default (`/etc/ansible/hosts`).
 
+**Two siblings belong here, not in tickets of their own** — same source, same per-host rule,
+same `-i`-versus-cfg problem:
+
+- **`inventory_file`** — the inventory *source* where `inventory_dir` is its directory
+  (`inventory/data.py:197-202`). Whatever this ticket derives for the dir gives the file for
+  free. It is also missing from `condition::MAGIC`, so T-051 has to list it regardless.
+- **`ansible_inventory_sources`** — the resolved `-i` list, from `_options_vars`. Purely a
+  launch fact: derivable only when the `inventory` cfg key names the sources, which is the
+  same parsing this ticket already adds. With no cfg key, stay templated.
+
 ## Done when
 
 - [ ] `inventory` key parsed, pinned by fixture

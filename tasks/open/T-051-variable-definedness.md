@@ -23,6 +23,19 @@ ruling out everything that could legitimately supply it:
 - Ansible **magic variables** (`inventory_hostname`, `groups`, `hostvars`, `role_path`,
   `playbook_dir`, `item`, …) — reuse `condition::MAGIC`.
 - Anything starting `ansible_` (facts).
+
+  Those two rules together cover almost all of `INTERNAL_STATIC_VARS`
+  (`constants.py:79-117`) — the `ansible_` prefix absorbs `ansible_playbook_python`,
+  `ansible_config_file`, `ansible_play_name`, `ansible_role_name(s)`, `ansible_play_hosts`,
+  `ansible_play_batch`, `ansible_version`, `ansible_limit`, `ansible_run_tags` and the rest.
+  Exactly **three** reserved names fall through both rules and must be added to
+  `condition::MAGIC` or they become false "undefined" warnings on ordinary lines:
+
+  ```
+  inventory_file      inventory_dir is in MAGIC, its twin is not
+  role_uuid
+  role_names          role_name is in MAGIC, the plural is not
+  ```
 - A `register`/`set_fact` anywhere reachable (already in the def index, so covered).
 - **Caller-injected** vars: a role/included file can receive vars from whoever includes it, and
   that caller isn't visible from the file alone. If the file is an include target (not a
