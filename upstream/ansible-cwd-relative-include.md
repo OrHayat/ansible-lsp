@@ -40,7 +40,8 @@ search.append(unfrackpath(os.path.join(dirname, source), follow=False))
 which resolves against the process's current working directory. So this candidate is
 `<cwd>/<dirname>/<source>` — for a role, `<cwd>/tasks/<source>`.
 
-Two things show this is unintended rather than a feature:
+Two things *suggest* — but do not prove — that this is unintended rather than a feature. No
+statement of intent was found either way; see "How confident is this" below before filing.
 
 1. **The comment above it still describes the old behaviour** — "loader basedir + … +
    filename" — while the code no longer applies the basedir.
@@ -90,6 +91,39 @@ path_dwim_relative(path='/tmp/t096e/roles/r1', dirname='tasks', source='x.yml', 
 
 Row 2 and row 4 are the duplicate pair — the same expression, one missing its base.
 
+## How confident is this, and why has it survived since 2017
+
+**Certain** (traced, or read directly):
+
+- the behaviour exists — same files, different CWD, different result
+- the comment above the line describes a basedir join the line does not perform
+- a basedir-relative version of the identical expression sits six lines below
+- `8f758204cf` introduced it as one of three uniform `path_dwim` → `unfrackpath` swaps, and
+  it is the only one of the three whose argument was relative
+
+**Inferred, not proven:** that it was accidental. Nothing in the commit message, and no
+later commit, states an intent either way. The line has not been touched since 2017
+(`git log -L 316,316`), which is equally consistent with "nobody noticed" and "nobody
+minded". A maintainer may answer this in one sentence; do not assert it in the issue.
+
+**Why eight years is not evidence against it.** The candidate only ever *adds* a
+resolution — it makes an include succeed that would otherwise fail, so it produces no error,
+no traceback and no bug report. It fires only when a directory named like `dirname`
+(`tasks/` for roles) sits under the operator's CWD, holds the file, *and* the file is absent
+from every earlier candidate.
+
+It is also **invisible to ansible's own unit tests**. `test_path_dwim_relative`
+(`test/units/parsing/test_dataloader.py:78`) is decorated
+`@patch('ansible.parsing.dataloader.unfrackpath', mock_unfrackpath_noop)`, so the function
+whose behaviour is in question is replaced by a no-op for the duration. The test asserts the
+two absolute candidates and a probe count of 2 for one of them — it records the duplication
+without examining where the relative candidate lands.
+
+One test does assert CWD: `path_dwim_relative_stack('', '', '') == os.path.abspath('./') + '/'`
+(`:171`). All-empty arguments, so it reads as a boundary case rather than an endorsement of
+CWD-relative include resolution, but it is the closest thing to a contrary datapoint and
+should be mentioned when filing.
+
 ## Impact
 
 Low frequency, high confusion. It needs a directory named like the include's `dirname`
@@ -100,10 +134,17 @@ with a developer's shell.
 
 ## Suggested fix
 
-Delete the CWD-relative entry. The basedir-relative one it duplicates is already in the list,
-so nothing that resolves for a legitimate reason stops resolving. If the duplicate is instead
-considered load-bearing by now, at minimum correct the comment so it describes what the line
-does.
+File it as a **question first**, not a patch: "is this candidate intentional? The comment
+says basedir, the code says CWD, and the basedir version is six lines below." That framing
+costs nothing if it turns out to be deliberate, and this dossier's confidence does not
+support asserting a bug outright.
+
+If it is unintended, deleting the CWD entry is safe on its face — the basedir-relative
+candidate it duplicates is already in the list, so nothing resolving for a legitimate reason
+stops resolving. It would still be a behaviour change for anyone unknowingly relying on it,
+which after eight years is not a hypothetical, so it likely wants a deprecation cycle rather
+than a straight removal. If it is deemed load-bearing, the minimum fix is correcting the
+comment so it describes what the line actually does.
 
 ## Why this repo cares
 
