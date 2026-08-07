@@ -104,9 +104,10 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | T-107      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | S    | T-107      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
-| T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | —          |
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
+| T-138 | [The installed ansible-core version is never detected, but rules need it](open/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | S    | —          |
+| T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | T-138      |
 
 ### P2 — coverage and usability
 

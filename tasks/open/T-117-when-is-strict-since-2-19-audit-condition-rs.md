@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-114 | —          |
+| open   | task | P1       | S    | T-114 | T-138      |
 
 ## Problem
 
@@ -32,8 +32,10 @@ already ship. T-032 is the ticket that built them; this is the version check the
 ## Approach
 
 Walk the four existing rules against the 2.19+ semantics, then add the two syntactic cases.
-Gate anything version-sensitive on the detected ansible-core version — the same detection
-T-084 already put on a background thread.
+Gate anything version-sensitive on the detected ansible-core version — **which does not
+exist yet**. `AnsibleInstall` records where Ansible is, not which version it is; T-138 adds
+the field by reading `<package_dir>/release.py`. Do that first or this ticket has nothing to
+gate on.
 
 ## Done when
 
