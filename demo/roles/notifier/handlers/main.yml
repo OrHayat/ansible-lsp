@@ -1,0 +1,14 @@
+---
+# Where does an include WRITTEN IN handlers/ resolve? (T-092)
+#
+# Tasks loaded from a role's handlers/ are Handlers, and Ansible anchors their
+# includes at handlers/, not tasks/ (included_file.py:172). This role has BOTH
+# handlers/restart.yml and tasks/restart.yml — Ctrl+click the include below: it must
+# open the handlers/ one. Before T-092 it opened the tasks/ decoy.
+- name: restart notifier
+  ansible.builtin.include_tasks: restart.yml
+
+# The fallback case: shared.yml exists only in tasks/. A handler include that misses
+# in handlers/ falls back to the role's tasks/ — so this resolves, to tasks/shared.yml.
+- name: rerun shared steps
+  ansible.builtin.include_tasks: shared.yml

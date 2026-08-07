@@ -1,0 +1,7 @@
+---
+# Only exists in tasks/. A handler include that misses in handlers/ legally falls
+# back to the role's tasks/ (dataloader.py:311-313), so handlers/main.yml can still
+# include this file — second candidate, not the anchor.
+- name: shared steps, reachable from both halves of the role
+  ansible.builtin.debug:
+    msg: "loaded via the tasks/ fallback"

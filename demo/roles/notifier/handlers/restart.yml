@@ -1,0 +1,13 @@
+---
+# The REAL target (T-092). An include written in handlers/ anchors here — Ctrl+click
+# on `restart.yml` in handlers/main.yml must open THIS file, not tasks/restart.yml,
+# which exists purely to catch a resolver that anchors handler includes at tasks/.
+- name: stop notifier
+  ansible.builtin.service:
+    name: notifier
+    state: stopped
+
+- name: start notifier
+  ansible.builtin.service:
+    name: notifier
+    state: started

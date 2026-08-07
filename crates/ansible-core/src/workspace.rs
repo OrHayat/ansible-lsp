@@ -11,9 +11,11 @@ pub struct FileContext {
     pub project_root: Option<PathBuf>,
     /// e.g. `.../roles/lustre-snapshot`
     pub role_dir: Option<PathBuf>,
-    /// The base Ansible resolves task includes against — NOT the including file's
-    /// own directory, once includes nest.
-    pub role_tasks_dir: Option<PathBuf>,
+    /// The role subdir Ansible anchors this file's includes at — NOT the including
+    /// file's own directory, once includes nest. `handlers/` for a file under a role's
+    /// handlers (tasks loaded from there are Handlers, and their includes anchor there:
+    /// `included_file.py:172`), else `tasks/` (T-092).
+    pub role_anchor_dir: Option<PathBuf>,
     /// The including file's own directory.
     pub file_dir: PathBuf,
     pub config: AnsibleConfig,
@@ -34,13 +36,13 @@ impl FileContext {
         config: impl FnOnce(&Path) -> AnsibleConfig,
     ) -> Self {
         let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let (role_dir, role_tasks_dir) = find_role(&file_dir, fs);
+        let (role_dir, role_anchor_dir) = find_role(&file_dir, fs);
         let project_root = find_project_root(&file_dir, fs);
         let config = project_root.as_deref().map(config).unwrap_or_default();
         Self {
             project_root,
             role_dir,
-            role_tasks_dir,
+            role_anchor_dir,
             file_dir,
             config,
         }
@@ -54,11 +56,24 @@ impl FileContext {
     /// warnings on working playbooks.
     pub fn task_search_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        push_unique(&mut dirs, self.role_tasks_dir.clone());
+        push_unique(&mut dirs, self.role_anchor_dir.clone());
+        push_unique(&mut dirs, self.handler_fallback_dir());
         push_unique(&mut dirs, self.role_dir.clone());
         push_unique(&mut dirs, Some(self.file_dir.clone()));
         push_unique(&mut dirs, self.project_root.clone());
         dirs
+    }
+
+    /// For a file anchored at `handlers/`: the role's `tasks/`, tried after the anchor.
+    /// A handler include that misses in `handlers/` legally falls back there —
+    /// `path_dwim_relative`'s "look in role's tasks dir w/o dirname"
+    /// (`dataloader.py:311-313`). None for a file anchored at `tasks/`.
+    fn handler_fallback_dir(&self) -> Option<PathBuf> {
+        let anchor = self.role_anchor_dir.as_deref()?;
+        if anchor.file_name()? != "handlers" {
+            return None;
+        }
+        Some(self.role_dir.as_deref()?.join("tasks"))
     }
 
     /// Directories that contain roles, in search order.
@@ -220,22 +235,27 @@ fn find_project_root(from: &Path, fs: &dyn Fs) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The role a file belongs to and the subdir its includes anchor at.
 fn find_role(from: &Path, fs: &dyn Fs) -> (Option<PathBuf>, Option<PathBuf>) {
-    for dir in from.ancestors() {
-        if dir.file_name().and_then(|n| n.to_str()) == Some("tasks") {
-            if let Some(role) = dir.parent() {
-                if is_role_dir(role, fs) {
-                    return (Some(role.to_path_buf()), Some(dir.to_path_buf()));
-                }
-            }
-        }
+    // Under tasks/ or handlers/: the anchor is that dir itself — Ansible picks it by the
+    // including task's kind, `'handlers' if isinstance(original_task, Handler) else
+    // 'tasks'` (included_file.py:172), which for role files means the dir they load from.
+    if let Some(anchor) = from.ancestors().find(|d| is_include_anchor(d, fs)) {
+        return (anchor.parent().map(Path::to_path_buf), Some(anchor.to_path_buf()));
     }
-    for dir in from.ancestors() {
-        if is_role_dir(dir, fs) {
-            return (Some(dir.to_path_buf()), Some(dir.join("tasks")));
-        }
+    // Elsewhere in a role (vars/, meta/, ...): no task lists live there, so includes keep
+    // the conventional tasks/ anchor.
+    if let Some(role) = from.ancestors().find(|d| is_role_dir(d, fs)) {
+        return (Some(role.to_path_buf()), Some(role.join("tasks")));
     }
     (None, None)
+}
+
+/// A role's `tasks/` or `handlers/` dir — the only two role subdirs that hold task
+/// lists, and therefore the only two places an include can anchor.
+fn is_include_anchor(dir: &Path, fs: &dyn Fs) -> bool {
+    matches!(dir.file_name().and_then(|n| n.to_str()), Some("tasks" | "handlers"))
+        && dir.parent().is_some_and(|role| is_role_dir(role, fs))
 }
 
 fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
@@ -256,7 +276,7 @@ mod tests {
         let c = FileContext::discover(Path::new(&f));
         assert!(c.role_dir.as_ref().unwrap().ends_with("roles/lustre-snapshot"));
         assert!(
-            c.role_tasks_dir
+            c.role_anchor_dir
                 .as_ref()
                 .unwrap()
                 .ends_with("roles/lustre-snapshot/tasks")

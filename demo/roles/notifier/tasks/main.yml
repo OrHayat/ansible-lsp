@@ -1,0 +1,8 @@
+---
+# The tasks half of the T-092 fixture. Nothing special here — deploy a config and
+# notify the handler. (`notify:` itself isn't resolved yet; that's T-028.)
+- name: Deploy config
+  ansible.builtin.copy:
+    dest: /etc/notifier.conf
+    content: "level=info\n"
+  notify: restart notifier

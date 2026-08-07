@@ -1,0 +1,7 @@
+---
+# The DECOY (T-092). Same basename as handlers/restart.yml — but an include written
+# inside handlers/ anchors at handlers/, so Ansible never loads this file for it.
+# Before T-092 the editor jumped here; wrong file.
+- name: wrong restart — a tasks/ file that shadows the handler include's real target
+  ansible.builtin.debug:
+    msg: "if a handler include opened this file, the resolver anchored at tasks/ (bug)"

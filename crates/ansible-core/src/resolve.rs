@@ -738,6 +738,70 @@ mod tests {
     }
 
     #[test]
+    fn handler_includes_anchor_at_handlers_not_tasks() {
+        // T-092: an include written in a role's handlers/ loads from handlers/ —
+        // `'handlers' if isinstance(original_task, Handler) else 'tasks'`
+        // (included_file.py:172) — with the role's tasks/ as a later legal fallback
+        // (dataloader.py:311-313), not the primary base.
+        let d = t016_dir("handlers");
+        std::fs::create_dir_all(d.join("roles/r/handlers")).unwrap();
+        std::fs::create_dir_all(d.join("roles/r/tasks")).unwrap();
+        // The same basename in both dirs pins which one wins.
+        std::fs::write(d.join("roles/r/handlers/restart.yml"), "").unwrap();
+        std::fs::write(d.join("roles/r/tasks/restart.yml"), "").unwrap();
+        // Only in tasks/: reachable from a handler include via the fallback.
+        std::fs::write(d.join("roles/r/tasks/shared.yml"), "").unwrap();
+        let handler_file = d.join("roles/r/handlers/main.yml");
+        std::fs::write(&handler_file, "").unwrap();
+
+        let out = resolve_src(&handler_file, "- include_tasks: restart.yml\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.targets, vec![d.join("roles/r/handlers/restart.yml")]);
+
+        let out = resolve_src(&handler_file, "- include_tasks: shared.yml\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![d.join("roles/r/tasks/shared.yml")]);
+
+        // Includes written under tasks/ still anchor at tasks/.
+        let task_file = d.join("roles/r/tasks/main.yml");
+        std::fs::write(&task_file, "").unwrap();
+        let out = resolve_src(&task_file, "- include_tasks: restart.yml\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.targets, vec![d.join("roles/r/tasks/restart.yml")]);
+    }
+
+    /// The demo fixture for T-092 keeps its promise: the files its comments point at
+    /// exist and win. Same scenario as `handler_includes_anchor_at_handlers_not_tasks`,
+    /// but against the checked-in demo tree — a hand-made fixture can silently lack the
+    /// file its comments describe (this one shipped without handlers/restart.yml).
+    #[test]
+    fn demo_notifier_handler_includes_resolve_as_documented() {
+        let file = Path::new("../../demo/roles/notifier/handlers/main.yml")
+            .canonicalize()
+            .unwrap();
+
+        let out = resolve_src(&file, "- include_tasks: restart.yml\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved);
+        assert!(
+            res.targets[0].ends_with("notifier/handlers/restart.yml"),
+            "handlers/ must win over the tasks/ decoy: {:?}",
+            res.targets
+        );
+
+        let out = resolve_src(&file, "- include_tasks: shared.yml\n");
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(
+            res.targets[0].ends_with("notifier/tasks/shared.yml"),
+            "the tasks/ fallback resolves shared.yml: {:?}",
+            res.targets
+        );
+    }
+
+    #[test]
     fn vars_files_candidate_order_vars_subdir_wins() {
         let d = t016_dir("order");
         std::fs::write(d.join("x.yml"), "a: 1\n").unwrap();
