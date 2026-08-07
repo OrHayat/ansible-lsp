@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | T-020 (last slot only) |
+| open   | bug  | P1       | M    | T-090 | T-020      |
 
 ## Symptom
 
@@ -24,21 +24,50 @@ search order; the warning at the end of this section is why.
 | a **task file** | `path_dwim_relative(path, dirname=<the include's own subdir>, source)` | ~6, incl. `$CWD/<dirname>/` |
 | a **role** | `path_dwim_relative(role_dir, 'tasks', source, is_role=True)` | **7**, incl. `$CWD/tasks/` and `<playbook_dir>/tasks/` |
 
-The full role list, traced, for `include_tasks: x.yml` in `roles/r1/tasks/main.yml`:
+### All seven, mapped to what we do — the implementation checklist
 
-```
-roles/r1/tasks/x.yml          (candidates 1-3 collapse to this)
-$CWD/tasks/x.yml              <- CWD-dependent
-roles/r1/x.yml                role root
-<playbook_dir>/tasks/x.yml
-<playbook_dir>/x.yml
-```
+Traced for `include_tasks: x.yml` in `roles/r1/tasks/main.yml`, so `path=roles/r1`,
+`dirname='tasks'`, `basedir=roles/r1`. Source lines are `dataloader.py:288-325`.
+
+| # | Source | Resolves to | Us |
+| - | ------ | ----------- | -- |
+| 1 | `join(path, dirname, source)` | `roles/r1/tasks/x.yml` | have — `role_anchor_dir` |
+| 2 | `unfrackpath(join(basedir, dirname, source))` | same as 1 | have — same |
+| 3 | `unfrackpath(join(basedir, 'tasks', source))` — roles only, skipped when `source` already ends in `dirname` | same as 1 | have — same |
+| 4 | `unfrackpath(join(dirname, source))` | `$CWD/tasks/x.yml` | **won't model** — upstream accident |
+| 5 | `unfrackpath(join(basedir, source))` | `roles/r1/x.yml` | have — `role_dir` |
+| 6 | `path_dwim(join(dirname, source))` | `<playbook_dir>/tasks/x.yml` | **MISSING** |
+| 7 | `path_dwim(source)` | `<playbook_dir>/x.yml` | approximated by `project_root` |
+
+Seven candidates, five distinct paths — 1, 2 and 3 collapse because `path` is already the
+role directory. `basedir` is `unfrackpath(path)`, except that when `is_role` and `path` ends
+in `tasks` it becomes `dirname(path)`, which is what makes 5 land on the role root.
+
+**The same seven collapse harder for a task file**, because there `path` *is* the playbook
+dir — three distinct locations, not seven:
+
+| Distinct path | From | Us |
+| ------------- | ---- | -- |
+| `<playbook_dir>/<subdir>/<source>` | 1, 2, 6 | have — `file_dir` |
+| `<playbook_dir>/<source>` | 5, 7 | approximated by `project_root` |
+| `$CWD/<subdir>/<source>` | 4 | won't model |
 
 `dirname` is **dynamic** — `'tasks'` for a role, the include path's own subdirectory
-otherwise. It is not the literal string `tasks`.
+otherwise. It is not the literal string `tasks`. Assuming it was cost this ticket two wrong
+conclusions.
 
 The project root appears in none of the three lists. It resolves only by coincidence, when it
 happens to equal `$CWD` or the playbook dir.
+
+**Both remaining candidates need the same missing fact.** #6 and #7 are the two `path_dwim`
+entries, and `path_dwim` joins onto `_basedir` — the *invoking playbook's* directory. From a
+role or task file that is unknowable without the reverse index, so **the rest of this ticket
+is blocked on T-020**, not merely awaiting a corpus scan. #4 we decline regardless.
+
+Approximating #6 as `<project_root>/tasks/<src>` was considered and rejected: it would add a
+guessed candidate, and a guess that *widens* resolution manufactures false `Resolved`
+verdicts, which is the failure mode this resolver exists to avoid. Better to warn wrongly
+about a rare miss than to point confidently at a file Ansible would never load.
 
 ## Both of the original claims were right
 
