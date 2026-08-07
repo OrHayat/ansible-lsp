@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| **partly done** | task | P3 | M | — |
+| done   | task | P3       | M    | —          |
 
 ## Problem
 
@@ -69,6 +69,22 @@ a release build.
 skips each file's content after an in-body `#[cfg(test)]`, and this file's `cfg` sits on the
 `mod` in `lib.rs`, so it read as production code.
 
+**`resolve.rs` is migrated.** All 16 `t016_dir` callers plus four more that built temp dirs
+inline are now `MemFs` trees; `t016_dir` itself is deleted. The helper is `mem_src(file, src,
+fs)` — `resolve_src`'s shape, routed through `discover_with` and the crate's `resolve_in`. It
+spells out `super::resolve_in` because the test module has a *local* `resolve_in` shadowing
+the crate function.
+
+`with_dirs` proved necessary on the first real use: `include_vars_dir_targets_the_loaded_files_not_the_directory`
+asserts that an empty `vars/empty` resolves with no targets, and the prefix rule can't see a
+directory holding no files.
+
+One test can't use a bare `/p` root. `vars_files_absolute_entry_is_one_candidate` turns on
+`Path::is_absolute`, which is platform-defined — on Windows a rooted path with no drive prefix
+is *relative*, so `/p/abs.yml` took the `vars/` prepend branch and produced two candidates
+instead of one. It uses `if cfg!(windows) { "C:/p" } else { "/p" }`. Any future MemFs tree that
+means "absolute" needs the same.
+
 **Ordering against T-077, settled:** the helper landed first, as this ticket asked — but
 T-077's first six conversions had already shipped as tempdir trees (`c6bcc3a`), so those six
 are the ones this ticket predicted would need rewriting. T-077's *remaining* ~25 should be
@@ -79,6 +95,6 @@ every caller does.
 ## Done when
 
 - [x] one `MemFs`, reachable from every test module, with empty directories expressible
-- [ ] `resolve.rs`'s fixture tests build no directories, and `t016_dir` is gone
+- [x] `resolve.rs`'s fixture tests build no directories, and `t016_dir` is gone
 - [x] `CfgFs`/`NoFile` are the shared helper rather than per-file re-implementations
 - [x] T-077's ordering is settled in writing, so its fixtures aren't built twice

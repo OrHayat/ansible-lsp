@@ -191,7 +191,6 @@ T-021 is now unblocked on that side.
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
 | T-135 | [Four resolve entry points are a cartesian product of two optional axes](open/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | S    | —          |
-| T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](open/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
@@ -246,6 +245,7 @@ T-021 is now unblocked on that side.
 | T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](closed/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | done     |
 | T-095 | **bug** · [Templated import_playbook is reported missing](closed/T-095-templated-import-playbook-is-reported-missing.md) | done     |
 | T-102 | [Duplicate YAML mapping key](closed/T-102-duplicate-yaml-mapping-key.md) | done     |
+| T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](closed/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -897,13 +897,6 @@ mod tests {
         &out.iter().find(|(r, _)| r.kind == kind).expect("kind").1
     }
 
-    fn t016_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ansible-lsp-t016-{name}"));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("vars")).unwrap();
-        d
-    }
-
     /// [`resolve_src`] against an in-memory tree: no directories built, nothing left behind,
     /// and no unique-name rule to get wrong (T-134).
     ///
@@ -1134,13 +1127,11 @@ mod tests {
 
     #[test]
     fn vars_files_group_with_templated_alternative_never_warns() {
-        let d = t016_dir("group-tmpl");
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(
-            &file,
+        let fs = crate::testing::MemFs::new(&[("/p/site.yml", "")]);
+        let out = mem_src(
+            "/p/site.yml",
             "- hosts: all\n  vars_files:\n    - - \"{{ env }}.yml\"\n      - vars/nope.yml\n",
+            &fs,
         );
         let group = &out.iter().find(|(r, _)| r.vars_files_group.is_some()).unwrap().1;
         assert_eq!(group.status, Status::Skipped);
@@ -1150,38 +1141,41 @@ mod tests {
 
     #[test]
     fn vars_files_templated_entry_globs_for_navigation() {
-        let d = t016_dir("glob");
-        std::fs::write(d.join("vars/prod.yml"), "a: 1\n").unwrap();
-        std::fs::write(d.join("vars/staging.yml"), "a: 2\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(&file, "- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n");
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/vars/prod.yml", "a: 1\n"),
+            ("/p/vars/staging.yml", "a: 2\n"),
+            ("/p/site.yml", ""),
+        ]);
+        let out = mem_src(
+            "/p/site.yml",
+            "- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::VarsFiles);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(res.skip_reason, Some(SkipReason::Templated), "offer, never assert");
-        assert!(res.targets.contains(&d.join("vars/prod.yml")));
-        assert!(res.targets.contains(&d.join("vars/staging.yml")));
+        assert!(res.targets.contains(&PathBuf::from("/p/vars/prod.yml")));
+        assert!(res.targets.contains(&PathBuf::from("/p/vars/staging.yml")));
     }
 
     #[test]
     fn resolve_with_substitutes_known_literals_for_vars_files() {
-        let d = t016_dir("subst");
-        std::fs::write(d.join("vars/prod.yml"), "a: 1\n").unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[("/p/vars/prod.yml", "a: 1\n"), ("/p/site.yml", "")]);
+        let file = Path::new("/p/site.yml");
 
         let doc = Document::new("- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n".to_string());
-        let ctx = FileContext::discover(&file);
+        let ctx = FileContext::discover_with(file, &fs, |root| {
+            crate::config::AnsibleConfig::load_in(root, &fs)
+        });
         let r = extract(&doc.parse().unwrap())
             .into_iter()
             .find(|r| r.kind == ReferenceKind::VarsFiles)
             .unwrap();
         let literals = HashMap::from([("env".to_string(), vec!["prod".to_string()])]);
-        let res = resolve_with(&r, &ctx, &literals);
+        let res = resolve_with_in(&r, &ctx, &literals, &fs);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(res.skip_reason, Some(SkipReason::Templated), "navigation only");
-        assert_eq!(res.targets, vec![d.join("vars/prod.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/vars/prod.yml")]);
     }
 
     /// Bare module names are implicitly `ansible.legacy`: a workspace `library/` shadows
@@ -1240,26 +1234,25 @@ mod tests {
     /// run under Ansible — only `.py` resolved before T-093.
     #[test]
     fn legacy_modules_match_any_extension() {
-        let d = t016_dir("modext");
-        std::fs::create_dir_all(d.join("library")).unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/site.yml", ""),
+            ("/p/library/winmod.ps1", "# powershell\n"),
+            ("/p/library/rawmod", "#!/bin/sh\n"),
+            // MODULE_IGNORE_EXTS: a doc file sharing the base name is never the module.
+            ("/p/library/notes.md", ""),
+        ]);
 
-        std::fs::write(d.join("library/winmod.ps1"), "# powershell\n").unwrap();
-        let out = resolve_src(&file, "- winmod:\n    path: x\n");
+        let out = mem_src("/p/site.yml", "- winmod:\n    path: x\n", &fs);
         let res = first(&out, ReferenceKind::Module);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("library/winmod.ps1")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/library/winmod.ps1")]);
 
-        std::fs::write(d.join("library/rawmod"), "#!/bin/sh\n").unwrap();
-        let out = resolve_src(&file, "- rawmod:\n    path: x\n");
+        let out = mem_src("/p/site.yml", "- rawmod:\n    path: x\n", &fs);
         let res = first(&out, ReferenceKind::Module);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("library/rawmod")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/library/rawmod")]);
 
-        // MODULE_IGNORE_EXTS: a doc file sharing the base name is never the module.
-        std::fs::write(d.join("library/notes.md"), "").unwrap();
-        let out = resolve_src(&file, "- notes:\n    path: x\n");
+        let out = mem_src("/p/site.yml", "- notes:\n    path: x\n", &fs);
         let res = first(&out, ReferenceKind::Module);
         assert_ne!(res.status, Status::Resolved, "got {:#?}", res.targets);
     }
@@ -1268,21 +1261,28 @@ mod tests {
     /// the first — the extensionless one, "shortest match first" (`loader.py:712`).
     #[test]
     fn ambiguous_module_match_takes_sorted_first() {
-        let d = t016_dir("modambig");
-        std::fs::create_dir_all(d.join("library")).unwrap();
-        let file = d.join("site.yml");
-        std::fs::write(&file, "").unwrap();
-        std::fs::write(d.join("library/both"), "#!/bin/sh\n").unwrap();
-        std::fs::write(d.join("library/both.ps1"), "").unwrap();
-        std::fs::write(d.join("library/both.py"), "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/site.yml", ""),
+            ("/p/library/both", "#!/bin/sh\n"),
+            ("/p/library/both.ps1", ""),
+            ("/p/library/both.py", ""),
+        ]);
 
-        let out = resolve_src(&file, "- both:\n    path: x\n");
+        let out = mem_src("/p/site.yml", "- both:\n    path: x\n", &fs);
         let res = first(&out, ReferenceKind::Module);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("library/both")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/library/both")]);
         // The losers stay in the trail.
-        assert!(res.candidates.contains(&d.join("library/both.ps1")), "{:#?}", res.candidates);
-        assert!(res.candidates.contains(&d.join("library/both.py")), "{:#?}", res.candidates);
+        assert!(
+            res.candidates.contains(&PathBuf::from("/p/library/both.ps1")),
+            "{:#?}",
+            res.candidates
+        );
+        assert!(
+            res.candidates.contains(&PathBuf::from("/p/library/both.py")),
+            "{:#?}",
+            res.candidates
+        );
     }
 
     /// The demo tree's non-Python modules (T-093): bash in `library/` and in a
@@ -1340,11 +1340,10 @@ mod tests {
 
     #[test]
     fn resolve_with_substitutes_a_known_literal_for_navigation() {
-        let d = std::env::temp_dir().join("ansible-lsp-t056");
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("prod.yml"), "x: 1\n").unwrap();
-        let ctx = FileContext::discover(&d.join("play.yml")); // file_dir = d
+        let fs = crate::testing::MemFs::new(&[("/p/prod.yml", "x: 1\n"), ("/p/play.yml", "")]);
+        let ctx = FileContext::discover_with(Path::new("/p/play.yml"), &fs, |root| {
+            crate::config::AnsibleConfig::load_in(root, &fs)
+        });
         let nodes = Document::new("- include_vars: \"{{ env }}.yml\"\n".to_string())
             .parse()
             .unwrap();
@@ -1356,7 +1355,7 @@ mod tests {
 
         let mut lit = HashMap::new();
         lit.insert("env".to_string(), vec!["prod".to_string()]);
-        let res = resolve_with(r, &ctx, &lit);
+        let res = resolve_with_in(r, &ctx, &lit, &fs);
         assert_eq!(res.status, Status::Resolved);
         assert!(res.targets.iter().any(|t| t.ends_with("prod.yml")));
         // Navigation only — never a warning.
@@ -1532,86 +1531,102 @@ mod tests {
     /// never produce a warning.
     #[test]
     fn include_vars_dir_targets_the_loaded_files_not_the_directory() {
-        let d = std::env::temp_dir().join("ansible-lsp-t017-dir");
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("roles/db/tasks")).unwrap();
-        std::fs::create_dir_all(d.join("roles/db/vars/prod/sub")).unwrap();
-        std::fs::create_dir_all(d.join("roles/db/vars/empty")).unwrap();
-        std::fs::write(d.join("roles/db/vars/prod/a.yml"), "x: 1\n").unwrap();
-        std::fs::write(d.join("roles/db/vars/prod/sub/b.json"), "{\"y\": 2}\n").unwrap();
-        std::fs::write(d.join("roles/db/vars/prod/notes.txt"), "").unwrap();
-        let file = d.join("roles/db/tasks/main.yml");
-        std::fs::write(&file, "").unwrap();
+        // `vars/empty` holds no files, so the prefix rule alone cannot see it — this is the
+        // case `with_dirs` exists for (T-134).
+        let fs = crate::testing::MemFs::with_dirs(
+            &[
+                ("/p/roles/db/tasks/main.yml", ""),
+                ("/p/roles/db/vars/prod/a.yml", "x: 1\n"),
+                ("/p/roles/db/vars/prod/sub/b.json", "{\"y\": 2}\n"),
+                ("/p/roles/db/vars/prod/notes.txt", ""),
+            ],
+            &["/p/roles/db/vars/empty"],
+        );
+        let file = "/p/roles/db/tasks/main.yml";
 
         // Unprefixed value resolves under the role's vars/; targets are the files the
         // walk loads (recursive, json included), never the directory itself. The .txt
         // would fail the task, and ignore_unknown_extensions=true skips it instead.
-        let out = resolve_src(&file, "- include_vars: { dir: prod, ignore_unknown_extensions: true }\n");
+        let out = mem_src(
+            file,
+            "- include_vars: { dir: prod, ignore_unknown_extensions: true }\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(
             res.targets,
             vec![
-                d.join("roles/db/vars/prod/a.yml"),
-                d.join("roles/db/vars/prod/sub/b.json"),
+                PathBuf::from("/p/roles/db/vars/prod/a.yml"),
+                PathBuf::from("/p/roles/db/vars/prod/sub/b.json"),
             ]
         );
 
         // An empty directory is legal and resolves — with nothing to navigate to.
-        let res = resolve_src(&file, "- include_vars: { dir: empty }\n");
+        let res = mem_src(file, "- include_vars: { dir: empty }\n", &fs);
         let res = first(&res, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Resolved);
         assert!(res.targets.is_empty());
 
         // In-role `vars/`-prefixed miss: provably absent at the role path; runtime decays
         // to cwd. Missing, with the one role-relative candidate named.
-        let res = resolve_src(&file, "- include_vars: { dir: vars/nope }\n");
+        let res = mem_src(file, "- include_vars: { dir: vars/nope }\n", &fs);
         let res = first(&res, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Missing);
-        assert_eq!(res.candidates, vec![d.join("roles/db/vars/nope")]);
+        assert_eq!(res.candidates, vec![PathBuf::from("/p/roles/db/vars/nope")]);
 
         // Templated dir: unknowable, skipped, never warned.
-        let res = resolve_src(&file, "- include_vars: { dir: \"{{ env }}\" }\n");
+        let res = mem_src(file, "- include_vars: { dir: \"{{ env }}\" }\n", &fs);
         let res = first(&res, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Skipped);
     }
 
     #[test]
     fn include_vars_dir_outside_a_role_uses_the_task_files_dir() {
-        let d = std::env::temp_dir().join("ansible-lsp-t017-dir-norole");
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("playbooks/setup/settings")).unwrap();
-        std::fs::write(d.join("playbooks/setup/settings/c.yml"), "z: 3\n").unwrap();
-        let file = d.join("playbooks/setup/tasks.yml");
-        std::fs::write(&file, "").unwrap();
-
-        let out = resolve_src(&file, "- include_vars: { dir: settings }\n");
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/playbooks/setup/settings/c.yml", "z: 3\n"),
+            ("/p/playbooks/setup/tasks.yml", ""),
+        ]);
+        let out = mem_src(
+            "/p/playbooks/setup/tasks.yml",
+            "- include_vars: { dir: settings }\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::IncludeVarsDir);
         assert_eq!(res.status, Status::Resolved);
-        assert_eq!(res.targets, vec![d.join("playbooks/setup/settings/c.yml")]);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from("/p/playbooks/setup/settings/c.yml")]
+        );
     }
 
     /// `inventory_dir` used to borrow the playbook-dir guesses; it is per-host and set by
     /// `-i` at launch, so it must stay templated — glob, never substitute, never warn.
     #[test]
     fn inventory_dir_is_not_substituted() {
-        let d = std::env::temp_dir().join("ansible-lsp-t070-invdir");
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("tasks")).unwrap();
-        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
-        // Planted exactly where the old project-root guess would have hit.
-        std::fs::write(d.join("only_here.yml"), "").unwrap();
-        let file = d.join("tasks/main.yml");
-        std::fs::write(&file, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            // Planted exactly where the old project-root guess would have hit.
+            ("/p/only_here.yml", ""),
+            ("/p/tasks/main.yml", ""),
+        ]);
 
         // Substitution would resolve this as a complete path with no skip reason; the
         // templated route is only reachable when the `{{ }}` survives expansion.
-        let out = resolve_src(&file, "- include_tasks: \"{{ inventory_dir }}/only_here.yml\"\n");
+        let out = mem_src(
+            "/p/tasks/main.yml",
+            "- include_tasks: \"{{ inventory_dir }}/only_here.yml\"\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.skip_reason, Some(SkipReason::Templated));
 
         // And an absent target skips rather than warns.
-        let out = resolve_src(&file, "- include_tasks: \"{{ inventory_dir }}/absent.yml\"\n");
+        let out = mem_src(
+            "/p/tasks/main.yml",
+            "- include_tasks: \"{{ inventory_dir }}/absent.yml\"\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Skipped);
     }
@@ -1695,11 +1710,14 @@ mod tests {
     /// wrong one no longer doing so.
     #[test]
     fn a_playbook_does_not_search_the_project_root() {
-        let d = t016_dir("t096");
-        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
-        std::fs::create_dir_all(d.join("playbooks")).unwrap();
-        let play = d.join("playbooks/site.yml");
-        std::fs::write(&play, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/root_only.yml", ""),
+            ("/p/playbooks/beside.yml", ""),
+            ("/p/site.yml", ""),
+            ("/p/tasks/t.yml", ""),
+        ]);
 
         // A playbook is decided by CONTENT, not by filename — `ast::build` needs play
         // keywords. A bare task list in a file called site.yml is a task file, and
@@ -1707,33 +1725,26 @@ mod tests {
         let pb = |inc: &str| format!("- hosts: all\n  tasks:\n    - include_tasks: {inc}\n");
 
         // Only at the repo root: Ansible errors, so we must not claim it resolves.
-        std::fs::write(d.join("root_only.yml"), "").unwrap();
-        let out = resolve_src(&play, &pb("root_only.yml"));
+        let out = mem_src("/p/playbooks/site.yml", &pb("root_only.yml"), &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Missing, "tried {:#?}", res.candidates);
 
         // Beside the playbook: still resolves, via file_dir.
-        std::fs::write(d.join("playbooks/beside.yml"), "").unwrap();
-        let out = resolve_src(&play, &pb("beside.yml"));
+        let out = mem_src("/p/playbooks/site.yml", &pb("beside.yml"), &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("playbooks/beside.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/playbooks/beside.yml")]);
 
         // A playbook AT the root: file_dir and project_root are the same directory, and
         // the dedupe leaves one entry. Dropping it would remove the file's own dir.
-        let at_root = d.join("site.yml");
-        std::fs::write(&at_root, "").unwrap();
-        let out = resolve_src(&at_root, &pb("root_only.yml"));
+        let out = mem_src("/p/site.yml", &pb("root_only.yml"), &fs);
         let res = first(&out, ReferenceKind::IncludeTasks);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
 
         // A task file is case 3: the invoking playbook is unknown, so project_root stays
         // as the approximation until T-020. Unchanged by this ticket, pinned so the
         // difference is deliberate rather than accidental.
-        std::fs::create_dir_all(d.join("tasks")).unwrap();
-        let task = d.join("tasks/t.yml");
-        std::fs::write(&task, "").unwrap();
-        let out = resolve_src(&task, "- include_tasks: root_only.yml\n");
+        let out = mem_src("/p/tasks/t.yml", "- include_tasks: root_only.yml\n", &fs);
         assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
     }
 
@@ -1748,31 +1759,36 @@ mod tests {
     /// load — and reported it Resolved. Being confidently wrong is worse than missing.
     #[test]
     fn playbook_dir_in_a_playbook_is_its_own_directory() {
-        let d = t016_dir("playbook-dir");
-        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
-        std::fs::create_dir_all(d.join("playbooks")).unwrap();
-        // Same basename in both places; only the sibling one is reachable.
-        std::fs::write(d.join("common.yml"), "").unwrap();
-        std::fs::write(d.join("playbooks/common.yml"), "").unwrap();
-        let play = d.join("playbooks/site.yml");
-        std::fs::write(&play, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            // Same basename in both places; only the sibling one is reachable.
+            ("/p/common.yml", ""),
+            ("/p/playbooks/common.yml", ""),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/tasks/t.yml", ""),
+        ]);
 
-        let out = resolve_src(&play, "- import_playbook: \"{{ playbook_dir }}/common.yml\"\n");
+        let out = mem_src(
+            "/p/playbooks/site.yml",
+            "- import_playbook: \"{{ playbook_dir }}/common.yml\"\n",
+            &fs,
+        );
         let res = first(&out, ReferenceKind::ImportPlaybook);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
         assert_eq!(
             res.targets,
-            vec![d.join("playbooks/common.yml")],
+            vec![PathBuf::from("/p/playbooks/common.yml")],
             "must be the playbook's own dir, not the project root"
         );
 
         // A task file is the case that genuinely cannot know: `playbook_dir` there is the
         // INVOKING playbook's dir. The two guesses stay until T-137 derives them from
         // invocation chains, so the root copy is still reachable from one.
-        std::fs::create_dir_all(d.join("tasks")).unwrap();
-        let task = d.join("tasks/t.yml");
-        std::fs::write(&task, "").unwrap();
-        let out = resolve_src(&task, "- include_tasks: \"{{ playbook_dir }}/common.yml\"\n");
+        let out = mem_src(
+            "/p/tasks/t.yml",
+            "- include_tasks: \"{{ playbook_dir }}/common.yml\"\n",
+            &fs,
+        );
         assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
     }
 
@@ -1857,31 +1873,36 @@ mod tests {
     /// on the entry was never read at all.
     #[test]
     fn templated_import_playbook_resolves_when_parse_time_can_supply_it() {
-        let d = t016_dir("t095");
-        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
-        std::fs::write(d.join("prod-setup.yml"), "").unwrap();
-        let play = d.join("site.yml");
-        std::fs::write(&play, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            ("/p/prod-setup.yml", ""),
+            ("/p/site.yml", ""),
+        ]);
 
         // `playbook_dir` is a magic variable — available with no play or host, so
         // `--syntax-check` passes on it. It must resolve, not warn.
-        let out = resolve_src(&play, "- import_playbook: \"{{ playbook_dir }}/prod-setup.yml\"\n");
-        let res = first(&out, ReferenceKind::ImportPlaybook);
-        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("prod-setup.yml")]);
-
-        // A literal `vars:` on the entry is `self.vars` — read before the merge, so it
-        // works where group_vars and set_fact cannot.
-        let out = resolve_src(
-            &play,
-            "- import_playbook: \"{{ env }}-setup.yml\"\n  vars:\n    env: prod\n",
+        let out = mem_src(
+            "/p/site.yml",
+            "- import_playbook: \"{{ playbook_dir }}/prod-setup.yml\"\n",
+            &fs,
         );
         let res = first(&out, ReferenceKind::ImportPlaybook);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert_eq!(res.targets, vec![d.join("prod-setup.yml")]);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/prod-setup.yml")]);
+
+        // A literal `vars:` on the entry is `self.vars` — read before the merge, so it
+        // works where group_vars and set_fact cannot.
+        let out = mem_src(
+            "/p/site.yml",
+            "- import_playbook: \"{{ env }}-setup.yml\"\n  vars:\n    env: prod\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::ImportPlaybook);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/prod-setup.yml")]);
 
         // Same file, same value, no `vars:` — nothing here can supply it, so it warns.
-        let out = resolve_src(&play, "- import_playbook: \"{{ env }}-setup.yml\"\n");
+        let out = mem_src("/p/site.yml", "- import_playbook: \"{{ env }}-setup.yml\"\n", &fs);
         assert_eq!(first(&out, ReferenceKind::ImportPlaybook).status, Status::Missing);
     }
 
@@ -2017,19 +2038,19 @@ mod tests {
     /// on the first hit.
     #[test]
     fn role_file_extension_order_flips_with_tasks_from() {
-        let d = t016_dir("role-exts");
-        let tasks = d.join("roles/r/tasks");
-        std::fs::create_dir_all(&tasks).unwrap();
-        for f in ["main.yml", "main.yaml", "setup", "setup.yml", "data.json"] {
-            std::fs::write(tasks.join(f), "").unwrap();
-        }
-        std::fs::create_dir_all(d.join("roles/bare/tasks")).unwrap();
-        std::fs::write(d.join("roles/bare/tasks/main"), "").unwrap();
-        let play = d.join("site.yml");
-        std::fs::write(&play, "").unwrap();
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/roles/r/tasks/main.yml", ""),
+            ("/p/roles/r/tasks/main.yaml", ""),
+            ("/p/roles/r/tasks/setup", ""),
+            ("/p/roles/r/tasks/setup.yml", ""),
+            ("/p/roles/r/tasks/data.json", ""),
+            ("/p/roles/bare/tasks/main", ""),
+            ("/p/site.yml", ""),
+        ]);
+        let tasks = PathBuf::from("/p/roles/r/tasks");
 
         // Default entry point: `''` last, so main.yml wins and main.yaml is unreachable.
-        let out = resolve_src(&play, "- include_role:\n    name: r\n");
+        let out = mem_src("/p/site.yml", "- include_role:\n    name: r\n", &fs);
         let res = first(&out, ReferenceKind::Role);
         assert_eq!(res.targets, vec![tasks.join("main.yml")]);
         assert_eq!(
@@ -2038,7 +2059,7 @@ mod tests {
         );
 
         // With a tasks_from: `''` first, so the literal name beats setup.yml.
-        let out = resolve_src(&play, "- include_role: { name: r, tasks_from: setup }\n");
+        let out = mem_src("/p/site.yml", "- include_role: { name: r, tasks_from: setup }\n", &fs);
         let res = first(&out, ReferenceKind::TasksFrom);
         assert_eq!(res.targets, vec![tasks.join("setup")]);
         assert_eq!(
@@ -2053,7 +2074,7 @@ mod tests {
         let hit = |exts: RoleExts, stem: &str, bare_first: bool| {
             exts.candidates(&tasks, stem, bare_first)
                 .into_iter()
-                .find(|p| p.is_file())
+                .find(|p| fs.is_file(p))
         };
         // `.json` is reachable only because the list says so.
         assert_eq!(hit(old, "data", true), None, "the old list must miss data.json");
@@ -2072,15 +2093,15 @@ mod tests {
         }
 
         // .json and the extensionless form resolve at both ends of the flip.
-        let out = resolve_src(&play, "- include_role: { name: r, tasks_from: data }\n");
+        let out = mem_src("/p/site.yml", "- include_role: { name: r, tasks_from: data }\n", &fs);
         assert_eq!(
             first(&out, ReferenceKind::TasksFrom).targets,
             vec![tasks.join("data.json")]
         );
-        let out = resolve_src(&play, "- include_role:\n    name: bare\n");
+        let out = mem_src("/p/site.yml", "- include_role:\n    name: bare\n", &fs);
         assert_eq!(
             first(&out, ReferenceKind::Role).targets,
-            vec![d.join("roles/bare/tasks/main")]
+            vec![PathBuf::from("/p/roles/bare/tasks/main")]
         );
     }
 
