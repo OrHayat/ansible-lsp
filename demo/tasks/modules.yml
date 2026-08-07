@@ -45,3 +45,15 @@
   community.crypto.openssl_certificate:
     path: /etc/ssl/cert.pem
     state: present
+
+# ------------------------------------------------------ ACTION LOOKALIKES (T-094)
+# Ansible recognises exactly three spellings of include_tasks: bare,
+# `ansible.builtin.`, `ansible.legacy.`. This key merely ENDS in the name — it's an
+# ordinary module in a third-party collection, so there must be no "missing file
+# x.yml" warning here.
+- name: Looks like an include, is a module — stays quiet
+  community.general.include_tasks: x.yml
+
+# The FQCN spelling of the real include still IS one: resolves and links the file.
+- name: The real include, builtin-FQCN spelling
+  ansible.builtin.include_tasks: sibling.yml

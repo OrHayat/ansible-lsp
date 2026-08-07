@@ -88,11 +88,6 @@ impl Reference {
     }
 }
 
-/// `ansible.builtin.include_tasks` -> `include_tasks`
-fn short_key(key: &str) -> &str {
-    key.rsplit('.').next().unwrap_or(key)
-}
-
 /// `roles/<x>/meta/main.yml`: each `dependencies:` entry names a role that runs before
 /// this one, so each is a Role reference. Callers gate by path — a `dependencies:` key in
 /// a random vars file is data, not dependencies (`roles/sync-state/vars/main.yml` has one).
@@ -219,9 +214,9 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
 /// The reference(s) a task's module implies: an include target, a role + `tasks_from`, or
 /// a bare FQCN module.
 fn module_refs(a: &Action, out: &mut Vec<Reference>) {
-    match short_key(&a.name) {
+    match crate::keywords::core_action(&a.name) {
         "include_tasks" | "import_tasks" => {
-            let kind = if short_key(&a.name) == "include_tasks" {
+            let kind = if crate::keywords::core_action(&a.name) == "include_tasks" {
                 ReferenceKind::IncludeTasks
             } else {
                 ReferenceKind::ImportTasks
@@ -559,5 +554,32 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].value, "community.lvm.pool_create");
         assert_eq!(r[1].value, "debug");
+    }
+
+    #[test]
+    fn only_core_spellings_are_actions() {
+        // T-094: Ansible recognises exactly three spellings per action — bare,
+        // `ansible.builtin.`, `ansible.legacy.` — so any other dotted key ending in an
+        // action's name is an ordinary module in that collection, not the action.
+        let cases: &[(&str, &str, ReferenceKind)] = &[
+            ("include_tasks", "x.yml", ReferenceKind::IncludeTasks),
+            ("import_tasks", "x.yml", ReferenceKind::ImportTasks),
+            ("import_playbook", "x.yml", ReferenceKind::ImportPlaybook),
+            ("include_role", "{name: r}", ReferenceKind::Role),
+            ("import_role", "{name: r}", ReferenceKind::Role),
+            ("include_vars", "x.yml", ReferenceKind::IncludeVars),
+        ];
+        for (action, args, kind) in cases {
+            for prefix in ["", "ansible.builtin.", "ansible.legacy."] {
+                let src = format!("- {prefix}{action}: {args}\n");
+                assert_eq!(of(&src, *kind).len(), 1, "not an action: {src}");
+            }
+            let fqcn = format!("community.general.{action}");
+            let src = format!("- {fqcn}: {args}\n");
+            assert!(of(&src, *kind).is_empty(), "treated as an action: {src}");
+            let m = of(&src, ReferenceKind::Module);
+            assert_eq!(m.len(), 1, "not a module: {src}");
+            assert_eq!(m[0].value, fqcn);
+        }
     }
 }

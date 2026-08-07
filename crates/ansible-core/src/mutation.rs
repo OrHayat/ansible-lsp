@@ -127,7 +127,7 @@ fn collect_stmt(s: &Stmt, out: &mut HashSet<String>) {
 
 fn collect_task(t: &Task, out: &mut HashSet<String>) {
     if let Some(a) = &t.action {
-        if short_key(&a.name) == "set_fact" {
+        if crate::keywords::core_action(&a.name) == "set_fact" {
             for (fact, _) in a.args.entries() {
                 if let Some(name) = fact.as_str() {
                     // `cacheable` is a set_fact option, not a fact.
@@ -141,10 +141,6 @@ fn collect_task(t: &Task, out: &mut HashSet<String>) {
     if let Some(reg) = &t.register {
         out.insert(reg.clone());
     }
-}
-
-fn short_key(key: &str) -> &str {
-    key.rsplit('.').next().unwrap_or(key)
 }
 
 #[cfg(test)]

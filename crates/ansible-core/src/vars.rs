@@ -132,10 +132,6 @@ impl VarIndex {
     }
 }
 
-fn short_key(key: &str) -> &str {
-    key.rsplit('.').next().unwrap_or(key)
-}
-
 /// A place a variable is *used*, with the absolute span of the name.
 #[derive(Debug, Clone)]
 pub struct VarUse {
@@ -231,7 +227,7 @@ fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>
             let mut inner = guard.to_vec();
             inner.extend(when_of(node));
             for (k, v) in entries {
-                let is_when = k.as_str().map(short_key) == Some("when");
+                let is_when = k.as_str().map(crate::keywords::core_action) == Some("when");
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
                 let g: &[String] = if is_when { guard } else { &inner };
                 walk_uses(v, is_when, g, out);
@@ -297,7 +293,7 @@ fn task(t: &Task, idx: &mut VarIndex) {
         idx.push_cond(v.name.clone(), VarSource::TaskVars, v.span, cond.clone());
     }
     if let Some(a) = &t.action {
-        if short_key(&a.name) == "set_fact" {
+        if crate::keywords::core_action(&a.name) == "set_fact" {
             for (fact, _) in a.args.entries() {
                 if let Some(name) = fact.as_str() {
                     // `cacheable` is a set_fact option, not a fact.
@@ -725,7 +721,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // when: guards the load, so it carries a condition. Templated targets are skipped.
     each_task(&tree, &mut |t| {
         let Some(a) = &t.action else { return };
-        if short_key(&a.name) != "include_vars" {
+        if crate::keywords::core_action(&a.name) != "include_vars" {
             return;
         }
         let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));

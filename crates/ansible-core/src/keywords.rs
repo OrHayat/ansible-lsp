@@ -114,6 +114,17 @@ fn in_set(sets: &[&[&str]], key: &str) -> bool {
     sets.iter().any(|s| s.contains(&key))
 }
 
+/// The action name of a task key, for exactly the spellings Ansible recognises as core:
+/// bare, `ansible.builtin.`- or `ansible.legacy.`-prefixed (`constants.py:34`,
+/// `utils/fqcn.py:20-31`). Any other dotted key comes back whole, so it can never equal a
+/// bare action name — `community.general.include_tasks` is an ordinary module in that
+/// collection, not an include (T-094).
+pub fn core_action(key: &str) -> &str {
+    key.strip_prefix("ansible.builtin.")
+        .or_else(|| key.strip_prefix("ansible.legacy."))
+        .unwrap_or(key)
+}
+
 /// Is `key` an Ansible directive on a task (as opposed to the module)? `key` is the bare
 /// key — directives are never FQCN, so a dotted key is always the module. `with_*` loops
 /// count as directives.
@@ -136,8 +147,8 @@ pub fn is_block_directive(key: &str) -> bool {
 pub fn is_play(keys: impl Iterator<Item = impl AsRef<str>>) -> bool {
     keys.into_iter().any(|k| {
         let s = k.as_ref();
-        // `import_playbook` may be written FQCN (`ansible.builtin.import_playbook`).
-        s == "hosts" || s.rsplit('.').next() == Some("import_playbook")
+        // `import_playbook` may be written `ansible.builtin.`/`ansible.legacy.`-prefixed.
+        s == "hosts" || core_action(s) == "import_playbook"
     })
 }
 

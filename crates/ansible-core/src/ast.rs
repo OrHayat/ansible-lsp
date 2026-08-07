@@ -169,10 +169,6 @@ pub fn build(nodes: &[Node]) -> Ast {
     }
 }
 
-fn short_key(key: &str) -> &str {
-    key.rsplit('.').next().unwrap_or(key)
-}
-
 fn name_of(node: &Node) -> Option<String> {
     node.get("name").and_then(|n| n.as_str()).map(str::to_owned)
 }
@@ -288,7 +284,7 @@ fn build_play_item(node: &Node) -> Option<PlayItem> {
 fn import_playbook_value(node: &Node) -> Option<&Node> {
     node.entries()
         .iter()
-        .find(|(k, _)| k.as_str().map(short_key) == Some("import_playbook"))
+        .find(|(k, _)| k.as_str().map(keywords::core_action) == Some("import_playbook"))
         .map(|(_, v)| v)
 }
 
@@ -420,7 +416,7 @@ fn find_action(node: &Node) -> Option<Action> {
     }
     for (k, v) in node.entries() {
         let Some(key) = k.as_str() else { continue };
-        let is_directive = !key.contains('.') && keywords::is_task_directive(short_key(key));
+        let is_directive = !key.contains('.') && keywords::is_task_directive(key);
         if !is_directive {
             return Some(Action {
                 name: key.to_string(),

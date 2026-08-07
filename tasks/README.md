@@ -93,7 +93,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-091 | **bug** · [with_ext misses .json and extensionless, and tasks_from flips the order](open/T-091-with-ext-misses-json-and-extensionless-and-tasks-from-flips.md) | S    | —          |
 | T-092 | **bug** · [Includes inside handlers/ resolve against tasks/](open/T-092-includes-inside-handlers-resolve-against-tasks.md) | S    | —          |
 | T-093 | **bug** · [Bare module names only try .py](open/T-093-bare-module-names-only-try-py.md) | S    | —          |
-| T-094 | **bug** · [short_key treats any dotted include_tasks as an include](open/T-094-short-key-treats-any-dotted-include-tasks-as-an-include.md) | S    | —          |
 | T-095 | **bug** · [Templated import_playbook is reported missing](open/T-095-templated-import-playbook-is-reported-missing.md) | S    | —          |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | —          |
 | T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | S    | —          |
@@ -192,6 +191,7 @@ T-021 is now unblocked on that side.
 | T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | M    | —          |
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
+| T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -240,6 +240,7 @@ T-021 is now unblocked on that side.
 | T-072 | [Network modules: one platform action plugin per family](closed/T-072-network-platform-action-plugins.md) | done |
 | T-016 | [`vars_files`](closed/T-016-vars-files.md)                     | done     |
 | T-086 | [`plugin_twin` matches a POSIX substring, so it finds nothing on Windows](closed/T-086-plugin-twin-windows-separators.md) | done     |
+| T-094 | **bug** · [short_key treats any dotted include_tasks as an include](closed/T-094-short-key-treats-any-dotted-include-tasks-as-an-include.md) | done     |
 
 ## Settled — don't re-derive these
 
