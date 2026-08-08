@@ -13,6 +13,11 @@ pub struct AnsibleInstall {
     /// Which ansible-core this is. `None` when no install was found, and rules that gate on
     /// it must say at their own call site what they do with that — T-138.
     pub version: Option<Version>,
+    /// The interpreter this Ansible runs on — the value `ansible_playbook_python` would hold
+    /// for a run launched from this install. Reconstructed, never read from a Python process:
+    /// see [`venv_interpreter`]. `None` is normal, and a consumer must treat it as "unknown",
+    /// not "no Python" — T-051.
+    pub python: Option<PathBuf>,
     /// Which path found `package_dir`, and what the whole detection cost. Startup is the
     /// only place this runs, and it used to be unmeasured — T-084.
     pub source: Source,
@@ -73,6 +78,90 @@ fn version_from_version_output(text: &str) -> Option<Version> {
         .split(|c: char| c.is_whitespace() || c == '[' || c == ']')
         .find(|t| t.starts_with(|c: char| c.is_ascii_digit()))?;
     Version::parse(token)
+}
+
+/// `ansible_playbook_python` is `sys.executable`, which only exists inside a running Python —
+/// and starting one is the thing detection exists to avoid (T-084: 3.6 s cold, and it does not
+/// run on Windows). Every source below therefore *reconstructs* the path, and each one is
+/// checked against this before it is believed: whatever we name must be a file, and must be a
+/// python. It rejects the two shebang forms that name something else — `#!/usr/bin/env python3`
+/// (not a path) and the `#!/bin/sh` + `exec` form pip writes when the prefix has spaces — and
+/// the `(main, ...)` group of a `--version` line too old to carry the interpreter.
+///
+/// Name only — existence is the caller's check, since only some of the sources can be stale.
+fn names_a_python(p: &Path) -> bool {
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.starts_with("python"))
+}
+
+/// The interpreter from the venv layout, which is the one source available on every platform.
+///
+/// `find_site_packages` only ever returns `<prefix>/lib/pythonX.Y/site-packages/ansible` or
+/// `<prefix>/Lib/site-packages/ansible`, so the prefix is the parent of the `lib` component —
+/// found by name rather than by popping a fixed depth, since the two layouts differ by one
+/// level. Derived from `package_dir` and **not** from the `ansible` executable's parent: for a
+/// uv tool install those are different directories, the shim living outside the venv
+/// (`install.rs` override comment, T-051). From the package dir a uv install gives
+/// `.../uv/tools/ansible-core/bin/python`, which is what its console script's shebang says too.
+fn venv_interpreter(pkg: &Path) -> Option<PathBuf> {
+    let prefix = venv_prefix(pkg)?;
+    let candidates: &[&str] = if cfg!(windows) {
+        &["Scripts/python.exe"]
+    } else {
+        &["bin/python3", "bin/python"]
+    };
+    candidates
+        .iter()
+        .map(|c| prefix.join(c))
+        .find(|p| p.is_file())
+}
+
+/// The `lib` component's parent. Found by name because the two layouts differ by a level —
+/// `lib/pythonX.Y/site-packages` against Windows' `Lib/site-packages` — so a fixed pop depth
+/// would be right on exactly one platform. Also lands correctly on a distro-packaged
+/// `/usr/lib/python3/dist-packages/ansible`, whose prefix really is `/usr`.
+fn venv_prefix(pkg: &Path) -> Option<&Path> {
+    let mut cur = pkg.parent();
+    while let Some(p) = cur {
+        if p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("lib")) {
+            return p.parent();
+        }
+        cur = p.parent();
+    }
+    None
+}
+
+/// The interpreter a console script names on its first line. Preferred over the layout probe
+/// where it exists, because it is what the script actually execs — pip and uv bake the absolute
+/// path in at install time. Unix only in practice: a Windows console script is an `.exe` with
+/// the path embedded in the binary, and the read below simply finds no `#!`.
+fn shebang_interpreter(exe: &Path) -> Option<PathBuf> {
+    use std::io::Read;
+    let mut buf = [0u8; 256];
+    let n = std::fs::File::open(exe).ok()?.read(&mut buf).ok()?;
+    // The baked-in path can outlive the venv it names, so this source is checked for existence
+    // as well as shape; a moved venv falls through to the layout probe instead of lying.
+    parse_shebang(&String::from_utf8_lossy(&buf[..n])).filter(|p| p.is_file())
+}
+
+/// The kernel reads a shebang as an interpreter plus at most one argument, so the path is the
+/// first token — which is also what makes `#!/usr/bin/env python3` fall out as `env`, and
+/// `#!/usr/bin/python3 -sE` (RPM's form) keep the interpreter without the flags.
+fn parse_shebang(head: &str) -> Option<PathBuf> {
+    let line = head.lines().next()?.strip_prefix("#!")?;
+    let path = PathBuf::from(line.split_whitespace().next()?);
+    names_a_python(&path).then_some(path)
+}
+
+/// `python version = 3.11.2 (main, ...) [GCC 12.2.0] (/usr/bin/python3)` — the trailing group is
+/// `sys.executable` verbatim, the one field of `--version` that reports it. It was not always
+/// there, and on a core that predates it the last group is `(main, ...)` from `sys.version`,
+/// which [`is_python_file`] rejects.
+fn interpreter_from_version_line(value: &str) -> Option<PathBuf> {
+    let start = value.rfind('(')?;
+    let path = PathBuf::from(value[start + 1..].trim_end_matches(')').trim());
+    names_a_python(&path).then_some(path)
 }
 
 /// How `package_dir` was found. The cost difference between these is three orders of
@@ -156,8 +245,12 @@ impl AnsibleInstall {
             }
         }
 
+        // Kept for the shebang read at the end — `which` is a PATH scan plus a canonicalize,
+        // so the interpreter derivation borrows this one rather than repeating it.
+        let mut exe_path = None;
         if install.package_dir.is_none() {
             if let Some(exe) = which("ansible") {
+                exe_path = Some(exe.clone());
                 // .../bin/ansible -> .../lib/python3.x/site-packages/ansible (Unix), or
                 // ...\Scripts\ansible.exe -> ...\Lib\site-packages\ansible (Windows).
                 if let Some(bin) = exe.parent() {
@@ -214,6 +307,14 @@ impl AnsibleInstall {
             let text = std::fs::read_to_string(pkg.join("release.py")).ok()?;
             version_from_release_py(&text)
         });
+
+        // Shebang first where there is one — it is what the script execs. The layout probe is
+        // the answer everywhere else: the override and tool-install branches never resolved an
+        // exe, and a Windows console script has no shebang to read.
+        install.python = exe_path
+            .as_deref()
+            .and_then(shebang_interpreter)
+            .or_else(|| install.package_dir.as_deref().and_then(venv_interpreter));
         install
     }
 
@@ -247,6 +348,7 @@ impl AnsibleInstall {
                     install.package_dir = Some(pkg);
                     install.source = Source::VersionCommand;
                 }
+                "python version" => install.python = interpreter_from_version_line(value),
                 "ansible collection location" => {
                     for p in value.split(':').filter(|s| !s.is_empty()) {
                         let root = PathBuf::from(p).join("ansible_collections");
@@ -485,6 +587,61 @@ __codename__ = "Fool in the Rain"
             Some(Version { major: 2, minor: 9, patch: 27 })
         );
         assert_eq!(version_from_version_output(""), None);
+    }
+
+    /// The prefix is what makes the derivation work off `package_dir` rather than off the
+    /// `ansible` exe, so it has to hold for every layout `find_site_packages` can return —
+    /// including the uv tool install, where the exe's own parent is the wrong answer (T-051).
+    #[test]
+    fn the_venv_prefix_is_found_in_every_layout_we_accept() {
+        let cases = [
+            ("/venv/lib/python3.11/site-packages/ansible", Some("/venv")),
+            ("C:/venv/Lib/site-packages/ansible", Some("C:/venv")),
+            ("/usr/lib/python3/dist-packages/ansible", Some("/usr")),
+            (
+                "/home/o/.local/share/uv/tools/ansible-core/lib/python3.13/site-packages/ansible",
+                Some("/home/o/.local/share/uv/tools/ansible-core"),
+            ),
+            ("/nowhere/site-packages/ansible", None),
+        ];
+        for (pkg, want) in cases {
+            let got = venv_prefix(Path::new(pkg)).map(|p| p.display().to_string());
+            assert_eq!(got.as_deref(), want, "prefix of {pkg}");
+        }
+    }
+
+    /// The shebang forms that are *not* `sys.executable`, each of which a naive
+    /// "take the rest of the line" read would hand back as an interpreter path.
+    #[test]
+    fn a_shebang_yields_an_interpreter_only_when_it_names_one() {
+        let py = |s: &str| parse_shebang(s).map(|p| p.display().to_string());
+        assert_eq!(
+            py("#!/home/o/.local/share/uv/tools/ansible-core/bin/python\n"),
+            Some("/home/o/.local/share/uv/tools/ansible-core/bin/python".into())
+        );
+        // RPM ships flags on the interpreter line; the kernel splits them off and so do we.
+        assert_eq!(py("#!/usr/bin/python3 -sE\n"), Some("/usr/bin/python3".into()));
+        // `env` is the interpreter here, and the python is an argument — not a path we know.
+        assert_eq!(py("#!/usr/bin/env python3\n"), None);
+        // pip's form when the prefix has spaces: the shell runs, then re-execs.
+        assert_eq!(py("#!/bin/sh\n'''exec' /path/python \"$0\" \"$@\"\n"), None);
+        assert_eq!(py("MZ\u{0}\u{0}binary junk"), None);
+        assert_eq!(py(""), None);
+    }
+
+    /// The `python version` line carries `sys.executable` in a trailing group — but only since
+    /// it was added, and before that the last group is `sys.version`'s build stamp.
+    #[test]
+    fn the_python_version_line_gives_up_the_interpreter_only_when_it_has_one() {
+        let line = "3.11.2 (main, Mar 13 2023, 12:18:29) [GCC 12.2.0] (/usr/bin/python3)";
+        assert_eq!(
+            interpreter_from_version_line(line).map(|p| p.display().to_string()),
+            Some("/usr/bin/python3".into())
+        );
+        // Older core: the last group is the build stamp, and taking it would be a bogus path.
+        let old = "3.8.10 (default, Nov 14 2022, 12:59:47) [GCC 9.4.0]";
+        assert_eq!(interpreter_from_version_line(old), None);
+        assert_eq!(interpreter_from_version_line("3.8.10"), None);
     }
 
     /// The Windows bug that hid builtins: PATH is `;`-separated there and entries hold `:`,

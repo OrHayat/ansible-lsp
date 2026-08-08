@@ -37,26 +37,48 @@ ruling out everything that could legitimately supply it:
   role_names          role_name is in MAGIC, the plural is not
   ```
 
-  For definedness the prefix rule is enough and no *value* is needed. Recording one anyway,
-  because it lived only in a session log: **`ansible_playbook_python` is derivable without a
-  subprocess.** It is `sys.executable`, and a pip/uv-generated console script names it on its
-  first line:
+  For definedness the prefix rule is enough and no *value* is needed. **Done anyway** —
+  `AnsibleInstall::python` (T-138's commit). `ansible_playbook_python` is `sys.executable`, set
+  in `_get_magic_variables` beside `ansible_config_file` (`vars/manager.py`; T-098 cites the
+  config line as `:457` — *the python line's own number is not verified, cite it when someone
+  next has the source open*).
+
+  `sys.executable` exists only inside a running Python, and starting one is what detection
+  exists to avoid (T-084: 3.6 s cold, and it does not run on Windows). So it is never read —
+  it is reconstructed, from three sources, best first:
+
+  | Source | Gives | Where it fails |
+  | ------ | ----- | -------------- |
+  | shebang of the resolved `ansible` | what the script actually execs | Windows (`.exe`, no shebang); `env`; the sh+exec form |
+  | `<prefix>/bin/python` from **`package_dir`** | every platform, no read at all | a layout `find_site_packages` never returns |
+  | `(…)` group on the `--version` python line | `sys.executable` verbatim | cores predating the group; that path is the slow one anyway |
+
+  A pip/uv console script names the interpreter on its first line:
 
   ```
   $ head -1 ~/.local/bin/ansible-playbook
   #!/home/orhayat/.local/share/uv/tools/ansible-core/bin/python
   ```
 
-  `from_filesystem` already resolves the executable with `which("ansible")`
-  (`install.rs:101`), so this is one line of one file on the path we always take — not
-  `ansible --version`, which is the expensive last resort (T-084: 3.6 s cold, and it crashes
-  on Windows).
+  `from_filesystem` already resolves the executable with `which("ansible")`, so this is one
+  line of one file on the path we always take.
 
-  The shebang is also **more accurate than the obvious convention.** Deriving
-  `<prefix>/bin/python` from the exe's parent gives `/home/orhayat/.local/bin/python` for the
-  install above — wrong, because uv puts the shim outside the venv. That is the same case
-  `install.rs:87` cites as the reason the `ansiblePath` override exists. Windows has no
-  shebang, but Ansible's control node does not run there anyway.
+  The shebang is **more accurate than the obvious convention.** Deriving `<prefix>/bin/python`
+  from the exe's parent gives `/home/orhayat/.local/bin/python` for the install above — wrong,
+  because uv puts the shim outside the venv. That is the same case `install.rs` cites as the
+  reason the `ansiblePath` override exists.
+
+  What that rules out is the **exe's** parent, not the prefix: derived from `package_dir`
+  instead, the same uv install gives `.../uv/tools/ansible-core/bin/python`, which is exactly
+  what the shebang above says. That is why the fallback is keyed off the package dir, and why
+  Windows gets an answer (`<prefix>\Scripts\python.exe`) despite having no shebang — moot for
+  running plays, since the control node does not run there, but not for a hover.
+
+  **It is a default, not a fact.** The value is the interpreter behind whatever `ansible` the
+  editor found; the real `ansible_playbook_python` is whichever interpreter launched the play.
+  Those diverge under CI, tox, a second venv, or `python -m ansible`. Same shape as the
+  `playbook_dir` lesson in `resolve.rs` — a consumer that turns this into a diagnostic needs to
+  say what it does when it is wrong.
 
   If it is ever needed from `ansible --version` instead, it is the last parenthesised group
   of the `python version` line.
