@@ -20,3 +20,9 @@ regex = "1"
 # (`parsing/utils/yaml.py:41`), and "did a JSON parser accept this" is the only test that
 # reproduces which files skip its duplicate-key check. See `parse::Loader` (T-102).
 serde_json = "1"
+
+# Until simonask/libyaml-safer takes the fix. `read_line_break` panicked at end of input
+# instead of doing nothing, so a block scalar whose last line has no trailing newline aborted
+# the process — valid YAML that libyaml, PyYAML and Ansible all accept. T-142.
+[patch.crates-io]
+libyaml-safer = { git = "https://github.com/OrHayat/libyaml-safer", rev = "40e4021" }

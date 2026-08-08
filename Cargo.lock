@@ -320,8 +320,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "libyaml-safer"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d325b93a27b93b93b7cf4a57d681c5b6a4d8f910e695db989c055eb1e4f657df"
+source = "git+https://github.com/OrHayat/libyaml-safer?rev=40e4021#40e4021e18dcef2e010009bd1e671b73128fa089"
 
 [[package]]
 name = "litemap"

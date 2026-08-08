@@ -276,6 +276,32 @@ mod tests {
         assert_eq!(duplicate_keys("- name: Block form with a file: parameter\n"), []);
     }
 
+    /// T-142. A block scalar whose last line has no trailing newline used to **panic** —
+    /// `scan_block_scalar` ends its loop at end of input, then calls `read_line_break`
+    /// anyway. libyaml's `READ_LINE` is a no-op there; the safe port turned that into
+    /// `panic!`, so the process aborted on documents PyYAML and Ansible both accept. Found
+    /// in `geerlingguy/ansible-for-devops`, `provisioning/tasks/composer.yml`.
+    ///
+    /// An editor re-parses on every keystroke and a buffer often has no final newline, so
+    /// this was reachable constantly, not in some corner. Fixed in our `libyaml-safer` fork
+    /// (see `[patch.crates.io]`); this pins it from our side.
+    #[test]
+    fn a_block_scalar_at_end_of_input_parses_instead_of_aborting() {
+        let cmd = |src: &str| {
+            let nodes = parse_lenient(src)
+                .unwrap_or_else(|| panic!("must parse, not abort: {src:?}"));
+            nodes[0].get("cmd").and_then(|v| v.as_str()).map(str::to_owned)
+        };
+        // Values cross-checked against PyYAML on the same input. The trailing newline is
+        // *not* cosmetic — clip chomping keeps one only when the source has one — so the
+        // pairs below must differ by exactly that. Equal values would mean we had padded
+        // the input rather than fixed the scan.
+        assert_eq!(cmd("cmd: >\n  mv a b\n  creates=c\n").as_deref(), Some("mv a b creates=c\n"));
+        assert_eq!(cmd("cmd: >\n  mv a b\n  creates=c").as_deref(), Some("mv a b creates=c"));
+        assert_eq!(cmd("cmd: |\n  mv a b\n  creates=c\n").as_deref(), Some("mv a b\ncreates=c\n"));
+        assert_eq!(cmd("cmd: |\n  mv a b\n  creates=c").as_deref(), Some("mv a b\ncreates=c"));
+    }
+
     #[test]
     fn accepts_the_underindented_scalar_class() {
         // The _run.yml class: a folded double-quoted scalar whose closing line sits at the
