@@ -430,9 +430,13 @@ mod tests {
         let deps = |src: &str| {
             meta_dependencies(&Document::new(src.to_string()).parse().unwrap())
         };
-        let r = deps(
-            "dependencies:\n  - docker-network\n  - role: podman\n    vars: { rootless: true }\n  - name: legacy\n",
-        );
+        let r = deps(r#"
+            dependencies:
+              - docker-network
+              - role: podman
+                vars: { rootless: true }
+              - name: legacy
+"#);
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].value, "docker-network");
         assert_eq!(r[1].value, "podman");

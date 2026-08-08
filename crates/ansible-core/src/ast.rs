@@ -515,7 +515,14 @@ mod tests {
     fn vars_files_non_scalar_and_deeper_nesting_are_dropped() {
         // A mapping entry, a doubly-nested list, and an empty inner list are all
         // runtime-fatal (or empty) in Ansible — none can name a file, so no entry.
-        let src = "- hosts: all\n  vars_files:\n    - {a: b}\n    - - - deep.yml\n    - []\n    - ok.yml\n";
+        let src = r#"
+            - hosts: all
+              vars_files:
+                - {a: b}
+                - - - deep.yml
+                - []
+                - ok.yml
+"#;
         let vf = vars_files(src);
         assert_eq!(vf.len(), 1);
         assert_eq!(vf[0].alternatives[0].0, "ok.yml");
@@ -590,7 +597,13 @@ mod tests {
 
     #[test]
     fn module_is_separated_from_directives() {
-        let a = ast("- name: t\n  when: x is defined\n  loop: [1, 2]\n  register: out\n  command: echo hi\n");
+        let a = ast(r#"
+            - name: t
+              when: x is defined
+              loop: [1, 2]
+              register: out
+              command: echo hi
+"#);
         let Ast::Tasks(stmts) = a else { panic!() };
         let Stmt::Task(t) = &stmts[0] else { panic!() };
         assert_eq!(t.action.as_ref().unwrap().name, "command");
@@ -605,9 +618,15 @@ mod tests {
 
     #[test]
     fn block_with_rescue_and_always() {
-        let a = ast(
-            "- block:\n    - debug: {msg: try}\n  rescue:\n    - debug: {msg: catch}\n  always:\n    - debug: {msg: fin}\n  when: risky\n",
-        );
+        let a = ast(r#"
+            - block:
+                - debug: {msg: try}
+              rescue:
+                - debug: {msg: catch}
+              always:
+                - debug: {msg: fin}
+              when: risky
+"#);
         let Ast::Tasks(stmts) = a else { panic!() };
         let Stmt::Block(b) = &stmts[0] else {
             panic!("expected a block");

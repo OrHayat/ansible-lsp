@@ -1173,7 +1173,17 @@ mod tests {
     /// corpus file that panicked the first gate run, minimised.
     #[test]
     fn undefined_check_survives_misaligned_spans_in_block_scalars() {
-        let src = "- hosts: all\n  tasks:\n    - debug:\n        msg: |\n          aa\n          ═══{{ zzz_und }}\n";
+        // The alignment is the test: a block scalar whose body holds a multi-byte character,
+        // so byte offsets and column counts part ways. Written out rather than escaped,
+        // because escaping hides exactly the thing being guarded.
+        let src = r#"
+            - hosts: all
+              tasks:
+                - debug:
+                    msg: |
+                      aa
+                      ═══{{ zzz_und }}
+"#;
         let _ = undef(src); // must not panic; the verdict is not the point
     }
 
