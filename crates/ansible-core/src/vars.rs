@@ -150,7 +150,12 @@ pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
 }
 
 /// Which words count is the caller's choice — see [`Extract`].
-fn template_uses_with(text: &str, base: usize, out: &mut Vec<VarUse>, extract: Extract) {
+fn template_uses_with(
+    text: &str,
+    base: usize,
+    out: &mut Vec<VarUse>,
+    extract: impl Fn(&str) -> Vec<(String, usize, usize)>,
+) {
     let mut i = 0;
     while let Some(open) = text[i..].find("{{") {
         let expr_start = i + open + 2;
@@ -178,7 +183,12 @@ pub fn expression_uses(expr: &str, base: usize, out: &mut Vec<VarUse>) {
     expression_uses_with(expr, base, out, condition::variable_uses)
 }
 
-fn expression_uses_with(expr: &str, base: usize, out: &mut Vec<VarUse>, extract: Extract) {
+fn expression_uses_with(
+    expr: &str,
+    base: usize,
+    out: &mut Vec<VarUse>,
+    extract: impl Fn(&str) -> Vec<(String, usize, usize)>,
+) {
     for (name, s, e) in extract(expr) {
         out.push(VarUse {
             name,
@@ -198,18 +208,20 @@ pub fn uses(nodes: &[Node]) -> Vec<VarUse> {
     uses_with(nodes, condition::variable_uses)
 }
 
-/// Which words a scan counts as a use. The tree walk is identical either way — only the
-/// tokenizer's `keep` differs — so the two views can never disagree about where a use *is*.
-type Extract = fn(&str) -> Vec<(String, usize, usize)>;
-
-/// Uses of names **Ansible injects** — magic vars and `ansible_*`. [`uses`] drops these on
-/// purpose, since no workspace file defines them and every rule would false-positive; hover
-/// is the one consumer that wants them (T-143).
-pub fn injected_uses(nodes: &[Node]) -> Vec<VarUse> {
-    uses_with(nodes, condition::injected_uses)
+/// [`uses`] plus the names Ansible injects, which it drops on purpose — no rule can use a
+/// name no workspace file defines. Hover is the only consumer, and it wants one scan of the
+/// tree rather than two complementary ones, so it takes this and sorts the two kinds out
+/// with [`condition::is_injected`] (T-143).
+pub fn any_uses(nodes: &[Node]) -> Vec<VarUse> {
+    uses_with(nodes, condition::any_uses)
 }
 
-fn uses_with(nodes: &[Node], extract: Extract) -> Vec<VarUse> {
+/// Generic, not a `fn` pointer: this runs once per scalar of every file in a scan, and the
+/// indirection would cost the tokenizer its inlining.
+fn uses_with(
+    nodes: &[Node],
+    extract: impl Fn(&str) -> Vec<(String, usize, usize)> + Copy,
+) -> Vec<VarUse> {
     let mut out = Vec::new();
     for n in nodes {
         walk_uses(n, false, &[], &mut out, extract);
@@ -229,7 +241,13 @@ fn when_of(node: &Node) -> Vec<String> {
     }
 }
 
-fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>, ex: Extract) {
+fn walk_uses(
+    node: &Node,
+    in_when: bool,
+    guard: &[String],
+    out: &mut Vec<VarUse>,
+    ex: impl Fn(&str) -> Vec<(String, usize, usize)> + Copy,
+) {
     match node {
         Node::Scalar { value, span } => {
             let before = out.len();

@@ -305,19 +305,24 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
 pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
         !(NOT_VARIABLES.contains(&w)
-            || MAGIC.contains(&w)
-            || w.starts_with("ansible_")
+            || is_injected(w)
             || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
 }
 
-/// The complement of [`variable_uses`]: the names it drops **because Ansible injects them** —
-/// the magic vars and the `ansible_*` prefix. No rule wants these (that is the point of
-/// dropping them), but hover does: they are the one class of name where "nothing in the
-/// workspace defines it" is the expected state rather than a finding (T-143).
-pub fn injected_uses(expr: &str) -> Vec<(String, usize, usize)> {
+/// True for a name Ansible injects: a magic variable, or the `ansible_*` fact prefix.
+/// [`variable_uses`] drops these — no rule can use a name no workspace file defines — and
+/// [`any_uses`] keeps them, which is the difference between the rule view and hover's.
+pub fn is_injected(name: &str) -> bool {
+    MAGIC.contains(&name) || name.starts_with("ansible_")
+}
+
+/// [`variable_uses`] plus the injected names it drops. One scan answering "what name is
+/// under this cursor", for a caller that will decide by [`is_injected`] which hover to
+/// render — rather than two complementary scans of the same tree (T-143).
+pub fn any_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
-        !NOT_VARIABLES.contains(&w) && (MAGIC.contains(&w) || w.starts_with("ansible_"))
+        !(NOT_VARIABLES.contains(&w) || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
 }
 

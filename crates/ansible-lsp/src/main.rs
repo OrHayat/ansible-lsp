@@ -1001,13 +1001,9 @@ impl Backend {
     /// only way to exercise this path on a machine with no Ansible.
     fn injected_var_hover_at(
         doc: &Document,
-        nodes: &[Node],
-        byte: usize,
+        use_: &vars::VarUse,
         install: Option<&AnsibleInstall>,
     ) -> Option<(String, Range)> {
-        let use_ = vars::injected_uses(nodes)
-            .into_iter()
-            .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let md = injected_var_hover(&use_.name, install?)?;
         let (sl, sc) = doc.byte_to_lsp(use_.span.start);
         let (el, ec) = doc.byte_to_lsp(use_.span.end);
@@ -1020,14 +1016,15 @@ impl Backend {
         byte: usize,
         path: &Path,
     ) -> Option<(String, Range)> {
-        let Some(use_) = vars::uses(nodes)
+        // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
+        // ones, so asking it first and falling back to a second, complementary scan walked
+        // the whole tree twice for every token that is not an ordinary variable.
+        let use_ = vars::any_uses(nodes)
             .into_iter()
-            .find(|u| byte >= u.span.start && byte < u.span.end)
-        else {
-            // No ordinary use here. `vars::uses` drops the names Ansible injects, so this is
-            // also the only place an `ansible_*` or magic token can be recognised at all.
-            return Self::injected_var_hover_at(doc, nodes, byte, AnsibleInstall::detected());
-        };
+            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+        if condition::is_injected(&use_.name) {
+            return Self::injected_var_hover_at(doc, &use_, AnsibleInstall::detected());
+        }
         let mut defs: Vec<vars::Located> = cached_definitions(path, nodes)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
@@ -2078,9 +2075,16 @@ mod tests {
             version: Some(Version { major: 2, minor: 21, patch: 2 }),
             ..Default::default()
         };
+        // The same two steps `variable_hover_at` takes: one scan, then the injected branch.
         let hover = |needle: &str, i: Option<&AnsibleInstall>| {
             let byte = text.find(needle).expect("needle present") + 1;
-            super::Backend::injected_var_hover_at(&doc, &nodes, byte, i)
+            let use_ = ansible_core::vars::any_uses(&nodes)
+                .into_iter()
+                .find(|u| byte >= u.span.start && byte < u.span.end)?;
+            if !ansible_core::condition::is_injected(&use_.name) {
+                return None;
+            }
+            super::Backend::injected_var_hover_at(&doc, &use_, i)
         };
 
         let (md, range) = hover("ansible_playbook_python", Some(&install)).expect("hovers");
@@ -2116,9 +2120,10 @@ mod tests {
 
         let at = |needle: &str| {
             let byte = text.find(needle).expect("needle present") + 1;
-            ansible_core::vars::injected_uses(&nodes)
+            ansible_core::vars::any_uses(&nodes)
                 .into_iter()
                 .find(|u| byte >= u.span.start && byte < u.span.end)
+                .filter(|u| ansible_core::condition::is_injected(&u.name))
                 .map(|u| u.name)
         };
         assert_eq!(at("ansible_playbook_python").as_deref(), Some("ansible_playbook_python"));
