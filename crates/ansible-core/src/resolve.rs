@@ -2298,44 +2298,39 @@ mod perf {
     use crate::references::extract;
     use std::time::Instant;
 
+    /// A playbook of `tasks` tasks, cycling through the reference kinds so `extract` and
+    /// `resolve` both get work shaped like a real file's rather than one construct repeated.
+    fn generated_playbook(tasks: usize) -> String {
+        let mut s = String::from("- hosts: all\n  tasks:\n");
+        for i in 0..tasks {
+            match i % 5 {
+                0 => s.push_str(&format!(
+                    "    - name: task {i}\n      ansible.builtin.file:\n        path: /tmp/{i}\n      when: flag_{i} is defined\n"
+                )),
+                1 => s.push_str(&format!("    - include_tasks: sub/part_{i}.yml\n")),
+                2 => s.push_str(&format!("    - include_role:\n        name: role_{i}\n")),
+                3 => s.push_str(&format!("    - command: echo {i}\n      register: out_{i}\n")),
+                _ => s.push_str(&format!("    - include_tasks: \"{{{{ proto_{i} }}}}/part.yml\"\n")),
+            }
+        }
+        s
+    }
+
+    /// Sized from a real repo rather than from one machine's home dir (T-077). The largest
+    /// YAML in kubespray (Apache-2.0) is ~1730 lines / 151 KB, and its largest *task* file
+    /// ~500 lines — the default below clears both. Generated rather than vendored because a
+    /// profiling aid wants a dial: `PROFILE_TASKS=20000` to push it.
     #[test]
     #[ignore = "profiling aid: cargo test perf -- --ignored --nocapture"]
     fn profile_largest_file() {
-        let Ok(home) = std::env::var("HOME") else {
-            return;
-        };
-        let root = PathBuf::from(&home).join("app/ansible");
-        if !root.is_dir() {
-            return;
-        }
-        // find largest yml
-        let mut biggest: Option<(PathBuf, u64)> = None;
-        fn walk(d: &Path, best: &mut Option<(PathBuf, u64)>) {
-            let Ok(rd) = std::fs::read_dir(d) else { return };
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    let n = p
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    if n == ".git" || n == "__pycache__" {
-                        continue;
-                    }
-                    walk(&p, best);
-                } else if p.extension().map_or(false, |x| x == "yml") {
-                    let s = e.metadata().map(|m| m.len()).unwrap_or(0);
-                    if best.as_ref().map_or(true, |(_, b)| s > *b) {
-                        *best = Some((p, s));
-                    }
-                }
-            }
-        }
-        walk(&root, &mut biggest);
-        let (path, size) = biggest.unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        println!("file: {} ({} KB)", path.display(), size / 1024);
+        let tasks: usize = std::env::var("PROFILE_TASKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2_000);
+        let text = generated_playbook(tasks);
+        let root = crate::testing::project("perf-profile", "", &[("playbooks/big.yml", &text)]);
+        let path = root.join("playbooks/big.yml");
+        println!("file: {tasks} tasks, {} KB", text.len() / 1024);
 
         let t = Instant::now();
         let doc = Document::new(text);

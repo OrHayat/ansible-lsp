@@ -105,9 +105,34 @@ Coverage measured at 11/86 classified, 7/86 guarded — in line with the full co
 12.6%), so the sample is representative rather than cherry-picked. Both are floors now, not
 printouts: the old test was `#[ignore]`d and only ever printed percentages.
 
-**Remaining: 1 site** — `resolve.rs`'s `perf::profile_largest_file`, which times the biggest
-file it can find. A fixture cannot stand in for "the biggest file in a real tree", so give it
-the `ANSIBLE_CORPUS` env var `parse_libyaml::corpus_smoke` already uses.
+### Adding a permissively-licensed repo
+
+The four collections are all GPL-3.0-or-later, and this repo carries no LICENSE. **kubespray**
+(`kubernetes-sigs/kubespray`, Apache-2.0) was added alongside them, which both widens the
+corpus and means it no longer rests on copyleft sources alone. Its shapes differ usefully from
+a collection's: `group_names`/`inventory_hostname` inventory checks, parenthesised membership,
+and `ansible_facts['x']` subscripts instead of dotted access.
+
+1011 files, 0 unparseable. It found one more bug: **T-140** — every `when-assignment` report
+across the repo was a Jinja *keyword argument* (`map(attribute='path')`,
+`version(x, operator='>=')`) misread as assignment. Confirmed through the production path, not
+just the sweep: `roles/container-engine/cri-o/tasks/load_vars.yml` and
+`roles/etcd/tasks/check_certs.yml` yield 6 real diagnostics between them.
+
+**Check corpus findings against `references::extract` before believing them.** A sweep that
+walks every mapping with a `when` key — the obvious way to write one — is not what the tool
+does, and it manufactures findings. It reported 3 `when-jinja-delimiters` in kubespray's
+`scripts/collect-info.yaml` that no user is ever shown: they are entries in a `commands:` list
+under `vars:`, read by one real task as `when: item.when | default(True)`, and the `{{ }}` is
+*required* there — strip it and `item.when` is a non-empty string, always truthy. The
+extractor reads conditions off tasks and correctly ignores them.
+
+`perf::profile_largest_file` no longer hunts for the biggest file under `$HOME`. It generates
+one, sized against the real thing — kubespray's largest YAML is ~1730 lines / 151 KB and its
+largest *task* file ~500 lines, so the 2000-task default (111 KB) clears both. Generated
+rather than vendored because a profiling aid wants a dial: `PROFILE_TASKS=20000` to push it.
+
+**Remaining: 0 test sites.** Nothing under `crates/` reads `$HOME` for a private repo any more.
 
 Note `builtin_modules_resolve_into_the_installed_ansible` and
 `installed_collection_modules_resolve` are a *different* dependency — the machine's Ansible
@@ -117,6 +142,19 @@ empty `testing::project` is enough, since nothing under the project root decides
 
 ## Done when
 
-- [ ] no test reads `$HOME` / a hardcoded private repo path
-- [ ] each moved test builds its tree inline and runs (not skips) on a clean checkout and CI
+- [x] no test reads `$HOME` / a hardcoded private repo path
+
+      The one remaining `HOME` read in a test is `config.rs`'s
+      `a_colon_list_expands_tilde_and_dot_against_the_project_root`, where `~` expansion is
+      the behaviour under test — it guards that one assertion and runs the rest regardless.
+      Every other `HOME` read is production code (`workspace.rs`, `install.rs`, `config.rs`'s
+      `expand_list`, `main.rs`'s path shortening).
+
+- [x] each moved test builds its tree inline and runs (not skips) on a clean checkout and CI
 - [ ] `smoke.js` / `timing.js` either take a path argument or build a temp tree inline
+
+      Not started. Both still open `path.join(process.env.HOME, "app", "ansible")`, and
+      `smoke.js` is the harder half: its `CASES` name specific files in that repo
+      (`roles/sync-state/tasks/http_access_point/reconcile.yml`,
+      `roles/lustre-snapshot/tasks/query/timestamp.yml`), so it needs a fixture tree on disk
+      to drive the server against, not just a path argument.

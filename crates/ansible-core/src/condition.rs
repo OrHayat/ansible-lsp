@@ -1104,6 +1104,44 @@ mod corpus {
         "ansible_facts.os_family == 'RedHat' and ansible_facts.distribution != \"Fedora\" and (ansible_facts.distribution_major_version | int) >= 10",
         // -- ansible.posix
         "ansible_selinux is defined and ansible_selinux.status == 'disabled'",
+        // -- kubespray. A deployment repo rather than a collection, so the shapes differ:
+        // `group_names`/`inventory_hostname` inventory checks, parenthesised membership, and
+        // `ansible_facts['x']` subscript rather than dotted access.
+        "vxlan.stat.exists",
+        "calico_rr_id is defined",
+        "container_manager == \"docker\"",
+        "container_manager ==  \"docker\"", // two spaces, exactly as upstream writes it
+        "container_manager_on_localhost == 'crio'",
+        "container_manager == 'containerd'",
+        "calico_datastore == \"etcd\"",
+        "etcd_deployment_type == \"kubeadm\"",
+        "dns_mode in ['coredns', 'coredns_dual']",
+        "dns_mode != 'none' and resolvconf_mode == 'docker_dns'",
+        "('macvlan' not in testcase)",
+        "('kube_control_plane' in group_names)",
+        "('kube_control_plane' not in group_names)",
+        "inventory_hostname == groups['kube_control_plane'] | last",
+        "ansible_facts['distribution'] == \"Fedora\" and not is_ostree",
+        "ansible_facts['os_family'] == \"RedHat\"",
+        "external_openstack_region is not defined or not external_openstack_region",
+        "docker_task_result is not changed",
+        "etcd_ca_cert.changed and ansible_os_family == \"ClearLinux\"",
+        "etcd_secret_changed | default(false)",
+        "flush_iptables | bool and ipv4_stack",
+        "enable_nat_default_gateway",
+        "gateway_api_enabled",
+        "drain_nodes",
+        "fstab_file.stat.exists",
+    ];
+
+    /// Conditions we get **wrong**, the second kind: a Jinja *keyword argument* reads as an
+    /// assignment once [`strip_strings`] has removed the quoted value, leaving `attribute=`
+    /// or `operator=` and a lone `=`. All 12 `when-assignment` reports across kubespray were
+    /// this, and none was a real fault. T-140.
+    const JINJA_KWARG_NOT_ASSIGNMENT: &[&str] = &[
+        "crio_version is version(\"1.29.0\", operator=\">=\")",
+        "force_etcd_cert_refresh or not item in etcdcert_master.files | map(attribute='path') | list",
+        "x | selectattr(\"path\", \"equalto\", p) | map(attribute=\"checksum\") | first",
     ];
 
     /// The list form, where every clause must hold. From `ansible.posix`'s selinux target
@@ -1274,10 +1312,24 @@ mod corpus {
             .iter()
             .filter(|c| is_guarded(std::slice::from_ref(&(*c).to_string())))
             .count();
-        // 11/86 and 7/86 as measured. Low by design, and in line with the full 1313-clause
-        // corpus (166 classified, 12.6%) — the sample is representative, not cherry-picked.
-        assert!(classified >= 11, "only {classified}/{} classified", REAL_WHENS.len());
-        assert!(guarded >= 7, "only {guarded} guarded conditions recognised");
+        // 14/111 and 10/111 as measured. Low by design, and in line with the full sweep
+        // (166/1313 across the collections, 221/2261 across kubespray) — the sample tracks
+        // the corpus it came from rather than being cherry-picked for a flattering number.
+        assert!(classified >= 14, "only {classified}/{} classified", REAL_WHENS.len());
+        assert!(guarded >= 10, "only {guarded} guarded conditions recognised");
+    }
+
+    /// The second live false positive. A Jinja keyword argument is not an assignment, and
+    /// `map(attribute='path')` / `version(x, operator='>=')` are everywhere in real playbooks.
+    /// Asserting today's wrong answer on purpose — when T-140 lands, invert this.
+    #[test]
+    fn a_jinja_keyword_argument_is_flagged_today_and_should_not_be() {
+        for c in JINJA_KWARG_NOT_ASSIGNMENT {
+            assert!(
+                problems(c, true).contains(&Problem::AssignmentNotComparison),
+                "{c}: T-140 fixed? invert this test"
+            );
+        }
     }
 
     /// A live false positive, pinned so the fix has a test waiting. `item` **is** defined in
