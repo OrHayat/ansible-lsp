@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | S    | —          |
+| done   | bug  | P1       | S    | —          |
 
 ## Symptom
 
@@ -71,8 +71,30 @@ parenthesised assignment like `(a = b)` reported.
 
 ## Done when
 
-- [ ] the three cases in `condition::corpus::JINJA_KWARG_NOT_ASSIGNMENT` stop being reported
-- [ ] `condition::corpus::a_jinja_keyword_argument_is_flagged_today_and_should_not_be` is
-      inverted (it asserts today's wrong answer on purpose)
-- [ ] `mode = 'docker'` is still reported — the rule must keep catching the real mistake
-- [ ] `x == 'a=b'` still stays silent
+- [x] the three cases in `condition::corpus::JINJA_KWARG_NOT_ASSIGNMENT` stop being reported
+
+      And the four kubespray files they came from now yield 0 diagnostics through
+      `references::extract` + `problems`, down from 6.
+
+- [x] `condition::corpus::a_jinja_keyword_argument_is_flagged_today_and_should_not_be` is
+      inverted — now `a_jinja_keyword_argument_is_not_an_assignment`
+- [x] `mode = 'docker'` is still reported — the rule must keep catching the real mistake
+
+      `assignment_is_not_comparison` grew a second loop pinning the shapes the narrowing must
+      not have swallowed: `mode = 'docker'`, `mode='docker'`, `(a = b)`, `x and mode = 'y'`.
+      The paren half of the test is what keeps `(a = b)` reported.
+
+- [x] `x == 'a=b'` still stays silent
+
+## Outcome
+
+`lone_equals` now tracks a stack of open parens, recording for each whether a name ran into
+it — `map(` is a call and takes keyword arguments, `(a or b)` is grouping and does not. An `=`
+is skipped only when it is inside a call *and* preceded by a name character. Both conditions
+are needed: `mode='docker'` has the name but no call, `(a = b)` has parens but no name.
+
+`demo/tasks/conditions.yml` carries the GOOD case, so the fix is visible and not merely
+asserted.
+
+Found while fixing this, unrelated to it: the parser **panics** on a block scalar in a file
+with no trailing newline. Filed separately.

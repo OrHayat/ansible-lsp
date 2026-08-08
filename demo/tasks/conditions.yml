@@ -146,6 +146,10 @@
   ansible.builtin.include_tasks: sibling.yml
   when: demo_mode = 'docker'  # noqa: when-item-without-loop
 
+- name: "GOOD — a Jinja keyword argument is not an assignment (T-140)"
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_hosts | selectattr("name", "equalto", "web") | map(attribute='port') | first == 80
+
 - name: "GOOD — `item` with a loop is correct, so no warning"
   ansible.builtin.include_tasks: sibling.yml
   loop: [1, 2]

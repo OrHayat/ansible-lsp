@@ -557,16 +557,44 @@ fn has_word(s: &str, word: &str) -> bool {
         .any(|w| w == word)
 }
 
-/// A `=` that isn't part of `==`, `!=`, `<=`, `>=`.
+/// A `=` that isn't part of `==`, `!=`, `<=`, `>=`, and isn't a Jinja keyword argument.
+///
+/// Runs on the output of [`strip_strings`], so a quoted `a=b` is already blanked out. That
+/// stripping is also what makes the keyword-argument case hard: `map(attribute='path')`
+/// arrives as `map(attribute=      )`, and the value that would have identified it is gone.
+/// Two signals survive it (T-140):
+///
+/// - the `=` runs straight into a name, where an assignment is written `mode = 'x'`;
+/// - it sits inside a **call**'s parentheses, which is the only place Jinja takes kwargs.
+///
+/// Both are required. `mode='docker'` outside parens is still an assignment, and so is
+/// `(a = b)` inside grouping parens — a `(` counts as a call only when a name runs into it.
 fn lone_equals(s: &str) -> bool {
     let b = s.as_bytes();
+    let name_char = |c: Option<u8>| matches!(c, Some(p) if p.is_ascii_alphanumeric() || p == b'_');
+    // One entry per open paren: was it a call, `map(`, or a grouping, `(a or b)`? A keyword
+    // like `not(` reads as a call here, which costs nothing — `not(a = b)` is not a shape
+    // anyone writes, and treating it as grouping would need a keyword list.
+    let mut calls: Vec<bool> = Vec::new();
     for (i, &c) in b.iter().enumerate() {
-        if c != b'=' {
-            continue;
-        }
         let prev = i.checked_sub(1).map(|j| b[j]);
+        match c {
+            b'(' => {
+                calls.push(name_char(prev));
+                continue;
+            }
+            b')' => {
+                calls.pop();
+                continue;
+            }
+            b'=' => {}
+            _ => continue,
+        }
         let next = b.get(i + 1).copied();
         if matches!(prev, Some(b'=' | b'!' | b'<' | b'>' | b'~')) || next == Some(b'=') {
+            continue;
+        }
+        if calls.last() == Some(&true) && name_char(prev) {
             continue;
         }
         return true;
@@ -930,6 +958,15 @@ mod tests {
             assert!(
                 !problems(ok, false).contains(&Problem::AssignmentNotComparison),
                 "false positive on {ok}"
+            );
+        }
+        // T-140 narrowed this rule; these are the shapes it must not have narrowed away.
+        // A name running into `=` is a keyword argument only inside a *call* — grouping
+        // parens and no parens at all are still assignments.
+        for bad in ["mode = 'docker'", "mode='docker'", "(a = b)", "x and mode = 'y'"] {
+            assert!(
+                problems(bad, false).contains(&Problem::AssignmentNotComparison),
+                "T-140 silenced a real assignment: {bad}"
             );
         }
     }
@@ -1319,15 +1356,16 @@ mod corpus {
         assert!(guarded >= 10, "only {guarded} guarded conditions recognised");
     }
 
-    /// The second live false positive. A Jinja keyword argument is not an assignment, and
-    /// `map(attribute='path')` / `version(x, operator='>=')` are everywhere in real playbooks.
-    /// Asserting today's wrong answer on purpose — when T-140 lands, invert this.
+    /// T-140, fixed. A Jinja keyword argument is not an assignment, and
+    /// `map(attribute='path')` / `version(x, operator='>=')` are everywhere in real playbooks
+    /// — these three are verbatim from kubespray, where all 12 `when-assignment` reports were
+    /// this and none was a real fault.
     #[test]
-    fn a_jinja_keyword_argument_is_flagged_today_and_should_not_be() {
+    fn a_jinja_keyword_argument_is_not_an_assignment() {
         for c in JINJA_KWARG_NOT_ASSIGNMENT {
             assert!(
-                problems(c, true).contains(&Problem::AssignmentNotComparison),
-                "{c}: T-140 fixed? invert this test"
+                !problems(c, true).contains(&Problem::AssignmentNotComparison),
+                "false positive on {c}"
             );
         }
     }
