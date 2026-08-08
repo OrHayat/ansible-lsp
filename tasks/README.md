@@ -105,8 +105,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
-| T-138 | [The installed ansible-core version is never detected, but rules need it](open/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | S    | —          |
-| T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | T-138      |
+| T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | ~~T-138~~      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](open/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | M    | ~~T-140~~      |
 
@@ -250,6 +249,7 @@ T-021 is now unblocked on that side.
 | T-077 | [Real-repo tests read a caller's home dir](closed/T-077-tests-use-fixtures-not-home.md) | done     |
 | T-140 | **bug** · [when-assignment fires on Jinja keyword arguments](closed/T-140-when-assignment-fires-on-jinja-keyword-arguments.md) | done     |
 | T-142 | **bug** · [Parser panics on a block scalar with no trailing newline](closed/T-142-parser-panics-on-a-block-scalar-with-no-trailing-newline.md) | done     |
+| T-138 | [The installed ansible-core version is never detected, but rules need it](closed/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | done     |
 
 ## Settled — don't re-derive these
 

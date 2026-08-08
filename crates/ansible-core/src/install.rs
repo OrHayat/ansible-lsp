@@ -10,10 +10,69 @@ pub struct AnsibleInstall {
     pub package_dir: Option<PathBuf>,
     /// Every `ansible_collections` root outside the workspace.
     pub collection_roots: Vec<PathBuf>,
+    /// Which ansible-core this is. `None` when no install was found, and rules that gate on
+    /// it must say at their own call site what they do with that — T-138.
+    pub version: Option<Version>,
     /// Which path found `package_dir`, and what the whole detection cost. Startup is the
     /// only place this runs, and it used to be unmeasured — T-084.
     pub source: Source,
     pub detect_ms: f64,
+}
+
+/// An ansible-core release, ordered. Pre-release suffixes (`2.22.0.dev0`, `2.19.0rc1`) are
+/// dropped rather than ordered: every version gate we have is "since X.Y", and a dev build of
+/// X.Y.Z already behaves like X.Y.Z for those purposes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl Version {
+    /// The numeric head of a version string; `None` unless it starts with a digit.
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut parts = s.trim().split('.');
+        Some(Self {
+            major: leading_number(parts.next()?)?,
+            minor: parts.next().and_then(leading_number).unwrap_or(0),
+            patch: parts.next().and_then(leading_number).unwrap_or(0),
+        })
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+fn leading_number(s: &str) -> Option<u32> {
+    s.chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+/// `__version__ = '2.22.0.dev0'` out of `<package_dir>/release.py`. This is the same constant
+/// `ansible --version` prints (`option_helpers.py:288`), for the price of one file read — the
+/// subprocess costs seconds cold and doesn't run on Windows at all (T-084).
+fn version_from_release_py(text: &str) -> Option<Version> {
+    let line = text.lines().find(|l| l.trim_start().starts_with("__version__"))?;
+    let (_, rhs) = line.split_once('=')?;
+    let literal = rhs.trim().trim_matches(|c| c == '\'' || c == '"');
+    Version::parse(literal)
+}
+
+/// The first line of `ansible --version`: `ansible [core 2.21.2]`, or bare `ansible 2.9.27`
+/// before the collection split.
+fn version_from_version_output(text: &str) -> Option<Version> {
+    let first = text.lines().next()?;
+    let token = first
+        .split(|c: char| c.is_whitespace() || c == '[' || c == ']')
+        .find(|t| t.starts_with(|c: char| c.is_ascii_digit()))?;
+    Version::parse(token)
 }
 
 /// How `package_dir` was found. The cost difference between these is three orders of
@@ -149,6 +208,12 @@ impl AnsibleInstall {
                 install.collection_roots.push(root);
             }
         }
+
+        // One read, whichever of the three branches above found the package.
+        install.version = install.package_dir.as_ref().and_then(|pkg| {
+            let text = std::fs::read_to_string(pkg.join("release.py")).ok()?;
+            version_from_release_py(&text)
+        });
         install
     }
 
@@ -158,7 +223,10 @@ impl AnsibleInstall {
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
-        let mut install = Self::default();
+        let mut install = Self {
+            version: version_from_version_output(&text),
+            ..Default::default()
+        };
 
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
@@ -346,6 +414,77 @@ mod tests {
             "ansible.builtin.systemd should have a source file"
         );
         assert!(!i.collection_roots.is_empty());
+        // Every install ships `release.py`; a package dir with no version means the read or
+        // the parse broke, not that this Ansible is unversioned.
+        assert!(i.version.is_some(), "a detected install must carry a version");
+    }
+
+    /// Verbatim from `lib/ansible/release.py` — the whole file, because it is this small and
+    /// the parse has to survive the module docstring and the two constants beside `__version__`.
+    const RELEASE_PY: &str = r#"# Copyright: (c) 2017 Ansible Project
+# GNU General Public License v3.0+
+
+from __future__ import annotations
+
+__version__ = '2.22.0.dev0'
+__author__ = 'Ansible, Inc.'
+__codename__ = "Fool in the Rain"
+"#;
+
+    #[test]
+    fn reads_the_version_out_of_release_py() {
+        assert_eq!(
+            version_from_release_py(RELEASE_PY),
+            Some(Version { major: 2, minor: 22, patch: 0 })
+        );
+        // Double quotes and a release build, both of which ship.
+        assert_eq!(
+            version_from_release_py("__version__ = \"2.19.3\"\n"),
+            Some(Version { major: 2, minor: 19, patch: 3 })
+        );
+        assert_eq!(version_from_release_py("__author__ = 'Ansible, Inc.'\n"), None);
+    }
+
+    /// A pre-release is the version it is heading for: gates read "since 2.19", and `2.19.0rc1`
+    /// is on the far side of that. Nothing here may parse to a *lower* version than the release.
+    #[test]
+    fn pre_release_suffixes_parse_to_their_release() {
+        let cases = [
+            ("2.22.0.dev0", Version { major: 2, minor: 22, patch: 0 }),
+            ("2.19.0rc1", Version { major: 2, minor: 19, patch: 0 }),
+            ("2.18.0b1", Version { major: 2, minor: 18, patch: 0 }),
+            ("2.21.2", Version { major: 2, minor: 21, patch: 2 }),
+            ("2.19", Version { major: 2, minor: 19, patch: 0 }),
+        ];
+        for (text, want) in cases {
+            assert_eq!(Version::parse(text), Some(want), "parsing {text}");
+        }
+        assert_eq!(Version::parse("devel"), None);
+        assert_eq!(Version::parse(""), None);
+    }
+
+    #[test]
+    fn version_gates_compare_the_way_since_x_y_reads() {
+        let v = |s: &str| Version::parse(s).unwrap();
+        assert!(v("2.19.0") >= v("2.19"));
+        assert!(v("2.22.0.dev0") > v("2.19.3"));
+        assert!(v("2.16.14") < v("2.19"));
+        assert!(v("2.9.27") < v("2.10.0"));
+    }
+
+    /// Both shapes of the first line: post-2.10 `[core X]`, and the bare pre-split form.
+    #[test]
+    fn reads_the_version_off_the_version_command() {
+        let out = "ansible [core 2.21.2]\n  config file = None\n";
+        assert_eq!(
+            version_from_version_output(out),
+            Some(Version { major: 2, minor: 21, patch: 2 })
+        );
+        assert_eq!(
+            version_from_version_output("ansible 2.9.27\n"),
+            Some(Version { major: 2, minor: 9, patch: 27 })
+        );
+        assert_eq!(version_from_version_output(""), None);
     }
 
     /// The Windows bug that hid builtins: PATH is `;`-separated there and entries hold `:`,

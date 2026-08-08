@@ -645,8 +645,12 @@ impl Backend {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "ansible-lsp detect: {} in {:.0} ms{}",
+                    "ansible-lsp detect: {}{} in {:.0} ms{}",
                     install.source.as_str(),
+                    install
+                        .version
+                        .map(|v| format!(" (core {v})"))
+                        .unwrap_or_default(),
                     install.detect_ms,
                     install
                         .package_dir

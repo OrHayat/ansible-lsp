@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P1       | S    | —          |
+| done   | task | P1       | S    | —          |
 
 ## Problem
 
@@ -100,8 +100,34 @@ and ignore the rest rather than pulling in a semver crate for it.
 
 ## Done when
 
-- [ ] `AnsibleInstall::version` is populated from `release.py` on the filesystem path
-- [ ] and from the first line on the version-command path
-- [ ] a fixture pins parsing of a `.dev` / `rc` suffix, not just `X.Y.Z`
-- [ ] `None` is handled explicitly wherever a rule gates on it
-- [ ] T-117's dependency is satisfied — it can gate its strict-`when:` rules
+- [x] `AnsibleInstall::version` is populated from `release.py` on the filesystem path
+- [x] and from the first line on the version-command path
+- [x] a fixture pins parsing of a `.dev` / `rc` suffix, not just `X.Y.Z`
+- [x] `None` is handled explicitly wherever a rule gates on it
+- [x] T-117's dependency is satisfied — it can gate its strict-`when:` rules
+
+## Outcome
+
+`Version { major, minor, patch }` in `install.rs`, `Ord` by field order so a gate reads
+`v >= Version::parse("2.19")`. Filled from `<package_dir>/release.py` at the end of
+`from_filesystem` — one read covering all three branches that can set `package_dir` — and
+from the first line of the output in `from_version_command`, which handles both
+`ansible [core 2.21.2]` and the pre-split `ansible 2.9.27`.
+
+Pre-release suffixes parse to the release they precede: `2.22.0.dev0` → 2.22.0, `2.19.0rc1`
+→ 2.19.0. That is deliberate and pinned by a test. Every gate on the board is "since X.Y",
+and a dev build is on the far side of that line, so ordering the suffix would put `.dev0`
+*below* the release and mis-answer the only question anyone asks.
+
+Two honest gaps:
+
+- **The `None` box is vacuous today.** No rule gates on the version yet, so there was no call
+  site to make explicit. The doc comment on the field states the rule instead: a gated rule
+  must decide at its own call site, and the safe default is current behaviour. T-117 is the
+  first ticket that has to honour it.
+- **The `release.py` read is not verified against a real install here** — this machine has no
+  Ansible, so `finds_the_local_ansible_install` early-returns as it always has. It now
+  asserts `version.is_some()` when an install *is* found, so the first CI or dev machine with
+  Ansible on PATH proves the path. The parse itself is pinned on a verbatim `release.py`.
+
+The startup log line carries it: `detect: path-walk-up (core 2.21.2) in 12 ms — <path>`.
