@@ -303,6 +303,27 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
 /// the offsets stay byte-accurate past non-ASCII. Uses are returned in order and NOT
 /// deduplicated, so each occurrence keeps its own span.
 pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
+    scan_words(expr, |w| {
+        !(NOT_VARIABLES.contains(&w)
+            || MAGIC.contains(&w)
+            || w.starts_with("ansible_")
+            || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    })
+}
+
+/// The complement of [`variable_uses`]: the names it drops **because Ansible injects them** —
+/// the magic vars and the `ansible_*` prefix. No rule wants these (that is the point of
+/// dropping them), but hover does: they are the one class of name where "nothing in the
+/// workspace defines it" is the expected state rather than a finding (T-143).
+pub fn injected_uses(expr: &str) -> Vec<(String, usize, usize)> {
+    scan_words(expr, |w| {
+        !NOT_VARIABLES.contains(&w) && (MAGIC.contains(&w) || w.starts_with("ansible_"))
+    })
+}
+
+/// The shared tokenizer. `keep` decides what counts, so the two views above can never drift
+/// on what a *word* is — only on which words they want.
+fn scan_words(expr: &str, keep: impl Fn(&str) -> bool) -> Vec<(String, usize, usize)> {
     let bytes = expr.as_bytes();
     let mut out: Vec<(String, usize, usize)> = Vec::new();
     let mut i = 0;
@@ -350,11 +371,7 @@ pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
         if before.ends_with(" is") || before.ends_with(" is not") {
             continue;
         }
-        if NOT_VARIABLES.contains(&word)
-            || MAGIC.contains(&word)
-            || word.starts_with("ansible_")
-            || word.chars().next().is_some_and(|c| c.is_ascii_digit())
-        {
+        if !keep(word) {
             continue;
         }
         out.push((word.to_string(), start, i));

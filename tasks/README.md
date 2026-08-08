@@ -250,6 +250,7 @@ T-021 is now unblocked on that side.
 | T-140 | **bug** · [when-assignment fires on Jinja keyword arguments](closed/T-140-when-assignment-fires-on-jinja-keyword-arguments.md) | done     |
 | T-142 | **bug** · [Parser panics on a block scalar with no trailing newline](closed/T-142-parser-panics-on-a-block-scalar-with-no-trailing-newline.md) | done     |
 | T-138 | [The installed ansible-core version is never detected, but rules need it](closed/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | done     |
+| T-143 | [Hover is silent on magic variables, including the two whose value we detect](closed/T-143-hover-is-silent-on-magic-variables-including-the-two-whose-v.md) | done     |
 
 ## Settled — don't re-derive these
 

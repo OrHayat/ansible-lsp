@@ -146,6 +146,11 @@ pub struct VarUse {
 /// in the document, so the returned spans are absolute. Literal text outside `{{ }}` is
 /// not scanned — only a template expression references variables.
 pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
+    template_uses_with(text, base, out, condition::variable_uses)
+}
+
+/// Which words count is the caller's choice — see [`Extract`].
+fn template_uses_with(text: &str, base: usize, out: &mut Vec<VarUse>, extract: Extract) {
     let mut i = 0;
     while let Some(open) = text[i..].find("{{") {
         let expr_start = i + open + 2;
@@ -153,7 +158,7 @@ pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
             break;
         };
         let expr = &text[expr_start..expr_start + close_rel];
-        for (name, s, e) in condition::variable_uses(expr) {
+        for (name, s, e) in extract(expr) {
             out.push(VarUse {
                 name,
                 span: Span {
@@ -170,7 +175,11 @@ pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
 /// Variable uses in a bare Jinja expression (a `when:` clause), where the whole string is
 /// the expression rather than literal text with `{{ }}` islands.
 pub fn expression_uses(expr: &str, base: usize, out: &mut Vec<VarUse>) {
-    for (name, s, e) in condition::variable_uses(expr) {
+    expression_uses_with(expr, base, out, condition::variable_uses)
+}
+
+fn expression_uses_with(expr: &str, base: usize, out: &mut Vec<VarUse>, extract: Extract) {
+    for (name, s, e) in extract(expr) {
         out.push(VarUse {
             name,
             span: Span {
@@ -186,9 +195,24 @@ pub fn expression_uses(expr: &str, base: usize, out: &mut Vec<VarUse>) {
 /// other scalar is treated as literal text with `{{ }}` templates. Walks the raw tree so
 /// every scalar's span is exact, and accumulates the enclosing `when:` onto each use.
 pub fn uses(nodes: &[Node]) -> Vec<VarUse> {
+    uses_with(nodes, condition::variable_uses)
+}
+
+/// Which words a scan counts as a use. The tree walk is identical either way — only the
+/// tokenizer's `keep` differs — so the two views can never disagree about where a use *is*.
+type Extract = fn(&str) -> Vec<(String, usize, usize)>;
+
+/// Uses of names **Ansible injects** — magic vars and `ansible_*`. [`uses`] drops these on
+/// purpose, since no workspace file defines them and every rule would false-positive; hover
+/// is the one consumer that wants them (T-143).
+pub fn injected_uses(nodes: &[Node]) -> Vec<VarUse> {
+    uses_with(nodes, condition::injected_uses)
+}
+
+fn uses_with(nodes: &[Node], extract: Extract) -> Vec<VarUse> {
     let mut out = Vec::new();
     for n in nodes {
-        walk_uses(n, false, &[], &mut out);
+        walk_uses(n, false, &[], &mut out, extract);
     }
     out
 }
@@ -205,21 +229,21 @@ fn when_of(node: &Node) -> Vec<String> {
     }
 }
 
-fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>) {
+fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>, ex: Extract) {
     match node {
         Node::Scalar { value, span } => {
             let before = out.len();
             if in_when {
-                expression_uses(value, span.start, out);
+                expression_uses_with(value, span.start, out, ex);
             } else {
-                template_uses(value, span.start, out);
+                template_uses_with(value, span.start, out, ex);
             }
             for u in &mut out[before..] {
                 u.guard = guard.to_vec();
             }
         }
         Node::Sequence { items, .. } => {
-            items.iter().for_each(|i| walk_uses(i, in_when, guard, out))
+            items.iter().for_each(|i| walk_uses(i, in_when, guard, out, ex))
         }
         Node::Mapping { entries, .. } => {
             // This task/block's own `when:` guards the values inside it (its module args),
@@ -230,7 +254,7 @@ fn walk_uses(node: &Node, in_when: bool, guard: &[String], out: &mut Vec<VarUse>
                 let is_when = k.as_str().map(crate::keywords::core_action) == Some("when");
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
                 let g: &[String] = if is_when { guard } else { &inner };
-                walk_uses(v, is_when, g, out);
+                walk_uses(v, is_when, g, out, ex);
             }
         }
         Node::Other { .. } => {}

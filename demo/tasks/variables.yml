@@ -69,3 +69,16 @@
     - name: Undefined anywhere reachable — warns, conceding inventory
       ansible.builtin.debug:
         msg: "{{ from_inventory }}"
+
+    # GOOD: a reserved name Ansible always injects. Nothing in this workspace defines it and
+    # the line above proves `var-undefined` is live in this file, so the silence there is the
+    # exemption doing its job — the `ansible_` prefix covers the facts AND the reserved
+    # statics (`ansible_playbook_python`, `ansible_config_file`, `ansible_version`, …).
+    #
+    # Hover it: the value is detected, not guessed — the interpreter behind the `ansible` this
+    # editor found (T-051), which the hover says out loud because the play may run on another.
+    # `ansible_version` hovers the same way. Every other magic name and every fact hovers
+    # nothing, deliberately: we speak only where we hold a value (T-143).
+    - name: A reserved ansible_ name — never "undefined", and hover knows its value
+      ansible.builtin.debug:
+        msg: "{{ ansible_playbook_python }} on {{ ansible_version }}"

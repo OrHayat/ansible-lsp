@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ansible_core::cache::ScanCache;
 use ansible_core::config::DuplicateDictKey;
 use ansible_core::fs::{Counting, StdFs};
+use ansible_core::install::AnsibleInstall;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Loader, Node, Span};
@@ -990,15 +991,43 @@ impl Backend {
         Some((out.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
 
+    /// Hover for a name Ansible injects. Separate from the variable hover because the two
+    /// answer different questions: that one says where a definition is, and for these there
+    /// is none anywhere — which is the expected state, not a finding.
+    ///
+    /// The install is passed in, not fetched: the caller supplies
+    /// [`AnsibleInstall::detected`] — never `detect`, since a hover must not be what starts
+    /// detection (T-084's 3.6 s freeze) — and a test supplies a synthetic one, which is the
+    /// only way to exercise this path on a machine with no Ansible.
+    fn injected_var_hover_at(
+        doc: &Document,
+        nodes: &[Node],
+        byte: usize,
+        install: Option<&AnsibleInstall>,
+    ) -> Option<(String, Range)> {
+        let use_ = vars::injected_uses(nodes)
+            .into_iter()
+            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+        let md = injected_var_hover(&use_.name, install?)?;
+        let (sl, sc) = doc.byte_to_lsp(use_.span.start);
+        let (el, ec) = doc.byte_to_lsp(use_.span.end);
+        Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
+    }
+
     fn variable_hover_at(
         doc: &Document,
         nodes: &[Node],
         byte: usize,
         path: &Path,
     ) -> Option<(String, Range)> {
-        let use_ = vars::uses(nodes)
+        let Some(use_) = vars::uses(nodes)
             .into_iter()
-            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+            .find(|u| byte >= u.span.start && byte < u.span.end)
+        else {
+            // No ordinary use here. `vars::uses` drops the names Ansible injects, so this is
+            // also the only place an `ansible_*` or magic token can be recognised at all.
+            return Self::injected_var_hover_at(doc, nodes, byte, AnsibleInstall::detected());
+        };
         let mut defs: Vec<vars::Located> = cached_definitions(path, nodes)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
@@ -1596,6 +1625,56 @@ fn reference_hover(
     }
 }
 
+/// Hover for a variable Ansible injects, for the two whose value the detected install knows.
+///
+/// Deliberately narrow. Every other magic name and every `ansible_*` fact keeps hovering
+/// nothing: a popup saying "provided by Ansible at runtime" on tokens we can say nothing
+/// concrete about is the tool talking to hear itself, and widening later is additive.
+///
+/// Both lines name the install, because both values are the *editor's* Ansible and the play
+/// may well run on another one — CI, tox, a second venv (T-051). A hover that states the
+/// source can be argued with; one that just asserts a path cannot.
+fn injected_var_hover(name: &str, install: &AnsibleInstall) -> Option<String> {
+    let source = || match install.package_dir.as_ref() {
+        Some(p) => md::text(&format!("from the detected install at {}", p.display())),
+        None => md::text("from the detected install"),
+    };
+    match name {
+        "ansible_playbook_python" => {
+            let py = install.python.as_ref()?;
+            Some(
+                Md::new()
+                    .line(md::text("`ansible_playbook_python` — the interpreter Ansible runs on"))
+                    .line(md::code(&py.display().to_string()))
+                    .gap()
+                    .line(source().italic())
+                    .line(
+                        md::text(
+                            "The running play's own interpreter may differ — this is the one \
+                             behind the `ansible` this editor found.",
+                        )
+                        .italic(),
+                    )
+                    .render(),
+            )
+        }
+        // A dict at runtime (`full`, `major`, `minor`, `revision`, `string`), so the hover
+        // reports the release rather than implying the bare name is a string.
+        "ansible_version" => {
+            let v = install.version.as_ref()?;
+            Some(
+                Md::new()
+                    .line(md::text("`ansible_version` — ansible-core, as a dict"))
+                    .line(md::code(&format!("{v}")))
+                    .gap()
+                    .line(source().italic())
+                    .render(),
+            )
+        }
+        _ => None,
+    }
+}
+
 /// Everything the hover request decides, given a parsed document and a byte offset. Kept
 /// out of the async handler because the whole point of T-078 is the *precedence* between
 /// the three hovers that can claim a token, and precedence is what wants a test.
@@ -1977,6 +2056,118 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+
+    /// The whole hover path, on a synthetic install — cursor in a document to rendered
+    /// markdown, with no `detect()` anywhere. The two halves were each pinned below while the
+    /// join between them was broken, so this is the test that actually says the feature works.
+    #[test]
+    fn hovering_an_injected_name_renders_the_detected_values() {
+        use ansible_core::install::{AnsibleInstall, Version};
+        use std::path::PathBuf;
+
+        let text = concat!(
+            "- hosts: localhost\n  vars: { base_url: x }\n  tasks:\n",
+            "    - debug: { msg: \"{{ ansible_playbook_python }} {{ base_url }}\" }\n",
+            "    - debug: { msg: \"{{ ansible_version }}\" }\n",
+        );
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().expect("fixture parses");
+        let install = AnsibleInstall {
+            package_dir: Some(PathBuf::from("/venv/lib/python3.13/site-packages/ansible")),
+            python: Some(PathBuf::from("/venv/bin/python")),
+            version: Some(Version { major: 2, minor: 21, patch: 2 }),
+            ..Default::default()
+        };
+        let hover = |needle: &str, i: Option<&AnsibleInstall>| {
+            let byte = text.find(needle).expect("needle present") + 1;
+            super::Backend::injected_var_hover_at(&doc, &nodes, byte, i)
+        };
+
+        let (md, range) = hover("ansible_playbook_python", Some(&install)).expect("hovers");
+        assert!(md.contains("/venv/bin/python"), "{md}");
+        assert!(md.contains("/venv/lib/python3.13/site-packages/ansible"), "{md}");
+        // The highlight covers the name itself, not the whole `{{ }}` or the whole scalar.
+        assert_eq!(range.start.line, 3);
+        assert_eq!(range.end.character - range.start.character, 23);
+
+        let (md, _) = hover("ansible_version", Some(&install)).expect("hovers");
+        assert!(md.contains("2.21.2"), "{md}");
+
+        // An ordinary variable is the definition hover's business, not this one's.
+        assert!(hover("base_url }}", Some(&install)).is_none());
+        // No install detected yet, or one we learned nothing about: silence, not a guess.
+        assert!(hover("ansible_playbook_python", None).is_none());
+        assert!(hover("ansible_version", Some(&AnsibleInstall::default())).is_none());
+    }
+
+    /// The gap that made the first cut of T-143 dead code: the renderer was right and nothing
+    /// reached it, because `vars::uses` drops injected names before hover ever sees a token.
+    /// This pins the token lookup itself — that the name under the cursor is found, with the
+    /// span the hover will highlight, and that an ordinary variable is NOT claimed here.
+    #[test]
+    fn an_injected_name_is_found_under_the_cursor() {
+        let text = concat!(
+            "- hosts: localhost\n  vars: { base_url: x }\n  tasks:\n",
+            "    - debug: { msg: \"{{ ansible_playbook_python }} {{ base_url }}\" }\n",
+            "    - debug: { msg: \"ok\" }\n      when: ansible_version is version('2.19', '>=')\n",
+        );
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().expect("fixture parses");
+
+        let at = |needle: &str| {
+            let byte = text.find(needle).expect("needle present") + 1;
+            ansible_core::vars::injected_uses(&nodes)
+                .into_iter()
+                .find(|u| byte >= u.span.start && byte < u.span.end)
+                .map(|u| u.name)
+        };
+        assert_eq!(at("ansible_playbook_python").as_deref(), Some("ansible_playbook_python"));
+        // Also inside a `when:`, which is scanned as a bare expression, not a `{{ }}` island.
+        assert_eq!(at("ansible_version is").as_deref(), Some("ansible_version"));
+        // An ordinary variable stays with the definition hover; this view must not claim it.
+        assert_eq!(at("base_url }}").as_deref(), None);
+
+        // And the complementary guarantee: the rule-facing view still drops them, so nothing
+        // here re-opens the false-"undefined" class that the exemption exists to prevent.
+        let rule_view: Vec<String> =
+            ansible_core::vars::uses(&nodes).into_iter().map(|u| u.name).collect();
+        assert_eq!(rule_view, vec!["base_url".to_string()]);
+    }
+
+    /// A synthetic install, so this runs on a machine with no Ansible — which is most of them,
+    /// and the reason `finds_the_local_ansible_install` can only early-return.
+    #[test]
+    fn injected_var_hover_speaks_only_where_it_holds_a_value() {
+        use ansible_core::install::{AnsibleInstall, Version};
+        use std::path::PathBuf;
+
+        let install = AnsibleInstall {
+            package_dir: Some(PathBuf::from("/venv/lib/python3.13/site-packages/ansible")),
+            python: Some(PathBuf::from("/venv/bin/python")),
+            version: Some(Version { major: 2, minor: 21, patch: 2 }),
+            ..Default::default()
+        };
+        let hover = |n: &str| super::injected_var_hover(n, &install);
+
+        let py = hover("ansible_playbook_python").expect("interpreter is known");
+        assert!(py.contains("/venv/bin/python"), "{py}");
+        assert!(py.contains("/venv/lib/python3.13/site-packages/ansible"), "names its source");
+        assert!(py.contains("may differ"), "concedes the play may run elsewhere");
+
+        let v = hover("ansible_version").expect("version is known");
+        assert!(v.contains("2.21.2"), "{v}");
+        assert!(v.contains("dict"), "does not imply the bare name is a string");
+
+        // Facts and the value-less magic names stay silent — no "provided by Ansible" noise.
+        assert!(hover("ansible_os_family").is_none());
+        assert!(hover("inventory_hostname").is_none());
+        assert!(hover("playbook_dir").is_none());
+
+        // A known name whose value was not detected invents nothing.
+        let empty = AnsibleInstall::default();
+        assert!(super::injected_var_hover("ansible_playbook_python", &empty).is_none());
+        assert!(super::injected_var_hover("ansible_version", &empty).is_none());
+    }
 
     /// T-102 end to end, against the two checked-in fixtures. The YAML file must report
     /// exactly what real ansible reported (four keys, four lines, live-verified on 2.21.2);

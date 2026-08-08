@@ -209,6 +209,13 @@ impl AnsibleInstall {
         DETECTED.get_or_init(Self::run)
     }
 
+    /// The result if detection has already run — never starting it. Anything on a request path
+    /// must use this: [`detect`](Self::detect) is `get_or_init`, so the first caller pays the
+    /// whole cost, and on the message pump that is the 3.6 s freeze T-084 measured.
+    pub fn detected() -> Option<&'static Self> {
+        DETECTED.get()
+    }
+
     fn run() -> Self {
         // Fast path: derive everything from the filesystem. `ansible --version` is
         // authoritative but costs seconds of Python startup when cold (3.6 s measured, T-084)

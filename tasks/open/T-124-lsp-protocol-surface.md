@@ -41,6 +41,7 @@ protocol feature is adopted for data that does not fit its model.
 - [x] T-008 — Teal decoration for resolvable references
 - [x] T-082 — Hover markdown is assembled by hand, in eight places
 - [ ] T-132 — Go-to-definition on a module with an action-plugin twin offers only the module
+- [x] T-143 — Hover is silent on magic variables, including the two whose value we detect
 
 ## Done when
 
