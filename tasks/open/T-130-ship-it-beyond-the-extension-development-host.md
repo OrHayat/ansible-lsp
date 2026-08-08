@@ -40,7 +40,7 @@ deliberately, rather than discovered when someone asks for a download link.
 - [ ] T-025 — Settings: toggle rules, override severity
 - [ ] T-026 — Neovim lspconfig entry
 - [ ] T-027 — Differential harness vs the legacy plugin
-- [ ] T-077 — Real-repo tests read a caller's home dir; move to inline fixtures
+- [x] T-077 — Real-repo tests read a caller's home dir; move to inline fixtures
 - [ ] T-081 — The board is hand-edited, and it has drifted
 - [x] T-014 — README is stale
 - [x] T-043 — Docs stale after the parser swap

@@ -1,38 +1,17 @@
 #!/usr/bin/env node
 // End-to-end smoke test: drive ansible-lsp over raw stdio, no VS Code involved.
-// Opens a real file from ~/app/ansible, asks for the definition under a cursor
-// placed on an include_tasks value, and prints where it resolved to.
+// Puts a cursor on an include_tasks value, asks for the definition, and prints where it
+// resolved to. The project is built in a temp dir (see fixture.js) so this runs on a fresh
+// checkout; pass a project root as the first argument to drive a real repo instead.
 
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const BIN = path.join(__dirname, "..", "target", "release", "ansible-lsp");
-const REPO = path.join(process.env.HOME, "app", "ansible");
+const { build, toUri, serverBin, CASES } = require("./fixture");
 
-// [file, the include value to click on, what we expect to land in]
-const CASES = [
-  [
-    "roles/sync-state/tasks/http_access_point/reconcile.yml",
-    "_converge_one_ap.yml",
-    "http_access_point/_converge_one_ap.yml",
-  ],
-  [
-    "roles/lustre-snapshot/tasks/query/timestamp.yml",
-    "query/exists.yml",
-    "lustre-snapshot/tasks/query/exists.yml",
-  ],
-  [
-    "roles/ad/tasks/join.yml",
-    "../../playbooks/tasks/select-available-node.yml",
-    "playbooks/tasks/select-available-node.yml",
-  ],
-  [
-    "roles/dashboard-docker/tasks/sanity-tests/main.yml",
-    "sanity-tests/database-tests.yml",
-    "sanity-tests/database-tests.yml",
-  ],
-];
+const BIN = serverBin();
+const { root: REPO, generated } = build();
 
 const srv = spawn(BIN, [], { stdio: ["pipe", "pipe", "inherit"] });
 
@@ -93,23 +72,28 @@ function positionOf(text, needle) {
 }
 
 (async () => {
+  console.log(`project: ${REPO}${generated ? " (generated)" : ""}\n`);
   await request("initialize", {
     processId: process.pid,
-    rootUri: `file://${REPO}`,
-    workspaceFolders: [{ uri: `file://${REPO}`, name: "ansible" }],
+    rootUri: toUri(REPO),
+    workspaceFolders: [{ uri: toUri(REPO), name: "ansible" }],
     capabilities: {},
   });
   notify("initialized", {});
 
   let pass = 0;
+  let skipped = 0;
   for (const [rel, needle, expect] of CASES) {
     const abs = path.join(REPO, rel);
     if (!fs.existsSync(abs)) {
+      // Only reachable when driving a real repo that lacks the file; the generated tree
+      // always has all four, so a skip there would be a fixture bug.
       console.log(`SKIP  ${rel} (not present)`);
+      skipped++;
       continue;
     }
     const text = fs.readFileSync(abs, "utf8");
-    const uri = `file://${abs}`;
+    const uri = toUri(abs);
 
     notify("textDocument/didOpen", {
       textDocument: { uri, languageId: "ansible", version: 1, text },
@@ -126,18 +110,18 @@ function positionOf(text, needle) {
     if (ok) pass++;
     console.log(
       `${ok ? "PASS" : "FAIL"}  ${needle}\n      -> ${
-        got ? got.replace(`file://${REPO}/`, "") : "no definition returned"
+        got ? got.replace(`${toUri(REPO)}/`, "") : "no definition returned"
       }`
     );
   }
 
-  console.log(`\n${pass}/${CASES.length} resolved`);
+  console.log(`\n${pass}/${CASES.length - skipped} resolved`);
 
   // documentLink over the demo file: exactly what the client paints teal.
   const demo = path.join(__dirname, "..", "demo", "tasks", "main.yml");
   if (fs.existsSync(demo)) {
     const text = fs.readFileSync(demo, "utf8");
-    const uri = `file://${demo}`;
+    const uri = toUri(demo);
     notify("textDocument/didOpen", {
       textDocument: { uri, languageId: "ansible", version: 1, text },
     });
@@ -169,7 +153,7 @@ function positionOf(text, needle) {
 
   // Diagnostics arrive as notifications after didOpen.
   await new Promise((r) => setTimeout(r, 200));
-  const demoDiags = diagnostics.get(`file://${demo}`) || [];
+  const demoDiags = diagnostics.get(toUri(demo)) || [];
   const demoText = fs.readFileSync(demo, "utf8").split("\n");
   console.log(`\ndemo/tasks/main.yml — ${demoDiags.length} warnings:`);
   for (const d of demoDiags) {
@@ -182,20 +166,23 @@ function positionOf(text, needle) {
   }
 
   // Repo-wide scan: diagnostics for files we never opened.
+  // site.yml is never opened above — it carries a deliberately missing include so the scan
+  // has something to find.
   process.stdout.write("\nwaiting for workspace scan");
-  for (let i = 0; i < 40 && !diagnostics.has(`file://${REPO}/site.yml`); i++) {
+  for (let i = 0; i < 40 && !diagnostics.has(`${toUri(REPO)}/site.yml`); i++) {
     process.stdout.write(".");
     await new Promise((r) => setTimeout(r, 250));
   }
   const scanned = [...diagnostics.entries()].filter(([u, d]) => d.length && !u.includes("/demo/"));
   console.log(`\n\nrepo-wide scan flagged ${scanned.length} file(s) never opened:`);
   for (const [uri, d] of scanned) {
-    console.log(`  ${uri.replace(`file://${REPO}/`, "")}:${d[0].range.start.line + 1}`);
+    console.log(`  ${uri.replace(`${toUri(REPO)}/`, "")}:${d[0].range.start.line + 1}`);
     console.log(`      ${d[0].message.split("\n")[0]}`);
   }
 
   await request("shutdown", null);
   notify("exit", null);
   srv.kill();
-  process.exit(pass === CASES.length ? 0 : 1);
+  const wanted = CASES.length - skipped;
+  process.exit(pass === wanted && (generated ? scanned.length > 0 : true) ? 0 : 1);
 })();

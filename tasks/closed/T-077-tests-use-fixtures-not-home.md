@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| **partly done** | P2 | M | T-130 | — |
+| done   | P2       | M    | T-130 | —          |
 
 ## Problem
 
@@ -134,6 +134,21 @@ rather than vendored because a profiling aid wants a dial: `PROFILE_TASKS=20000`
 
 **Remaining: 0 test sites.** Nothing under `crates/` reads `$HOME` for a private repo any more.
 
+### The stdio harnesses
+
+`scripts/fixture.js` builds the project both harnesses drive: `mkdtemp`, written from string
+literals, with the four goto-definition cases beside the tree they need. Each pins a different
+rule in the include search order — a sibling inside a `tasks/` subdirectory, a nested path
+anchored at `tasks/` rather than at the including file, a `../../` climb that only resolves off
+the *role dir* as a base, and a subdirectory named from inside itself. `site.yml` carries a
+deliberately missing include so the workspace scan has something to find.
+
+Verified running, not just compiling: 4/4 resolve, the scan flags `site.yml:4`, `timing.js`
+reports 2000 links on a 145 KB generated playbook. Two things surfaced only by running it —
+the generated playbook first pointed at a path that didn't resolve from `playbooks/`, so
+`documentLink` reported **0 links** and timed the miss path; and `spawn` needs `ansible-lsp.exe`
+on Windows, so `serverBin()` adds the extension and exits 2 with a build hint when it is absent.
+
 Note `builtin_modules_resolve_into_the_installed_ansible` and
 `installed_collection_modules_resolve` are a *different* dependency — the machine's Ansible
 install, not the repo — and are out of scope here. Their `repo()` guard was still dropped: an
@@ -151,10 +166,8 @@ empty `testing::project` is enough, since nothing under the project root decides
       `expand_list`, `main.rs`'s path shortening).
 
 - [x] each moved test builds its tree inline and runs (not skips) on a clean checkout and CI
-- [ ] `smoke.js` / `timing.js` either take a path argument or build a temp tree inline
+- [x] `smoke.js` / `timing.js` either take a path argument or build a temp tree inline
 
-      Not started. Both still open `path.join(process.env.HOME, "app", "ansible")`, and
-      `smoke.js` is the harder half: its `CASES` name specific files in that repo
-      (`roles/sync-state/tasks/http_access_point/reconcile.yml`,
-      `roles/lustre-snapshot/tasks/query/timestamp.yml`), so it needs a fixture tree on disk
-      to drive the server against, not just a path argument.
+      Both. `scripts/fixture.js` writes the tree into `mkdtemp` from string literals and
+      holds the four `CASES`; passing a project root as `argv[2]` drives a real repo instead,
+      and a missing one exits 2 rather than resolving nothing.

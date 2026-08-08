@@ -156,7 +156,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
-| T-077 | [Real-repo tests read a caller's home dir](open/T-077-tests-use-fixtures-not-home.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -248,6 +247,7 @@ T-021 is now unblocked on that side.
 | T-095 | **bug** · [Templated import_playbook is reported missing](closed/T-095-templated-import-playbook-is-reported-missing.md) | done     |
 | T-102 | [Duplicate YAML mapping key](closed/T-102-duplicate-yaml-mapping-key.md) | done     |
 | T-134 | [MemFs is trapped in one test module, so fixtures elsewhere hit real disk](closed/T-134-memfs-is-trapped-in-one-test-module-so-fixtures-elsewhere-hi.md) | done     |
+| T-077 | [Real-repo tests read a caller's home dir](closed/T-077-tests-use-fixtures-not-home.md) | done     |
 
 ## Settled — don't re-derive these
 

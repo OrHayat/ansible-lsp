@@ -5,8 +5,12 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const BIN = path.join(__dirname, "..", "target", "release", "ansible-lsp");
-const REPO = path.join(process.env.HOME, "app", "ansible");
+const { build, toUri, serverBin } = require("./fixture");
+
+const BIN = serverBin();
+// 2000 tasks (~110 KB) clears the largest YAML in any real repo we measured. Pass a
+// project root as argv[2] to time that instead (T-077).
+const { root: REPO, generated } = build({ bigTasks: 2000 });
 
 const t0 = process.hrtime.bigint();
 const srv = spawn(BIN, [], { stdio: ["pipe", "pipe", "inherit"] });
@@ -50,14 +54,15 @@ const ms = (start) => (Number(process.hrtime.bigint() - start) / 1e6).toFixed(1)
 
 (async () => {
   let t = process.hrtime.bigint();
-  await request("initialize", { processId: process.pid, rootUri: `file://${REPO}`, capabilities: {} });
+  await request("initialize", { processId: process.pid, rootUri: toUri(REPO), capabilities: {} });
   const tInit = ms(t);
   notify("initialized", {});
 
+  console.log(`project            ${REPO}${generated ? " (generated)" : ""}`);
   console.log(`process spawn      ${tSpawn.toFixed(1)} ms`);
   console.log(`initialize         ${tInit} ms`);
 
-  // Biggest YAML file in the repo — worst case for a single request.
+  // Worst case for a single request: the biggest YAML under the root.
   let biggest = null;
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -74,12 +79,12 @@ const ms = (start) => (Number(process.hrtime.bigint() - start) / 1e6).toFixed(1)
   walk(REPO);
 
   for (const [label, file] of [
-    ["largest file", biggest.p],
+    ["largest file", biggest && biggest.p],
     ["demo file", path.join(__dirname, "..", "demo", "tasks", "main.yml")],
   ]) {
-    if (!fs.existsSync(file)) continue;
+    if (!file || !fs.existsSync(file)) continue;
     const text = fs.readFileSync(file, "utf8");
-    const uri = `file://${file}`;
+    const uri = toUri(file);
     t = process.hrtime.bigint();
     notify("textDocument/didOpen", { textDocument: { uri, languageId: "ansible", version: 1, text } });
     const r = await request("textDocument/documentLink", { textDocument: { uri } });
