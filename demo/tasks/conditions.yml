@@ -136,6 +136,68 @@
   ansible.builtin.include_tasks: sibling.yml
   when: not (skip_demo | default(false)
 
+# ====================================== FATAL SINCE ansible-core 2.19 — not yet flagged
+# 2.19 made conditionals strict: an empty condition is refused outright rather than treated
+# as "no condition". Both of these kill the task at runtime and the editor is still silent,
+# which is what T-117 fixes. It needs the detected core version to gate on (T-138).
+
+- name: "PENDING — an empty conditional is an error since 2.19"
+  ansible.builtin.include_tasks: sibling.yml
+  when: ""
+
+- name: "PENDING — a null conditional is the same error"
+  ansible.builtin.include_tasks: sibling.yml
+  when:
+
+- name: "WRONG TIER — fully wrapped is deprecated for 2.23, not broken today"
+  # This warns right now, with the pre-2.19 story: `when:` resolves it once and then
+  # evaluates the result, so it works. A deprecation is a hint, not a warning — T-117.
+  ansible.builtin.include_tasks: sibling.yml
+  when: "{{ demo_override }}"
+
+# ============================= THE OTHER FOUR EXPRESSION KEYWORDS — not yet linted (T-141)
+# `when:` is one of five bare-expression keywords, and the same broken expression is equally
+# fatal in any of them. Every case above is an `include_tasks:` because the rules currently
+# ride on file references rather than on tasks; neither limit is deliberate.
+
+- name: "PENDING — failed_when: single `=` is the same runtime syntax error"
+  ansible.builtin.command: echo hi
+  failed_when: demo_mode = 'docker'
+
+- name: "PENDING — until: unbalanced parenthesis, on a task that is not an include"
+  ansible.builtin.command: echo hi
+  until: not (demo_result.rc == 0
+  retries: 3
+  delay: 1
+
+- name: "PENDING — assert: that: is a list of bare expressions, like a list when:"
+  ansible.builtin.assert:
+    that:
+      - demo_hosts | length > 0
+      - demo_mode = 'docker'
+
+- name: "PENDING — changed_when: `{{ }}` double-evaluates here exactly as it does in when:"
+  ansible.builtin.command: echo hi
+  changed_when: "{{ demo_result.rc != 0 }}"
+
+- name: "PENDING — changed_when: a literal is not a boolean, fatal since 2.19"
+  # Live on core 2.21.2: "Conditional result (True) was derived from value of type 'str'.
+  # Conditionals must have a boolean result." Provable without knowing any variable, so
+  # unlike the rest of the non-boolean check this one is a static rule — T-117.
+  ansible.builtin.command: echo hi
+  changed_when: "'bad'"
+
+- name: "GOOD — changed_when: false is a YAML boolean, not an expression"
+  ansible.builtin.command: echo hi
+  changed_when: false
+
+- name: "GOOD — changed_when: a quoted expression is still a bare expression"
+  # The quoting is YAML's, not Jinja's — the parser hands the rules the same string it
+  # would for an unquoted `when:`. A literal and an attribute access in one value, so this
+  # is the case that catches a routing bug that mishandles quoting.
+  ansible.builtin.command: echo hi
+  changed_when: "'CHANGED' in demo_result.stdout"
+
 # ==================================================================== SUPPRESSION AND EDGES
 
 - name: "SILENCED — rule-scoped noqa, same syntax as ansible-lint"
