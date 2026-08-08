@@ -869,11 +869,6 @@ mod tests {
     use crate::parse::Document;
     use crate::references::extract;
 
-    fn repo() -> Option<PathBuf> {
-        let p = PathBuf::from(std::env::var("HOME").ok()?).join("app/ansible");
-        p.is_dir().then_some(p)
-    }
-
     fn resolve_src(file: &Path, src: &str) -> Vec<(Reference, Resolution)> {
         let doc = Document::new(src.to_string());
         let ctx = FileContext::discover(file);
@@ -902,6 +897,12 @@ mod tests {
     ///
     /// `super::resolve_in` is spelled out because the local helper of the same name — which
     /// takes a file and a value — shadows the crate function inside this module.
+    /// [`resolve_in`] against an in-memory tree — the local two-argument helper, not the
+    /// crate function of that name.
+    fn mem_in(file: &str, value: &str, fs: &dyn Fs) -> Resolution {
+        mem_src(file, &format!("- include_tasks: {value}\n"), fs).pop().unwrap().1
+    }
+
     fn mem_src(file: &str, src: &str, fs: &dyn Fs) -> Vec<(Reference, Resolution)> {
         let file = Path::new(file);
         let doc = Document::new(src.to_string());
@@ -1096,7 +1097,13 @@ mod tests {
         // First existing alternative wins, even with a later one also present.
         let out = mem_src(
             "/p/site.yml",
-            "- hosts: all\n  vars_files:\n    - - vars/a.yml\n      - vars/b.yml\n      - vars/c.yml\n",
+            r#"
+            - hosts: all
+              vars_files:
+                - - vars/a.yml
+                  - vars/b.yml
+                  - vars/c.yml
+"#,
             &fs,
         );
         let group = &out.iter().find(|(r, _)| r.vars_files_group.is_some()).unwrap().1;
@@ -1110,7 +1117,12 @@ mod tests {
         // None exists: exactly the group is Missing, naming every candidate tried.
         let out = mem_src(
             "/p/site.yml",
-            "- hosts: all\n  vars_files:\n    - - vars/nope-a.yml\n      - vars/nope-b.yml\n",
+            r#"
+            - hosts: all
+              vars_files:
+                - - vars/nope-a.yml
+                  - vars/nope-b.yml
+"#,
             &fs,
         );
         let missing: Vec<_> = out.iter().filter(|(_, res)| res.status == Status::Missing).collect();
@@ -1465,15 +1477,21 @@ mod tests {
     #[test]
     #[ignore = "role_path expansion disabled pending chain-derived values — T-067/T-068"]
     fn role_path_expands_to_the_containing_role() {
-        let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("roles/zfs-container/tasks/main.yml"),
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/roles/zfs-container/tasks/main.yml", ""),
+            // A sibling role: reachable only by collapsing `..` across the role dir.
+            ("/p/roles/common/tasks/set-marker.yml", ""),
+        ]);
+        let res = mem_in(
+            "/p/roles/zfs-container/tasks/main.yml",
             "\"{{ role_path }}/../common/tasks/set-marker.yml\"",
+            &fs,
         );
         assert_eq!(res.status, Status::Resolved, "should resolve, not glob");
         assert_eq!(
             res.targets[0],
-            root.join("roles/common/tasks/set-marker.yml"),
+            PathBuf::from("/p/roles/common/tasks/set-marker.yml"),
             "`..` must collapse across the substituted role dir"
         );
     }
@@ -1483,15 +1501,28 @@ mod tests {
     /// warnings, because this repo's playbooks live in `<root>/playbooks/`.
     #[test]
     fn playbook_dir_tries_every_plausible_location() {
-        let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("roles/lustre-storage/tasks/main.yml"),
+        // The playbooks live a level down, so `{{ playbook_dir }}/../roles/...` only lands
+        // when `<root>/playbooks` is among the guesses — from `<root>` alone the `..`
+        // collapses out of the project entirely.
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/roles/lustre-storage/tasks/main.yml", ""),
+            ("/p/roles/common/tasks/check-prerequisites.yml", ""),
+        ]);
+        let res = mem_in(
+            "/p/roles/lustre-storage/tasks/main.yml",
             "\"{{ playbook_dir }}/../roles/common/tasks/check-prerequisites.yml\"",
+            &fs,
         );
         assert_eq!(
             res.status,
             Status::Resolved,
             "resolves via <root>/playbooks, not <root>"
+        );
+        assert_eq!(
+            res.targets[0],
+            PathBuf::from("/p/roles/common/tasks/check-prerequisites.yml")
         );
     }
 
@@ -1499,10 +1530,14 @@ mod tests {
     #[test]
     #[ignore = "role_path expansion disabled pending chain-derived values — T-067/T-068"]
     fn an_expanded_path_that_is_missing_still_warns() {
-        let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("roles/zfs-container/tasks/main.yml"),
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/roles/zfs-container/tasks/main.yml", ""),
+        ]);
+        let res = mem_in(
+            "/p/roles/zfs-container/tasks/main.yml",
             "\"{{ role_path }}/tasks/definitely-not-here.yml\"",
+            &fs,
         );
         assert_eq!(res.status, Status::Missing);
         assert!(
@@ -1515,11 +1550,9 @@ mod tests {
     /// guessed at.
     #[test]
     fn role_path_outside_a_role_is_not_substituted() {
-        let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("site.yml"),
-            "\"{{ role_path }}/tasks/whatever.yml\"",
-        );
+        // A playbook at the root: no enclosing role, so `role_path` has no value at all.
+        let fs = crate::testing::MemFs::new(&[("/p/ansible.cfg", ""), ("/p/site.yml", "")]);
+        let res = mem_in("/p/site.yml", "\"{{ role_path }}/tasks/whatever.yml\"", &fs);
         assert_ne!(
             res.status,
             Status::Missing,
@@ -1633,14 +1666,22 @@ mod tests {
 
     #[test]
     fn templated_paths_never_warn() {
-        let Some(root) = repo() else { return };
+        // Both halves of "several files or none" are in one tree: `*/validate.yml` globs to
+        // two siblings, `*/xyzzy.yml` to nothing at all.
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/roles/sync-state/tasks/http_access_point/reconcile.yml", ""),
+            ("/p/roles/sync-state/tasks/http_access_point/validate.yml", ""),
+            ("/p/roles/sync-state/tasks/https_access_point/validate.yml", ""),
+        ]);
         for value in [
             "\"{{ ap_protocol }}/validate.yml\"",
             "\"{{ nothing_matches_this }}/xyzzy.yml\"",
         ] {
-            let res = resolve_in(
-                &root.join("roles/sync-state/tasks/http_access_point/reconcile.yml"),
+            let res = mem_in(
+                "/p/roles/sync-state/tasks/http_access_point/reconcile.yml",
                 value,
+                &fs,
             );
             assert_ne!(res.status, Status::Missing, "{value} must not warn");
             assert_eq!(res.skip_reason, Some(SkipReason::Templated));
@@ -1650,33 +1691,53 @@ mod tests {
     /// The legacy plugin globbed templated includes; dropping that was a regression.
     #[test]
     fn templated_include_offers_every_candidate() {
-        let Some(root) = repo() else { return };
-        let res = resolve_in(
-            &root.join("roles/sync-state/tasks/main.yml"),
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/roles/sync-state/tasks/main.yml", ""),
+            ("/p/roles/sync-state/tasks/http_access_point/_converge_one_ap.yml", ""),
+            ("/p/roles/sync-state/tasks/https_access_point/_converge_one_ap.yml", ""),
+            // Same basename, wrong dir shape: the `_access_point` suffix has to be honoured.
+            ("/p/roles/sync-state/tasks/shared/_converge_one_ap.yml", ""),
+        ]);
+        let res = mem_in(
+            "/p/roles/sync-state/tasks/main.yml",
             "\"{{ proto }}_access_point/_converge_one_ap.yml\"",
+            &fs,
         );
         assert_eq!(res.status, Status::Resolved);
-        assert!(
-            res.targets.len() >= 2,
-            "expected several, got {:?}",
-            res.targets
+        assert_eq!(
+            res.targets,
+            vec![
+                PathBuf::from("/p/roles/sync-state/tasks/http_access_point/_converge_one_ap.yml"),
+                PathBuf::from("/p/roles/sync-state/tasks/https_access_point/_converge_one_ap.yml"),
+            ],
+            "every match, and only the ones the pattern actually names"
         );
     }
 
     #[test]
     fn import_playbook_resolves_relative_to_the_importer() {
-        let Some(root) = repo() else { return };
-        for (from, target) in [
-            ("playbooks/lustre-full-deploy.yml", "lustre-infrastructure.yml"),
-            ("playbooks/app/setup.yml", "../../network-setup.yml"),
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/network-setup.yml", ""),
+            ("/p/playbooks/lustre-full-deploy.yml", ""),
+            ("/p/playbooks/lustre-infrastructure.yml", ""),
+            ("/p/playbooks/app/setup.yml", ""),
+        ]);
+        // A bare name beside the importer, and a `../..` climb out of a nested dir. Both
+        // anchor at the *importing* file, never at the project root.
+        for (from, target, want) in [
+            (
+                "/p/playbooks/lustre-full-deploy.yml",
+                "lustre-infrastructure.yml",
+                "/p/playbooks/lustre-infrastructure.yml",
+            ),
+            ("/p/playbooks/app/setup.yml", "../../network-setup.yml", "/p/network-setup.yml"),
         ] {
-            let out = resolve_src(&root.join(from), &format!("- import_playbook: {target}\n"));
+            let out = mem_src(from, &format!("- import_playbook: {target}\n"), &fs);
             let res = first(&out, ReferenceKind::ImportPlaybook);
-            if res.status != Status::Resolved {
-                // Path may not exist in this checkout; only assert when it does.
-                continue;
-            }
-            assert!(res.targets[0].is_file());
+            assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+            assert_eq!(res.targets[0], PathBuf::from(want));
         }
     }
 
@@ -1687,10 +1748,17 @@ mod tests {
     /// time. Globbing would offer files Ansible can't reach, hence no candidates. T-095.
     #[test]
     fn templated_import_playbook_is_reported_not_skipped() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        // A file that *would* match if this globbed, so the empty candidate list below is
+        // the rule at work rather than an empty directory.
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/playbooks/prod-setup.yml", ""),
+        ]);
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- import_playbook: \"{{ env }}-setup.yml\"\n",
+            &fs,
         );
         let res = first(&out, ReferenceKind::ImportPlaybook);
         assert_eq!(res.status, Status::Missing);
@@ -1906,27 +1974,43 @@ mod tests {
         assert_eq!(first(&out, ReferenceKind::ImportPlaybook).status, Status::Missing);
     }
 
+    /// The tree the role cases share. `podman` is an ordinary role; `cib-batch` has entry
+    /// points but deliberately **no** `main.yml`, which is legal exactly because every caller
+    /// passes `tasks_from`. `roles_path` is set, so the search order is the config's and not
+    /// the `~/.ansible/roles` defaults — which would otherwise vary per machine.
+    fn roles_fs() -> crate::testing::MemFs {
+        crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
+            ("/p/site.yml", ""),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/roles/podman/tasks/main.yml", ""),
+            ("/p/roles/cib-batch/tasks/begin.yml", ""),
+            ("/p/roles/cib-batch/tasks/commit.yml", ""),
+            ("/p/roles/cib-batch/tasks/abort.yml", ""),
+        ])
+    }
+
     #[test]
     fn role_by_name_resolves_via_roles_path() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- include_role:\n    name: podman\n",
+            &roles_fs(),
         );
         let res = first(&out, ReferenceKind::Role);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert!(res.targets[0].ends_with("roles/podman/tasks/main.yml"));
+        assert_eq!(res.targets[0], PathBuf::from("/p/roles/podman/tasks/main.yml"));
     }
 
     /// `roles/cib-batch` has begin/commit/abort.yml but no main.yml — legal, because
-    /// every caller passes tasks_from. 16 working references in this repo depend on
-    /// this not warning.
+    /// every caller passes tasks_from. 16 working references in the repo this was found
+    /// in depended on this not warning.
     #[test]
     fn role_without_main_is_fine_when_tasks_from_is_given() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- include_role: { name: cib-batch, tasks_from: begin }\n",
+            &roles_fs(),
         );
         assert_eq!(first(&out, ReferenceKind::Role).status, Status::Skipped);
         assert_eq!(
@@ -1938,22 +2022,22 @@ mod tests {
     /// Same role, no tasks_from: now main.yml really is required, so it's an error.
     #[test]
     fn role_without_main_and_without_tasks_from_is_missing() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- include_role:\n    name: cib-batch\n",
+            &roles_fs(),
         );
         assert_eq!(first(&out, ReferenceKind::Role).status, Status::Missing);
     }
 
-    /// A role name that resolves nowhere is worth reporting — this one is a real
-    /// break in the repo: site.yml lists `lustre`, and roles/lustre does not exist.
+    /// A role name that resolves nowhere is worth reporting — this was a real break in the
+    /// repo it was found in: site.yml listed `lustre`, and roles/lustre did not exist.
     #[test]
     fn unknown_role_name_is_reported() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("site.yml"),
+        let out = mem_src(
+            "/p/site.yml",
             "- hosts: all\n  roles:\n    - lustre\n",
+            &roles_fs(),
         );
         let res = first(&out, ReferenceKind::Role);
         assert_eq!(res.status, Status::Missing);
@@ -1962,24 +2046,24 @@ mod tests {
 
     #[test]
     fn roles_block_entries_resolve() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- hosts: all\n  roles:\n    - podman\n",
+            &roles_fs(),
         );
         assert_eq!(first(&out, ReferenceKind::Role).status, Status::Resolved);
     }
 
     #[test]
     fn tasks_from_resolves_inside_its_own_role() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- include_role: { name: cib-batch, tasks_from: begin }\n",
+            &roles_fs(),
         );
         let res = first(&out, ReferenceKind::TasksFrom);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
-        assert!(res.targets[0].ends_with("roles/cib-batch/tasks/begin.yml"));
+        assert_eq!(res.targets[0], PathBuf::from("/p/roles/cib-batch/tasks/begin.yml"));
     }
 
     /// The T-091 demo keeps its promises: every GOOD line in
@@ -2107,10 +2191,19 @@ mod tests {
 
     #[test]
     fn in_repo_collection_module_resolves() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        // A collection you wrote, living under the project root rather than an install.
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/playbooks/site.yml", ""),
+            (
+                "/p/collections/ansible_collections/community/lvm/plugins/modules/pool_create.py",
+                "",
+            ),
+        ]);
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- community.lvm.pool_create:\n    name: p\n",
+            &fs,
         );
         let res = first(&out, ReferenceKind::Module);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
@@ -2118,12 +2211,17 @@ mod tests {
     }
 
     /// Like pyright into site-packages: jump into the installed ansible itself.
+    ///
+    /// The one dependency left here is the *install* — an empty project is enough, because
+    /// nothing under the root contributes to where `ansible.builtin` lives. That's why this
+    /// stays out of T-077: faking the target would mean inventing a site-packages tree, and
+    /// the test would then prove the fixture rather than the resolver.
     #[test]
     fn builtin_modules_resolve_into_the_installed_ansible() {
-        let Some(root) = repo() else { return };
         if AnsibleInstall::detect().package_dir.is_none() {
             return; // ansible not on PATH
         }
+        let root = crate::testing::project("builtin-modules", "", &[("playbooks/site.yml", "")]);
         let out = resolve_src(
             &root.join("playbooks/site.yml"),
             "- ansible.builtin.systemd:\n    name: x\n",
@@ -2133,13 +2231,15 @@ mod tests {
         assert!(res.targets[0].ends_with("ansible/modules/systemd.py"));
     }
 
-    /// An installed collection you never wrote, found via `ansible --version`.
+    /// An installed collection you never wrote, found via `ansible --version`. Gated on the
+    /// install alone, for the reason given just above.
     #[test]
     fn installed_collection_modules_resolve() {
-        let Some(root) = repo() else { return };
         if AnsibleInstall::detect().collection_roots.is_empty() {
             return;
         }
+        let root =
+            crate::testing::project("installed-collections", "", &[("playbooks/site.yml", "")]);
         let out = resolve_src(
             &root.join("playbooks/site.yml"),
             "- community.postgresql.postgresql_user:\n    name: x\n",
@@ -2152,10 +2252,11 @@ mod tests {
     /// A collection genuinely not installed: silent, never a warning.
     #[test]
     fn uninstalled_collection_is_skipped_not_warned() {
-        let Some(root) = repo() else { return };
-        let out = resolve_src(
-            &root.join("playbooks/site.yml"),
+        let fs = crate::testing::MemFs::new(&[("/p/ansible.cfg", ""), ("/p/playbooks/site.yml", "")]);
+        let out = mem_src(
+            "/p/playbooks/site.yml",
             "- nosuch.collection.module:\n    name: x\n",
+            &fs,
         );
         assert_eq!(first(&out, ReferenceKind::Module).status, Status::Skipped);
     }
