@@ -109,6 +109,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-117 | [when: is strict since 2.19 — audit condition.rs](open/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | S    | T-138      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-140 | **bug** · [when-assignment fires on Jinja keyword arguments](open/T-140-when-assignment-fires-on-jinja-keyword-arguments.md) | S    | —          |
+| T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](open/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | M    | T-140      |
 
 ### P2 — coverage and usability
 

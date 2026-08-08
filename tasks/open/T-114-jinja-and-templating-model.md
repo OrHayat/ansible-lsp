@@ -36,6 +36,7 @@ resolving paths, and it lives with the other file-reference work.
 - [ ] T-115 — Filter, test and lookup name index
 - [ ] T-116 — Undefined propagation: the Marker model
 - [ ] T-117 — when: is strict since 2.19 — audit condition.rs
+- [ ] T-141 — Condition rules only see when:, not the other four expression keywords
 
 ## Done when
 
