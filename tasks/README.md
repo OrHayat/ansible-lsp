@@ -130,8 +130,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-061 | [`undeclared-var`: the playbook's required `-e` inputs](open/T-061-undeclared-var-contract.md) | S | T-062 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M | — |
 | T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
-| T-076 | [Var-index re-walks shared files per consumer](open/T-076-var-index-redundant-walk.md) | M | T-075 refs |
-| T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | T-076 |
+| T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | ~~T-076~~ |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
 | T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](open/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | S    | —    |
 | T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | T-062 |
@@ -251,6 +250,7 @@ T-021 is now unblocked on that side.
 | T-142 | **bug** · [Parser panics on a block scalar with no trailing newline](closed/T-142-parser-panics-on-a-block-scalar-with-no-trailing-newline.md) | done     |
 | T-138 | [The installed ansible-core version is never detected, but rules need it](closed/T-138-the-installed-ansible-core-version-is-never-detected-but-rul.md) | done     |
 | T-143 | [Hover is silent on magic variables, including the two whose value we detect](closed/T-143-hover-is-silent-on-magic-variables-including-the-two-whose-v.md) | done     |
+| T-076 | [Var-index re-walks shared files per consumer](closed/T-076-var-index-redundant-walk.md) | done     |
 
 ## Settled — don't re-derive these
 

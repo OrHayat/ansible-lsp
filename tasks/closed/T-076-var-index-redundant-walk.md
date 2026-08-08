@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P2       | M    | T-131 | —          |
+| done   | P2       | M    | T-131 | —          |
 
 ## Problem
 
@@ -55,7 +55,11 @@ first as a stepping stone if needed, then layer 3 on top.
 
 ## Done when
 
-- [ ] the var-index phase (T-074's log line) drops by an order of magnitude on the demo
+- [x] ~~the var-index phase (T-074's log line) drops by an order of magnitude on the demo~~ —
+      **moved to T-085**, which already carries it as a box. Not met here (3.6×, see below);
+      the remaining cost is repeated *path probing*, which no memo in this ticket can reach.
+      Rescoped rather than quietly restated: see "Why this closes at 3.6×".
+- [x] the walk visits each file once — 509 edges collapse to 141 walked files
 - [x] each on-disk file is read + parsed at most once per scan
 - [x] `ansible.cfg` is read at most once per directory per scan
 - [x] variable hover/goto and the T-066 provenance breadcrumbs are unchanged (tests green)
@@ -149,6 +153,26 @@ is made of.
 Reproduced by `crates/ansible-core/examples/herd.rs` — one shared cache, N threads, cold each
 run. Nothing else in the tree can see this: the effect exists only when many threads miss the
 same cold key at once, so both the CLI and every unit test are blind to it.
+
+## Why this closes at 3.6×
+
+The ticket asked for an order of magnitude and got 3.6×. It closes anyway, because the target
+was written before anyone knew what the remaining time was made of, and it turned out not to
+belong to this ticket at all.
+
+This ticket's subject is **redundant work**: the same file walked, read, parsed and contextualised
+once per consumer. That is gone, twice over — the memo collapsed 509 edges to 141 walked files,
+and single-flight killed the concurrent duplicates the memo still let through (21 `ansible.cfg`
+reads to 1). There is no repeated work left here to remove.
+
+What is left is **distinct** work that is individually slow: 456 of 1143 syscalls are probes for
+paths that do not exist — role search order, the `ansible.cfg` walk-up, `canonicalize` re-walking
+shared prefixes — each a legitimate first-time question, each ~2.4 ms on 9p. Deduplication cannot
+help; those are different keys. Only asking fewer questions can, and that is T-085's subject,
+where the order-of-magnitude box already lives verbatim.
+
+Leaving this open as an umbrella would have kept T-085 blocked behind it, which is the wrong
+shape: T-085 is not "the rest of T-076", it is a different fix to a different cause.
 
 ## Refs
 

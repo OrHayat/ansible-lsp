@@ -39,7 +39,7 @@ better placed where it is.
 
 - [x] T-074 — Startup scan metrics
 - [x] T-075 — The startup scan blocks all requests
-- [ ] T-076 — Var-index re-walks shared files once per consumer
+- [x] T-076 — Var-index re-walks shared files once per consumer
 - [x] T-084 — Cold `ansible --version` blocks startup for seconds
 - [ ] T-085 — The var walk is syscall-bound, and 4× of the syscalls are repeats
 
