@@ -64,14 +64,56 @@ case now pins an exact count of 3 and that a non-matching sibling dir is exclude
 in-memory `Fs` after these six shipped as tempdirs, so these six are the rewrite it predicted;
 don't add more. `tree`/`project` stay only for callers that hardcode `StdFs`.
 
-**Remaining: 25 sites** — `resolve.rs` 23, `condition.rs` 1, `mutation.rs` 1. The `resolve.rs`
-bulk is `let Some(root) = repo() else { return };` at the top of ~18 tests. Each is
-self-describing (it names the paths it needs and what it expects), so the trees can be built
-from the test text without access to the private repo.
+`resolve.rs` is **done**: all 18 `repo() else { return }` guards are gone and the `repo()`
+helper with them, so nothing in that file reads `$HOME` any more. 16 became `MemFs` trees; the
+two install-gated ones kept only their install check (below). A `mem_in` helper sits beside
+`mem_src` for the four magic-var cases, which call the local two-argument `resolve_in`.
+
+Two of the 16 still fail when un-ignored, and correctly so: `role_path_expands_to_the_containing_role`
+and `an_expanded_path_that_is_missing_still_warns` return `Skipped` because `role_path`
+substitution is switched off at `resolve.rs:138` pending T-067/T-068. The fixture is right and
+the feature is absent — they go green when that lands, with no second pass needed.
+
+The port also exposed a hole in `MemFs`: `read_dir` reported only files, never subdirectories.
+`glob::expand` filters that listing on `Kind::Dir` to descend a wildcard segment
+(`glob.rs:80`), so **every `*/name.yml` pattern silently matched nothing** and any test globbing
+across a directory segment would have passed vacuously. Fixed in `testing.rs`.
+
+### The corpus replacement
+
+The two corpus tests couldn't become hand-written fixtures — a sweep asserting "we don't
+misjudge real conditions" proves nothing against conditions you wrote yourself. They now run
+against **official collections** instead of one private repo:
+
+| Collection (`ansible-collections/…`) | Commit    |
+| ------------------------------------ | --------- |
+| `ansible.posix`                       | `ffdf9ef` |
+| `community.general`                   | `6d6d64d` |
+| `community.docker`                    | `bc8f6a6` |
+| `community.crypto`                    | `498036f` |
+
+1941 YAML files, 1211 `when:` sites, 1313 clauses, 416 distinct expressions. `condition.rs`'s
+`corpus` module inlines the shape-diverse subset (86 expressions, verbatim, YAML quoting
+stripped) as `REAL_WHENS`, and `mutation.rs` reproduces `ansible.posix`'s selinux include chain.
+
+That immediately paid for itself: the sweep found **3 false positives**, all
+`when-item-without-loop`, all in files included with the loop at the include site — filed as
+**T-139** (P1) and pinned by a test that asserts today's wrong answer so the fix has somewhere
+to land.
+
+Coverage measured at 11/86 classified, 7/86 guarded — in line with the full corpus (166/1313,
+12.6%), so the sample is representative rather than cherry-picked. Both are floors now, not
+printouts: the old test was `#[ignore]`d and only ever printed percentages.
+
+**Remaining: 1 site** — `resolve.rs`'s `perf::profile_largest_file`, which times the biggest
+file it can find. A fixture cannot stand in for "the biggest file in a real tree", so give it
+the `ANSIBLE_CORPUS` env var `parse_libyaml::corpus_smoke` already uses.
 
 Note `builtin_modules_resolve_into_the_installed_ansible` and
 `installed_collection_modules_resolve` are a *different* dependency — the machine's Ansible
-install, not the repo — and are out of scope here.
+install, not the repo — and are out of scope here. Their `repo()` guard was still dropped: an
+empty `testing::project` is enough, since nothing under the project root decides where
+`ansible.builtin` lives, so they now skip for the one reason they actually have.
 
 ## Done when
 

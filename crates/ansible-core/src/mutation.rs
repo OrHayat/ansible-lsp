@@ -168,8 +168,16 @@ mod tests {
         let pb = write(
             &d,
             "play.yml",
-            "- hosts: all\n  tasks:\n    - set_fact:\n        skip_it: true\n        cacheable: yes\n\
-             \n    - command: echo hi\n      register: result\n",
+            r#"
+            - hosts: all
+              tasks:
+                - set_fact:
+                    skip_it: true
+                    cacheable: yes
+
+                - command: echo hi
+                  register: result
+"#,
         );
         let got = mutated_vars(&pb);
         assert!(got.contains("skip_it"));
@@ -186,20 +194,43 @@ mod tests {
         write(
             &d,
             "roles/storage/tasks/main.yml",
-            "- name: mark done\n  set_fact:\n    skip_format: true\n",
+            r#"
+            - name: mark done
+              set_fact:
+                skip_format: true
+"#,
         );
-        let pb = write(&d, "play.yml", "- hosts: all\n  roles:\n    - storage\n");
+        let pb = write(
+            &d,
+            "play.yml",
+            r#"
+            - hosts: all
+              roles:
+                - storage
+"#,
+        );
         assert!(mutated_vars(&pb).contains("skip_format"));
     }
 
     #[test]
     fn follows_include_tasks() {
         let d = tmp("include");
-        write(&d, "sub.yml", "- set_fact:\n    deep_var: 1\n");
+        write(
+            &d,
+            "sub.yml",
+            r#"
+            - set_fact:
+                deep_var: 1
+"#,
+        );
         let pb = write(
             &d,
             "play.yml",
-            "- hosts: all\n  tasks:\n    - include_tasks: sub.yml\n",
+            r#"
+            - hosts: all
+              tasks:
+                - include_tasks: sub.yml
+"#,
         );
         assert!(mutated_vars(&pb).contains("deep_var"));
     }
@@ -208,11 +239,23 @@ mod tests {
     #[test]
     fn cycles_terminate() {
         let d = tmp("cycle");
-        write(&d, "b.yml", "- include_tasks: a.yml\n- set_fact:\n    from_b: 1\n");
+        write(
+            &d,
+            "b.yml",
+            r#"
+            - include_tasks: a.yml
+            - set_fact:
+                from_b: 1
+"#,
+        );
         let pb = write(
             &d,
             "a.yml",
-            "- hosts: all\n  tasks:\n    - include_tasks: b.yml\n",
+            r#"
+            - hosts: all
+              tasks:
+                - include_tasks: b.yml
+"#,
         );
         assert!(mutated_vars(&pb).contains("from_b"));
     }
@@ -239,25 +282,61 @@ mod tests {
         assert!(mutated_vars(&demo.join("mutating.yml")).contains("demo_done"));
     }
 
-    /// The real instance this rule was built for. Not a synthetic fixture — if this
-    /// stops firing, either the repo was fixed or the expansion regressed.
+    /// A real instance, taken from upstream rather than invented. The chain is
+    /// `ansible.posix`'s selinux target (`tests/integration/targets/selinux/tasks/`, commit
+    /// `ffdf9ef`): `main.yml` guards an `include_tasks: selinux.yml` behind a `when:`, and
+    /// the included file then `set_fact`s and `register`s several names.
+    ///
+    /// That is the shape the rule exists for — the mutation is invisible from the entry
+    /// point, so anything that stops following the include silently reports nothing. It
+    /// replaces a test pinned to one private repo under `$HOME` (T-077), which skipped
+    /// everywhere else and panicked outright on Windows.
+    ///
+    /// Written out here rather than vendored: the upstream file is ~140 lines of GPL-3.0
+    /// test code, and only its include/`set_fact` skeleton is load-bearing.
     #[test]
-    #[ignore]
-    fn finds_the_real_lustre_case() {
-        let repo = PathBuf::from(std::env::var("HOME").unwrap()).join("app/ansible");
-        let target = repo.join("playbooks/lustre-storage-format.yml");
-        if !target.exists() {
-            eprintln!("skip: {} absent", target.display());
-            return;
-        }
-        let got = mutated_vars(&target);
-        assert!(
-            got.contains("skip_format"),
-            "lustre-storage-format.yml reaches roles/lustre-storage, which sets skip_format \
-             — the variable playbooks/lustre-deploy-full.yml:247 gates the import on. \
-             Found {} names instead.",
-            got.len()
+    fn follows_a_real_upstream_include_chain() {
+        let d = tmp("posix-selinux");
+        // Raw strings, indented with the code: YAML tolerates a uniformly indented root node,
+        // so the fixture reads as the file it stands for instead of as escape soup.
+        write(
+            &d,
+            "selinux.yml",
+            r#"
+            - name: Get current SELinux config
+              ansible.builtin.slurp:
+                src: /etc/sysconfig/selinux
+              register: selinux_config_original_base64
+
+            - name: Decode the config
+              ansible.builtin.set_fact:
+                selinux_config_original_raw: "{{ selinux_config_original_base64.content | b64decode }}"
+                before_test_sestatus: "{{ ansible_selinux }}"
+"#,
         );
+        let pb = write(
+            &d,
+            "main.yml",
+            r#"
+            - hosts: all
+              tasks:
+                - name: Include_tasks for when SELinux is enabled
+                  ansible.builtin.include_tasks: selinux.yml
+                  when:
+                    - ansible_selinux is defined
+                    - ansible_selinux.status == 'enabled'
+"#,
+        );
+
+        let got = mutated_vars(&pb);
+        // The `register:`, and both names from the one `set_fact:` — a mapping with several
+        // keys defines all of them, not just the first.
+        assert!(got.contains("selinux_config_original_base64"), "register, found {got:?}");
+        assert!(got.contains("selinux_config_original_raw"), "set_fact, found {got:?}");
+        assert!(got.contains("before_test_sestatus"), "second set_fact key, found {got:?}");
+        // `src:` and `content` are module arguments and a lookup, not mutated variables.
+        assert!(!got.contains("src"));
+        assert!(!got.contains("content"));
     }
 
     #[test]
@@ -267,7 +346,13 @@ mod tests {
         let pb = write(
             &d,
             "play.yml",
-            "- hosts: all\n  vars:\n    bound_early: true\n  tasks:\n    - command: echo\n",
+            r#"
+            - hosts: all
+              vars:
+                bound_early: true
+              tasks:
+                - command: echo
+"#,
         );
         assert!(!mutated_vars(&pb).contains("bound_early"));
     }

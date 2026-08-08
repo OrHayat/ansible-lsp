@@ -993,12 +993,136 @@ mod tests {
 mod corpus {
     use super::*;
     use crate::parse::{Document, Node};
-    use crate::workspace::yaml_files;
-    use std::path::PathBuf;
 
-    fn repo() -> PathBuf {
-        PathBuf::from(std::env::var("HOME").unwrap()).join("app/ansible")
-    }
+    /// Real `when:` expressions, verbatim, from four official Ansible collections. This is
+    /// the corpus — it replaces a sweep over a private repo under `$HOME`, which skipped
+    /// silently on every other machine and so proved nothing on CI (T-077).
+    ///
+    /// Harvested from these trees, pinned so the sample can be reproduced or widened:
+    ///
+    /// | `ansible-collections/…`  | commit    |
+    /// | ------------------------ | --------- |
+    /// | `ansible.posix`          | `ffdf9ef` |
+    /// | `community.general`      | `6d6d64d` |
+    /// | `community.docker`       | `bc8f6a6` |
+    /// | `community.crypto`       | `498036f` |
+    ///
+    /// 1941 YAML files, 1211 `when:` sites, 1313 clauses, 416 distinct expressions. Below is
+    /// the shape-diverse subset: every construct that appeared more than once, plus the
+    /// awkward one-offs. YAML quoting is stripped, because that is what the parser hands us.
+    ///
+    /// These all ship and work upstream, so **any [`Problem`] reported here is a false
+    /// positive** — that is the assertion these earn, and a synthetic fixture cannot make it.
+    const REAL_WHENS: &[&str] = &[
+        // -- community.crypto
+        "cryptography_version is version('3.3', '>=')",
+        "select_crypto_backend == 'cryptography'",
+        "openssl_version is version('0.9.8zh', '>=')",
+        "openssl_version is version('1.0.0', '>=')",
+        "challenge_data is changed",
+        "challenge_data is changed and challenge == 'http-01'",
+        "challenge_data is changed and challenge in ['dns-01', 'dns-account-01']",
+        "acme_roots[2].subject_key_identifier is defined",
+        "acme_intermediates[0].subject_key_identifier is defined",
+        "privatekey_fmt_2_step_1 is not failed",
+        "create_passphrase_1 is failed",
+        "backend == 'cryptography'",
+        "cryptography_version is version('3.3', '>=') and bcrypt_version.stdout is version('3.1.5', '>=')",
+        "test_keystore_path is defined",
+        "has_java_keytool",
+        // -- community.docker
+        "docker_api_version is version('1.25', '>=')",
+        "docker_py_version is version('2.6.0', '>=')",
+        "docker_py_version is version('2.6.0', '<')",
+        "docker_api_version is version('1.30', '>=') and docker_py_version is version('2.6.0', '>=')",
+        "docker_api_version is version('1.28', '<') or docker_py_version is version('3.5.0', '<')",
+        "not(docker_api_version is version('1.25', '>=')) and (ansible_facts.distribution != 'CentOS' or ansible_facts.distribution_major_version|int > 6)",
+        "not remote_cert",
+        "not docker_skip_cleanup",
+        "needs_docker_daemon",
+        "docker_has_buildx",
+        "docker_has_compose and docker_compose_version is version('2.18.0', '>=')",
+        "inspect is failed",
+        "inspect is not failed",
+        "docker_inspect is failed",
+        "docker_inspect is not failed",
+        "remove_all_images is failed",
+        "registry_logs is not failed",
+        "nginx_logs is not failed",
+        // -- community.general
+        "debug_test|default(false)|bool",
+        "gitlab_premium_tests is defined",
+        "credentials.username != ''",
+        "credentials.username == ''",
+        "ansible_facts.os_family == 'Debian'",
+        "ansible_facts.os_family == 'Suse'",
+        "ansible_facts.os_family == 'RedHat'",
+        "ansible_facts.os_family != 'Darwin'",
+        "ansible_facts.os_family == \"FreeBSD\"",
+        "ansible_facts.distribution == 'Archlinux'",
+        "ansible_facts.distribution == \"MacOSX\"",
+        "ansible_facts.distribution == \"Ubuntu\"",
+        "ansible_facts.distribution == \"RedHat\" and ansible_facts.distribution_major_version == \"8\"",
+        "ansible_facts.os_family == \"RedHat\" and ansible_facts.distribution_major_version|int >= 7",
+        "ansible_system == 'Linux'",
+        "ansible_system == 'FreeBSD'",
+        "ansible_system in ('FreeBSD', 'Linux')",
+        "ansible_facts.system == 'Linux'",
+        "ansible_facts == {}",
+        "ansible_version.full is version('2.21', '>=')",
+        "ansible_facts.python_version is version('3.8', '<')",
+        "ansible_facts.distribution in ['Ubuntu', 'Debian']",
+        "ansible_facts.os_family in ['Ubuntu', 'Debian']",
+        "ansible_facts.distribution in ['MacOSX']",
+        "has_snap",
+        "has_gnupg",
+        "has_hg is failed",
+        "not sdkmanager_installed.stat.exists",
+        "not in_check_mode",
+        "yum_updates.results | length != 0",
+        "updates.results | length > 0",
+        "volume_info_all.storage_volumes | length > 0",
+        "luks_extra_packages | length > 0",
+        "terraform_version_installed is not defined or terraform_version_installed != terraform_version",
+        "terraform_version_output.changed",
+        "yum_versionlock_install is changed",
+        "tty_1 is failed",
+        "tty_1 is not failed",
+        "storage_opts_1 is failed",
+        "original_timezone is changed and original_timezone.diff.before.name != 'n/a'",
+        "not with_alternatives and ansible_facts.os_family == 'RedHat'",
+        "with_alternatives or ansible_facts.os_family != 'RedHat'",
+        "lxml_xpath_attribute_result_attrname",
+        "ansible_distribution in package_distros",
+        "fstype == 'lvm'",
+        "git_installed is succeeded and git_version.stdout is version(git_version_supporting_includes, \">=\")",
+        "locale_basic.locales | intersect(initial_state.stdout_lines) != []",
+        "url_removal_result is failed",
+        "false",
+        "ansible_facts.distribution_version is version('11.01', '>')",
+        "ansible_facts.distribution == 'Fedora' and ansible_facts.distribution_major_version == '34'",
+        "ansible_facts.os_family == 'RedHat' and ansible_facts.distribution != \"Fedora\" and (ansible_facts.distribution_major_version | int) >= 10",
+        // -- ansible.posix
+        "ansible_selinux is defined and ansible_selinux.status == 'disabled'",
+    ];
+
+    /// The list form, where every clause must hold. From `ansible.posix`'s selinux target
+    /// (`tests/integration/targets/selinux/tasks/main.yml`) and `community.crypto`.
+    const REAL_WHEN_LISTS: &[&[&str]] = &[
+        &["ansible_selinux is defined", "ansible_selinux.status == 'enabled'"],
+        &["select_crypto_backend == 'cryptography'", "cryptography_version is version('3.3', '>=')"],
+    ];
+
+    /// Conditions we get **wrong**. All three sit in task files that are `include_tasks`'d
+    /// with the loop at the *include* site — `loop: "{{ cmd_echo_tests }}"` in
+    /// `community.general`'s `cmd_runner/tasks/main.yml`, `with_sequence: start=1 end=2` in
+    /// its `alternatives/tasks/tests.yml` — so `item` is defined and these run fine upstream.
+    /// [`problems`] only sees the task's own mapping, so it calls all three broken. T-139.
+    const ITEM_FROM_AN_INCLUDING_LOOP: &[&str] = &[
+        "item.copy_to is defined",
+        "ansible_facts.os_family != 'RedHat' or with_alternatives or item != 1",
+        "ansible_facts.os_family == 'RedHat' and not with_alternatives and item == 1",
+    ];
 
     fn whens(node: &Node, out: &mut Vec<(Vec<String>, bool)>) {
         match node {
@@ -1097,50 +1221,79 @@ mod corpus {
         );
     }
 
+    /// The assertion the corpus exists for. Every one of these ships and works upstream, so
+    /// a [`Problem`] on any of them is us calling working Ansible broken — the P1 failure
+    /// mode for a linter. Runs everywhere, unlike the `$HOME` sweep it replaces.
     #[test]
-    #[ignore]
-    fn when_coverage() {
-        let root = repo();
-        if !root.exists() {
-            eprintln!("skip: {} absent", root.display());
-            return;
-        }
-        let mut all = Vec::new();
-        for p in yaml_files(&root) {
-            let Ok(text) = std::fs::read_to_string(&p) else { continue };
-            let doc = Document::new(text);
-            let Some(nodes) = doc.parse() else { continue };
-            for n in &nodes {
-                whens(n, &mut all);
+    fn no_shipped_condition_is_reported_as_broken() {
+        let mut flagged = Vec::new();
+        for c in REAL_WHENS {
+            for p in problems(c, false) {
+                flagged.push(format!("{}  <-  {c}", p.rule_id()));
             }
         }
-        let mut classified = 0;
-        let mut clauses = 0;
-        let mut clause_classified = 0;
-        let mut probs = 0;
-        let mut guarded = 0;
-        for (cs, has_loop) in &all {
-            if classify_all(cs) != Verdict::Unknown {
-                classified += 1;
-            }
-            if is_guarded(cs) {
-                guarded += 1;
-            }
-            for c in cs {
-                clauses += 1;
-                if classify(c) != Verdict::Unknown {
-                    clause_classified += 1;
+        for cs in REAL_WHEN_LISTS {
+            for c in *cs {
+                for p in problems(c, false) {
+                    flagged.push(format!("{}  <-  {c}", p.rule_id()));
                 }
-                probs += problems(c, *has_loop).len();
             }
         }
-        let pct = |n: usize, d: usize| if d == 0 { 0.0 } else { 100.0 * n as f64 / d as f64 };
-        println!("\ntasks with when:      {}", all.len());
-        println!("  classified          {classified} ({:.0}%)", pct(classified, all.len()));
-        println!("  guarded by default  {guarded} ({:.0}%)", pct(guarded, all.len()));
-        println!("individual clauses    {clauses}");
-        println!("  classified          {clause_classified} ({:.0}%)", pct(clause_classified, clauses));
-        println!("problems found        {probs}");
-        assert_eq!(probs, 0, "repo is clean today; a nonzero count is a new find or a false positive");
+        assert!(
+            flagged.is_empty(),
+            "false positives on real, shipped conditions:\n  {}",
+            flagged.join("\n  ")
+        );
+    }
+
+    /// Nothing in the corpus may panic or hang the classifiers, whatever their verdict —
+    /// the shapes here are wilder than anything written by hand (`~` concatenation,
+    /// `regex_search` with backslashes, `intersect(...) != []`, indexed roots).
+    #[test]
+    fn every_real_condition_classifies_without_panicking() {
+        for c in REAL_WHENS {
+            let _ = classify(c);
+            let _ = variables(c);
+        }
+        for cs in REAL_WHEN_LISTS {
+            let cs: Vec<String> = cs.iter().map(|s| (*s).to_string()).collect();
+            let _ = classify_all(&cs);
+            let _ = is_guarded(&cs);
+        }
+    }
+
+    /// A floor, not a target. The classifier deliberately answers `Unknown` for anything it
+    /// cannot summarise honestly, so most of a real corpus is `Unknown` and that is correct.
+    /// This pins the shapes it *does* claim, so a regression that quietly stops recognising
+    /// `is defined` or `is version(...)` fails here instead of going unnoticed.
+    #[test]
+    fn real_world_coverage_does_not_regress() {
+        let classified = REAL_WHENS.iter().filter(|c| classify(c) != Verdict::Unknown).count();
+        // The guard forms specifically: these drive the "runs unless…" hover.
+        let guarded = REAL_WHENS
+            .iter()
+            .filter(|c| is_guarded(std::slice::from_ref(&(*c).to_string())))
+            .count();
+        // 11/86 and 7/86 as measured. Low by design, and in line with the full 1313-clause
+        // corpus (166 classified, 12.6%) — the sample is representative, not cherry-picked.
+        assert!(classified >= 11, "only {classified}/{} classified", REAL_WHENS.len());
+        assert!(guarded >= 7, "only {guarded} guarded conditions recognised");
+    }
+
+    /// A live false positive, pinned so the fix has a test waiting. `item` **is** defined in
+    /// these three: the loop sits on the `include_tasks` that pulls their file in, which
+    /// [`problems`] never sees. Asserting the wrong answer on purpose — when T-139 lands,
+    /// this test fails and gets inverted.
+    #[test]
+    fn item_from_an_including_loop_is_flagged_today_and_should_not_be() {
+        for c in ITEM_FROM_AN_INCLUDING_LOOP {
+            assert!(
+                problems(c, false).contains(&Problem::ItemWithoutLoop),
+                "{c}: T-139 fixed? invert this test"
+            );
+            // With the flag set — what a loop-aware caller would pass — they come out clean,
+            // so the rule itself is right and only its input is missing.
+            assert!(problems(c, true).is_empty(), "{c} is otherwise well-formed");
+        }
     }
 }
