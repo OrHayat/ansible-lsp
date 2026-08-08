@@ -108,7 +108,8 @@ value all render nothing.
 `demo/tasks/variables.yml` carries it, one line below the `var-undefined` case, so the demo
 shows both halves of the same name — exempt from the diagnostic, and known to hover.
 
-**Unverified in a live editor.** This machine has no Ansible, so `detected()` returns an
-install with `python: None` and `version: None`, and the hover correctly renders nothing here.
-The rendering and the lookup are each pinned by a test, but nobody has yet watched the popup
-appear. First run on a machine with Ansible on PATH is the real check.
+**Verified live** in the Extension Development Host, 2026-08-08 — the popup appears with the
+detected values. Worth recording because the automated coverage stops one step short: the
+end-to-end test supplies a synthetic install, so everything from cursor to markdown is pinned,
+but `AnsibleInstall::detected()` returning something real, and VS Code rendering the markdown,
+were only ever going to be confirmed by looking.
