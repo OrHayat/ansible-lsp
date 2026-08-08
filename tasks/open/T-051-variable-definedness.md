@@ -38,7 +38,7 @@ ruling out everything that could legitimately supply it:
   ```
 
   For definedness the prefix rule is enough and no *value* is needed. **Done anyway** —
-  `AnsibleInstall::python` (T-138's commit). `ansible_playbook_python` is `sys.executable`, set
+  `AnsibleInstall::python`, commit `628aa8b`. `ansible_playbook_python` is `sys.executable`, set
   in `_get_magic_variables` beside `ansible_config_file` (`vars/manager.py`; T-098 cites the
   config line as `:457` — *the python line's own number is not verified, cite it when someone
   next has the source open*).
@@ -128,6 +128,14 @@ ticket's own rule, the rule doesn't ship at that count. Interim fix is **T-065**
 which the reachability bar gets re-measured. Also noted: the walk's
 `MAX_DEPTH` truncation can hide real definitions; when that matters, suppress
 `var-undefined` on truncated walks rather than report from partial knowledge.
+
+**`ansible_playbook_python` has a value** (commit `628aa8b`, on top of T-138's version
+detection). `AnsibleInstall::python`, reconstructed with no subprocess — shebang of the
+resolved `ansible`, else `<prefix>/bin/python` derived from `package_dir`, else the trailing
+group of the `--version` python line. Nothing consumes it yet, and the definedness rules never
+needed it: the `ansible_` prefix already covers the name. See the Approach note for the source
+table, the shebang forms that are not `sys.executable`, and why the value is a default rather
+than a fact.
 
 ## Done when
 
