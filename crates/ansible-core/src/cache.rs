@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
 use crate::config::AnsibleConfig;
@@ -130,6 +131,60 @@ impl<V: Clone> Map<V> {
     }
 }
 
+/// A [`Map`] that computes each key **once**, even under a cold-cache stampede.
+///
+/// `Map`'s get-then-insert lets every thread that misses the same cold key run the compute;
+/// they agree on the answer, so it is correct, and on a local filesystem it is also cheap.
+/// It is not cheap when the compute is a `9p` round trip: 32 threads starting together all
+/// miss, and one `ansible.cfg` gets read 15 times (measured on the demo).
+///
+/// The cell, not the shard lock, is what they wait on — so a thread wanting a *different*
+/// key is never blocked behind someone else's filesystem call. The shard lock is held only
+/// long enough to hand out the cell.
+///
+/// Not for a memo whose compute can re-enter the same key: the second entry would wait on a
+/// cell only it can fill. `contributions` is exactly that (a walk reaching a cycle comes back
+/// to its own key), which is why it stays a plain `Map`.
+struct Flight<V> {
+    cells: Map<Arc<OnceLock<V>>>,
+}
+
+impl<V> Default for Flight<V> {
+    fn default() -> Self {
+        Self { cells: Map::default() }
+    }
+}
+
+impl<V: Clone> Flight<V> {
+    /// The value for `k`, and whether *this* caller computed it — the flag is what the stats
+    /// count, so they report distinct computations rather than attempts.
+    fn get_or_init(&self, k: &Path, f: impl FnOnce() -> V) -> (V, bool) {
+        let cell = {
+            let mut shard = match self.cells.slot(k).lock() {
+                Ok(s) => s,
+                // Poisoned: compute without memoizing rather than fail the scan.
+                Err(_) => return (f(), true),
+            };
+            shard.entry(k.to_path_buf()).or_default().clone()
+        };
+        let mut computed = false;
+        let v = cell.get_or_init(|| {
+            computed = true;
+            f()
+        });
+        (v.clone(), computed)
+    }
+
+    /// Fill the cell if it is still empty, with a value the caller already has.
+    fn prime(&self, k: &Path, v: impl FnOnce() -> V) {
+        let cell = {
+            let Ok(mut shard) = self.cells.slot(k).lock() else { return };
+            shard.entry(k.to_path_buf()).or_default().clone()
+        };
+        let _ = cell.get_or_init(v);
+    }
+}
+
 /// Shared across the files of one scan. Every method takes `&self` and locks only around the
 /// map access, never across the filesystem work — so a miss on one thread doesn't hold the
 /// others. Two threads racing the same miss both compute it and agree on the answer.
@@ -148,9 +203,9 @@ pub struct ScanCache {
     /// Raw directory entries, from which the YAML-filtered `listings` are derived.
     dirs: Map<Arc<Vec<(PathBuf, Kind)>>>,
     walks: Map<Arc<Vec<(PathBuf, Vec<String>)>>>,
-    sources: Map<Option<Arc<Source>>>,
-    contexts: Map<Arc<FileContext>>,
-    configs: Map<AnsibleConfig>,
+    sources: Flight<Option<Arc<Source>>>,
+    contexts: Flight<Arc<FileContext>>,
+    configs: Flight<AnsibleConfig>,
     contributions: Map<Arc<Contribution>>,
     /// Recursive YAML listings, for `role_task_files`.
     trees: Map<Arc<Vec<PathBuf>>>,
@@ -173,9 +228,9 @@ impl ScanCache {
             kinds: Map::default(),
             dirs: Map::default(),
             walks: Map::default(),
-            sources: Map::default(),
-            contexts: Map::default(),
-            configs: Map::default(),
+            sources: Flight::default(),
+            contexts: Flight::default(),
+            configs: Flight::default(),
             contributions: Map::default(),
             trees: Map::default(),
             listings: Map::default(),
@@ -236,20 +291,20 @@ impl ScanCache {
         let key = canon.clone().unwrap_or_else(|| path.to_path_buf());
         // Two levels of `Option` collapse here: "the lock is gone" and "never looked at"
         // both mean recompute, while a remembered *failure* is a hit that returns `None`.
-        if let Some(hit) = self.sources.get(&key) {
-            return hit;
-        }
-        let src = self.fs.read(path).map(|text| {
-            let doc = Document::new(text);
-            let nodes = doc.parse().map(Arc::new);
-            Arc::new(Source {
-                text: Arc::from(doc.text.as_str()),
-                nodes,
-                canon: canon.clone(),
+        let (src, computed) = self.sources.get_or_init(&key, || {
+            self.fs.read(path).map(|text| {
+                let doc = Document::new(text);
+                let nodes = doc.parse().map(Arc::new);
+                Arc::new(Source {
+                    text: Arc::from(doc.text.as_str()),
+                    nodes,
+                    canon: canon.clone(),
+                })
             })
         });
-        self.stats.reads.fetch_add(1, Ordering::Relaxed);
-        self.sources.insert(key, src.clone());
+        if computed {
+            self.stats.reads.fetch_add(1, Ordering::Relaxed);
+        }
         src
     }
 
@@ -258,7 +313,7 @@ impl ScanCache {
     /// file's walk reaches it.
     pub fn prime(&self, path: &Path, text: &str, nodes: &[Node]) {
         let Some(canon) = Fs::canonical(self, path) else { return };
-        self.sources.or_insert_with(canon.clone(), || {
+        self.sources.prime(&canon.clone(), || {
             Some(Arc::new(Source {
                 text: Arc::from(text),
                 nodes: Some(Arc::new(nodes.to_vec())),
@@ -271,22 +326,21 @@ impl ScanCache {
     /// `discover` looks at — with the project's `ansible.cfg` read at most once.
     pub fn context(&self, file: &Path) -> Arc<FileContext> {
         let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        if let Some(hit) = self.contexts.get(&dir) {
-            return hit;
+        let (ctx, computed) = self.contexts.get_or_init(&dir, || {
+            Arc::new(FileContext::discover_with(file, self, |root| self.config(root)))
+        });
+        if computed {
+            self.stats.contexts.fetch_add(1, Ordering::Relaxed);
         }
-        let ctx = Arc::new(FileContext::discover_with(file, self, |root| self.config(root)));
-        self.stats.contexts.fetch_add(1, Ordering::Relaxed);
-        self.contexts.insert(dir, ctx.clone());
         ctx
     }
 
     fn config(&self, root: &Path) -> AnsibleConfig {
-        if let Some(hit) = self.configs.get(root) {
-            return hit;
+        let (cfg, computed) =
+            self.configs.get_or_init(root, || AnsibleConfig::load_in(root, self));
+        if computed {
+            self.stats.configs.fetch_add(1, Ordering::Relaxed);
         }
-        let cfg = AnsibleConfig::load_in(root, self);
-        self.stats.configs.fetch_add(1, Ordering::Relaxed);
-        self.configs.insert(root.to_path_buf(), cfg.clone());
         cfg
     }
 

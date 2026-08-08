@@ -56,10 +56,10 @@ first as a stepping stone if needed, then layer 3 on top.
 ## Done when
 
 - [ ] the var-index phase (T-074's log line) drops by an order of magnitude on the demo
-- [ ] each on-disk file is read + parsed at most once per scan
-- [ ] `ansible.cfg` is read at most once per directory per scan
-- [ ] variable hover/goto and the T-066 provenance breadcrumbs are unchanged (tests green)
-- [ ] the corpus scan (`~/app/ansible`) resolves identically to before
+- [x] each on-disk file is read + parsed at most once per scan
+- [x] `ansible.cfg` is read at most once per directory per scan
+- [x] variable hover/goto and the T-066 provenance breadcrumbs are unchanged (tests green)
+- [x] the corpus scan (`~/app/ansible`) resolves identically to before
 
 ## What shipped (option A, part 1)
 
@@ -107,6 +107,48 @@ Two corrections the trace forced:
   unmemoized. Measured, old vs new: `readlink` 1879 → 712, total file syscalls 4164 → 2464.
   The memo is one level too coarse (whole paths, not directories), which is a missed
   opportunity, not a regression.
+
+## The memo was leaking under concurrency (option A, part 2)
+
+The two "at most once" boxes above were **false in the editor and true everywhere we looked.**
+`scan demo` reported 1 `ansible.cfg` read; the LSP reported **21**, for a workspace with one
+`ansible.cfg` on disk. The CLI is single-threaded, so it could never show this.
+
+The cause was a documented decision, not a bug in the usual sense — `ScanCache`'s own comment
+said *"two threads racing the same miss both compute it and agree on the answer"*, and each
+memo was get-then-insert with no per-key lock. Correct, and cheap on ext4 where the compute is
+a memory hit. Not cheap on a 32-core box over 9p: every thread starts together, every one
+misses the cold key, and each pays a filesystem round trip to learn the same answer.
+
+`Flight<V>` is the fix — a `Map<Arc<OnceLock<V>>>`, so the *cell* is what a racer waits on
+rather than the shard lock, and a thread wanting a different key is never blocked behind
+someone else's filesystem call. Applied to `sources`, `contexts` and `configs`.
+**Not** to `contributions`: that walk re-enters its own key on a cycle, and a per-key cell
+would make the second entry wait on a cell only it can fill.
+
+Measured in the LSP on the `/mnt/c` workspace, 32 cores, before -> after:
+
+| | before | after |
+| ---------------- | ------------- | ----- |
+| reads | 106-108 | 49 |
+| contexts | 79-82 | 43 |
+| `ansible.cfg` | 21 | 1 |
+| fs syscalls | 1282-1297 | 1143 |
+| fs time | 3339-3476 ms | 2930 ms |
+| **scan wall** | **370-393 ms** | **388 ms** |
+| **var-index** | **2482-2579 ms** | **2655 ms** |
+
+**Half the reads, and not one millisecond faster.** The duplicates were 32 threads blocked on
+9p *at the same moment*, so removing them removed work, not latency. Worth having — the
+counters are honest now, and the boxes above are true at real concurrency rather than only
+under a single-threaded CLI — but it does not touch this ticket's headline box, and the split
+of remaining work to T-085 stands. If anything it sharpens T-085's case: 456 of the remaining
+1143 syscalls are *misses*, probes for paths that do not exist, and that is what the 2930 ms
+is made of.
+
+Reproduced by `crates/ansible-core/examples/herd.rs` — one shared cache, N threads, cold each
+run. Nothing else in the tree can see this: the effect exists only when many threads miss the
+same cold key at once, so both the CLI and every unit test are blind to it.
 
 ## Refs
 
