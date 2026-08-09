@@ -120,12 +120,37 @@ fn include_args_problems(t: &Task, out: &mut Vec<Problem>) {
         if !valid.contains(&key) {
             invalid_option(out);
         } else if is_import && (key == "apply" || key == "rescuable") {
-            invalid_option(out);
+            // The raise sites test Python truthiness (`if apply_attrs and ...`,
+            // `task_include.py:80`, `role_include.py:152,158`) — live-verified:
+            // `rescuable: false` and `apply: {}` on an import run clean, while any
+            // truthy value is `Invalid options`. Falsy-but-wrong-typed `apply` gets a
+            // different error (`Expected a dict`), which is type checking, not ours.
+            if !yaml_falsy(v) {
+                invalid_option(out);
+            }
         } else if key == "apply" {
             for u in unknown_block_keys(v) {
                 out.push(fatal(&u, "Block"));
             }
         }
+    }
+}
+
+/// Would this YAML value be falsy once Ansible's loader turns it into Python? Empty
+/// collections, null spellings, the YAML-1.1 false spellings the loader resolves to
+/// `bool` (single-letter `y`/`n` are strings, not bools), and integer zero.
+fn yaml_falsy(n: &Node) -> bool {
+    match n {
+        Node::Scalar { value, .. } => matches!(
+            value.as_str(),
+            "" | "~"
+                | "null" | "Null" | "NULL"
+                | "0"
+                | "no" | "No" | "NO"
+                | "false" | "False" | "FALSE"
+                | "off" | "Off" | "OFF"
+        ),
+        _ => n.entries().is_empty() && n.items().is_empty(),
     }
 }
 
@@ -317,6 +342,21 @@ mod tests {
                 (Tier::Error, "Invalid options for import_role: rescuable".into()),
             ]
         );
+    }
+
+    /// The raise sites test truthiness, so falsy values pass — live-verified:
+    /// `rescuable: false` and `apply: {}` on imports run clean in Ansible.
+    #[test]
+    fn falsy_apply_and_rescuable_on_imports_stay_silent() {
+        let got = check(
+            "- hosts: web\n  tasks:\n    - import_tasks: {file: f.yml, apply: {}}\n    \
+             - import_role: {name: r, rescuable: false}\n    \
+             - import_role: {name: r, rescuable: no}\n",
+            true,
+        );
+        assert!(got.is_empty(), "found: {got:?}");
+        // Known miss, not a lie: a QUOTED "no" is a truthy string and Ansible errors on
+        // it, but scalar style isn't distinguishable here, so it passes silently.
     }
 
     /// T-101: a legal `apply:` has its contents checked as the Block it becomes at
