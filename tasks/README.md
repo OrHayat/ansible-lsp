@@ -102,7 +102,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
-| T-155 | [loop_control with no loop is dead config, and ansible never says so](open/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | S    | —          |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~  |
 
 ### P2 — coverage and usability
@@ -264,6 +263,7 @@ T-021 is now unblocked on that side.
 | T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](closed/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | done     |
 | T-154 | **bug** · [Vaulted vars files are invisible to the index, so var-undefined lies](closed/T-154-vaulted-vars-files-are-invisible-to-the-index-so-var-undefin.md) | **rejected** |
 | T-101 | [Dynamic includes reject keywords imports accept](closed/T-101-dynamic-includes-reject-keywords-imports-accept.md) | done     |
+| T-155 | [loop_control with no loop is dead config, and ansible never says so](closed/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | done     |
 
 ## Settled — don't re-derive these
 

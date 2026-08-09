@@ -108,6 +108,60 @@
       loop: # GOOD: a valueless loop is None, so it never counts as the first loop
       with_items: [a, b]
 
+# Row 20. The next line of the same function: a `with_*` written with no value at all. Only
+# a MISSING value counts — `with_items: ""` and `with_items: []` both run clean upstream.
+- name: a loop keyword with nothing to loop over
+  hosts: localhost
+  tasks:
+    - debug: { msg: x }
+      with_items: # BAD: "you must specify a value when using with_items"
+
+    - debug: { msg: x }
+      with_dict: # BAD: the message names the key as written, not the lookup
+
+    - debug: { msg: x }
+      with_items: "" # GOOD: an empty string is not None, and ansible runs it
+
+    - debug: { msg: x }
+      with_items: [] # GOOD: an empty list is a loop over nothing, not a missing value
+
+# Row 21 and T-155, both hanging off one read of `loop_control:`. Row 21 is stricter than the
+# `loop:` guard: a valueless `loop_control:` is fatal, and so is a templated scalar — that is
+# what "cannot be a variable itself" means. T-155 is ours: a well-formed block with no loop to
+# control is inert, and ansible runs it clean with no warning at all.
+- name: loop_control, malformed and dead
+  hosts: localhost
+  vars:
+    a_control: { loop_var: it }
+  tasks:
+    - debug: { msg: x }
+      loop: [1]
+      loop_control: nonsense # BAD: not a mapping
+
+    - debug: { msg: x }
+      loop: [1]
+      loop_control: "{{ a_control }}" # BAD: it may CONTAIN variables, but not BE one
+
+    - debug: { msg: x }
+      loop: [1]
+      loop_control: # BAD: unlike `loop:`, a valueless loop_control is fatal
+
+    - debug: { msg: x }
+      loop_control: # WARN (dead-loop-control): no loop:, no with_* — every key here is inert
+        loop_var: it
+        label: "{{ it }}"
+
+    - include_tasks: tasks/sibling.yml
+      loop_control: { loop_var: it } # WARN: includes take loop_control, and it is just as dead
+
+    - debug: { msg: "{{ it }}" } # GOOD: a loop to control, so the block does something
+      loop: [1]
+      loop_control: { loop_var: it }
+
+    - block: # GOOD here: `loop_control` on a Block is T-107's invalid-attribute error,
+        - debug: { msg: x } # not ours — one fault, one rule.
+      loop_control: { loop_var: it }
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

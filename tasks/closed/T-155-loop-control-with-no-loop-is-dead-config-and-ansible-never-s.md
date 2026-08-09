@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-099 | —          |
+| done   | task | P1       | S    | T-099 | —          |
 
 ## Problem
 
@@ -61,10 +61,28 @@ keys — an `include_tasks` with `loop_control` and no loop is the same dead blo
 
 ## Done when
 
-- [ ] a task with `loop_control:` and no `loop:`/`with_*` warns (`task.py:87` — no cross-check exists upstream)
-- [ ] the message names the inert keys, not just the block
-- [ ] the same task **with** a loop does not warn, including the `with_*` spelling (`task.py:252-261`)
-- [ ] `include_tasks`/`include_role` carrying `loop_control` and no loop warns too (`task_include.py:42`)
-- [ ] severity is WARNING — ansible exits 0 on this, measured on 2.21.2
-- [ ] `# noqa` suppression works, per T-010
-- [ ] a fixture exercises both sides: dead block, and a live loop that must stay quiet
+- [x] a task with `loop_control:` and no `loop:`/`with_*` warns (`task.py:87` — no cross-check exists upstream)
+- [x] the message names the inert keys, not just the block
+- [x] the same task **with** a loop does not warn, including the `with_*` spelling (`task.py:252-261`)
+- [x] `include_tasks`/`include_role` carrying `loop_control` and no loop warns too (`task_include.py:42`)
+- [x] severity is WARNING — ansible exits 0 on this, measured on 2.21.2
+- [x] `# noqa` suppression works, per T-010
+- [x] a fixture exercises both sides: dead block, and a live loop that must stay quiet
+
+## Outcome
+
+Shipped in `placement.rs` on rule id `dead-loop-control`, alongside T-110 row 21 — both hang
+off one read of the `loop_control:` key, so the malformed case and the dead case are decided
+together.
+
+Two things the measurements settled that the ticket had not
+(`scratchpad/t110_row20_21_t155.sh`):
+
+- **A valueless `loop:` still counts as no loop**, so `loop:` + `loop_control:` is dead too —
+  the guard upstream is `is not None`, the same one row 10 turns on.
+- **Blocks are excluded.** `loop_control` is not a Block keyword at all, so a Block carrying
+  one gets `'loop_control' is not a valid attribute for a Block` from T-107, not this warning.
+  One fault, one rule; asserted on both sides so neither can silently take the other's case.
+
+The four task shapes measured clean upstream — plain task, `include_tasks`, `include_role`,
+`import_tasks` — all warn here.

@@ -2425,7 +2425,12 @@ mod tests {
         let files = ansible_core::workspace::yaml_files(&demo);
         assert!(files.len() > 10, "the demo walk found the demo");
         for path in files {
-            if path.file_name().is_some_and(|n| n == "invalid_attributes.yml") {
+            // `invalid_attributes.yml` is the rule's own demo. `placement.yml` carries one
+            // deliberate case — `loop_control:` on a Block — to show the boundary between
+            // this rule and T-155's; its exact expected set is asserted by
+            // `the_dead_loop_control_warning_is_its_own_rule`, so it is covered, not exempt.
+            const DEMOS: [&str; 2] = ["invalid_attributes.yml", "placement.yml"];
+            if path.file_name().is_some_and(|n| DEMOS.iter().any(|d| n == *d)) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -2479,6 +2484,14 @@ mod tests {
                  'include_tasks' instead.",
                 "duplicate loop in task: items",
                 "duplicate loop in task: list",
+                "you must specify a value when using with_items",
+                "you must specify a value when using with_dict",
+                "the `loop_control` value must be specified as a dictionary and cannot be a \
+                 variable itself (though it can contain variables)",
+                "the `loop_control` value must be specified as a dictionary and cannot be a \
+                 variable itself (though it can contain variables)",
+                "the `loop_control` value must be specified as a dictionary and cannot be a \
+                 variable itself (though it can contain variables)",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
@@ -2508,6 +2521,37 @@ mod tests {
         for want in ["discarded", "'items' lookup", "Delete one of the two"] {
             assert!(got[0].message.contains(want), "missing {want:?}: {}", got[0].message);
         }
+    }
+
+    /// T-155, end to end: the demo's two dead `loop_control:` blocks — one on a plain task,
+    /// one on an `include_tasks` — each warn on their own code and name the inert keys. The
+    /// block-level one does not, because that is T-107's invalid-attribute error.
+    #[test]
+    fn the_dead_loop_control_warning_is_its_own_rule() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "dead-loop-control"),
+            )
+            .collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+        assert!(got[0].message.contains("`loop_var`, `label` have no effect"), "{}", got[0].message);
+        assert!(got[1].message.contains("`loop_var` has no effect"), "{}", got[1].message);
+
+        // The Block's `loop_control` is the keyword rule's, not this one's.
+        let blocks: Vec<String> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| d.message.contains("not a valid attribute for a Block"))
+            .map(|d| d.message)
+            .collect();
+        assert_eq!(blocks, ["'loop_control' is not a valid attribute for a Block"]);
     }
 
     /// No false positives: every demo file except the one built to demonstrate the rule
@@ -2584,6 +2628,31 @@ mod tests {
         let wrong_id = "- hosts: web\n  tasks:\n    - debug:\n      \
                         with_items: [a] # noqa: invalid-placement\n      loop: [1]\n";
         assert_eq!(codes(wrong_id), 1, "invalid-placement must not silence shadowed-loop");
+    }
+
+    /// T-155: same contract for the dead-`loop_control` warning — its own id, and the
+    /// replication id does not reach it.
+    #[test]
+    fn noqa_suppresses_dead_loop_control_independently() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let count = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "dead-loop-control")
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  tasks:\n    - debug:\n      loop_control: {loop_var: it}\n";
+        assert_eq!(count(noisy), 1);
+        let silenced = "- hosts: web\n  tasks:\n    - debug:\n      \
+                        loop_control: {loop_var: it} # noqa: dead-loop-control\n";
+        assert_eq!(count(silenced), 0);
+        let wrong_id = "- hosts: web\n  tasks:\n    - debug:\n      \
+                        loop_control: {loop_var: it} # noqa: invalid-placement\n";
+        assert_eq!(count(wrong_id), 1, "invalid-placement must not silence dead-loop-control");
     }
 
     /// T-088: `# noqa: invalid-attribute` on the offending line silences the rule.

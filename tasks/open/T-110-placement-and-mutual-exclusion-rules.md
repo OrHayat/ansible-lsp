@@ -67,7 +67,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | Batch | Rows            | Shared machinery                    | State                                    |
 | ----- | --------------- | ----------------------------------- | ---------------------------------------- |
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
-| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | 3, 4, 10 **done**; 20-21 open            |
+| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
 | 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                                     |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
@@ -91,6 +91,13 @@ reports the bare `import_tasks`. Every task container — all four play-level li
 blocks, and a standalone task file — reaches the same `load_list_of_tasks` and was verified
 to fire. Known miss: the `action: import_tasks` spelling, since the module is read from the
 written key only.
+
+Rows 20-21 closed batch 2, measured in `scratchpad/t110_row20_21_t155.sh`. Row 20 fires only
+on a genuinely absent value — `with_items: ""` and `with_items: []` both run clean, and the
+parser's `Node::Null`-vs-empty-scalar distinction is what makes that decidable. Row 21 turned
+out **stricter** than the loop guard it sits beside: a valueless `loop_control:` is fatal
+where a valueless `loop:` is not, and a templated scalar is fatal too, which is what the
+message's "cannot be a variable itself" is about. T-155 shipped on the same read of the key.
 
 The `with_` prefix is matched wholesale rather than from a list. All fourteen documented
 lookup loops were measured and every one fires (`scratchpad/t110_with_variants.sh`), but the
@@ -132,8 +139,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
 - [x] 17 — `hosts:` not a sequence or string (`play.py:134`)
 - [x] 18 — a `vars_prompt` entry missing `name:` (`play.py:243`)
 - [x] 19 — a `vars_prompt` entry with an unsupported key (`play.py:246`)
-- [ ] 20 — `with_x:` with a null value (`task.py:259`)
-- [ ] 21 — `loop_control:` whose value is not a dict (`task.py:346-352`)
+- [x] 20 — `with_x:` with a null value (`task.py:259`) — only a *missing* value counts;
+      `with_items: ""` and `with_items: []` both run clean upstream
+- [x] 21 — `loop_control:` whose value is not a dict (`task.py:346-352`) — stricter than the
+      `loop:` guard: a valueless `loop_control:` is fatal too, and so is a templated scalar
 - [ ] 22 — a task with no module/action at all (`mod_args.py:368`)
 - [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays silent (`helpers.py:210-212`)
 - [ ] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,324`)
