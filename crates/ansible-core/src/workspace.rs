@@ -231,9 +231,21 @@ fn push_unique(dirs: &mut Vec<PathBuf>, p: Option<PathBuf>) {
     }
 }
 
-/// Walks up asking "is `ansible.cfg` here?" at every ancestor. Each *directory* asks about
-/// the same shared ancestors, so on a scan this is the single most repeated probe in the
-/// codebase — 28 hits on one path in a 60-file demo. A memoizing `fs` collapses it (T-085).
+/// Walks up asking "is `ansible.cfg` here?" at every ancestor.
+///
+/// This walk is an **editor heuristic, not Ansible behaviour**. Real discovery
+/// (`find_ini_config_file`, `manager.py:253-313`) checks the invocation CWD only — no
+/// ancestor walk. But a language server has no meaningful CWD, so the walk predicts the
+/// one the user will run from: open `~/app/ansible/playbooks/site.yml` in a workspace
+/// rooted at `~/app`, and the cfg that governs their real run is
+/// `~/app/ansible/ansible.cfg`, because that is where they will `cd` to invoke
+/// `ansible-playbook`. The nearest enclosing cfg *is* that prediction — anchored to the
+/// file, never to the workspace, so a monorepo of several ansible trees resolves each
+/// file against its own config. (T-098)
+///
+/// Each *directory* asks about the same shared ancestors, so on a scan this is the single
+/// most repeated probe in the codebase — 28 hits on one path in a 60-file demo. A
+/// memoizing `fs` collapses it (T-085).
 fn find_project_root(from: &Path, fs: &dyn Fs) -> Option<PathBuf> {
     from.ancestors()
         .find(|d| fs.is_file(&d.join("ansible.cfg")))

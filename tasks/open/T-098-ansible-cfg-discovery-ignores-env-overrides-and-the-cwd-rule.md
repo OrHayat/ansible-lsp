@@ -68,7 +68,8 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
       defaults in `workspace.rs` and `install.rs` — `AnsibleConfig::ansible_home`, resolved
       env → ini → `~/.ansible`; install discovery honours the env half only, having no
       project cfg in scope
-- [ ] the ancestor walk is commented as an editor heuristic, not Ansible behaviour
+- [x] the ancestor walk is commented as an editor heuristic, not Ansible behaviour —
+      `find_project_root`'s doc: the walk predicts the CWD the user will run from
 - [ ] the scan report says which config file was used
 - [ ] `{{ ansible_config_file }}` expands to the discovered file, and stays templated when
       none was found
