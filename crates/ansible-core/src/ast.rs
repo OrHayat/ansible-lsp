@@ -12,7 +12,7 @@
 //! Ansible's full `ModuleArgsParser` rules — `action:`/`local_action:`, free-form, `args:`
 //! — are a follow-up; only the value-naming forms are handled below.
 
-use crate::keywords;
+use crate::keywords::{self, KeyContext};
 use crate::parse::{Node, Span};
 
 #[derive(Debug, Clone)]
@@ -69,6 +69,8 @@ pub struct Play {
     pub vars_files: Vec<VarsFilesEntry>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
+    /// Keys Ansible would reject on this play.
+    pub unknown_keys: Vec<UnknownKey>,
 }
 
 /// One `vars_files:` entry: a scalar path, or a nested list meaning "load the first of
@@ -102,6 +104,8 @@ pub struct Block {
     /// `vars:` bound at block scope.
     pub vars: Vec<VarBinding>,
     pub directives: Vec<Directive>,
+    /// Keys Ansible would reject on this block.
+    pub unknown_keys: Vec<UnknownKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +126,8 @@ pub struct Task {
     /// `vars:` bound at task scope.
     pub vars: Vec<VarBinding>,
     pub directives: Vec<Directive>,
+    /// Keys Ansible would reject on this task (or under its `loop_control:`).
+    pub unknown_keys: Vec<UnknownKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +155,17 @@ pub struct Directive {
     pub value: Span,
 }
 
+/// A key ansible-core would reject in its context — `'%s' is not a valid attribute for a
+/// %s` (`base.py:211-220`). Classified once here, module keys / `with_*` / `local_action`
+/// already excluded, so rules need no keyword knowledge of their own (T-107).
+#[derive(Debug, Clone)]
+pub struct UnknownKey {
+    pub key: String,
+    pub key_span: Span,
+    /// The context whose legal set rejected the key — names the class in the message.
+    pub ctx: KeyContext,
+}
+
 /// A `name: value` entry under a `vars:` mapping. The span covers the value, to anchor
 /// go-to-definition on the variable.
 #[derive(Debug, Clone)]
@@ -171,8 +188,31 @@ pub fn build(nodes: &[Node]) -> Ast {
     if looks_like_plays {
         Ast::Playbook(items.iter().filter_map(build_play_item).collect())
     } else {
-        Ast::Tasks(build_stmts(items))
+        // A standalone task file may be a role's `tasks/main.yml` or its
+        // `handlers/main.yml` — indistinguishable from content alone, so use the handler
+        // context: it is a strict superset (Task + `listen`), turning the ambiguity into
+        // a missed `listen` diagnostic on task files rather than a false one on handlers.
+        Ast::Tasks(build_stmts(items, true))
     }
+}
+
+/// Keys of `node` that ansible-core's `_validate_attributes` would reject in `ctx`,
+/// after `skip` removes the keys consumed before that check runs.
+fn unknown_keys_of(
+    node: &Node,
+    ctx: KeyContext,
+    skip: impl Fn(&str) -> bool,
+) -> Vec<UnknownKey> {
+    node.entries()
+        .iter()
+        .filter_map(|(k, _)| {
+            let key = k.as_str()?;
+            if skip(key) || keywords::legal_key(ctx, key) {
+                return None;
+            }
+            Some(UnknownKey { key: key.to_string(), key_span: k.span(), ctx })
+        })
+        .collect()
 }
 
 fn name_of(node: &Node) -> Option<String> {
@@ -308,9 +348,9 @@ fn import_playbook_value(node: &Node) -> Option<&Node> {
 }
 
 fn build_play(node: &Node) -> Play {
-    let stmts = |key: &str| {
+    let stmts = |key: &str, handlers: bool| {
         node.get(key)
-            .map(|n| build_stmts(n.items()))
+            .map(|n| build_stmts(n.items(), handlers))
             .unwrap_or_default()
     };
     // Captured structurally, so not repeated in `directives`.
@@ -328,15 +368,16 @@ fn build_play(node: &Node) -> Play {
         name: name_of(node),
         hosts: node.get("hosts").map(|n| n.span()),
         roles: node.get("roles").map(build_roles).unwrap_or_default(),
-        pre_tasks: stmts("pre_tasks"),
-        tasks: stmts("tasks"),
-        post_tasks: stmts("post_tasks"),
-        handlers: stmts("handlers"),
+        pre_tasks: stmts("pre_tasks", false),
+        tasks: stmts("tasks", false),
+        post_tasks: stmts("post_tasks", false),
+        handlers: stmts("handlers", true),
         vars: vars_of(node),
         vars_files: node.get("vars_files").map(vars_files_of).unwrap_or_default(),
         directives: collect_directives(node, |k| {
             keywords::is_play_directive(k) && !STRUCTURAL.contains(&k)
         }),
+        unknown_keys: unknown_keys_of(node, KeyContext::Play, |_| false),
     }
 }
 
@@ -363,25 +404,25 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
         .collect()
 }
 
-fn build_stmts(items: &[Node]) -> Vec<Stmt> {
-    items.iter().filter_map(build_stmt).collect()
+fn build_stmts(items: &[Node], handlers: bool) -> Vec<Stmt> {
+    items.iter().filter_map(|n| build_stmt(n, handlers)).collect()
 }
 
-fn build_stmt(node: &Node) -> Option<Stmt> {
+fn build_stmt(node: &Node, handlers: bool) -> Option<Stmt> {
     if !matches!(node, Node::Mapping { .. }) {
         return None;
     }
     if node.get("block").is_some() {
-        Some(Stmt::Block(build_block(node)))
+        Some(Stmt::Block(build_block(node, handlers)))
     } else {
-        Some(Stmt::Task(build_task(node)))
+        Some(Stmt::Task(build_task(node, handlers)))
     }
 }
 
-fn build_block(node: &Node) -> Block {
+fn build_block(node: &Node, handlers: bool) -> Block {
     let stmts = |key: &str| {
         node.get(key)
-            .map(|n| build_stmts(n.items()))
+            .map(|n| build_stmts(n.items(), handlers))
             .unwrap_or_default()
     };
     let when = node.get("when");
@@ -399,15 +440,44 @@ fn build_block(node: &Node) -> Block {
                 && k != "name"
                 && !keywords::BLOCK_TASK_CONTAINERS.contains(&k)
         }),
+        unknown_keys: unknown_keys_of(node, KeyContext::Block, |_| false),
     }
 }
 
-fn build_task(node: &Node) -> Task {
+fn build_task(node: &Node, handlers: bool) -> Task {
     let when = node.get("when");
+    let action = find_action(node);
+    // `include_tasks`/`include_role` tasks are validated against the restricted
+    // `VALID_INCLUDE_KEYWORDS` set; `import_*` keep the full Task set
+    // (`task_include.py:87-99`, `constants.py:45`).
+    let dynamic_include = action
+        .as_ref()
+        .is_some_and(|a| matches!(keywords::core_action(&a.name), "include_tasks" | "include_role"));
+    let ctx = match (handlers, dynamic_include) {
+        (true, true) => KeyContext::DynamicHandlerInclude,
+        (true, false) => KeyContext::Handler,
+        (false, true) => KeyContext::DynamicInclude,
+        (false, false) => KeyContext::Task,
+    };
+    // Keys the args parser consumes before validation ever sees them: any dotted key and
+    // the bare module key (`mod_args.py:330-333`), `local_action` (`mod_args.py:131`),
+    // and `with_*` (`task.py:336` — accepted by prefix; Ansible additionally requires an
+    // installed lookup, which we cannot enumerate, so we err lenient).
+    let module_key = action.as_ref().map(|a| a.name.clone());
+    let skip = |k: &str| {
+        k.contains('.')
+            || k.starts_with("with_")
+            || k == "local_action"
+            || Some(k) == module_key.as_deref()
+    };
+    let mut unknown_keys = unknown_keys_of(node, ctx, skip);
+    if let Some(lc) = node.get("loop_control") {
+        unknown_keys.extend(unknown_keys_of(lc, KeyContext::LoopControl, |_| false));
+    }
     Task {
         span: node.span(),
         name: name_of(node),
-        action: find_action(node),
+        action,
         when: when.map(clauses).unwrap_or_default(),
         when_span: when.map(|w| w.span()),
         looped: is_looped(node),
@@ -415,6 +485,7 @@ fn build_task(node: &Node) -> Task {
         register_span: node.get("register").map(|n| n.span()),
         vars: vars_of(node),
         directives: collect_directives(node, |k| keywords::is_task_directive(k) && k != "name"),
+        unknown_keys,
     }
 }
 
@@ -648,5 +719,103 @@ mod tests {
     #[test]
     fn vars_file_is_other() {
         assert!(matches!(ast("key: value\nother: 2\n"), Ast::Other));
+    }
+
+    fn first_play(a: &Ast) -> &Play {
+        let Ast::Playbook(items) = a else { panic!("expected a playbook") };
+        let PlayItem::Play(p) = &items[0] else { panic!("expected a play") };
+        p
+    }
+
+    #[test]
+    fn play_only_keys_are_rejected_on_a_play() {
+        let a = ast("- hosts: web\n  when: x is defined\n  user: alice\n  tasks:\n    - debug:\n");
+        let p = first_play(&a);
+        let keys: Vec<&str> = p.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        // `when:` on a play is fatal (Play mixes in no Conditional, `play.py:48`)...
+        assert_eq!(keys, ["when"]);
+        assert_eq!(p.unknown_keys[0].ctx, KeyContext::Play);
+        // ...while legacy `user:` is renamed in preprocess and accepted (`play.py:166-174`).
+    }
+
+    #[test]
+    fn loop_on_a_block_is_rejected() {
+        let a = ast("- hosts: web\n  tasks:\n    - block:\n        - debug:\n      loop: [1, 2]\n");
+        let Stmt::Block(b) = &first_play(&a).tasks[0] else { panic!("expected a block") };
+        let keys: Vec<&str> = b.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        assert_eq!(keys, ["loop"]);
+        assert_eq!(b.unknown_keys[0].ctx, KeyContext::Block);
+    }
+
+    #[test]
+    fn the_module_key_with_loops_and_local_action_are_never_unknown() {
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - community.general.ufw: {rule: allow}\n      \
+             with_items: [a]\n    - local_action: command echo hi\n      register: out\n",
+        );
+        let p = first_play(&a);
+        for s in &p.tasks {
+            let Stmt::Task(t) = s else { panic!() };
+            assert!(t.unknown_keys.is_empty(), "found: {:?}", t.unknown_keys);
+        }
+    }
+
+    #[test]
+    fn a_misplaced_task_key_is_unknown_with_the_task_context() {
+        let a = ast("- hosts: web\n  tasks:\n    - debug:\n      listen: restart nginx\n");
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        let keys: Vec<&str> = t.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        // `listen` is handler-only (`handler.py:27`).
+        assert_eq!(keys, ["listen"]);
+        assert_eq!(t.unknown_keys[0].ctx, KeyContext::Task);
+    }
+
+    #[test]
+    fn handlers_accept_listen() {
+        let a = ast("- hosts: web\n  handlers:\n    - name: restart\n      debug:\n      listen: x\n");
+        let Stmt::Task(t) = &first_play(&a).handlers[0] else { panic!() };
+        assert!(t.unknown_keys.is_empty(), "found: {:?}", t.unknown_keys);
+    }
+
+    #[test]
+    fn dynamic_includes_use_the_restricted_set() {
+        // `become:` is a perfectly good task key, but invalid on `include_tasks`
+        // (`task_include.py:42-44,87-99`); the import form keeps the full set.
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      become: true\n    \
+             - import_tasks: f.yml\n      become: true\n",
+        );
+        let p = first_play(&a);
+        let Stmt::Task(inc) = &p.tasks[0] else { panic!() };
+        let keys: Vec<&str> = inc.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        assert_eq!(keys, ["become"]);
+        assert_eq!(inc.unknown_keys[0].ctx, KeyContext::DynamicInclude);
+        let Stmt::Task(imp) = &p.tasks[1] else { panic!() };
+        assert!(imp.unknown_keys.is_empty(), "found: {:?}", imp.unknown_keys);
+    }
+
+    #[test]
+    fn loop_control_keys_are_their_own_context() {
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - debug:\n      loop: [1]\n      loop_control:\n        \
+             loop_var: it\n        pause: 1\n        name: nope\n",
+        );
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        let keys: Vec<&str> = t.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        // `name` is Base vocabulary; LoopControl skips Base entirely (`loop_control.py:27`).
+        assert_eq!(keys, ["name"]);
+        assert_eq!(t.unknown_keys[0].ctx, KeyContext::LoopControl);
+    }
+
+    #[test]
+    fn a_standalone_task_file_gets_the_handler_superset() {
+        // tasks/main.yml and handlers/main.yml are indistinguishable by content, so
+        // `listen` passes here — a deliberate miss instead of a false error on handlers.
+        let a = ast("- debug:\n  listen: x\n- include_tasks: f.yml\n  listen: y\n");
+        let Ast::Tasks(stmts) = a else { panic!() };
+        for s in &stmts {
+            let Stmt::Task(t) = s else { panic!() };
+            assert!(t.unknown_keys.is_empty(), "found: {:?}", t.unknown_keys);
+        }
     }
 }
