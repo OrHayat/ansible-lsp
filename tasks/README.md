@@ -151,6 +151,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
+| T-147 | [Validate role meta/main.yml against the RoleMetadata set](open/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -187,6 +188,8 @@ T-021 is now unblocked on that side.
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
 | T-135 | [Four resolve entry points are a cartesian product of two optional axes](open/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | S    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | S    | —          |
+| T-148 | [Audit how ansible-core validates meta/runtime.yml, then mirror it](open/T-148-audit-how-ansible-core-validates-meta-runtime-yml-then-mirro.md) | M    | —          |
+| T-149 | [Validate meta/argument_specs.yml itself, not just call sites](open/T-149-validate-meta-argument-specs-yml-itself-not-just-call-sites.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
