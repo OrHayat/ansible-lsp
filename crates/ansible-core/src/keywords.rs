@@ -1,18 +1,33 @@
 //! Ansible keyword schema — which keys are *directives* (Ansible-owned) versus the
-//! *module* on a task, and which keys hold nested task lists.
+//! *module* on a task, and which keys are legal in each playbook context.
 //!
-//! Derived from the `FieldAttribute` declarations in Ansible's own source
-//! (`lib/ansible/playbook/{base,play,task,block,conditional,taggable,collectionsearch,
-//! delegatable,notifiable}.py`). This is a checked-in snapshot so the LSP works with no
-//! Ansible clone present. To regenerate against a newer Ansible, grep those files for
-//! `= FieldAttribute` / `= NonInheritableFieldAttribute` and fold the names in below.
+//! Derived from the `Attribute` declarations in Ansible's own source, gathered the way
+//! `FieldAttributeBase._fattributes` gathers them (`base.py:93-105`): every `Attribute`
+//! in the class MRO, under its name *and* its alias — which is why `async`, `async_val`
+//! and `loop_with` are all legal on a task. This is a checked-in snapshot so the LSP works
+//! with no Ansible clone present. To regenerate against a newer Ansible, run the
+//! fattributes oracle from the source checkout and diff (T-107):
 //!
-//! The lists err toward *completeness*: a directive we forget would be misread as a task's
-//! module, whereas an extra directive name is harmless (no module is named `when`).
+//! ```text
+//! python3 -c "import sys; sys.path.insert(0,'lib'); \
+//!   from ansible.playbook.play import Play; print(sorted(Play.fattributes))"
+//! ```
+//!
+//! Two audiences with opposite error costs share this file:
+//!
+//! - **Module detection** (`is_task_directive` and friends) errs toward *over*-inclusion:
+//!   a directive we forget would be misread as a task's module, whereas an extra directive
+//!   name is harmless (no module is named `when`).
+//! - **Validation** ([`legal_key`]) is *exact* per context: these sets reproduce
+//!   `'%s' is not a valid attribute for a %s` (`base.py:211-220`), so both a missing and
+//!   an extra name is a wrong diagnostic.
 
-/// Shared by Play, Task and Block (`base.py`) plus the universally-mixed traits
-/// (`when`/`tags`/`collections`/`delegate_*`). Over-including here is safe.
-const COMMON: &[&str] = &[
+// ---------------------------------------------------------------------------------------
+// The mixins, exactly as ansible-core composes them.
+// ---------------------------------------------------------------------------------------
+
+/// `Base` (`base.py:688-721`): inherited by every playbook object.
+const BASE: &[&str] = &[
     "any_errors_fatal",
     "become",
     "become_exe",
@@ -20,11 +35,8 @@ const COMMON: &[&str] = &[
     "become_method",
     "become_user",
     "check_mode",
-    "collections",
     "connection",
     "debugger",
-    "delegate_facts",
-    "delegate_to",
     "diff",
     "environment",
     "ignore_errors",
@@ -35,37 +47,33 @@ const COMMON: &[&str] = &[
     "port",
     "remote_user",
     "run_once",
-    "tags",
     "throttle",
     "timeout",
     "vars",
-    "when",
 ];
 
-/// `task.py` + the task-only mixins, plus the parser-level keys that aren't
-/// `FieldAttribute`s but still aren't the module: `action`/`local_action`/`args`, and
-/// `listen` on handlers. `with_*` is matched by prefix, not listed.
-const TASK_ONLY: &[&str] = &[
-    "action",
-    "args",
-    "async",
-    "changed_when",
-    "delay",
-    "failed_when",
-    "listen",
-    "local_action",
-    "loop",
-    "loop_control",
-    "notify",
-    "poll",
-    "register",
-    "retries",
-    "until",
-];
+/// `Conditional` (`conditional.py:32`).
+const CONDITIONAL: &[&str] = &["when"];
 
-/// `play.py`. Includes the task-container keys (`pre_tasks`/`tasks`/`post_tasks`/
-/// `handlers`) and `roles`.
-const PLAY_ONLY: &[&str] = &[
+/// `Taggable` (`taggable.py:46`).
+const TAGGABLE: &[&str] = &["tags"];
+
+/// `CollectionSearch` (`collectionsearch.py:34`).
+const COLLECTION_SEARCH: &[&str] = &["collections"];
+
+/// `Delegatable` (`delegatable.py:10-11`).
+const DELEGATABLE: &[&str] = &["delegate_to", "delegate_facts"];
+
+/// `Notifiable` (`notifiable.py:10`).
+const NOTIFIABLE: &[&str] = &["notify"];
+
+// ---------------------------------------------------------------------------------------
+// Class-own keys.
+// ---------------------------------------------------------------------------------------
+
+/// `Play` (`play.py:61-89`). Play mixes in **only** `Taggable` and `CollectionSearch`
+/// (`play.py:48`) — `when:`, `notify:` and `delegate_to:` on a play are fatal.
+const PLAY_OWN: &[&str] = &[
     "fact_path",
     "force_handlers",
     "gather_facts",
@@ -86,18 +94,90 @@ const PLAY_ONLY: &[&str] = &[
     "vars_prompt",
 ];
 
-/// `block.py`.
-const BLOCK_ONLY: &[&str] = &["always", "block", "rescue"];
+/// `Block` (`block.py:35-37`); mixes in all five traits (`block.py:32`).
+const BLOCK_OWN: &[&str] = &["always", "block", "rescue"];
 
-/// Keys on an `include_role`/`import_role` (and `roles:` dict entries) that name where in
-/// the role to look — the siblings of `tasks_from`. Not `FieldAttribute`s; from role
-/// include preprocessing.
+/// `Task` (`task.py:79-94`); same five traits (`task.py:54`). Includes every raw
+/// `fattributes` key: `async` is the YAML alias of `async_val` and *both* are accepted,
+/// as is the nominally-private `loop_with`. `action`/`args` are real attributes here;
+/// `local_action` is not — it is parser-level (`mod_args.py:131`).
+const TASK_OWN: &[&str] = &[
+    "action",
+    "args",
+    "async",
+    "async_val",
+    "changed_when",
+    "delay",
+    "failed_when",
+    "loop",
+    "loop_control",
+    "loop_with",
+    "poll",
+    "register",
+    "retries",
+    "until",
+];
+
+/// `Handler` = Task + `listen` (`handler.py:27`).
+const HANDLER_OWN: &[&str] = &["listen"];
+
+/// `RoleMetadata` (`metadata.py:38-41`); mixes in only `CollectionSearch`
+/// (`metadata.py:32`) — `when:` in `meta/main.yml` is fatal, `become:` parses fine.
+const ROLE_METADATA_OWN: &[&str] = &[
+    "allow_duplicates",
+    "argument_specs",
+    "dependencies",
+    "galaxy_info",
+];
+
+/// Task-level keys on a **dynamic** include (`include_tasks`/`include_role`):
+/// `TaskInclude.VALID_INCLUDE_KEYWORDS` (`task_include.py:42-44`). A smaller set than
+/// Task — `become:`, `delegate_to:`, `until:` on an `include_tasks` are invalid.
+/// Handler context adds `listen` (`handler_task_include.py:27`). `import_tasks`/
+/// `import_role` skip this restriction and keep the full Task set.
+const DYNAMIC_INCLUDE: &[&str] = &[
+    "action",
+    "args",
+    "collections",
+    "debugger",
+    "ignore_errors",
+    "loop",
+    "loop_control",
+    "loop_with",
+    "name",
+    "no_log",
+    "register",
+    "run_once",
+    "tags",
+    "timeout",
+    "vars",
+    "when",
+];
+
+/// `loop_control:` values load as `LoopControl` (`loop_control.py:27-35`), which extends
+/// `FieldAttributeBase` directly — none of the common keywords are legal under it.
+pub const LOOP_CONTROL_KEYS: &[&str] = &[
+    "break_when",
+    "extended",
+    "extended_allitems",
+    "index_var",
+    "label",
+    "loop_var",
+    "pause",
+];
+
+/// Args of `include_role`/`import_role`: `IncludeRole.VALID_ARGS`
+/// (`role_include.py:40-43`). A closed set — an unknown arg is a hard
+/// `Invalid options` error (`role_include.py:137-139`). `apply` and `rescuable` are
+/// additionally fatal on `import_role` (`role_include.py:150-159`).
 pub const ROLE_INCLUDE_KEYS: &[&str] = &[
     "allow_duplicates",
+    "apply",
     "defaults_from",
     "handlers_from",
     "name",
     "public",
+    "rescuable",
     "role",
     "rolespec_validate",
     "tasks_from",
@@ -114,6 +194,69 @@ fn in_set(sets: &[&[&str]], key: &str) -> bool {
     sets.iter().any(|s| s.contains(&key))
 }
 
+// ---------------------------------------------------------------------------------------
+// Exact validation sets, per context (T-107).
+// ---------------------------------------------------------------------------------------
+
+/// A place a YAML key can appear, each with its own legal keyword set. Mirrors the class
+/// that would load the mapping in ansible-core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyContext {
+    Play,
+    Block,
+    Task,
+    Handler,
+    /// A task whose action is `include_tasks`/`include_role` (`constants.py:45`) — the
+    /// restricted `VALID_INCLUDE_KEYWORDS` set, not the full Task set.
+    DynamicInclude,
+    /// A dynamic include in handler position: the restricted set plus `listen`.
+    DynamicHandlerInclude,
+    /// `meta/main.yml`.
+    RoleMetadata,
+    /// The mapping under `loop_control:`.
+    LoopControl,
+}
+
+/// Is `key` accepted by ansible-core in this context? Exact — reproduces the
+/// `frozenset(self.fattributes)` membership check of `base.py:217-220`, plus the
+/// preprocess-level escapes that run before it (`user:` on a play, `play.py:166-174`).
+///
+/// The module key on a task and `local_action`/`with_*` are *not* in these sets — they
+/// are consumed by the args parser before validation, so callers must exclude them first
+/// (`mod_args.py:330-333`), as must role params on a `roles:` entry
+/// (`definition.py:200-224`).
+pub fn legal_key(ctx: KeyContext, key: &str) -> bool {
+    let mixins_of_task: &[&[&str]] = &[
+        BASE,
+        CONDITIONAL,
+        TAGGABLE,
+        COLLECTION_SEARCH,
+        DELEGATABLE,
+        NOTIFIABLE,
+        TASK_OWN,
+    ];
+    match ctx {
+        // `user:` is renamed to `remote_user` in preprocess, before validation.
+        KeyContext::Play => {
+            key == "user" || in_set(&[BASE, TAGGABLE, COLLECTION_SEARCH, PLAY_OWN], key)
+        }
+        KeyContext::Block => in_set(
+            &[BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, NOTIFIABLE, BLOCK_OWN],
+            key,
+        ),
+        KeyContext::Task => in_set(mixins_of_task, key),
+        KeyContext::Handler => in_set(mixins_of_task, key) || in_set(&[HANDLER_OWN], key),
+        KeyContext::DynamicInclude => in_set(&[DYNAMIC_INCLUDE], key),
+        KeyContext::DynamicHandlerInclude => in_set(&[DYNAMIC_INCLUDE, HANDLER_OWN], key),
+        KeyContext::RoleMetadata => in_set(&[BASE, COLLECTION_SEARCH, ROLE_METADATA_OWN], key),
+        KeyContext::LoopControl => in_set(&[LOOP_CONTROL_KEYS], key),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Lenient directive predicates, for module detection.
+// ---------------------------------------------------------------------------------------
+
 /// The action name of a task key, for exactly the spellings Ansible recognises as core:
 /// bare, `ansible.builtin.`- or `ansible.legacy.`-prefixed (`constants.py:34`,
 /// `utils/fqcn.py:20-31`). Any other dotted key comes back whole, so it can never equal a
@@ -127,19 +270,26 @@ pub fn core_action(key: &str) -> &str {
 
 /// Is `key` an Ansible directive on a task (as opposed to the module)? `key` is the bare
 /// key — directives are never FQCN, so a dotted key is always the module. `with_*` loops
-/// count as directives.
+/// count as directives (Ansible only accepts `with_<lookup>` for an installed lookup,
+/// `task.py:336`; we accept the prefix wholesale, erring lenient since we cannot
+/// enumerate collection lookups). `local_action` and `listen` are included: over-inclusion
+/// is safe here.
 pub fn is_task_directive(key: &str) -> bool {
-    key.starts_with("with_") || in_set(&[COMMON, TASK_ONLY], key)
+    key.starts_with("with_")
+        || key == "local_action"
+        || legal_key(KeyContext::Handler, key)
 }
 
-/// Is `key` a directive on a play?
+/// Is `key` a directive on a play? Lenient (accepts the whole task vocabulary too):
+/// used to split directives from modules, not to validate — `when:` on a play is fatal
+/// to Ansible, but it is still a directive, not a module.
 pub fn is_play_directive(key: &str) -> bool {
-    in_set(&[COMMON, PLAY_ONLY], key)
+    legal_key(KeyContext::Play, key) || is_task_directive(key)
 }
 
-/// Is `key` a directive on a block?
+/// Is `key` a directive on a block? Lenient, same reasoning.
 pub fn is_block_directive(key: &str) -> bool {
-    in_set(&[COMMON, BLOCK_ONLY], key)
+    legal_key(KeyContext::Block, key) || in_set(&[BLOCK_OWN], key)
 }
 
 /// Does this mapping look like a play? Plays are the only nodes with `hosts:`, and a
@@ -170,7 +320,8 @@ mod tests {
             assert!(is_task_directive(k), "{k} should be a task directive");
         }
         assert!(is_task_directive("with_items"));
-        assert!(is_task_directive("async")); // the YAML key, not async_val
+        assert!(is_task_directive("async")); // the YAML key, alias of async_val
+        assert!(is_task_directive("local_action"));
     }
 
     #[test]
@@ -186,5 +337,81 @@ mod tests {
         assert!(is_play(["hosts", "tasks"].iter()));
         assert!(is_play(["import_playbook"].iter()));
         assert!(!is_play(["include_tasks", "when"].iter()));
+    }
+
+    /// The context sets match `cls.fattributes` exactly. The counts are from the oracle
+    /// run against ansible-core (raw dict keys, names and aliases both); if a count here
+    /// drifts on a version bump, re-run the oracle and update the sets, not the test.
+    #[test]
+    fn set_sizes_match_the_fattributes_oracle() {
+        let count = |ctx, extra: &[&str]| {
+            let mut all: Vec<&str> = [
+                BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, NOTIFIABLE,
+                PLAY_OWN, BLOCK_OWN, TASK_OWN, HANDLER_OWN, ROLE_METADATA_OWN,
+                DYNAMIC_INCLUDE, LOOP_CONTROL_KEYS,
+            ]
+            .concat();
+            all.extend(extra);
+            all.sort_unstable();
+            all.dedup();
+            all.into_iter().filter(|k| legal_key(ctx, k)).count()
+        };
+        assert_eq!(count(KeyContext::Play, &["user"]), 43); // oracle: 42, + legacy `user`
+        assert_eq!(count(KeyContext::Block, &[]), 31);
+        assert_eq!(count(KeyContext::Task, &[]), 42);
+        assert_eq!(count(KeyContext::Handler, &[]), 43);
+        assert_eq!(count(KeyContext::RoleMetadata, &[]), 27);
+        assert_eq!(count(KeyContext::DynamicInclude, &[]), 16);
+        assert_eq!(count(KeyContext::DynamicHandlerInclude, &[]), 17);
+        assert_eq!(count(KeyContext::LoopControl, &[]), 7);
+    }
+
+    #[test]
+    fn the_negative_space_is_where_the_diagnostics_live() {
+        // Play mixes in no Conditional/Delegatable/Notifiable (`play.py:48`).
+        for k in ["when", "delegate_to", "delegate_facts", "notify", "loop", "register"] {
+            assert!(!legal_key(KeyContext::Play, k), "{k} must be fatal on a play");
+        }
+        // ...but the legacy `user:` escape hatch is real (`play.py:166-174`).
+        assert!(legal_key(KeyContext::Play, "user"));
+        assert!(!legal_key(KeyContext::Task, "user"));
+
+        // Blocks look like tasks but have no loop/register/action.
+        for k in ["loop", "register", "action", "until", "listen"] {
+            assert!(!legal_key(KeyContext::Block, k), "{k} must be fatal on a block");
+        }
+        assert!(legal_key(KeyContext::Block, "block"));
+
+        // `listen` is handler-only.
+        assert!(legal_key(KeyContext::Handler, "listen"));
+        assert!(!legal_key(KeyContext::Task, "listen"));
+
+        // Dynamic includes lose most of the task vocabulary (`task_include.py:42-44`).
+        for k in ["become", "delegate_to", "until", "changed_when", "retries", "async"] {
+            assert!(
+                !legal_key(KeyContext::DynamicInclude, k),
+                "{k} must be invalid on include_tasks/include_role"
+            );
+        }
+        assert!(legal_key(KeyContext::DynamicInclude, "when"));
+        assert!(legal_key(KeyContext::DynamicHandlerInclude, "listen"));
+
+        // meta/main.yml: no Conditional, but all of Base parses.
+        assert!(!legal_key(KeyContext::RoleMetadata, "when"));
+        assert!(legal_key(KeyContext::RoleMetadata, "become"));
+        assert!(legal_key(KeyContext::RoleMetadata, "galaxy_info"));
+
+        // loop_control skips Base entirely (`loop_control.py:27`).
+        assert!(!legal_key(KeyContext::LoopControl, "name"));
+        assert!(legal_key(KeyContext::LoopControl, "loop_var"));
+    }
+
+    #[test]
+    fn raw_fattributes_quirks_are_legal() {
+        // `fattributes` holds names AND aliases (`base.py:102-104`), so all three are
+        // accepted YAML on a task — verified live via `Task.load`.
+        for k in ["async", "async_val", "loop_with"] {
+            assert!(legal_key(KeyContext::Task, k), "{k} is accepted by Ansible");
+        }
     }
 }
