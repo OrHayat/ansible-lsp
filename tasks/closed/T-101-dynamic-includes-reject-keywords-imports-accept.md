@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-099 | —          |
+| done   | task | P1       | S    | T-099 | —          |
 
 ## Problem
 

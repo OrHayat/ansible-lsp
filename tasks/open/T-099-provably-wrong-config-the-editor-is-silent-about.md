@@ -33,7 +33,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-087 — Invalid vars_files entry: provably fatal at runtime, silent in the editor
 - [ ] T-089 — Indexed access into static list vars: no element support, out-of-bounds unflagged
 - [ ] T-100 — Unknown key in a roles: entry silently becomes a variable
-- [ ] T-101 — Dynamic includes reject keywords imports accept
+- [x] T-101 — Dynamic includes reject keywords imports accept
 - [x] T-102 — Duplicate YAML mapping key
 - [ ] T-103 — A static field carrying a template is used literally
 - [ ] T-104 — hostvars cannot see play, role or task vars

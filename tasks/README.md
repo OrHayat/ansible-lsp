@@ -93,7 +93,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](open/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | S    | —          |
-| T-101 | [Dynamic includes reject keywords imports accept](open/T-101-dynamic-includes-reject-keywords-imports-accept.md) | S    | —          |
 | T-103 | [A static field carrying a template is used literally](open/T-103-a-static-field-carrying-a-template-is-used-literally.md) | S    | —          |
 | T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
@@ -262,6 +261,7 @@ T-021 is now unblocked on that side.
 | T-107 | [Per-class keyword sets from FieldAttribute](closed/T-107-per-class-keyword-sets-from-fieldattribute.md) | done     |
 | T-088 | [Unknown play keyword: Ansible refuses the play, the editor says nothing](closed/T-088-unknown-play-keyword-ansible-refuses-the-play-the-editor-say.md) | done     |
 | T-154 | **bug** · [Vaulted vars files are invisible to the index, so var-undefined lies](closed/T-154-vaulted-vars-files-are-invisible-to-the-index-so-var-undefin.md) | **rejected** |
+| T-101 | [Dynamic includes reject keywords imports accept](closed/T-101-dynamic-includes-reject-keywords-imports-accept.md) | done     |
 
 ## Settled — don't re-derive these
 
