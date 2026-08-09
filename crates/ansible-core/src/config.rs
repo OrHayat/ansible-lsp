@@ -484,10 +484,16 @@ mod tests {
     fn the_roles_path_env_var_beats_the_cfg_key() {
         let env = EnvMap::from_pairs(&[("ANSIBLE_ROLES_PATH", "/abs/roles:~/r"), ("HOME", "/home/t")]);
 
-        let c = AnsibleConfig::builder(Path::new("/p"))
-            .fs(&CfgFs::some("[defaults]\nroles_path = ./from_ini\n"))
-            .env(&env)
-            .load();
+        let ini = CfgFs::some("[defaults]\nroles_path = ./from_ini\n");
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
+        assert_eq!(
+            c.roles_path,
+            vec![PathBuf::from("/p/from_ini")],
+            "baseline: the ini key is in force — without this, `env wins` could pass with the\
+             \n ini layer silently broken"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.roles_path,
             vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
@@ -508,10 +514,16 @@ mod tests {
     fn the_collections_path_env_var_beats_the_cfg_key() {
         let env = EnvMap::from_pairs(&[("ANSIBLE_COLLECTIONS_PATH", "/site/coll")]);
 
-        let c = AnsibleConfig::builder(Path::new("/p"))
-            .fs(&CfgFs::some("[defaults]\ncollections_path = ./from_ini\n"))
-            .env(&env)
-            .load();
+        let ini = CfgFs::some("[defaults]\ncollections_path = ./from_ini\n");
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
+        assert_eq!(
+            c.collections_path,
+            vec![PathBuf::from("/p/from_ini")],
+            "baseline: the ini key is in force — without this, `env wins` could pass with the\
+             \n ini layer silently broken"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.collections_path,
             vec![PathBuf::from("/site/coll")],
@@ -527,10 +539,16 @@ mod tests {
     fn the_library_env_var_beats_the_cfg_key() {
         let env = EnvMap::from_pairs(&[("ANSIBLE_LIBRARY", "/site/modules")]);
 
-        let c = AnsibleConfig::builder(Path::new("/p"))
-            .fs(&CfgFs::some("[defaults]\nlibrary = ./from_ini\n"))
-            .env(&env)
-            .load();
+        let ini = CfgFs::some("[defaults]\nlibrary = ./from_ini\n");
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/p/from_ini")],
+            "baseline: the ini key is in force — without this, `env wins` could pass with the\
+             \n ini layer silently broken"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.library,
             vec![PathBuf::from("/site/modules")],
@@ -547,10 +565,16 @@ mod tests {
     fn the_action_plugins_env_var_beats_the_cfg_key() {
         let env = EnvMap::from_pairs(&[("ANSIBLE_ACTION_PLUGINS", "/site/action")]);
 
-        let c = AnsibleConfig::builder(Path::new("/p"))
-            .fs(&CfgFs::some("[defaults]\naction_plugins = ./from_ini\n"))
-            .env(&env)
-            .load();
+        let ini = CfgFs::some("[defaults]\naction_plugins = ./from_ini\n");
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
+        assert_eq!(
+            c.action_plugins,
+            vec![PathBuf::from("/p/from_ini")],
+            "baseline: the ini key is in force — without this, `env wins` could pass with the\
+             \n ini layer silently broken"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.action_plugins,
             vec![PathBuf::from("/site/action")],
