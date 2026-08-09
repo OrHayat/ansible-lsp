@@ -13,6 +13,7 @@ pub mod keywords;
 pub mod mutation;
 pub mod parse;
 pub mod parse_libyaml;
+pub mod placement;
 pub mod references;
 pub mod resolve;
 pub mod splitter;

@@ -18,6 +18,7 @@ use ansible_core::attributes;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Loader, Node, Span};
+use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
 use ansible_core::vars;
@@ -596,7 +597,26 @@ impl Backend {
         })
         .collect();
 
-        missing.chain(broken).chain(invalid).collect()
+        // Shapes ansible-core refuses to load, where every key involved is spelled correctly
+        // and legal where it sits — what is wrong is the structure around it, which the
+        // keyword sets cannot see (T-110).
+        let misplaced: Vec<Diagnostic> = placement::problems(&a.nodes, &a.doc.text)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, placement::RULE_ID))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(match p.tier {
+                    placement::Tier::Error => DiagnosticSeverity::ERROR,
+                    placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(placement::RULE_ID.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
+        missing.chain(broken).chain(invalid).chain(misplaced).collect()
     }
 
     /// Condition-aware definedness: a variable *used* under a `when:` that its *definitions*
@@ -2419,6 +2439,88 @@ mod tests {
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
+    }
+
+    /// T-110 batch 1. Every message is ansible-core 2.21.2's own, measured by running each
+    /// case through `--syntax-check` — Ansible stops at the first, we report all nine.
+    #[test]
+    fn placement_diagnostics_match_ansibles_messages() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-placement"))
+            .collect();
+
+        let messages: Vec<&str> = got.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "both 'user' and 'remote_user' are set for this play. The use of 'user' is \
+                 deprecated, and should be removed",
+                "Hosts list cannot be empty. Please check your playbook",
+                "Hosts list cannot contain values of 'None'. Please check your playbook",
+                "Hosts list contains an invalid host value: '{ name: web }'",
+                "Hosts list must be a sequence or string. Please check your playbook.",
+                "Invalid vars_prompt data structure, found unsupported key 'promt'",
+                "Invalid vars_prompt data structure, missing 'name' key",
+                "Invalid vars_prompt data structure, missing 'name' key",
+                "playbook entries must be either valid plays or 'import_playbook' statements",
+            ],
+            "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
+             the documented miss"
+        );
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+    }
+
+    /// No false positives: every demo file except the one built to demonstrate the rule
+    /// stays free of placement diagnostics.
+    #[test]
+    fn every_other_demo_file_is_free_of_placement_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "placement.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-placement")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-110: `# noqa: invalid-placement` on the offending line silences the rule.
+    #[test]
+    fn noqa_suppresses_invalid_placement() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let flagged = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-placement")
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  user: alice\n  remote_user: bob\n  tasks: []\n";
+        assert_eq!(flagged(noisy), 1);
+        let silenced =
+            "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
+        assert_eq!(flagged(silenced), 0);
     }
 
     /// T-088: `# noqa: invalid-attribute` on the offending line silences the rule.

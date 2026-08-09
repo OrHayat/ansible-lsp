@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | M    | T-106 | T-107      |
+| partly done | task | P1  | M    | T-106 | T-107      |
 
 ## Problem
 
@@ -62,6 +62,26 @@ not a placement rule.
 One pass over the semantic AST from T-044. No resolution, no index; each rule is a shape test
 on a node and its parent.
 
+Landing in batches grouped by the context each rule needs, not by severity:
+
+| Batch | Rows            | Shared machinery                    | State                              |
+| ----- | --------------- | ----------------------------------- | ---------------------------------- |
+| 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`          |
+| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | open — lands T-155's shape test too |
+| 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                               |
+| 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                               |
+| 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem       |
+
+Batch 5 is a candidate to split off: rows 12 and 22 need "which keys resolve to a module",
+which is resolution, not shape, so it does not share this ticket's premise.
+
+Batch 1 shipped as `placement.rs`, rule id `invalid-placement`, one diagnostic per fault
+rather than Ansible's stop-at-the-first. Every message was measured by running the case
+through `--syntax-check` on 2.21.2 (`scratchpad/t110_batch1.sh`), and `demo/placement.yml`
+carries a good-and-bad example of each. One deliberate miss, pinned by a test: `hosts: 42`
+is fatal to Ansible as an int, but the parse tree keeps no scalar style, so it cannot be
+told from the good `hosts: "42"` — a miss, never a false error.
+
 ## Done when
 
 One box per row of the table, each carrying the cite it was measured from. Rows 1-22 are
@@ -75,17 +95,20 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
 - [ ] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:280-285`)
 - [ ] 7 — `rescue:`/`always:` without `block:` (`block.py:138-142`)
 - [ ] 8 — playbook not a list, empty, or an entry that is not a dict (`playbook/__init__.py:74-91`)
+      — the not-a-dict entry ships; the other three need to know the file IS a playbook,
+      which only the command line says, so they stay unchecked rather than false-positive on
+      every vars file. Reopen if T-150's file-kind matrix gives us that knowledge.
 - [ ] 9 — both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry (`playbook_include.py:41-48`)
 - [ ] 10 — `loop` and a `with_*` together, or two `with_*` (`task.py:252-261`)
 - [ ] 11 — `action:` and `local_action:` together (`mod_args.py:322`)
 - [ ] 12 — two resolvable module keys in one task (`mod_args.py:353-354`)
-- [ ] 13 — both `user:` and `remote_user:` in one play (`play.py:170`)
-- [ ] 14 — `hosts:` empty (`play.py:123`)
-- [ ] 15 — `hosts:` entry is `None` (`play.py:129`)
-- [ ] 16 — `hosts:` entry is not a valid host value (`play.py:131`)
-- [ ] 17 — `hosts:` not a sequence or string (`play.py:134`)
-- [ ] 18 — a `vars_prompt` entry missing `name:` (`play.py:243`)
-- [ ] 19 — a `vars_prompt` entry with an unsupported key (`play.py:246`)
+- [x] 13 — both `user:` and `remote_user:` in one play (`play.py:170`)
+- [x] 14 — `hosts:` empty (`play.py:123`)
+- [x] 15 — `hosts:` entry is `None` (`play.py:129`)
+- [x] 16 — `hosts:` entry is not a valid host value (`play.py:131`)
+- [x] 17 — `hosts:` not a sequence or string (`play.py:134`)
+- [x] 18 — a `vars_prompt` entry missing `name:` (`play.py:243`)
+- [x] 19 — a `vars_prompt` entry with an unsupported key (`play.py:246`)
 - [ ] 20 — `with_x:` with a null value (`task.py:259`)
 - [ ] 21 — `loop_control:` whose value is not a dict (`task.py:346-352`)
 - [ ] 22 — a task with no module/action at all (`mod_args.py:368`)

@@ -191,6 +191,21 @@ pub const ROLE_INCLUDE_KEYS: &[&str] = &[
     "vars_from",
 ];
 
+/// Keys of one `vars_prompt:` entry (`play.py:246`). A closed set checked inline at load,
+/// not a `FieldAttribute` class — an unknown key is `Invalid vars_prompt data structure,
+/// found unsupported key '%s'`, fatal regardless of `invalid_task_attribute_failed`.
+pub const VARS_PROMPT_KEYS: &[&str] = &[
+    "confirm",
+    "default",
+    "encrypt",
+    "name",
+    "private",
+    "prompt",
+    "salt",
+    "salt_size",
+    "unsafe",
+];
+
 /// Play-level keys whose value is an ordered list of tasks/blocks.
 pub const PLAY_TASK_CONTAINERS: &[&str] = &["pre_tasks", "tasks", "post_tasks", "handlers"];
 

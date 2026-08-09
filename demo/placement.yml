@@ -1,0 +1,66 @@
+# T-110 batch 1: play- and playbook-level shapes ansible-core refuses to load. Every key
+# below is spelled correctly and legal where it sits — what is wrong is the structure around
+# it, so the T-107 keyword rules cannot see any of it. Messages measured on ansible-core
+# 2.21.2; each BAD line is the exact error `--syntax-check` gives.
+- name: user and remote_user are mutually exclusive
+  hosts: localhost
+  user: alice # BAD: `user` is renamed to `remote_user` in preprocess, and the seat is taken
+  remote_user: bob # GOOD on its own — this is the spelling to keep
+  tasks:
+    - debug: { msg: ok }
+
+- name: an empty hosts is fatal in every spelling
+  hosts: # BAD: null, empty string and empty list are all falsy — same error for all three
+  tasks:
+    - debug: { msg: ok }
+
+- name: a hosts list cannot contain a bare dash
+  hosts:
+    - web # GOOD
+    - # BAD: None, not the empty string — "Hosts list cannot contain values of 'None'"
+    - db
+  tasks:
+    - debug: { msg: ok }
+
+- name: a hosts entry must be a string, not a container
+  hosts:
+    - { name: web } # BAD: a mapping is an invalid host value
+  tasks:
+    - debug: { msg: ok }
+
+- name: hosts itself must be a sequence or a string
+  hosts: { group: web } # BAD: a mapping is neither
+  tasks:
+    - debug: { msg: ok }
+
+# Known miss, deliberate: `hosts: 42` is an int to Ansible and fatal with the same
+# "must be a sequence or string" error, but the parse tree keeps no scalar style, so we
+# cannot tell it from the perfectly good `hosts: "42"`. A miss, never a false error.
+- name: a numeric hosts we do not flag
+  hosts: 42
+  tasks:
+    - debug: { msg: ok }
+
+- name: vars_prompt entries have a closed vocabulary
+  hosts: localhost
+  vars_prompt:
+    - name: pw # GOOD: the one required key
+      prompt: Password? # GOOD
+      private: true # GOOD
+      promt: Password? # BAD: unsupported key — one letter from a real one
+    - prompt: no name here # BAD: missing 'name' key
+  tasks:
+    - debug: { msg: ok }
+
+- name: a lone mapping is wrapped into a one-element list, and checked the same
+  hosts: localhost
+  vars_prompt: # BAD: missing 'name' key — the unwrapped spelling is not a loophole
+    prompt: Password?
+  tasks:
+    - debug: { msg: ok }
+
+# BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
+# file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
+# which only the command line says, so we stay quiet on those rather than false-positive
+# on every vars file.
+- just-a-string
