@@ -30,7 +30,7 @@ checked):
 | `defaults/` `vars/` files          | same                                             | yes (indexed) | n/a | — |
 | playbook `.meta` files             | `play.py:452-475` — playbook-level `argument_specs`, found in the T-107 full read | no | no | T-153 |
 | `ansible.cfg`                      | `config/base.yml`                                | yes  | partly (per-setting) | ~~T-098~~, T-144 |
-| vault-encrypted files              | `$ANSIBLE_VAULT` header                          | no — parses as one scalar, lands in `Ast::Other`, silent | n/a | none: no lie today; revisit if a rule ever misfires on one |
+| vault-encrypted files              | `$ANSIBLE_VAULT` header                          | no — parses as one scalar, `Ast::Other`; but a vaulted vars source makes `var-undefined` fire falsely (probed) | n/a | T-154 (bug) |
 | `files/`, `templates/` (Jinja)     | not YAML                                         | n/a  | n/a       | out of scope here |
 
 Non-core files (`.ansible-lint`, `ansible-navigator.yml`, `execution-environment.yml`)
