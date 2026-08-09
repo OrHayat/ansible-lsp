@@ -24,11 +24,11 @@ all of them for the settings `config.rs` consumes:
 | Env var                           | Overrides                          | Modelled today?     |
 | --------------------------------- | ---------------------------------- | ------------------- |
 | `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:201` |
-| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:161` (`install.rs:304` env-only: no project cfg in scope there) |
+| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:164` (`install.rs:304` env-only: no project cfg in scope there) |
 | `ANSIBLE_ROLES_PATH`              | `roles_path`                       | yes, `config.rs:152` |
 | `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | yes, `config.rs:155` |
 | `ANSIBLE_LIBRARY`                 | `library`                          | yes, `config.rs:158` |
-| `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | no                  |
+| `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | yes, `config.rs:161` |
 | `ANSIBLE_NETWORK_GROUP_MODULES`   | `network_group_modules`            | yes, `config.rs:145` |
 | `ANSIBLE_DUPLICATE_YAML_DICT_KEY` | `duplicate_dict_key`               | yes, `config.rs:149` |
 
@@ -63,7 +63,7 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
 - [x] `ANSIBLE_ROLES_PATH` overrides the ini's `roles_path`
 - [x] `ANSIBLE_COLLECTIONS_PATH` overrides the ini's `collections_path`
 - [x] `ANSIBLE_LIBRARY` overrides the ini's `library`
-- [ ] `ANSIBLE_ACTION_PLUGINS` overrides the ini's `action_plugins`
+- [x] `ANSIBLE_ACTION_PLUGINS` overrides the ini's `action_plugins`
 - [x] `ANSIBLE_HOME` (env, or the `home` ini key) relocates the hardcoded `~/.ansible`
       defaults in `workspace.rs` and `install.rs` — `AnsibleConfig::ansible_home`, resolved
       env → ini → `~/.ansible`; install discovery honours the env half only, having no
