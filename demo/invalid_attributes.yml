@@ -1,0 +1,37 @@
+# T-107: keys ansible-core refuses to load, each named for the class that rejects it.
+# Every BAD line is an ERROR here because the demo config leaves
+# `invalid_task_attribute_failed` at its default (true); setting it false downgrades the
+# task-level ones to `Ignoring invalid attribute` warnings — the play and block ones stay
+# fatal either way.
+- name: invalid attribute demos
+  hosts: localhost
+  when: ansible_check_mode # BAD: plays mix in no Conditional — fatal, not ignored
+  tasks:
+    - name: a fine task
+      debug: { msg: ok }
+      when: ansible_check_mode # GOOD: tasks do take `when`
+
+    - name: blocks look like tasks but cannot loop
+      block:
+        - debug: { msg: in block }
+      loop: [1, 2] # BAD: `loop` is not a valid attribute for a Block
+
+    - name: listen belongs on handlers
+      debug: { msg: x }
+      listen: nope # BAD on a task; GOOD on the handler below
+
+    - name: dynamic includes take a restricted keyword set
+      include_tasks: tasks/main.yml
+      become: true # BAD: valid on a task, invalid on include_tasks/include_role
+
+    - name: loop_control has its own small vocabulary
+      debug: { msg: "{{ it }}" }
+      loop: [1]
+      loop_control:
+        loop_var: it # GOOD
+        name: nope # BAD: LoopControl has no Base keys — fatal regardless of config
+
+  handlers:
+    - name: restart
+      debug: { msg: restarting }
+      listen: signal # GOOD: handlers are the one task context with `listen`

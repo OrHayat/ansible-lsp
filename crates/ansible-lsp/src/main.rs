@@ -14,6 +14,7 @@ use ansible_core::config::DuplicateDictKey;
 use ansible_core::expressions;
 use ansible_core::fs::{Counting, StdFs};
 use ansible_core::install::{AnsibleInstall, Version};
+use ansible_core::attributes;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Loader, Node, Span};
@@ -572,7 +573,30 @@ impl Backend {
             })
             .collect();
 
-        missing.chain(broken).collect()
+        // Keys ansible-core would refuse to load — `'x' is not a valid attribute for a
+        // Play/Task/...`, classified per context in `ast::build`. Task-level severity
+        // follows the project's `invalid_task_attribute_failed`; play/block/loop_control
+        // unknowns are errors regardless (T-107).
+        let invalid: Vec<Diagnostic> = attributes::problems(
+            &ansible_core::ast::build(&a.nodes),
+            a.ctx.config.invalid_task_attribute_failed,
+        )
+        .into_iter()
+        .filter(|p| !a.doc.is_suppressed(p.span.start, attributes::RULE_ID))
+        .map(|p| Diagnostic {
+            range: range_of(p.span),
+            severity: Some(match p.tier {
+                attributes::Tier::Error => DiagnosticSeverity::ERROR,
+                attributes::Tier::Warning => DiagnosticSeverity::WARNING,
+            }),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String(attributes::RULE_ID.into())),
+            message: p.message,
+            ..Default::default()
+        })
+        .collect();
+
+        missing.chain(broken).chain(invalid).collect()
     }
 
     /// Condition-aware definedness: a variable *used* under a `when:` that its *definitions*
@@ -2335,6 +2359,39 @@ mod tests {
             3,
             "exactly the three empty-string cases, not the null one"
         );
+    }
+
+    /// T-107. Each rejected key is anchored on itself, carries the class Ansible would
+    /// name, and the legal uses around it stay silent. The demo config keeps
+    /// `invalid_task_attribute_failed` at the default, so everything here is an ERROR.
+    #[test]
+    fn invalid_attribute_diagnostics_name_the_rejecting_class() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/invalid_attributes.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-attribute"))
+            .collect();
+
+        let messages: Vec<&str> = got.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "'when' is not a valid attribute for a Play",
+                "'loop' is not a valid attribute for a Block",
+                "'listen' is not a valid attribute for a Task",
+                "'become' is not a valid attribute for a TaskInclude",
+                "'name' is not a valid attribute for a LoopControl",
+            ],
+            "one diagnostic per BAD line, none for the GOOD ones"
+        );
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+        // Anchored on the key itself: the play's `when`, not the whole play.
+        assert_eq!(got[0].range.start.line, got[0].range.end.line);
     }
 
     /// T-016: the messages must describe what Ansible actually does with a missing

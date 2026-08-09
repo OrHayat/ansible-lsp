@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod attributes;
 pub mod cache;
 pub mod condition;
 pub mod config;

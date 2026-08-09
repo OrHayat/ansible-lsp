@@ -36,7 +36,7 @@ impl EnvMap {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AnsibleConfig {
     /// Every path list is `None` = never set (the built-in defaults apply) vs
     /// `Some(vec![])` = explicitly emptied (`ANSIBLE_ROLES_PATH=`, a bare `roles_path =`),
@@ -68,6 +68,28 @@ pub struct AnsibleConfig {
     /// What a duplicate YAML mapping key does. `DUPLICATE_YAML_DICT_KEY`'s ini name is
     /// `duplicate_dict_key`; the env var keeps the longer spelling. T-102.
     pub duplicate_dict_key: DuplicateDictKey,
+    /// `INVALID_TASK_ATTRIBUTE_FAILED` (`base.yml:1703-1713`): true — the shipped
+    /// default — makes an unknown task attribute a load error, false downgrades it to
+    /// `Ignoring invalid attribute`. Task-level only; plays and blocks stay fatal. T-107.
+    pub invalid_task_attribute_failed: bool,
+}
+
+/// Hand-written for one field: `invalid_task_attribute_failed` defaults *true*, which
+/// `#[derive(Default)]` cannot express.
+impl Default for AnsibleConfig {
+    fn default() -> Self {
+        Self {
+            roles_path: None,
+            collections_path: None,
+            library: None,
+            action_plugins: None,
+            config_file: None,
+            ansible_home: None,
+            network_group_modules: None,
+            duplicate_dict_key: DuplicateDictKey::default(),
+            invalid_task_attribute_failed: true,
+        }
+    }
 }
 
 /// `DUPLICATE_YAML_DICT_KEY` (`config/base.yml:1361-1375`). Exactly three values, lowercase
@@ -177,6 +199,11 @@ impl AnsibleConfig {
                         cfg.duplicate_dict_key = v;
                     }
                 }
+                "invalid_task_attribute_failed" => {
+                    if let Some(v) = parse_bool(&value) {
+                        cfg.invalid_task_attribute_failed = v;
+                    }
+                }
                 _ => {}
             }
         }
@@ -207,6 +234,9 @@ impl AnsibleConfig {
         if let Some(v) = env.var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").and_then(DuplicateDictKey::parse)
         {
             cfg.duplicate_dict_key = v;
+        }
+        if let Some(v) = env.var("ANSIBLE_INVALID_TASK_ATTRIBUTE_FAILED").and_then(parse_bool) {
+            cfg.invalid_task_attribute_failed = v;
         }
         cfg
     }
@@ -333,6 +363,17 @@ fn name_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// A boolean the way Ansible's `boolean()` reads one (`convert_bool.py:12-13`):
+/// `y yes on 1 true t` / `n no off 0 false f`, case-insensitive. `None` for any other
+/// spelling — callers keep the shipped default rather than refusing to serve.
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_lowercase().as_str() {
+        "y" | "yes" | "on" | "1" | "true" | "t" => Some(true),
+        "n" | "no" | "off" | "0" | "false" | "f" => Some(false),
+        _ => None,
+    }
+}
+
 /// Colon-separated list; `~` expanded, relative entries resolved against the config's
 /// own directory (Ansible resolves them against cwd, which is where you run it from).
 fn expand_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
@@ -370,6 +411,25 @@ mod tests {
 
     fn cfg(text: &str) -> AnsibleConfig {
         AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::some(text)).env(&EnvMap::empty()).load()
+    }
+
+    /// T-107. Shipped default true; the ini key and env var flip it; env beats ini;
+    /// Ansible's full boolean vocabulary is accepted, and a bad spelling keeps the
+    /// default rather than going dark.
+    #[test]
+    fn invalid_task_attribute_failed_reads_ini_and_env() {
+        assert!(cfg("[defaults]\nroles_path = ./roles\n").invalid_task_attribute_failed);
+        assert!(!cfg("[defaults]\ninvalid_task_attribute_failed = False\n").invalid_task_attribute_failed);
+        assert!(!cfg("[defaults]\ninvalid_task_attribute_failed = no\n").invalid_task_attribute_failed);
+        assert!(cfg("[defaults]\ninvalid_task_attribute_failed = on\n").invalid_task_attribute_failed);
+        assert!(cfg("[defaults]\ninvalid_task_attribute_failed = maybe\n").invalid_task_attribute_failed);
+
+        let env = EnvMap::from_pairs(&[("ANSIBLE_INVALID_TASK_ATTRIBUTE_FAILED", "0")]);
+        let got = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\ninvalid_task_attribute_failed = true\n"))
+            .env(&env)
+            .load();
+        assert!(!got.invalid_task_attribute_failed, "env must beat the ini value");
     }
 
     /// T-102. All three spellings, plus the two ways a value can be absent. Live-verified
