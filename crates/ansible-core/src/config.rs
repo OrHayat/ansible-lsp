@@ -1,8 +1,34 @@
 //! `ansible.cfg` — where roles and collections are searched for.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::fs::{Fs, StdFs};
+
+/// The process environment, snapshotted once — the seam that does for env vars what [`Fs`]
+/// does for the filesystem: tests pass a literal map, and only
+/// [`from_process`](Self::from_process) touches the real thing, so no test needs `set_var`
+/// or a single-test binary to control what config sees. A server's environment is fixed at
+/// launch, so a snapshot loses nothing.
+pub struct EnvMap(HashMap<String, String>);
+
+impl EnvMap {
+    pub fn from_process() -> Self {
+        Self(std::env::vars().collect())
+    }
+
+    pub fn empty() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+        Self(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    pub fn var(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(String::as_str)
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct AnsibleConfig {
@@ -65,14 +91,24 @@ pub const DEFAULT_NETWORK_GROUP_MODULES: &[&str] = &[
 
 impl AnsibleConfig {
     pub fn load(project_root: &Path) -> Self {
-        Self::load_in(project_root, &StdFs)
+        Self::builder(project_root).load()
     }
 
-    /// [`load`](Self::load) against a caller-supplied filesystem, so a scan reads each
-    /// project's config once (T-085).
-    pub fn load_in(project_root: &Path, fs: &dyn Fs) -> Self {
+    /// [`load`](Self::load) with either dependency swappable: a caller-supplied filesystem
+    /// so a scan reads each project's config once (T-085), a caller-supplied environment so
+    /// a test controls what config sees.
+    pub fn builder(project_root: &Path) -> AnsibleConfigBuilder<'_> {
+        AnsibleConfigBuilder { root: project_root, fs: None, env: None }
+    }
+
+    fn load_resolved(project_root: &Path, fs: &dyn Fs, env: &EnvMap) -> Self {
         let mut cfg = Self::default();
-        if let Some(text) = fs.read(&project_root.join("ansible.cfg")) {
+        // `ANSIBLE_CONFIG` beats the walk-found project file — the front of
+        // `find_ini_config_file`'s ladder (`manager.py:263-271`). First hit wins whole:
+        // when the env file exists the project's is not read, let alone merged.
+        let file = env_config_file(fs, env).unwrap_or_else(|| project_root.join("ansible.cfg"));
+        let base = file.parent().unwrap_or(project_root);
+        if let Some(text) = fs.read(&file) {
             let mut in_defaults = false;
             for line in text.lines() {
                 let line = line.trim();
@@ -86,7 +122,7 @@ impl AnsibleConfig {
                 let Some((key, value)) = line.split_once('=') else {
                     continue;
                 };
-                let paths = || expand_list(value.trim(), project_root);
+                let paths = || expand_list(value.trim(), base, env);
                 match key.trim() {
                     "roles_path" => cfg.roles_path = paths(),
                     "collections_path" | "collections_paths" => cfg.collections_path = paths(),
@@ -105,16 +141,12 @@ impl AnsibleConfig {
             }
         }
         // Env beats the ini file, which beats the shipped default — and it applies whether
-        // or not an `ansible.cfg` was found, so it can't ride inside the block above. Read
-        // once here rather than at each lookup: a server's environment is fixed at launch,
-        // so there is nothing to observe later.
-        if let Ok(v) = std::env::var("ANSIBLE_NETWORK_GROUP_MODULES") {
-            cfg.network_group_modules = Some(name_list(&v));
+        // or not an `ansible.cfg` was found, so it can't ride inside the block above.
+        if let Some(v) = env.var("ANSIBLE_NETWORK_GROUP_MODULES") {
+            cfg.network_group_modules = Some(name_list(v));
         }
         // Note the spelling: the env var is DUPLICATE_YAML_DICT_KEY, the ini key is not.
-        if let Some(v) = std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY")
-            .ok()
-            .and_then(|v| DuplicateDictKey::parse(&v))
+        if let Some(v) = env.var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").and_then(DuplicateDictKey::parse)
         {
             cfg.duplicate_dict_key = v;
         }
@@ -131,6 +163,53 @@ impl AnsibleConfig {
     }
 }
 
+/// Builds an [`AnsibleConfig`] with any dependency not supplied defaulting to the real
+/// one — [`StdFs`], a fresh [`EnvMap::from_process`]. The default is silent by design
+/// (accepted trade-off, T-098): a test that wants isolation from the developer's shell
+/// must say `.env(&EnvMap::empty())` — omitting it means the real environment applies.
+pub struct AnsibleConfigBuilder<'a> {
+    root: &'a Path,
+    fs: Option<&'a dyn Fs>,
+    env: Option<&'a EnvMap>,
+}
+
+impl<'a> AnsibleConfigBuilder<'a> {
+    pub fn fs(mut self, fs: &'a dyn Fs) -> Self {
+        self.fs = Some(fs);
+        self
+    }
+
+    pub fn env(mut self, env: &'a EnvMap) -> Self {
+        self.env = Some(env);
+        self
+    }
+
+    pub fn load(self) -> AnsibleConfig {
+        let fs = self.fs.unwrap_or(&StdFs);
+        match self.env {
+            Some(env) => AnsibleConfig::load_resolved(self.root, fs, env),
+            None => AnsibleConfig::load_resolved(self.root, fs, &EnvMap::from_process()),
+        }
+    }
+}
+
+/// The file `ANSIBLE_CONFIG` names, when it names one that exists: `~` expanded, a
+/// directory value means its `ansible.cfg`, and a set-but-missing path falls through to
+/// the caller's next candidate rather than erroring — Ansible does the same, dropping to
+/// CWD → `~/.ansible.cfg` → `/etc/ansible/ansible.cfg` (`manager.py:296-300`). A relative
+/// value resolves against the process CWD, as it does in Ansible.
+fn env_config_file(fs: &dyn Fs, env: &EnvMap) -> Option<PathBuf> {
+    let raw = env.var("ANSIBLE_CONFIG")?;
+    let mut p = match raw.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(env.var("HOME")?).join(rest),
+        None => PathBuf::from(raw),
+    };
+    if fs.is_dir(&p) {
+        p = p.join("ansible.cfg");
+    }
+    fs.is_file(&p).then_some(p)
+}
+
 /// A generic `type: list` value: comma-separated plain names. Unlike the path keys, which
 /// are colon-separated and expanded — feeding one of these through [`expand_list`] would
 /// split on the wrong character and then treat each name as a relative path.
@@ -145,15 +224,15 @@ fn name_list(value: &str) -> Vec<String> {
 
 /// Colon-separated list; `~` expanded, relative entries resolved against the config's
 /// own directory (Ansible resolves them against cwd, which is where you run it from).
-fn expand_list(value: &str, base: &Path) -> Vec<PathBuf> {
+fn expand_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
     value
         .split(':')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| match s.strip_prefix("~/") {
-            Some(rest) => match std::env::var("HOME") {
-                Ok(home) => PathBuf::from(home).join(rest),
-                Err(_) => PathBuf::from(s),
+            Some(rest) => match env.var("HOME") {
+                Some(home) => PathBuf::from(home).join(rest),
+                None => PathBuf::from(s),
             },
             None if Path::new(s).is_absolute() => PathBuf::from(s),
             None => base.join(s.trim_start_matches("./")),
@@ -167,16 +246,13 @@ mod tests {
     use crate::testing::CfgFs;
 
     fn cfg(text: &str) -> AnsibleConfig {
-        AnsibleConfig::load_in(Path::new("/p"), &CfgFs::some(text))
+        AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::some(text)).env(&EnvMap::empty()).load()
     }
 
     /// T-102. All three spellings, plus the two ways a value can be absent. Live-verified
     /// against ansible-core 2.21.2 — see [`DuplicateDictKey`] for what it rejects.
     #[test]
     fn duplicate_dict_key_reads_all_three_values() {
-        if std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").is_ok() {
-            return; // the env layer wins over everything asserted here
-        }
         use DuplicateDictKey::*;
         // Unset anywhere, and set in another section, both mean Ansible's default.
         assert_eq!(cfg("[defaults]\nroles_path = ./roles\n").duplicate_dict_key, Warn);
@@ -192,9 +268,6 @@ mod tests {
     /// analyse is worse than one that analyses with `warn`.
     #[test]
     fn an_invalid_duplicate_dict_key_falls_back_rather_than_failing() {
-        if std::env::var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").is_ok() {
-            return;
-        }
         // `False` is what the option's own description suggests, and Ansible rejects it.
         for bad in ["False", "false", "IGNORE", "Error", "bogus", ""] {
             let text = format!("[defaults]\nduplicate_dict_key = {bad}\n");
@@ -206,13 +279,9 @@ mod tests {
         }
     }
 
-    /// T-072. The env override is exercised by its own integration test, which needs a
-    /// process to itself; this covers the two layers below it.
+    /// T-072.
     #[test]
     fn network_group_modules_falls_back_then_is_replaced_by_the_cfg_key() {
-        if std::env::var("ANSIBLE_NETWORK_GROUP_MODULES").is_ok() {
-            return; // the env layer wins over everything asserted here
-        }
         // Unset: the shipped platforms apply.
         let c = cfg("[defaults]\nroles_path = ./roles\n");
         assert_eq!(c.network_group_modules, None);
@@ -239,8 +308,8 @@ mod tests {
 
     /// A real-shaped config off the real filesystem, not the `CfgFs` stub: the `~` and `./`
     /// expansions are the point, and they run against actual paths. Built inline rather than
-    /// read from a private repo under `$HOME` (T-077); `~` still needs `HOME`, so that one
-    /// assertion — and only it — is skipped where the variable is unset, as on Windows.
+    /// read from a private repo under `$HOME` (T-077); `HOME` comes from the injected
+    /// environment, so the `~` assertion holds everywhere, Windows included.
     #[test]
     fn a_colon_list_expands_tilde_and_dot_against_the_project_root() {
         let root = crate::testing::project(
@@ -248,14 +317,105 @@ mod tests {
             "[defaults]\nroles_path = ~/ansible/roles:./roles\ncollections_path = ./collections\n",
             &[("roles/.keep", ""), ("collections/.keep", "")],
         );
-        let cfg = AnsibleConfig::load(&root);
+        let cfg = AnsibleConfig::builder(&root)
+            .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
+            .load();
 
         assert_eq!(cfg.roles_path.len(), 2, "a colon splits entries: {:?}", cfg.roles_path);
+        assert_eq!(cfg.roles_path[0], PathBuf::from("/home/t/ansible/roles"));
         assert_eq!(cfg.roles_path[1], root.join("roles"), "`./` is project-root relative");
         assert!(cfg.collections_path.contains(&root.join("collections")));
+    }
 
-        if let Ok(home) = std::env::var("HOME") {
-            assert_eq!(cfg.roles_path[0], PathBuf::from(home).join("ansible/roles"));
-        }
+    /// T-072, moved from its own single-test binary when `EnvMap` made env injectable.
+    #[test]
+    fn the_network_env_var_overrides_both_the_cfg_key_and_the_default() {
+        let env = EnvMap::from_pairs(&[("ANSIBLE_NETWORK_GROUP_MODULES", "junos, vyos")]);
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nnetwork_group_modules = ios\n"))
+            .env(&env)
+            .load();
+        assert!(c.is_network_platform("junos"), "env value in force");
+        assert!(c.is_network_platform("vyos"));
+        assert!(!c.is_network_platform("ios"), "env replaces the cfg key wholesale");
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
+        assert!(c.is_network_platform("junos"), "env honoured without an ansible.cfg");
+        assert!(!c.is_network_platform("ios"));
+    }
+
+    /// T-102, likewise. Live-verified against ansible-core 2.21.2 — cfg `error` + env
+    /// `ignore` runs silently, cfg `ignore` + env `error` refuses to load the file, and
+    /// the env var applies with no `ansible.cfg` present at all.
+    #[test]
+    fn the_duplicate_key_env_var_overrides_both_the_cfg_key_and_the_default() {
+        use DuplicateDictKey::*;
+        let with = |cfg: Option<&str>, env: &EnvMap| {
+            let fs = cfg.map(CfgFs::some).unwrap_or_else(CfgFs::none);
+            AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(env).load().duplicate_dict_key
+        };
+        const ERROR_CFG: &str = "[defaults]\nduplicate_dict_key = error\n";
+        const IGNORE_CFG: &str = "[defaults]\nduplicate_dict_key = ignore\n";
+
+        let ignore = EnvMap::from_pairs(&[("ANSIBLE_DUPLICATE_YAML_DICT_KEY", "ignore")]);
+        assert_eq!(with(Some(ERROR_CFG), &ignore), Ignore, "env beats the cfg key");
+        assert_eq!(with(None, &ignore), Ignore, "env applies with no ansible.cfg");
+
+        // And in the other direction, so this can't pass by preferring the quieter value.
+        let error = EnvMap::from_pairs(&[("ANSIBLE_DUPLICATE_YAML_DICT_KEY", "error")]);
+        assert_eq!(with(Some(IGNORE_CFG), &error), Error);
+
+        // A value Ansible rejects leaves the layer below intact rather than aborting, which
+        // is where we knowingly diverge: Ansible refuses to run at all.
+        let bad = EnvMap::from_pairs(&[("ANSIBLE_DUPLICATE_YAML_DICT_KEY", "False")]);
+        assert_eq!(with(Some(IGNORE_CFG), &bad), Ignore, "cfg key survives");
+        assert_eq!(with(None, &bad), Warn, "and the default survives");
+    }
+
+    /// T-098. `ANSIBLE_CONFIG` picks the config file outright, beating the project walk.
+    #[test]
+    fn ansible_config_replaces_the_project_file_wholesale() {
+        use crate::testing::MemFs;
+        let fs = MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
+            ("/elsewhere/team.cfg", "[defaults]\nlibrary = ./mods\n"),
+        ]);
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&fs)
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/team.cfg")]))
+            .load();
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/elsewhere/mods")],
+            "the env file's relative entries anchor to its own directory, not the project"
+        );
+        assert!(
+            c.roles_path.is_empty(),
+            "first hit wins whole: the project file is not read, let alone merged"
+        );
+    }
+
+    /// A directory value means its `ansible.cfg` (`manager.py:268-270`), and a value naming
+    /// nothing falls through to the project file, as Ansible drops to its CWD → HOME →
+    /// /etc candidates rather than erroring.
+    #[test]
+    fn ansible_config_takes_a_directory_and_a_missing_path_falls_through() {
+        use crate::testing::MemFs;
+        let fs = MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
+            ("/elsewhere/d/ansible.cfg", "[defaults]\nroles_path = ./shared\n"),
+        ]);
+        let load = |env: &EnvMap| AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(env).load();
+
+        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/d")]));
+        assert_eq!(c.roles_path, vec![PathBuf::from("/elsewhere/d/shared")]);
+
+        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/nowhere/ansible.cfg")]));
+        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")]);
+
+        let c = load(&EnvMap::empty());
+        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")], "unset: the walk's file");
     }
 }

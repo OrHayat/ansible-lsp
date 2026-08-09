@@ -54,7 +54,9 @@ fn walk_file(
     collect_assignments(&ast::build(&nodes), out);
 
     // Follow anything that can carry a `set_fact` into this playbook's run.
-    let ctx = FileContext::discover_with(path, fs, |root| crate::config::AnsibleConfig::load_in(root, fs));
+    let ctx = FileContext::discover_with(path, fs, |root| {
+        crate::config::AnsibleConfig::builder(root).fs(fs).load()
+    });
     for r in references::extract(&nodes) {
         if !matches!(
             r.kind,

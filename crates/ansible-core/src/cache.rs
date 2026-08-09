@@ -337,7 +337,7 @@ impl ScanCache {
 
     fn config(&self, root: &Path) -> AnsibleConfig {
         let (cfg, computed) =
-            self.configs.get_or_init(root, || AnsibleConfig::load_in(root, self));
+            self.configs.get_or_init(root, || AnsibleConfig::builder(root).fs(self).load());
         if computed {
             self.stats.configs.fetch_add(1, Ordering::Relaxed);
         }

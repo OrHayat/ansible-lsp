@@ -907,7 +907,7 @@ mod tests {
         let file = Path::new(file);
         let doc = Document::new(src.to_string());
         let ctx = FileContext::discover_with(file, fs, |root| {
-            crate::config::AnsibleConfig::load_in(root, fs)
+            crate::config::AnsibleConfig::builder(root).fs(fs).env(&crate::config::EnvMap::empty()).load()
         });
         extract(&doc.parse().unwrap())
             .into_iter()
@@ -1177,7 +1177,7 @@ mod tests {
 
         let doc = Document::new("- hosts: all\n  vars_files: [\"vars/{{ env }}.yml\"]\n".to_string());
         let ctx = FileContext::discover_with(file, &fs, |root| {
-            crate::config::AnsibleConfig::load_in(root, &fs)
+            crate::config::AnsibleConfig::builder(root).fs(&fs).env(&crate::config::EnvMap::empty()).load()
         });
         let r = extract(&doc.parse().unwrap())
             .into_iter()
@@ -1354,7 +1354,7 @@ mod tests {
     fn resolve_with_substitutes_a_known_literal_for_navigation() {
         let fs = crate::testing::MemFs::new(&[("/p/prod.yml", "x: 1\n"), ("/p/play.yml", "")]);
         let ctx = FileContext::discover_with(Path::new("/p/play.yml"), &fs, |root| {
-            crate::config::AnsibleConfig::load_in(root, &fs)
+            crate::config::AnsibleConfig::builder(root).fs(&fs).env(&crate::config::EnvMap::empty()).load()
         });
         let nodes = Document::new("- include_vars: \"{{ env }}.yml\"\n".to_string())
             .parse()
