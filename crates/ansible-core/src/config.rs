@@ -557,22 +557,39 @@ mod tests {
         assert_eq!(with(None, &bad), Warn, "and the default survives");
     }
 
+    /// A fixture path that is absolute on the *host*.
+    ///
+    /// The fixtures are written POSIX-style, but on Windows a rooted path with no drive
+    /// prefix is **relative** — `Path::is_absolute` is false — so an `ANSIBLE_CONFIG` value
+    /// like `/elsewhere/team.cfg` takes the `is_relative` branch in [`env_config_file`], gets
+    /// re-anchored onto the cwd's drive, and misses the `MemFs` key. Only the paths that must
+    /// survive that branch need this; everything else compares by components, where `/` and
+    /// `\` are the same separator, so the rest of the fixtures stay as written.
+    fn abs(p: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{p}")
+        } else {
+            p.to_string()
+        }
+    }
+
     /// T-098. `ANSIBLE_CONFIG` picks the config file outright, beating the project walk.
     #[test]
     fn ansible_config_replaces_the_project_file_wholesale() {
         use crate::testing::MemFs;
+        let team = abs("/elsewhere/team.cfg");
         let fs = MemFs::new(&[
             ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
-            ("/elsewhere/team.cfg", "[defaults]\nlibrary = ./mods\n"),
+            (&team, "[defaults]\nlibrary = ./mods\n"),
         ]);
 
         let c = AnsibleConfig::builder(Path::new("/p"))
             .fs(&fs)
-            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/team.cfg")]))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", &team)]))
             .load();
         assert_eq!(
             c.library,
-            Some(vec![PathBuf::from("/elsewhere/mods")]),
+            Some(vec![PathBuf::from(abs("/elsewhere/mods"))]),
             "the env file's relative entries anchor to its own directory, not the project"
         );
         assert!(
@@ -587,16 +604,17 @@ mod tests {
     #[test]
     fn ansible_config_takes_a_directory_and_a_missing_path_falls_through() {
         use crate::testing::MemFs;
+        let dir_cfg = abs("/elsewhere/d/ansible.cfg");
         let fs = MemFs::new(&[
             ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
-            ("/elsewhere/d/ansible.cfg", "[defaults]\nroles_path = ./shared\n"),
+            (&dir_cfg, "[defaults]\nroles_path = ./shared\n"),
         ]);
         let load = |env: &EnvMap| AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(env).load();
 
-        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/d")]));
-        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/elsewhere/d/shared")]));
+        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", &abs("/elsewhere/d"))]));
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from(abs("/elsewhere/d/shared"))]));
 
-        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/nowhere/ansible.cfg")]));
+        let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", &abs("/nowhere/ansible.cfg"))]));
         assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/roles")]));
 
         let c = load(&EnvMap::empty());
@@ -668,19 +686,17 @@ mod tests {
     #[test]
     fn the_discovered_config_file_is_recorded() {
         use crate::testing::MemFs;
-        let fs = MemFs::new(&[
-            ("/p/ansible.cfg", "[defaults]\n"),
-            ("/elsewhere/team.cfg", "[defaults]\n"),
-        ]);
+        let team = abs("/elsewhere/team.cfg");
+        let fs = MemFs::new(&[("/p/ansible.cfg", "[defaults]\n"), (&team, "[defaults]\n")]);
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(&EnvMap::empty()).load();
         assert_eq!(c.config_file, Some(PathBuf::from("/p/ansible.cfg")));
 
         let c = AnsibleConfig::builder(Path::new("/p"))
             .fs(&fs)
-            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/team.cfg")]))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", &team)]))
             .load();
-        assert_eq!(c.config_file, Some(PathBuf::from("/elsewhere/team.cfg")));
+        assert_eq!(c.config_file, Some(PathBuf::from(&team)));
 
         let c =
             AnsibleConfig::builder(Path::new("/q")).fs(&fs).env(&EnvMap::empty()).load();
@@ -704,14 +720,12 @@ mod tests {
     #[test]
     fn env_path_values_anchor_to_the_project_not_the_env_config() {
         use crate::testing::MemFs;
-        let fs = MemFs::new(&[
-            ("/p/ansible.cfg", ""),
-            ("/shared/team.cfg", "[defaults]\nlibrary = ./mods\n"),
-        ]);
+        let team = abs("/shared/team.cfg");
+        let fs = MemFs::new(&[("/p/ansible.cfg", ""), (&team, "[defaults]\nlibrary = ./mods\n")]);
         let c = AnsibleConfig::builder(Path::new("/p"))
             .fs(&fs)
             .env(&EnvMap::from_pairs(&[
-                ("ANSIBLE_CONFIG", "/shared/team.cfg"),
+                ("ANSIBLE_CONFIG", &team),
                 ("ANSIBLE_ROLES_PATH", "./roles"),
             ]))
             .load();
@@ -722,7 +736,7 @@ mod tests {
         );
         assert_eq!(
             c.library,
-            Some(vec![PathBuf::from("/shared/mods")]),
+            Some(vec![PathBuf::from(abs("/shared/mods"))]),
             "the ini's own entries keep anchoring to their config file"
         );
     }
