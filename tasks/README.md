@@ -90,7 +90,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
-| T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | S    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](open/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | S    | —          |
@@ -106,6 +105,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
+| T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -152,6 +152,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
+| T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

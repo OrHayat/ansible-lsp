@@ -45,6 +45,7 @@ the same argument applied one layer up.
 - [x] T-009 — `import_playbook`
 - [x] T-013 — Hint on unparseable files
 - [x] T-018 — `meta/main.yml` dependencies
+- [ ] T-144 — Audit base.yml: every setting that touches what we model, routed to its ticket
 
 ## Done when
 

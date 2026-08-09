@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | S    | T-090 | —          |
+| open   | bug  | P1       | M    | T-090 | —          |
 
 ## Symptom
 
@@ -16,9 +16,24 @@ outright. Every role and collection path downstream inherits the error.
 the **CWD only** → `~/.ansible.cfg` → `/etc/ansible/ansible.cfg`. First hit wins, no merging,
 and **no ancestor walk**. `workspace.rs:217-221` walks up from the file.
 
-Also unmodelled: `ANSIBLE_ROLES_PATH`, `ANSIBLE_COLLECTIONS_PATH` and `ANSIBLE_LIBRARY`
-override the ini wholesale, while `config.rs` reads only `ANSIBLE_NETWORK_GROUP_MODULES`. And
-a world-writable CWD makes its `ansible.cfg` silently skipped (`manager.py:279-284`).
+The complete env surface, audited against 2.21.2: `manager.py` reads the environment in
+exactly two places — `ANSIBLE_CONFIG` directly (`manager.py:266`) and a loop over each
+setting's `env:` list from `base.yml` (`manager.py:647`) — so the vars below are provably
+all of them for the settings `config.rs` consumes:
+
+| Env var                           | Overrides                          | Modelled today?     |
+| --------------------------------- | ---------------------------------- | ------------------- |
+| `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:201` |
+| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default — hardcoded at `workspace.rs:95,125,150`, `install.rs:302` | no |
+| `ANSIBLE_ROLES_PATH`              | `roles_path`                       | no                  |
+| `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | no                  |
+| `ANSIBLE_LIBRARY`                 | `library`                          | no                  |
+| `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | no                  |
+| `ANSIBLE_NETWORK_GROUP_MODULES`   | `network_group_modules`            | yes, `config.rs:145` |
+| `ANSIBLE_DUPLICATE_YAML_DICT_KEY` | `duplicate_dict_key`               | yes, `config.rs:149` |
+
+Each override replaces the ini value wholesale — no merging. And a world-writable CWD makes
+its `ansible.cfg` silently skipped (`manager.py:279-284`).
 
 ## Approach
 
@@ -43,8 +58,12 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
 
 ## Done when
 
-- [ ] `ANSIBLE_CONFIG` is honoured when set
-- [ ] the three path env vars override the ini
+- [x] `ANSIBLE_CONFIG` is honoured when set — `env_config_file` (`config.rs:201`); unit-tested via the
+      `EnvMap` seam, real-env plumbing in `tests/process_env_snapshot.rs`
+- [ ] the four path env vars override the ini (`ANSIBLE_ROLES_PATH`, `ANSIBLE_COLLECTIONS_PATH`,
+      `ANSIBLE_LIBRARY`, `ANSIBLE_ACTION_PLUGINS`)
+- [ ] `ANSIBLE_HOME` (env, or the `home` ini key) relocates the hardcoded `~/.ansible`
+      defaults in `workspace.rs` and `install.rs`
 - [ ] the ancestor walk is commented as an editor heuristic, not Ansible behaviour
 - [ ] the scan report says which config file was used
 - [ ] `{{ ansible_config_file }}` expands to the discovered file, and stays templated when
