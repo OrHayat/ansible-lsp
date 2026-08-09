@@ -40,7 +40,19 @@ severity is unambiguous.
 
 ## Done when
 
-- [ ] a non-whitelisted keyword on `include_tasks`/`include_role` is an ERROR
-- [ ] the same keyword on `import_tasks`/`import_role` is not
-- [ ] `apply:` on an import is an ERROR, and its contents are checked as a Block
-- [ ] the whitelist is derived from one table, not repeated per action
+- [x] a non-whitelisted keyword on `include_tasks`/`include_role` is an ERROR
+      (delivered by T-107's `KeyContext::DynamicInclude`)
+- [x] the same keyword on `import_tasks`/`import_role` is not (T-107, tested)
+- [x] `apply:` on an import is an ERROR (`Invalid options for import_tasks: apply`,
+      same for `import_role`, plus `rescuable`), and its contents are checked as a
+      Block — including the unknown-arg case (`include_tasks: {file: f, name: x}` is
+      `Invalid options` too, the sets being closed)
+- [x] the whitelist is derived from one table (`DYNAMIC_INCLUDE`, `TASK_INCLUDE_ARGS`,
+      `ROLE_INCLUDE_KEYS` in `keywords.rs`), not repeated per action
+
+Outcome note: probed while closing — `apply:` vars land at block-vars precedence (task
+vars beat them), include-*line* vars are include params (they beat task vars), and
+`import_playbook` entry vars are a parse-time overwrite of play vars
+(`playbook_include.py:118`, so task vars still beat them). All defined precedence, no
+conflict state — nothing lintable; hover provenance is the T-112 answer. Real-tree
+sweep: 731 files, zero findings.

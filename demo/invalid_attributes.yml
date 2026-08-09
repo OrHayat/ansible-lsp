@@ -24,6 +24,19 @@
       include_tasks: tasks/main.yml
       become: true # BAD: valid on a task, invalid on include_tasks/include_role
 
+    - name: apply belongs to includes only
+      import_tasks:
+        file: tasks/main.yml
+        apply: # BAD: imports inherit directly; apply is include-only
+          tags: [setup]
+
+    - name: apply contents load as a Block at expansion time
+      include_tasks:
+        file: tasks/main.yml
+        apply:
+          become: true # GOOD: a Block keyword
+          retries: 3 # BAD: tasks retry, blocks don't — and --syntax-check never sees this
+
     - name: loop_control has its own small vocabulary
       debug: { msg: "{{ it }}" }
       loop: [1]

@@ -2385,6 +2385,8 @@ mod tests {
                 "'loop' is not a valid attribute for a Block",
                 "'listen' is not a valid attribute for a Task",
                 "'become' is not a valid attribute for a TaskInclude",
+                "Invalid options for import_tasks: apply",
+                "'retries' is not a valid attribute for a Block",
                 "'name' is not a valid attribute for a LoopControl",
             ],
             "one diagnostic per BAD line, none for the GOOD ones"

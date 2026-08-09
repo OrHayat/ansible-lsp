@@ -4,7 +4,7 @@
 
 use crate::ast::{Ast, PlayItem, Stmt, Task, UnknownKey};
 use crate::keywords::{self, KeyContext};
-use crate::parse::Span;
+use crate::parse::{Node, Span};
 
 /// Rule id, for `# noqa: invalid-attribute` and for display.
 pub const RULE_ID: &str = "invalid-attribute";
@@ -67,6 +67,7 @@ fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
             }
         }
         Stmt::Task(t) => {
+            include_args_problems(t, out);
             for u in &t.unknown_keys {
                 if u.ctx == KeyContext::LoopControl {
                     // `LoopControl.load` runs `_validate_attributes` itself, before the
@@ -84,6 +85,63 @@ fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
             }
         }
     }
+}
+
+/// The include/import actions carry closed *args* sets on top of the keyword rules
+/// (T-101): unknown args are `Invalid options` (`task_include.py:70-72`,
+/// `role_include.py:137-139`); `apply` — and `rescuable` for roles — are include-only,
+/// fatal on the import twins (`task_include.py:79-81`, `role_include.py:150-159`); and
+/// a legal `apply:`'s contents load as a Block at expansion time (`task_include.py:
+/// 106-124`), so a bad key inside it is a runtime error even `--syntax-check` misses.
+/// All unconditional raises — `INVALID_TASK_ATTRIBUTE_FAILED` never softens these.
+fn include_args_problems(t: &Task, out: &mut Vec<Problem>) {
+    let Some(action) = t.action.as_ref() else { return };
+    let (valid, is_import): (&[&str], bool) = match keywords::core_action(&action.name) {
+        "include_tasks" => (keywords::TASK_INCLUDE_ARGS, false),
+        "import_tasks" => (keywords::TASK_INCLUDE_ARGS, true),
+        "include_role" => (keywords::ROLE_INCLUDE_KEYS, false),
+        "import_role" => (keywords::ROLE_INCLUDE_KEYS, true),
+        _ => return,
+    };
+    // Only the mapping spelling has written arg keys; free-form (`include_tasks: x.yml`)
+    // is `_raw_params` and has nothing to check.
+    if !matches!(action.args, Node::Mapping { .. }) {
+        return;
+    }
+    for (k, v) in action.args.entries() {
+        let Some(key) = k.as_str() else { continue };
+        let invalid_option = |out: &mut Vec<Problem>| {
+            out.push(Problem {
+                span: k.span(),
+                tier: Tier::Error,
+                message: format!("Invalid options for {}: {}", action.name, key),
+            });
+        };
+        if !valid.contains(&key) {
+            invalid_option(out);
+        } else if is_import && (key == "apply" || key == "rescuable") {
+            invalid_option(out);
+        } else if key == "apply" {
+            for u in unknown_block_keys(v) {
+                out.push(fatal(&u, "Block"));
+            }
+        }
+    }
+}
+
+/// Keys of an `apply:` mapping that `Block.load` would reject at expansion time.
+fn unknown_block_keys(apply: &Node) -> Vec<UnknownKey> {
+    apply
+        .entries()
+        .iter()
+        .filter_map(|(k, _)| {
+            let key = k.as_str()?;
+            if keywords::legal_key(KeyContext::Block, key) {
+                return None;
+            }
+            Some(UnknownKey { key: key.to_string(), key_span: k.span(), ctx: KeyContext::Block })
+        })
+        .collect()
 }
 
 /// The class Ansible would name in the error — `self.__class__.__name__` at the raise
@@ -240,6 +298,64 @@ mod tests {
             got,
             [(Tier::Error, "'frobnicate' is not a valid attribute for a Play".into())]
         );
+    }
+
+    /// T-101: `apply:` is include-only; on the import twins it is `Invalid options`.
+    #[test]
+    fn apply_on_an_import_is_an_error() {
+        let got = check(
+            "- hosts: web\n  tasks:\n    - import_tasks: {file: f.yml, apply: {become: true}}\n    \
+             - import_role: {name: r, apply: {become: true}}\n    \
+             - import_role: {name: r, rescuable: true}\n",
+            true,
+        );
+        assert_eq!(
+            got,
+            [
+                (Tier::Error, "Invalid options for import_tasks: apply".into()),
+                (Tier::Error, "Invalid options for import_role: apply".into()),
+                (Tier::Error, "Invalid options for import_role: rescuable".into()),
+            ]
+        );
+    }
+
+    /// T-101: a legal `apply:` has its contents checked as the Block it becomes at
+    /// expansion time — an error `--syntax-check` never reaches.
+    #[test]
+    fn apply_contents_are_checked_as_a_block() {
+        let ok = check(
+            "- hosts: web\n  tasks:\n    - include_tasks: {file: f.yml, apply: {become: true, tags: [x]}}\n    \
+             - include_role: {name: r, apply: {when: y}, rescuable: false}\n",
+            true,
+        );
+        assert!(ok.is_empty(), "found: {ok:?}");
+        let got = check(
+            "- hosts: web\n  tasks:\n    - include_tasks: {file: f.yml, apply: {retries: 3}}\n",
+            true,
+        );
+        assert_eq!(
+            got,
+            [(Tier::Error, "'retries' is not a valid attribute for a Block".into())]
+        );
+    }
+
+    /// T-101: the include arg sets are closed — unknown args error even on includes.
+    #[test]
+    fn unknown_include_args_are_invalid_options() {
+        let got = check(
+            "- hosts: web\n  tasks:\n    - include_tasks: {file: f.yml, name: x}\n    \
+             - include_role: {name: r, frobnicate: 1}\n",
+            true,
+        );
+        assert_eq!(
+            got,
+            [
+                (Tier::Error, "Invalid options for include_tasks: name".into()),
+                (Tier::Error, "Invalid options for include_role: frobnicate".into()),
+            ]
+        );
+        // The free-form spelling has no written arg keys — nothing to check.
+        assert!(check("- hosts: web\n  tasks:\n    - include_tasks: f.yml\n", true).is_empty());
     }
 
     #[test]

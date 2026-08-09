@@ -166,6 +166,13 @@ pub const LOOP_CONTROL_KEYS: &[&str] = &[
     "pause",
 ];
 
+/// Args of `include_tasks`/`import_tasks`: `TaskInclude.VALID_ARGS` minus the internal
+/// `_raw_params` (the free-form spelling, which is not a written key)
+/// (`task_include.py:39-41`). A closed set — anything else is a hard `Invalid options`
+/// error (`task_include.py:70-72`), and `apply` is additionally fatal on `import_tasks`
+/// (`task_include.py:79-81`).
+pub const TASK_INCLUDE_ARGS: &[&str] = &["apply", "file"];
+
 /// Args of `include_role`/`import_role`: `IncludeRole.VALID_ARGS`
 /// (`role_include.py:40-43`). A closed set — an unknown arg is a hard
 /// `Invalid options` error (`role_include.py:137-139`). `apply` and `rescuable` are
