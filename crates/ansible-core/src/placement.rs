@@ -12,8 +12,14 @@
 use crate::keywords;
 use crate::parse::{Node, Span};
 
-/// Rule id, for `# noqa: invalid-placement` and for display.
+/// Rule id, for `# noqa: invalid-placement` and for display. Everything under it replicates
+/// a shape ansible-core itself refuses.
 pub const RULE_ID: &str = "invalid-placement";
+
+/// A second rule id, for the one place this module deliberately speaks where ansible-core
+/// stays silent: a loop keyword whose value is discarded while its lookup still applies.
+/// Separate so it can be suppressed and toggled without touching the replication rules.
+pub const SHADOWED_LOOP_RULE_ID: &str = "shadowed-loop";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -27,6 +33,9 @@ pub struct Problem {
     pub span: Span,
     pub tier: Tier,
     pub message: String,
+    /// Which rule fired — [`RULE_ID`] for everything that replicates ansible-core,
+    /// [`SHADOWED_LOOP_RULE_ID`] for the one divergence.
+    pub rule: &'static str,
 }
 
 const HOSTS_EMPTY: &str = "Hosts list cannot be empty. Please check your playbook";
@@ -86,7 +95,79 @@ fn stmt(node: &Node, out: &mut Vec<Problem>) {
         }
         return;
     }
+    // `preprocess_data` runs inside `Task.load`, so a duplicate loop is raised before
+    // `helpers.py` ever asks whether the action was an import. One fault, one message.
+    if duplicate_loop(node, out) {
+        return;
+    }
     loop_on_import(node, out);
+}
+
+/// Row 10. `_preprocess_with_loop` refuses a `with_*` when `loop`/`loop_with` is **already**
+/// set (`task.py:252-261`), and `preprocess_data` walks the task's keys in written order —
+/// so this reads the keys in order and only fires where Ansible does. Returns whether it did.
+///
+/// That ordering makes the rule asymmetric, which is measured, not assumed:
+/// `loop:` then `with_items:` is fatal, while `with_items:` then `loop:` runs clean — and
+/// runs *wrong*. See `upstream/ansible-duplicate-loop.md`. The silent order gets
+/// [`SHADOWED_LOOP_RULE_ID`], a warning of our own rather than a borrowed error.
+///
+/// Returns whether a fatal duplicate was reported, which suppresses the import rule — the
+/// shadowed-loop warning does not, since on an import both faults are real and Ansible does
+/// raise the import one.
+fn duplicate_loop(node: &Node, out: &mut Vec<Problem>) -> bool {
+    let mut loop_set = false;
+    // A `with_*` that a later `loop:` would overwrite the value of, without clearing the
+    // lookup it registered.
+    let mut shadowable: Option<(&str, Span)> = None;
+    for (k, v) in node.entries() {
+        let Some(key) = k.as_str() else { continue };
+        if key == "loop" {
+            // `new_ds['loop'] = v` goes through the plain attribute branch, and the guard
+            // is `is not None` — so a `loop:` with no value never counts as a loop.
+            if matches!(v, Node::Null { .. }) {
+                continue;
+            }
+            if let Some((lookup, span)) = shadowable.take() {
+                out.push(shadowed_loop(lookup, span));
+                return false;
+            }
+            loop_set = true;
+        } else if let Some(lookup) = key.strip_prefix("with_") {
+            if loop_set {
+                out.push(error(k.span(), format!("duplicate loop in task: {lookup}")));
+                return true;
+            }
+            // A null value is row 20's error, raised by the same function one line later.
+            // Until that row ships, this stays silent rather than borrowing the wrong text.
+            if matches!(v, Node::Null { .. }) {
+                return false;
+            }
+            loop_set = true;
+            shadowable = Some((lookup, k.span()));
+        }
+    }
+    false
+}
+
+/// Our own warning, with no upstream counterpart: `_preprocess_with_loop` records **two**
+/// keys, `loop_with` and `loop` (`task.py:260-261`), and a later `loop:` overwrites only
+/// `loop`. The stale `loop_with` still picks the plugin at run time
+/// (`task_executor.py:157-170`), so the task loops with a lookup whose own value was thrown
+/// away — different iterations from the same `loop:` written alone, and Ansible says nothing.
+fn shadowed_loop(lookup: &str, span: Span) -> Problem {
+    Problem {
+        span,
+        tier: Tier::Warning,
+        message: format!(
+            "`with_{lookup}:` is overridden by the `loop:` below it — its value is discarded, \
+             but the '{lookup}' lookup it registered is not, so this task loops with \
+             '{lookup}' over the `loop:` value and iterates differently from the same \
+             `loop:` written alone. Ansible accepts this silently (it is fatal in the other \
+             order). Delete one of the two keywords."
+        ),
+        rule: SHADOWED_LOOP_RULE_ID,
+    }
 }
 
 /// Rows 3 and 4. `import_*` is expanded at parse time, before any loop could iterate, so a
@@ -136,7 +217,7 @@ fn live_loop(node: &Node) -> Option<Span> {
 }
 
 fn error(span: Span, message: String) -> Problem {
-    Problem { span, tier: Tier::Error, message }
+    Problem { span, tier: Tier::Error, message, rule: RULE_ID }
 }
 
 fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
@@ -520,6 +601,98 @@ mod tests {
         assert_eq!(
             check("- import_tasks: f.yml\n  loop: [1]\n"),
             [NO_LOOP_TASKS]
+        );
+    }
+
+    /// Row 10, in the order that actually raises. Every case measured on 2.21.2.
+    #[test]
+    fn a_second_loop_keyword_is_a_duplicate_loop() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug:\n      loop: [1]\n      with_items: [a]\n"),
+            ["duplicate loop in task: items"]
+        );
+        // Two `with_*` are symmetric: whichever is second raises, naming itself.
+        assert_eq!(
+            check(
+                "- hosts: web\n  tasks:\n    - debug:\n      with_items: [a]\n      with_list: [b]\n"
+            ),
+            ["duplicate loop in task: list"]
+        );
+        assert_eq!(
+            check(
+                "- hosts: web\n  tasks:\n    - debug:\n      with_list: [b]\n      with_items: [a]\n"
+            ),
+            ["duplicate loop in task: items"]
+        );
+    }
+
+    /// The order Ansible accepts gets a warning of our own, on its own rule id — the
+    /// discarded `with_*` still steers the surviving `loop:`
+    /// (`upstream/ansible-duplicate-loop.md`).
+    #[test]
+    fn a_loop_written_after_a_with_star_warns_on_its_own_rule() {
+        let src = "- hosts: web\n  tasks:\n    - debug:\n      with_items: [a]\n      loop: [1]\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].tier, Tier::Warning, "Ansible runs this, so it is not an error");
+        assert_eq!(got[0].rule, SHADOWED_LOOP_RULE_ID);
+        // Anchored on the dead keyword, which is the line to delete.
+        assert_eq!(got[0].span.slice(src), "with_items");
+        for want in ["with_items:", "discarded", "'items' lookup", "other\norder", "Delete one"] {
+            let want = want.replace('\n', " ");
+            assert!(got[0].message.contains(&want), "missing {want:?}: {}", got[0].message);
+        }
+    }
+
+    /// On an import, both faults are real and Ansible does raise the import one, so the
+    /// warning does not suppress it.
+    #[test]
+    fn a_shadowed_loop_on_an_import_reports_both() {
+        let got = check(
+            "- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      with_items: [a]\n      \
+             loop: [1]\n",
+        );
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got[0].contains("overridden by the `loop:`"));
+        assert_eq!(got[1], NO_LOOP_TASKS);
+    }
+
+    /// The guard is `is not None`, so a valueless `loop:` never counts as the first loop.
+    #[test]
+    fn a_null_loop_does_not_make_a_following_with_star_a_duplicate() {
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - debug:\n      loop:\n      with_items: [a]\n"
+        )
+        .is_empty());
+    }
+
+    /// The duplicate check runs one line before the null-value check in the same function,
+    /// so it wins — measured: `loop:` + a null `with_items:` is a duplicate, not row 20.
+    #[test]
+    fn the_duplicate_check_beats_the_null_value_check() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug:\n      loop: [1]\n      with_items:\n"),
+            ["duplicate loop in task: items"]
+        );
+        // The other way round, row 20 owns it — silent here until row 20 ships. A null
+        // `with_*` never registered a lookup, so there is nothing to shadow either.
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - debug:\n      with_items:\n      loop: [1]\n"
+        )
+        .is_empty());
+    }
+
+    /// `preprocess_data` runs inside `Task.load`, before `helpers.py` looks at the action,
+    /// so a duplicate loop on an import reports the duplicate — one fault, one message.
+    #[test]
+    fn a_duplicate_loop_on_an_import_beats_the_import_rule() {
+        assert_eq!(
+            check(
+                "- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      loop: [1]\n      \
+                 with_items: [a]\n"
+            ),
+            ["duplicate loop in task: items"]
         );
     }
 

@@ -67,7 +67,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | Batch | Rows            | Shared machinery                    | State                                    |
 | ----- | --------------- | ----------------------------------- | ---------------------------------------- |
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
-| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | 3 and 4 **done**; 10, 20-21 open         |
+| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | 3, 4, 10 **done**; 20-21 open            |
 | 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                                     |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
@@ -118,7 +118,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       which only the command line says, so they stay unchecked rather than false-positive on
       every vars file. Reopen if T-150's file-kind matrix gives us that knowledge.
 - [ ] 9 — both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry (`playbook_include.py:41-48`)
-- [ ] 10 — `loop` and a `with_*` together, or two `with_*` (`task.py:252-261`)
+- [x] 10 — `loop` and a `with_*` together, or two `with_*` (`task.py:252-261`)
+      — the rule is **asymmetric upstream**: `loop:` then `with_*` is fatal, `with_*` then
+      `loop:` runs clean and runs wrong. Filed as `upstream/ansible-duplicate-loop.md`. We
+      give Ansible's error for the fatal order, and a warning of our own
+      (`shadowed-loop`, the module's one deliberate divergence) for the accepted one.
 - [ ] 11 — `action:` and `local_action:` together (`mod_args.py:322`)
 - [ ] 12 — two resolvable module keys in one task (`mod_args.py:353-354`)
 - [x] 13 — both `user:` and `remote_user:` in one play (`play.py:170`)

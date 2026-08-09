@@ -82,6 +82,32 @@
       import_tasks: tasks/sibling.yml
       loop: [1] # BAD: handlers are a task list like any other
 
+# Row 10. `_preprocess_with_loop` refuses a `with_*` only when a loop is ALREADY recorded,
+# and the keys are walked in written order — so ansible's rule is asymmetric. We report the
+# fatal order with ansible's own message, and the order ansible accepts gets a WARNING of our
+# own on its own rule id (`shadowed-loop`), because accepting it is an upstream bug:
+# upstream/ansible-duplicate-loop.md.
+- name: two loops on one task
+  hosts: localhost
+  tasks:
+    - debug: { msg: "{{ item }}" }
+      loop: [1, 2]
+      with_items: [a, b] # BAD: a loop was already recorded — "duplicate loop in task: items"
+
+    - debug: { msg: "{{ item }}" }
+      with_items: [a, b]
+      with_list: [c, d] # BAD: two `with_*` are symmetric, whichever is second raises
+
+    - debug: { msg: "{{ item }}" }
+      with_items: [a, b] # WARN (shadowed-loop): ansible runs this, and that is the bug. The
+      # with_items VALUE is discarded, but the `items` lookup it registered is not — so the
+      # `loop:` below iterates flattened, differently from the same `loop:` written alone.
+      loop: [1, 2]
+
+    - debug: { msg: "{{ item }}" }
+      loop: # GOOD: a valueless loop is None, so it never counts as the first loop
+      with_items: [a, b]
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

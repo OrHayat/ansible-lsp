@@ -602,7 +602,7 @@ impl Backend {
         // keyword sets cannot see (T-110).
         let misplaced: Vec<Diagnostic> = placement::problems(&a.nodes, &a.doc.text)
             .into_iter()
-            .filter(|p| !a.doc.is_suppressed(p.span.start, placement::RULE_ID))
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
             .map(|p| Diagnostic {
                 range: range_of(p.span),
                 severity: Some(match p.tier {
@@ -610,7 +610,7 @@ impl Backend {
                     placement::Tier::Warning => DiagnosticSeverity::WARNING,
                 }),
                 source: Some("ansible-lsp".into()),
-                code: Some(NumberOrString::String(placement::RULE_ID.into())),
+                code: Some(NumberOrString::String(p.rule.into())),
                 message: p.message,
                 ..Default::default()
             })
@@ -2477,12 +2477,37 @@ mod tests {
                  'include_role' instead.",
                 "You cannot use loops on 'import_tasks' statements. You should use \
                  'include_tasks' instead.",
+                "duplicate loop in task: items",
+                "duplicate loop in task: list",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
              the documented miss"
         );
         assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+    }
+
+    /// The one rule here that speaks where ansible-core does not: it carries its own code,
+    /// so it can be toggled and suppressed separately, and it is a WARNING because the
+    /// playbook does run — it just runs a loop the author did not write.
+    #[test]
+    fn the_shadowed_loop_warning_is_its_own_rule() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "shadowed-loop"))
+            .collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::WARNING));
+        // The message has to carry the mechanism, or it reads as a style nit.
+        for want in ["discarded", "'items' lookup", "Delete one of the two"] {
+            assert!(got[0].message.contains(want), "missing {want:?}: {}", got[0].message);
+        }
     }
 
     /// No false positives: every demo file except the one built to demonstrate the rule
@@ -2529,6 +2554,36 @@ mod tests {
         let silenced =
             "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
         assert_eq!(flagged(silenced), 0);
+    }
+
+    /// T-110: the divergent rule has its own id, so it suppresses on its own — and the
+    /// replication id must NOT silence it, or the two would be one rule wearing two names.
+    #[test]
+    fn noqa_suppresses_shadowed_loop_independently() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let codes = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter_map(|d| match d.code {
+                    Some(NumberOrString::String(s)) if s == "shadowed-loop" => Some(s),
+                    _ => None,
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  tasks:\n    - debug:\n      with_items: [a]\n      loop: [1]\n";
+        assert_eq!(codes(noisy), 1);
+
+        // The noqa goes on the line the diagnostic is anchored to: the dead `with_*`.
+        let silenced = "- hosts: web\n  tasks:\n    - debug:\n      \
+                        with_items: [a] # noqa: shadowed-loop\n      loop: [1]\n";
+        assert_eq!(codes(silenced), 0);
+
+        // The other id must not reach it.
+        let wrong_id = "- hosts: web\n  tasks:\n    - debug:\n      \
+                        with_items: [a] # noqa: invalid-placement\n      loop: [1]\n";
+        assert_eq!(codes(wrong_id), 1, "invalid-placement must not silence shadowed-loop");
     }
 
     /// T-088: `# noqa: invalid-attribute` on the offending line silences the rule.
