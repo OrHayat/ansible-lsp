@@ -5,8 +5,9 @@
 //! Each rule is a shape test on a node and its parent: no resolution, no index, no variables.
 //! Measured against ansible-core 2.21.2.
 //!
-//! This is the play/playbook batch. The task-level rules (loops, `loop_control`, handler
-//! placement, the `mod_args` pair) are the later batches of the same ticket.
+//! Shipped so far: the play/playbook batch, and the two loop-on-import rules. The rest of
+//! the task-level rules (`loop_control`, handler placement, the `mod_args` pair) are the
+//! later batches of the same ticket.
 
 use crate::keywords;
 use crate::parse::{Node, Span};
@@ -37,8 +38,8 @@ const NOT_A_PLAY: &str =
 /// Every placement problem in the file. `src` is the document text, needed only to quote a
 /// bad `hosts:` entry back at the author.
 ///
-/// Playbook-only: a file whose top-level sequence has no `hosts:` and no `import_playbook:`
-/// is a task file, where none of these rules exist.
+/// The play-shaped rules apply only to playbooks; the task-shaped ones run in both, since a
+/// role's `tasks/main.yml` reaches the same `load_list_of_tasks` that a play's `tasks:` does.
 pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
     let mut out = Vec::new();
     // The same document selection `ast::build` makes, so the two agree on what a playbook is.
@@ -50,6 +51,10 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
         .iter()
         .any(|it| keywords::is_play(it.entries().iter().filter_map(|(k, _)| k.as_str())));
     if !looks_like_plays {
+        // A standalone task file: `tasks/main.yml`, a handler file, an include target.
+        for item in items {
+            stmt(item, &mut out);
+        }
         return out;
     }
     for item in items {
@@ -64,6 +69,70 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
         }
     }
     out
+}
+
+/// One entry of a task list: a block, whose three task-holding keys recurse, or a task.
+fn stmt(node: &Node, out: &mut Vec<Problem>) {
+    if !matches!(node, Node::Mapping { .. }) {
+        return;
+    }
+    if node.get("block").is_some() {
+        for key in keywords::BLOCK_TASK_CONTAINERS {
+            if let Some(list) = node.get(key) {
+                for child in list.items() {
+                    stmt(child, out);
+                }
+            }
+        }
+        return;
+    }
+    loop_on_import(node, out);
+}
+
+/// Rows 3 and 4. `import_*` is expanded at parse time, before any loop could iterate, so a
+/// loop on one is fatal — `task.loop is not None` after `preprocess_data` has folded every
+/// `with_*` into `loop` (`helpers.py:152-154`, `helpers.py:258-260`).
+///
+/// Both messages are literal strings upstream, so an FQCN spelling still reports the bare
+/// name — live-verified. `action: import_tasks` is a miss: the module is read from the
+/// written key only, and that spelling is vanishingly rare for an import.
+fn loop_on_import(node: &Node, out: &mut Vec<Problem>) {
+    let import = node.entries().iter().find_map(|(k, _)| {
+        match keywords::core_action(k.as_str()?) {
+            "import_tasks" => Some(("import_tasks", "include_tasks")),
+            "import_role" => Some(("import_role", "include_role")),
+            _ => None,
+        }
+    });
+    let Some((action, replacement)) = import else { return };
+    let Some(key) = live_loop(node) else { return };
+    out.push(error(
+        key,
+        format!(
+            "You cannot use loops on '{action}' statements. You should use '{replacement}' \
+             instead."
+        ),
+    ));
+}
+
+/// The span of a loop key that would leave `task.loop` set. A `loop:` written with no value
+/// is `None` and passes — live-verified, `loop: []` is empty but not None and still fails.
+/// A `with_*` with no value dies earlier, in `preprocess_data`, with a different message
+/// (row 20), so it is not this rule's to report.
+///
+/// The `with_` prefix is matched wholesale, which covers every documented lookup loop —
+/// all fourteen measured — but over-reaches in one case: Ansible only folds `with_x` into
+/// `loop` when `x` names an *installed* lookup (`task.py:336`), and an unrecognised one
+/// falls through to `'with_frobnicate' is not a valid attribute` instead. So a typo'd
+/// `with_item` on an import gets our loop message where Ansible gives an invalid-attribute
+/// one. Both are errors on the same line; only the reason differs. Enumerating lookups is
+/// T-115, and it is the same leniency `keywords::is_task_directive` already takes.
+fn live_loop(node: &Node) -> Option<Span> {
+    node.entries().iter().find_map(|(k, v)| {
+        let key = k.as_str()?;
+        let is_loop = key == "loop" || key.starts_with("with_");
+        (is_loop && !matches!(v, Node::Null { .. })).then(|| k.span())
+    })
 }
 
 fn error(span: Span, message: String) -> Problem {
@@ -86,6 +155,15 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     }
     if let Some(prompts) = node.get("vars_prompt") {
         vars_prompt(prompts, out);
+    }
+    // `pre_tasks`, `tasks`, `post_tasks` and `handlers` all reach the same
+    // `load_list_of_tasks`, so the task-shaped rules apply identically in each.
+    for key in keywords::PLAY_TASK_CONTAINERS {
+        if let Some(list) = node.get(key) {
+            for item in list.items() {
+                stmt(item, out);
+            }
+        }
     }
 }
 
@@ -304,12 +382,153 @@ mod tests {
         assert_eq!(check("- hosts: web\n  tasks: []\n- - nested\n"), [NOT_A_PLAY]);
     }
 
-    /// Task files have none of these rules — every one of them is play-shaped.
+    /// Task files have none of the *play* rules — every one of them is play-shaped.
     #[test]
-    fn a_task_file_is_left_alone() {
+    fn a_task_file_is_left_alone_by_the_play_rules() {
         assert!(check("- name: t\n  debug: {msg: hi}\n- command: echo hi\n").is_empty());
         // Including one that would look like a bad `hosts:` if we squinted.
         assert!(check("- name: t\n  add_host:\n    hostname: web\n").is_empty());
+    }
+
+    const NO_LOOP_TASKS: &str =
+        "You cannot use loops on 'import_tasks' statements. You should use 'include_tasks' \
+         instead.";
+    const NO_LOOP_ROLE: &str =
+        "You cannot use loops on 'import_role' statements. You should use 'include_role' \
+         instead.";
+
+    /// Rows 3 and 4. `with_*` counts because `preprocess_data` folds it into `loop` before
+    /// the check runs — all four spellings measured on 2.21.2.
+    #[test]
+    fn a_loop_on_an_import_is_an_error() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      loop: [1, 2]\n"),
+            [NO_LOOP_TASKS]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      with_items: [1]\n"),
+            [NO_LOOP_TASKS]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_role: {name: r}\n      loop: [1]\n"),
+            [NO_LOOP_ROLE]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_role: {name: r}\n      with_items: [1]\n"),
+            [NO_LOOP_ROLE]
+        );
+    }
+
+    /// Every documented lookup loop, measured — the prefix match needs no list.
+    #[test]
+    fn every_with_lookup_spelling_counts_as_a_loop() {
+        for k in [
+            "with_list",
+            "with_items",
+            "with_indexed_items",
+            "with_flattened",
+            "with_together",
+            "with_dict",
+            "with_sequence",
+            "with_subelements",
+            "with_nested",
+            "with_cartesian",
+            "with_random_choice",
+            "with_fileglob",
+            "with_first_found",
+            "with_lines",
+        ] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      {k}: [1]\n"
+                )),
+                [NO_LOOP_TASKS],
+                "for {k}"
+            );
+        }
+    }
+
+    /// The documented over-reach: Ansible folds `with_x` into `loop` only for an installed
+    /// lookup, so `with_frobnicate` is an invalid attribute to it and a loop to us. Same
+    /// line, same severity, different reason. Pinned so T-115 can tighten it.
+    #[test]
+    fn an_unknown_with_lookup_is_reported_as_a_loop_not_an_unknown_key() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      with_frobnicate: [1]\n"),
+            [NO_LOOP_TASKS],
+            "upstream says: 'with_frobnicate' is not a valid attribute for a TaskInclude"
+        );
+    }
+
+    /// The message is a literal upstream, so an FQCN import still reports the bare name.
+    #[test]
+    fn an_fqcn_import_reports_the_bare_action_name() {
+        for prefix in ["ansible.builtin.", "ansible.legacy."] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks:\n    - {prefix}import_tasks: f.yml\n      loop: [1]\n"
+                )),
+                [NO_LOOP_TASKS]
+            );
+        }
+    }
+
+    /// `task.loop is not None`, so a `loop:` with no value passes — but an empty list does
+    /// not. Both live-verified.
+    #[test]
+    fn a_null_loop_passes_and_an_empty_list_does_not() {
+        assert!(check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      loop:\n").is_empty());
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      loop: []\n"),
+            [NO_LOOP_TASKS]
+        );
+    }
+
+    /// The dynamic twins are exactly what the message tells you to switch to.
+    #[test]
+    fn loops_on_the_include_twins_stay_silent() {
+        assert!(check("- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      loop: [1]\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - include_role: {name: r}\n      loop: [1]\n").is_empty());
+        // And an import with no loop at all.
+        assert!(check("- hosts: web\n  tasks:\n    - import_tasks: f.yml\n").is_empty());
+    }
+
+    /// Every task list reaches the same `load_list_of_tasks`: all four play containers,
+    /// nested blocks, and a standalone task file.
+    #[test]
+    fn the_loop_rule_reaches_every_task_list() {
+        for key in ["pre_tasks", "tasks", "post_tasks", "handlers"] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  {key}:\n    - import_tasks: f.yml\n      loop: [1]\n"
+                )),
+                [NO_LOOP_TASKS],
+                "in {key}"
+            );
+        }
+        for key in ["block", "rescue", "always"] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks:\n    - block: [{{debug: null}}]\n      \
+                     {key}:\n        - import_tasks: f.yml\n          loop: [1]\n"
+                )),
+                [NO_LOOP_TASKS],
+                "in {key}"
+            );
+        }
+        // A role's tasks/main.yml is not a playbook, but it is the same task list.
+        assert_eq!(
+            check("- import_tasks: f.yml\n  loop: [1]\n"),
+            [NO_LOOP_TASKS]
+        );
+    }
+
+    /// Anchored on the loop key, where the fix goes — Ansible anchors on the whole task.
+    #[test]
+    fn the_loop_key_is_what_gets_underlined() {
+        let src = "- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      with_items: [1]\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        assert_eq!(problems(&nodes, src)[0].span.slice(src), "with_items");
     }
 
     #[test]

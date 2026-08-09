@@ -194,6 +194,7 @@ T-021 is now unblocked on that side.
 | T-151 | [Validate galaxy.yml and requirements.yml against the galaxy schemas](open/T-151-validate-galaxy-yml-and-requirements-yml-against-the-galaxy.md) | M    | —          |
 | T-152 | [YAML inventory files: index them and check the all/hosts/children shape](open/T-152-yaml-inventory-files-index-them-and-check-the-all-hosts-chil.md) | M    | —          |
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
+| T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 
 ### Downstream — not this repo's code
 

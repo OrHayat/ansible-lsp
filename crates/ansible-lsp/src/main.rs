@@ -2469,6 +2469,14 @@ mod tests {
                 "Invalid vars_prompt data structure, found unsupported key 'promt'",
                 "Invalid vars_prompt data structure, missing 'name' key",
                 "Invalid vars_prompt data structure, missing 'name' key",
+                "You cannot use loops on 'import_tasks' statements. You should use \
+                 'include_tasks' instead.",
+                "You cannot use loops on 'import_tasks' statements. You should use \
+                 'include_tasks' instead.",
+                "You cannot use loops on 'import_role' statements. You should use \
+                 'include_role' instead.",
+                "You cannot use loops on 'import_tasks' statements. You should use \
+                 'include_tasks' instead.",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \

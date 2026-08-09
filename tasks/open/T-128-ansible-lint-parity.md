@@ -33,6 +33,7 @@ is a success, not a failure.
 ## Children
 
 - [ ] T-129 — Triage every ansible-lint rule: covered, port, reject, out of scope
+- [ ] T-156 — with_<lookup> to loop: modernization, with autofix only where it is provably safe
 
 ## Done when
 

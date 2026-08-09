@@ -59,6 +59,29 @@
   tasks:
     - debug: { msg: ok }
 
+- name: imports are expanded at parse time, so a loop has nothing to iterate
+  hosts: localhost
+  pre_tasks:
+    - import_tasks: tasks/sibling.yml
+      loop: [1, 2] # BAD: use include_tasks, which the message itself suggests
+  tasks:
+    - ansible.builtin.import_tasks: tasks/sibling.yml
+      with_items: [1] # BAD: `with_*` folds into `loop` before the check, FQCN or not
+    - import_role:
+        name: notifier
+      loop: [1] # BAD: the same rule, one action over
+    - import_tasks: tasks/sibling.yml
+      loop: # GOOD: a loop written with no value is None, and passes — live-verified
+    - include_tasks: tasks/sibling.yml
+      loop: [1, 2] # GOOD: the dynamic twin is exactly what the error tells you to use
+    - include_role:
+        name: notifier
+      loop: [1] # GOOD: same
+  handlers:
+    - name: every task list reaches the same loader
+      import_tasks: tasks/sibling.yml
+      loop: [1] # BAD: handlers are a task list like any other
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

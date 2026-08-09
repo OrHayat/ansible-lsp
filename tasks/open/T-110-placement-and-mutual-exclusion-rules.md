@@ -64,13 +64,13 @@ on a node and its parent.
 
 Landing in batches grouped by the context each rule needs, not by severity:
 
-| Batch | Rows            | Shared machinery                    | State                              |
-| ----- | --------------- | ----------------------------------- | ---------------------------------- |
-| 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`          |
-| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | open — lands T-155's shape test too |
-| 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                               |
-| 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                               |
-| 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem       |
+| Batch | Rows            | Shared machinery                    | State                                    |
+| ----- | --------------- | ----------------------------------- | ---------------------------------------- |
+| 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
+| 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | 3 and 4 **done**; 10, 20-21 open         |
+| 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                                     |
+| 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
+| 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
 
 Batch 5 is a candidate to split off: rows 12 and 22 need "which keys resolve to a module",
 which is resolution, not shape, so it does not share this ticket's premise.
@@ -82,6 +82,25 @@ carries a good-and-bad example of each. One deliberate miss, pinned by a test: `
 is fatal to Ansible as an int, but the parse tree keeps no scalar style, so it cannot be
 told from the good `hosts: "42"` — a miss, never a false error.
 
+Rows 3-4 followed, on the same measured footing (`scratchpad/t110_loop_on_import.sh`,
+`scratchpad/t110_loop_containers.sh`). Three facts that had to be measured rather than
+assumed: `with_*` counts, because `preprocess_data` folds it into `loop` before the check;
+`loop:` written with **no value** passes, since the test is `task.loop is not None`, while
+`loop: []` fails; and the messages are literal strings upstream, so an FQCN import still
+reports the bare `import_tasks`. Every task container — all four play-level lists, nested
+blocks, and a standalone task file — reaches the same `load_list_of_tasks` and was verified
+to fire. Known miss: the `action: import_tasks` spelling, since the module is read from the
+written key only.
+
+The `with_` prefix is matched wholesale rather than from a list. All fourteen documented
+lookup loops were measured and every one fires (`scratchpad/t110_with_variants.sh`), but the
+prefix over-reaches by exactly one case: Ansible folds `with_x` into `loop` only when `x`
+names an **installed lookup** (`task.py:336`), so `with_frobnicate` — or a typo'd
+`with_item` — is `'with_frobnicate' is not a valid attribute for a TaskInclude` upstream and
+a loop error to us. Same line, same severity, different reason; pinned by a test. T-115's
+lookup index is what would tighten it, and this is the same leniency
+`keywords::is_task_directive` already documents.
+
 ## Done when
 
 One box per row of the table, each carrying the cite it was measured from. Rows 1-22 are
@@ -89,8 +108,8 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
 
 - [ ] 1 — `block:` used as a handler (`helpers.py:104-106`)
 - [ ] 2 — `include_role`/`import_role` inside `handlers:` (`helpers.py:245-247`)
-- [ ] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
-- [ ] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
+- [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
+- [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
 - [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`)
 - [ ] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:280-285`)
 - [ ] 7 — `rescue:`/`always:` without `block:` (`block.py:138-142`)
