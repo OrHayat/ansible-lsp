@@ -155,6 +155,9 @@ impl AnsibleConfig {
         if let Some(v) = env.var("ANSIBLE_COLLECTIONS_PATH") {
             cfg.collections_path = expand_list(v, base, env);
         }
+        if let Some(v) = env.var("ANSIBLE_LIBRARY") {
+            cfg.library = expand_list(v, base, env);
+        }
         cfg.ansible_home = env
             .var("ANSIBLE_HOME")
             .map(|v| expand_path(v, base, env))
@@ -514,6 +517,25 @@ mod tests {
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
         assert_eq!(c.collections_path, vec![PathBuf::from("/site/coll")], "no ansible.cfg");
+    }
+
+    /// T-098.
+    #[test]
+    fn the_library_env_var_beats_the_cfg_key() {
+        let env = EnvMap::from_pairs(&[("ANSIBLE_LIBRARY", "/site/modules")]);
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nlibrary = ./from_ini\n"))
+            .env(&env)
+            .load();
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/site/modules")],
+            "env replaces the cfg key wholesale"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
+        assert_eq!(c.library, vec![PathBuf::from("/site/modules")], "no ansible.cfg");
     }
 
     #[test]
