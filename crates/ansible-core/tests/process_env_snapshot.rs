@@ -12,6 +12,18 @@ use ansible_core::testing;
 
 #[test]
 fn a_process_env_var_reaches_the_loaded_config() {
+    // SAFETY: single-threaded — this binary holds exactly one test. Cleared rather than
+    // guarded-and-skipped: the test must still run on machines where these are exported.
+    for var in [
+        "ANSIBLE_CONFIG",
+        "ANSIBLE_ROLES_PATH",
+        "ANSIBLE_COLLECTIONS_PATH",
+        "ANSIBLE_LIBRARY",
+        "ANSIBLE_ACTION_PLUGINS",
+        "ANSIBLE_HOME",
+    ] {
+        unsafe { std::env::remove_var(var) };
+    }
     let root = testing::project(
         "env-snapshot-project",
         "[defaults]\nroles_path = ./roles\n",
@@ -20,13 +32,13 @@ fn a_process_env_var_reaches_the_loaded_config() {
     let other =
         testing::tree("env-snapshot-other", &[("team.cfg", "[defaults]\nroles_path = ./shared\n")]);
 
-    assert_eq!(AnsibleConfig::load(&root).roles_path, vec![root.join("roles")]);
+    assert_eq!(AnsibleConfig::load(&root).roles_path, Some(vec![root.join("roles")]));
 
     // SAFETY: single-threaded — this binary holds exactly one test.
     unsafe { std::env::set_var("ANSIBLE_CONFIG", other.join("team.cfg")) };
-    assert_eq!(AnsibleConfig::load(&root).roles_path, vec![other.join("shared")]);
+    assert_eq!(AnsibleConfig::load(&root).roles_path, Some(vec![other.join("shared")]));
 
     // SAFETY: as above.
     unsafe { std::env::remove_var("ANSIBLE_CONFIG") };
-    assert_eq!(AnsibleConfig::load(&root).roles_path, vec![root.join("roles")]);
+    assert_eq!(AnsibleConfig::load(&root).roles_path, Some(vec![root.join("roles")]));
 }

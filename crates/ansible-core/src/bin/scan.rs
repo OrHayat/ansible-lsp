@@ -36,6 +36,7 @@ fn main() {
     let files = yaml_files(&root);
     // One cache for the whole run, like the editor's workspace scan (T-076).
     let cache = ScanCache::default();
+    let env = ansible_core::config::EnvMap::from_process();
 
     let mut totals: BTreeMap<&str, [usize; 3]> = BTreeMap::new(); // resolved, missing, skipped
     let mut missing: Vec<String> = Vec::new();
@@ -107,7 +108,7 @@ fn main() {
                     for target in &res.targets {
                         let m = mut_cache
                             .entry(target.clone())
-                            .or_insert_with(|| mutation::mutated_vars_in(target, &cache));
+                            .or_insert_with(|| mutation::mutated_vars_in(target, &cache, &env));
                         let hit: Vec<&String> = used.iter().filter(|v| m.contains(*v)).collect();
                         if !hit.is_empty() {
                             mutated.push(format!(

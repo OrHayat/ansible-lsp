@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
-use crate::config::AnsibleConfig;
+use crate::config::{AnsibleConfig, EnvMap};
 use crate::fs::{Fs, Kind, StdFs};
 use crate::parse::{Document, Node};
 use crate::vars::Located;
@@ -211,6 +211,9 @@ pub struct ScanCache {
     trees: Map<Arc<Vec<PathBuf>>>,
     /// One directory's own YAML files, for `group_vars/` and `host_vars/`.
     listings: Map<Arc<Vec<PathBuf>>>,
+    /// What config loads read — the process snapshot normally; [`with_env`](Self::with_env)
+    /// swaps it so a test's fixtures can't be hijacked by the developer's shell.
+    env: EnvMap,
     stats: AtomicStats,
 }
 
@@ -234,8 +237,17 @@ impl ScanCache {
             contributions: Map::default(),
             trees: Map::default(),
             listings: Map::default(),
+            env: EnvMap::from_process(),
             stats: AtomicStats::default(),
         }
+    }
+
+    /// Replace the environment config loads see. For tests: `.with_env(EnvMap::empty())`
+    /// keeps a fixture project's `ansible.cfg` from being overridden by whatever
+    /// `ANSIBLE_CONFIG`/`ANSIBLE_ROLES_PATH` the invoking shell happens to export.
+    pub fn with_env(mut self, env: EnvMap) -> Self {
+        self.env = env;
+        self
     }
 
     /// The backend a miss falls through to — where its counters live, if it has any.
@@ -337,7 +349,8 @@ impl ScanCache {
 
     fn config(&self, root: &Path) -> AnsibleConfig {
         let (cfg, computed) =
-            self.configs.get_or_init(root, || AnsibleConfig::builder(root).fs(self).load());
+            self.configs
+                .get_or_init(root, || AnsibleConfig::builder(root).fs(self).env(&self.env).load());
         if computed {
             self.stats.configs.fetch_add(1, Ordering::Relaxed);
         }
