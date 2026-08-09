@@ -71,24 +71,31 @@ fn main() {
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
         }
+        // Expressions that cannot work at all. Read from the tree, so all five
+        // bare-expression keywords count and a task without a reference still gets read.
+        for s in ansible_core::expressions::sites(&nodes) {
+            let (cl, _) = doc.byte_to_lsp(s.value_span.start);
+            for c in &s.clauses {
+                for p in condition::problems(c, s.binds_item) {
+                    if !doc.is_suppressed(s.value_span.start, p.rule_id()) {
+                        broken_when.push(format!(
+                            "  {}:{}  {}  ({})",
+                            path.strip_prefix(&root).unwrap_or(path).display(),
+                            cl + 1,
+                            p.rule_id(),
+                            s.keyword,
+                        ));
+                    }
+                }
+            }
+        }
+
         for r in refs {
             let res = resolve_in(&r, &ctx, &cache);
 
-            // Conditions that cannot work at all, and the cross-file one.
+            // The cross-file condition check.
             if let Some(span) = r.condition_span {
                 let (cl, _) = doc.byte_to_lsp(span.start);
-                for c in &r.conditions {
-                    for p in condition::problems(c, r.repeated) {
-                        if !doc.is_suppressed(span.start, p.rule_id()) {
-                            broken_when.push(format!(
-                                "  {}:{}  {}",
-                                path.strip_prefix(&root).unwrap_or(path).display(),
-                                cl + 1,
-                                p.rule_id()
-                            ));
-                        }
-                    }
-                }
                 if r.kind == ReferenceKind::ImportPlaybook
                     && !doc.is_suppressed(span.start, "when-import-var-mutated")
                 {

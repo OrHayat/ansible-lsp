@@ -163,6 +163,14 @@ that. It is deliberately not folded into `Other`, which means "an alias or somet
 model"; null is a value YAML has, and conflating the two hides the distinction the rule needs.
 That variant is the whole reason the empty rule can be a one-line string test.
 
+**Severity correction, after the fact.** The three rules 2.19 did not change were left at
+WARNING on the grounds that the version had not touched them — but that confused "unchanged by
+2.19" with "not fatal". `when-assignment` and `when-unbalanced` are Jinja syntax errors and kill
+the task on **both** 2.18.6 and 2.21.2, so they are ERROR unconditionally, with no version to
+gate on. A rule whose message reads "raises a syntax error here at runtime" cannot ship as a
+warning. `when-item-without-loop` is equally fatal and stays a WARNING for a different reason:
+T-139 makes it fire on conditions that work, where the loop sits on the including task.
+
 Deliberately not done:
 
 - **Embedded templates.** `ALLOW_EMBEDDED_TEMPLATES` defaults `true` and 2.21.2 emitted no

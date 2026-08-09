@@ -2,6 +2,7 @@ pub mod ast;
 pub mod cache;
 pub mod condition;
 pub mod config;
+pub mod expressions;
 pub mod fs;
 pub mod glob;
 pub mod guard;

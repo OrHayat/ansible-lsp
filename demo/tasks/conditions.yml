@@ -181,36 +181,54 @@
   ansible.builtin.include_tasks: sibling.yml
   when: "{{ demo_override }}"
 
-# ============================= THE OTHER FOUR EXPRESSION KEYWORDS — not yet linted (T-141)
-# `when:` is one of five bare-expression keywords, and the same broken expression is equally
-# fatal in any of them. Every case above is an `include_tasks:` because the rules currently
-# ride on file references rather than on tasks; neither limit is deliberate.
+# ================================== THE OTHER FOUR EXPRESSION KEYWORDS — all linted (T-141)
+# `when:` is one of five bare-expression keywords and the same broken expression is equally
+# fatal in any of them. The diagnostic names the keyword it fired on; the rule ids stay
+# `when-*`, so a `# noqa:` written years ago keeps working.
+#
+# None of these is an `include_tasks:`, deliberately. The rules used to ride on the file
+# references a task produced, so a task that referenced nothing was never read.
 
-- name: "PENDING — failed_when: single `=` is the same runtime syntax error"
+- name: "BAD — failed_when: single `=` is the same runtime syntax error"
   ansible.builtin.command: echo hi
   failed_when: demo_mode = 'docker'
 
-- name: "PENDING — until: unbalanced parenthesis, on a task that is not an include"
+- name: "BAD — until: unbalanced parenthesis, on a task that is not an include"
   ansible.builtin.command: echo hi
   until: not (demo_result.rc == 0
   retries: 3
   delay: 1
 
-- name: "PENDING — assert: that: is a list of bare expressions, like a list when:"
+- name: "BAD — assert: that: is a list of bare expressions, like a list when:"
+  # `that:` is a module parameter rather than a directive, so it is found one level down.
   ansible.builtin.assert:
     that:
       - demo_hosts | length > 0
       - demo_mode = 'docker'
 
-- name: "PENDING — changed_when: `{{ }}` double-evaluates here exactly as it does in when:"
+- name: "BAD — changed_when: a wrapped expression is the same mistake here as in when:"
   ansible.builtin.command: echo hi
   changed_when: "{{ demo_result.rc != 0 }}"
 
-- name: "PENDING — changed_when: a literal is not a boolean, fatal since 2.19"
-  # The same fault as the `when:` case above, and T-117 built the rule for it — but nothing
-  # feeds `changed_when` to the rules yet, so this stays silent until T-141 routes it.
+- name: "BAD — changed_when: a literal is not a boolean, fatal since 2.19"
   ansible.builtin.command: echo hi
   changed_when: "'bad'"
+
+- name: "GOOD — a template inside a string constant is embedded, not wrapped"
+  # `ALLOW_EMBEDDED_TEMPLATES` defaults on and 2.21.2 emits no deprecation for this, so we
+  # say nothing either. Nine corpus lines like it were false positives before T-141.
+  ansible.builtin.command: echo hi
+  failed_when: "'{{ demo_mode }}' == demo_result.stdout"
+
+- name: "GOOD — an apostrophe inside a double-quoted string is not an unbalanced quote"
+  # Counting each quote's parity called this broken; three real corpus lines had this shape.
+  ansible.builtin.command: echo hi
+  changed_when: demo_result.stdout == "the label's value"
+
+- name: "GOOD — a Jinja kwarg may be spaced around the `=` and is still not an assignment"
+  # kubespray writes `attribute = "x"`; T-140 only recognised `attribute="x"`.
+  ansible.builtin.command: echo hi
+  failed_when: demo_hosts | map(attribute = 'port') | first == 80
 
 - name: "GOOD — changed_when: false is a YAML boolean, not an expression"
   ansible.builtin.command: echo hi
@@ -240,6 +258,16 @@
 - name: "GOOD — `item` with a loop is correct, so no warning"
   ansible.builtin.include_tasks: sibling.yml
   loop: [1, 2]
+  when: item > 1
+
+- name: "BAD — when-item-without-loop: loop_control renamed the loop variable"
+  # A loop binds exactly one variable and `loop_var:` names it. After the rename `item` is
+  # undefined again, so this dies with "'item' is undefined" despite the loop being right
+  # there — verified on core 2.21.2. Reading any loop as "item is fine" hid this.
+  ansible.builtin.include_tasks: sibling.yml
+  loop: [1, 2]
+  loop_control:
+    loop_var: demo_entry
   when: item > 1
 
 - name: "GOOD — the word `item` inside a string literal is not a reference"

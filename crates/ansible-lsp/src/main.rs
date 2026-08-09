@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ansible_core::cache::ScanCache;
 use ansible_core::config::DuplicateDictKey;
+use ansible_core::expressions;
 use ansible_core::fs::{Counting, StdFs};
 use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::condition;
@@ -538,26 +539,26 @@ impl Backend {
                 ..Default::default()
             });
 
-        // Conditions that cannot work whatever the variables hold. Anchored on the
-        // `when:` itself, and deduplicated: one task can hold several references
-        // sharing one condition.
+        // Expressions that cannot work whatever the variables hold, anchored on the value
+        // they were written in. Read from the tree rather than from the references a task
+        // produced: all five bare-expression keywords count, and a task with no reference —
+        // or a `when:` on a block — is diagnosed like any other (T-141).
+        //
         // 2.19 made conditionals strict, so the same fault is an error on a new core and a
         // warning-of-a-future-break on an old one. The version picks the severity, never
         // whether we speak; undetected falls to the warning, which is right either way (T-117).
-        let mut seen = HashSet::new();
-        let broken: Vec<Diagnostic> = a
-            .refs
-            .iter()
-            .filter_map(|(r, _)| Some((r, r.condition_span?)))
-            .filter(|(_, span)| seen.insert(span.start))
-            .flat_map(|(r, span)| {
-                r.conditions
+        let broken: Vec<Diagnostic> = expressions::sites(&a.nodes)
+            .into_iter()
+            .flat_map(|s| {
+                s.clauses
                     .iter()
-                    .flat_map(|c| condition::problems(c, r.repeated))
-                    .map(move |p| (p, span))
+                    .flat_map(|c| condition::problems(c, s.binds_item))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(move |p| (p, s.keyword.clone(), s.value_span))
             })
-            .filter(|(p, span)| !a.doc.is_suppressed(span.start, p.rule_id()))
-            .map(|(p, span)| Diagnostic {
+            .filter(|(p, _, span)| !a.doc.is_suppressed(span.start, p.rule_id()))
+            .map(|(p, keyword, span)| Diagnostic {
                 range: range_of(span),
                 severity: Some(match p.tier(core) {
                     condition::Tier::Error => DiagnosticSeverity::ERROR,
@@ -566,7 +567,7 @@ impl Backend {
                 }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule_id().into())),
-                message: p.message(core),
+                message: p.message(core, &keyword),
                 ..Default::default()
             })
             .collect();

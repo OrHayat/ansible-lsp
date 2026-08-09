@@ -292,51 +292,60 @@ impl Problem {
                     Tier::Warning
                 }
             }
+            // A Jinja syntax error, which kills the task on every version — verified on both
+            // 2.18.6 and 2.21.2, so there is nothing to gate. These read as errors because
+            // that is what they are; shipping "raises a syntax error at runtime" as a warning
+            // says the opposite of the message.
+            Problem::AssignmentNotComparison | Problem::UnbalancedDelimiters => Tier::Error,
+            // `item` undefined is equally fatal, but T-139 is a live false positive — the
+            // loop can sit on the *including* task, which `problems` never sees, and three
+            // corpus conditions hit exactly that. A warning until that is fixed.
+            Problem::ItemWithoutLoop => Tier::Warning,
             // On 2.19+ this is no longer "evaluates twice": the value is resolved once and
             // then evaluated, and whether that deprecates depends on the runtime type of
             // the result. A hint can point at it; a warning would overstate it.
             Problem::JinjaDelimiters if is_strict(core) => Tier::Hint,
-            _ => Tier::Warning,
+            Problem::JinjaDelimiters => Tier::Warning,
         }
     }
 
-    pub fn message(&self, core: Option<Version>) -> String {
+    /// `keyword` is the bare-expression keyword this fired on — `when`, `failed_when`,
+    /// `changed_when`, `until`, or `that` under `assert:`. All five are the same expression
+    /// language with the same failure modes, so naming the wrong one in a message is the
+    /// difference between a fix and a hunt (T-141).
+    pub fn message(&self, core: Option<Version>, keyword: &str) -> String {
         let strict = is_strict(core);
         match self {
-            Problem::JinjaDelimiters if strict => {
-                "`when:` is already a Jinja expression. This is resolved once and the result \
-                 evaluated: if it resolves to a string it is an indirect expression, otherwise \
-                 it is deprecated for removal in 2.23. Drop the delimiters and write the \
-                 expression directly."
-                    .into()
-            }
-            Problem::JinjaDelimiters => {
-                "`when:` is already a Jinja expression — `{{ }}` here evaluates twice \
+            Problem::JinjaDelimiters if strict => format!(
+                "`{keyword}:` is already a Jinja expression. This is resolved once and the \
+                 result evaluated: if it resolves to a string it is an indirect expression, \
+                 otherwise it is deprecated for removal in 2.23. Drop the delimiters and write \
+                 the expression directly."
+            ),
+            Problem::JinjaDelimiters => format!(
+                "`{keyword}:` is already a Jinja expression — `{{{{ }}}}` here evaluates twice \
                  and misbehaves on bare variables. Drop the delimiters."
-                    .into()
-            }
-            Problem::ItemWithoutLoop => {
-                "`item` is only defined inside a loop, and this task has no \
-                 `loop:`/`with_*` — the condition can never evaluate."
-                    .into()
-            }
-            Problem::AssignmentNotComparison => {
-                "single `=` is assignment, not comparison — Jinja raises a syntax \
-                 error here at runtime. Use `==`."
-                    .into()
-            }
-            Problem::UnbalancedDelimiters => {
-                "unbalanced parentheses or quotes — Jinja raises a syntax error here \
-                 at runtime."
-                    .into()
-            }
+            ),
+            Problem::ItemWithoutLoop => format!(
+                "`item` is only defined inside a loop, and this task has no `loop:`/`with_*` \
+                 — this `{keyword}:` can never evaluate."
+            ),
+            Problem::AssignmentNotComparison => format!(
+                "single `=` is assignment, not comparison — Jinja raises a syntax error here \
+                 at runtime, failing the `{keyword}:`. Use `==`."
+            ),
+            Problem::UnbalancedDelimiters => format!(
+                "unbalanced parentheses or quotes — Jinja raises a syntax error here at \
+                 runtime, failing the `{keyword}:`."
+            ),
             Problem::EmptyCondition => format!(
-                "an empty condition {}. Remove the clause — an absent `when:` and `when: []` \
-                 both mean \"no condition\" and are fine; only an empty string is refused.",
+                "an empty `{keyword}:` {}. Remove it — an absent `{keyword}:` and \
+                 `{keyword}: []` both mean \"no condition\" and are fine; only an empty string \
+                 is refused.",
                 Self::since_219(strict, core, "is refused outright", "evaluates as true")
             ),
             Problem::NonBooleanLiteral => format!(
-                "this condition is a literal, so it cannot evaluate to a boolean, and a \
+                "this `{keyword}:` is a literal, so it cannot evaluate to a boolean, and a \
                  non-boolean result {}. Note that YAML quoting is invisible here: `\"x\"` is \
                  the variable `x`, while `\"'x'\"` is this literal.",
                 Self::since_219(strict, core, "is an error", "is accepted as truthy")
@@ -367,7 +376,11 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
     if cond.trim().is_empty() {
         return vec![Problem::EmptyCondition];
     }
-    if cond.contains("{{") || cond.contains("{%") {
+    // Only the *fully wrapped* form. A template embedded in a larger expression — inside a
+    // string constant (`'{{ host }}' == x`) or beside one (`{{ a }}:{{ b }} in xs`) — is the
+    // `ALLOW_EMBEDDED_TEMPLATES` case, which defaults on and emits no deprecation on 2.21.2;
+    // diagnosing it would be louder than the runtime (T-117's audit, T-141's corpus run).
+    if fully_wrapped(cond) || strip_strings(cond).contains("{%") {
         out.push(Problem::JinjaDelimiters);
     }
     if is_bare_literal(cond) {
@@ -380,10 +393,7 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
     if lone_equals(&bare) {
         out.push(Problem::AssignmentNotComparison);
     }
-    if bare.matches('(').count() != bare.matches(')').count()
-        || cond.matches('\'').count() % 2 == 1
-        || cond.matches('"').count() % 2 == 1
-    {
+    if bare.matches('(').count() != bare.matches(')').count() || unterminated_quote(cond) {
         out.push(Problem::UnbalancedDelimiters);
     }
     out
@@ -668,6 +678,29 @@ fn strip_strings(s: &str) -> String {
     out
 }
 
+/// A quote that never closes. Counting each quote character's parity instead reports
+/// `x == "it's"` as unbalanced, because the apostrophe inside the double-quoted string makes
+/// the single-quote count odd — three such lines in the corpus, all correct Ansible (T-141).
+/// Tracking which quote is open is the same walk [`strip_strings`] already does.
+fn unterminated_quote(s: &str) -> bool {
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        match quote {
+            None if c == '\'' || c == '"' => quote = Some(c),
+            Some(q) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    quote.is_some()
+}
+
+/// The whole value is one `{{ … }}` and nothing else. Two templates back to back, or one
+/// beside literal text, is embedded templating rather than the wrapped-expression case.
+fn fully_wrapped(s: &str) -> bool {
+    let t = s.trim();
+    t.len() >= 4 && t.starts_with("{{") && t.ends_with("}}") && !t[2..t.len() - 2].contains("}}")
+}
+
 fn has_word(s: &str, word: &str) -> bool {
     s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(|w| w == word)
@@ -685,6 +718,11 @@ fn has_word(s: &str, word: &str) -> bool {
 ///
 /// Both are required. `mode='docker'` outside parens is still an assignment, and so is
 /// `(a = b)` inside grouping parens — a `(` counts as a call only when a name runs into it.
+///
+/// The name may be separated from the `=` by spaces: `map(attribute = "x")` is written that
+/// way in kubespray and is a kwarg like any other, so the name is looked for past whitespace
+/// (T-141's corpus run). The *operator* test still reads the byte immediately before, since
+/// `==`/`!=`/`<=`/`>=` are never written with a gap.
 fn lone_equals(s: &str) -> bool {
     let b = s.as_bytes();
     let name_char = |c: Option<u8>| matches!(c, Some(p) if p.is_ascii_alphanumeric() || p == b'_');
@@ -710,7 +748,8 @@ fn lone_equals(s: &str) -> bool {
         if matches!(prev, Some(b'=' | b'!' | b'<' | b'>' | b'~')) || next == Some(b'=') {
             continue;
         }
-        if calls.last() == Some(&true) && name_char(prev) {
+        let prev_name = b[..i].iter().rev().find(|c| !c.is_ascii_whitespace()).copied();
+        if calls.last() == Some(&true) && name_char(prev_name) {
             continue;
         }
         return true;
@@ -1138,6 +1177,40 @@ mod tests {
         }
     }
 
+    /// T-141. Widening the rules to the other four keywords put 8097 real clauses through
+    /// them instead of the `when:`-only subset, and these three shapes were reported as
+    /// broken. All are correct Ansible, verbatim from the corpus, and each killed a different
+    /// rule bug that `when:` alone never reached.
+    #[test]
+    fn shapes_the_corpus_proved_are_not_faults() {
+        // An apostrophe inside a double-quoted string made the single-quote count odd.
+        // `community.docker`, `docker_image/tasks/tests/options.yml:506`.
+        let quoted = r#"labels_1.image.Config.Labels["this is a label"] == "this is the label's value""#;
+        assert!(!problems(quoted, false).contains(&Problem::UnbalancedDelimiters), "{quoted}");
+
+        // A kwarg written with spaces around the `=`. T-140 required the name to run into it.
+        // kubespray, `tests/testcases/015_check-nodes-ready.yml:16`.
+        let spaced = r#"x | map(attribute = "status.conditions") | list | min"#;
+        assert!(!problems(spaced, false).contains(&Problem::AssignmentNotComparison), "{spaced}");
+
+        // A template inside a string constant is embedded templating, which defaults to
+        // allowed and warns about nothing. `community.crypto`, `get_certificate`.
+        let embedded = "'{{ sni_host }}' == result.subject.CN";
+        assert!(!problems(embedded, false).contains(&Problem::JinjaDelimiters), "{embedded}");
+        // Nor is a template beside literal text. kubespray, `check_pull_required.yml:19`.
+        let beside = "{{ download.repo }}:{{ download.tag }} in docker_images.stdout.split(',')";
+        assert!(!problems(beside, false).contains(&Problem::JinjaDelimiters), "{beside}");
+
+        // What survived the sweep, and should have: genuinely wrapped whole expressions.
+        // kubespray, `validate_inventory/tasks/main.yml:73` and `assert-sorted-checksums.yml:18`.
+        for c in [
+            "{{ (kubelet_max_pods | default(110)) | int <= (2 ** (32 - x | int)) - 2 }}",
+            "{{ item.1.value | reject('string') == [] }}",
+        ] {
+            assert!(problems(c, false).contains(&Problem::JinjaDelimiters), "{c}");
+        }
+    }
+
     /// T-117. The version picks the severity, never whether we speak. Measured upstream: on
     /// 2.18.6 an empty condition runs silently, on 2.21.2 it is fatal — so an old core earns a
     /// warning that it breaks on upgrade rather than the silence upstream gives it.
@@ -1160,25 +1233,61 @@ mod tests {
             Problem::AssignmentNotComparison,
             Problem::UnbalancedDelimiters,
         ] {
-            assert_eq!(p.tier(v(21, 2)), Tier::Warning, "{p:?}");
-            assert_eq!(p.tier(None), Tier::Warning, "{p:?}");
+            assert_eq!(p.tier(v(21, 2)), p.tier(v(18, 6)), "{p:?} must not read the version");
+            assert_eq!(p.tier(v(21, 2)), p.tier(None), "{p:?} must not read the version");
         }
+
+        // A Jinja syntax error kills the task on every version — measured on 2.18.6 and
+        // 2.21.2 — so it is an error, not a warning that contradicts its own message.
+        assert_eq!(Problem::AssignmentNotComparison.tier(None), Tier::Error);
+        assert_eq!(Problem::UnbalancedDelimiters.tier(None), Tier::Error);
+        // `item` is just as fatal, and stays a warning only because T-139 makes it fire on
+        // conditions that work — invert this when the including task's loop is visible.
+        assert_eq!(Problem::ItemWithoutLoop.tier(None), Tier::Warning, "T-139 fixed? raise it");
     }
 
     /// A warning on an old core reads as "this is broken" unless it says otherwise — the point
     /// there is "this breaks when you upgrade", so the message has to name both runtimes.
     #[test]
     fn the_strictness_message_names_the_version_case() {
-        let old = Problem::EmptyCondition.message(Some(Version { major: 2, minor: 18, patch: 6 }));
+        let v18 = Some(Version { major: 2, minor: 18, patch: 6 });
+        let v21 = Some(Version { major: 2, minor: 21, patch: 2 });
+
+        let old = Problem::EmptyCondition.message(v18, "when");
         assert!(old.contains("2.18.6"), "{old}");
         assert!(old.contains("2.19"), "names the upgrade that changes it: {old}");
 
-        let new = Problem::NonBooleanLiteral.message(Some(Version { major: 2, minor: 21, patch: 2 }));
+        let new = Problem::NonBooleanLiteral.message(v21, "when");
         assert!(new.contains("2.21.2"), "{new}");
 
         // An unchanged rule reads the same whatever the version.
         let p = Problem::AssignmentNotComparison;
-        assert_eq!(p.message(None), p.message(Some(Version { major: 2, minor: 21, patch: 2 })));
+        assert_eq!(p.message(None, "when"), p.message(v21, "when"));
+    }
+
+    /// T-141. The same fault in `failed_when:` must not be described as a `when:` problem —
+    /// the reader has to find the line, and there may be several on one task.
+    #[test]
+    fn a_message_names_the_keyword_it_fired_on() {
+        let v21 = Some(Version { major: 2, minor: 21, patch: 2 });
+        for p in [
+            Problem::JinjaDelimiters,
+            Problem::ItemWithoutLoop,
+            Problem::AssignmentNotComparison,
+            Problem::UnbalancedDelimiters,
+            Problem::EmptyCondition,
+            Problem::NonBooleanLiteral,
+        ] {
+            for keyword in ["when", "failed_when", "changed_when", "until", "that"] {
+                let m = p.message(v21, keyword);
+                assert!(m.contains(&format!("`{keyword}:`")), "{p:?} on {keyword}: {m}");
+            }
+            // Naming one keyword must not leave another's name in the text.
+            let m = p.message(v21, "failed_when");
+            assert!(!m.contains("`when:`"), "{p:?} still says when: {m}");
+        }
+        // The rule ids stay `when-*` whatever the keyword, so existing `# noqa:` keeps working.
+        assert_eq!(Problem::AssignmentNotComparison.rule_id(), "when-assignment");
     }
 
     #[test]

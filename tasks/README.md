@@ -106,7 +106,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
-| T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](open/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | M    | ~~T-140~~      |
 
 ### P2 — coverage and usability
 
@@ -251,6 +250,7 @@ T-021 is now unblocked on that side.
 | T-143 | [Hover is silent on magic variables, including the two whose value we detect](closed/T-143-hover-is-silent-on-magic-variables-including-the-two-whose-v.md) | done     |
 | T-076 | [Var-index re-walks shared files per consumer](closed/T-076-var-index-redundant-walk.md) | done     |
 | T-117 | [when: is strict since 2.19 — audit condition.rs](closed/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | done     |
+| T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](closed/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | done     |
 
 ## Settled — don't re-derive these
 
