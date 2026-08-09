@@ -98,11 +98,12 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
-| T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | S    | ~~T-107~~      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
+| T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~  |
+| T-155 | [loop_control with no loop is dead config, and ansible never says so](open/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | S    | —          |
 
 ### P2 — coverage and usability
 
