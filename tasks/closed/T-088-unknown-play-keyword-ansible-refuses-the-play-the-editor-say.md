@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P3       | S    | T-106 | —          |
+| done   | P3       | S    | T-106 | —          |
 
 ## Problem
 
@@ -29,8 +29,13 @@ set), so the same check there is a different, riskier ticket.
 
 ## Done when
 
-- [ ] an unknown play-level key gets an ERROR diagnostic on the key span
-- [ ] a one-edit near miss suggests the intended keyword
-- [ ] every valid demo play stays diagnostic-free (no false positives on the keywords the
-      schema knows)
-- [ ] `# noqa` suppresses it
+- [x] an unknown play-level key gets an ERROR diagnostic on the key span
+- [x] a one-edit near miss suggests the intended keyword (`vars_file` →
+      "did you mean 'vars_files'?"; distance 1 incl. transposition, per-context dictionary)
+- [x] every valid demo play stays diagnostic-free (demo-wide sweep test, plus a
+      731-file sweep of a real tree: zero findings)
+- [x] `# noqa` suppresses it
+
+Closed by T-107, which delivered the whole per-context rule — the scope guard above
+turned out unnecessary: module names and `with_*` are excluded in `ast::build`, so the
+task-level check shipped safely at the same time.

@@ -35,10 +35,10 @@ sibling epic).
 
 ## Children
 
-- [ ] T-088 — Unknown play keyword: Ansible refuses the play, the editor says nothing
+- [x] T-088 — Unknown play keyword: Ansible refuses the play, the editor says nothing
 - [x] T-044 — Semantic AST (Play / Block / Task / Role)
 - [x] T-045 — Keyword schema from Ansible's FieldAttributes
-- [ ] T-107 — Per-class keyword sets from FieldAttribute
+- [x] T-107 — Per-class keyword sets from FieldAttribute
 - [ ] T-108 — Keyword value types: isa coercion and listof
 - [ ] T-109 — Keyword value enums
 - [ ] T-110 — Placement and mutual-exclusion rules

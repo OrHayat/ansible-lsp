@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | M    | T-106 | —          |
+| done   | task | P1       | M    | T-106 | —          |
 
 ## Problem
 
@@ -161,8 +161,19 @@ per-class set.
 
 ## Done when
 
-- [ ] each of the six contexts has its own legal set, composed from named mixins
-- [ ] `when:` on a play and `loop:` on a block are ERRORs
-- [ ] task-level severity follows `INVALID_TASK_ATTRIBUTE_FAILED`
-- [ ] module names and `with_*` are excluded before a key is called unknown
-- [ ] T-088 closes as part of this
+- [x] each of the six contexts has its own legal set, composed from named mixins
+      (`keywords.rs`: nine contexts in the end — the audit found dynamic includes,
+      `LoopControl` and the handler-include variant on top of the six)
+- [x] `when:` on a play and `loop:` on a block are ERRORs
+- [x] task-level severity follows `INVALID_TASK_ATTRIBUTE_FAILED` (config + env, with
+      Ansible's boolean vocabulary; play/block/loop_control stay fatal regardless)
+- [x] module names and `with_*` are excluded before a key is called unknown
+      (in `ast::build`, so rules see pre-classified `unknown_keys`)
+- [x] T-088 closes as part of this
+
+Outcome notes: `Ast::Tasks` files check the Handler superset (tasks/ vs handlers/ is
+indistinguishable without the path — a missed `listen` on a task file, never a false
+error on a handler file; `FileContext.role_anchor_dir` could sharpen this later).
+`RoleMetadata` and the `roles:`-entry contexts are transcribed in `keywords.rs` but not
+yet wired to a file kind — `meta/main.yml` is `Ast::Other` today. Real-tree sweep:
+731 files, zero findings.
