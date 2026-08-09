@@ -8,7 +8,7 @@ mic key on this Mac).
 | ---- | ----- |
 | `ansible.cfg` | marks the project root, so `playbook_dir` and the role path have values |
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
-| `tasks/conditions.yml` | `when:` analysis — every verdict and every warning rule |
+| `tasks/conditions.yml` | condition analysis — every verdict and every warning rule, plus the 2.19 strictness (T-117) and the four expression keywords beyond `when:` (T-141), both still unflagged |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
 | `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |

@@ -51,7 +51,9 @@
 
 - name: "RequiresDefined — statically the interesting one"
   # If demo_override is defined nowhere in the workspace, this branch can never be
-  # taken. Detecting that needs the whole-workspace variable index (T-033).
+  # taken. The workspace index that would prove it exists now (T-033), but a variable used
+  # inside a condition is deliberately left out of the undefined report — guarding it is the
+  # point — so nothing turns "defined nowhere" into "this branch is dead" yet.
   ansible.builtin.include_tasks: sibling.yml
   when: demo_override is defined
 
@@ -137,21 +139,38 @@
   when: not (skip_demo | default(false)
 
 # ====================================== FATAL SINCE ansible-core 2.19 — not yet flagged
-# 2.19 made conditionals strict: an empty condition is refused outright rather than treated
-# as "no condition". Both of these kill the task at runtime and the editor is still silent,
-# which is what T-117 fixes. It needs the detected core version to gate on (T-138).
+# 2.19 made conditionals strict. The rule, verified on core 2.21.2, is narrower than it
+# sounds: a clause that is a *string* stripping to empty is refused outright. Absence of a
+# clause is not. The editor is silent on all of these, which is what T-117 fixes — gated on
+# the core version `AnsibleInstall` detects, since none of it applies before 2.19.
 
 - name: "PENDING — an empty conditional is an error since 2.19"
   ansible.builtin.include_tasks: sibling.yml
   when: ""
 
-- name: "PENDING — a null conditional is the same error"
+- name: "PENDING — whitespace strips to empty, so it is the same error"
+  ansible.builtin.include_tasks: sibling.yml
+  when: "   "
+
+- name: "PENDING — one empty clause poisons the whole list"
+  ansible.builtin.include_tasks: sibling.yml
+  when:
+    - demo_mode | default('native') == 'native'
+    - ""
+
+- name: "GOOD — a null when: is absence, not an empty condition, and runs"
+  # The trap, and the reason the rule has to test the string rather than the clause count:
+  # `when:` is a list field defaulting to empty, so null and [] both mean "no condition"
+  # and run fine. Only a string that strips to empty is the error. Verified on 2.21.2.
   ansible.builtin.include_tasks: sibling.yml
   when:
 
-- name: "WRONG TIER — fully wrapped is deprecated for 2.23, not broken today"
-  # This warns right now, with the pre-2.19 story: `when:` resolves it once and then
-  # evaluates the result, so it works. A deprecation is a hint, not a warning — T-117.
+- name: "WRONG TIER — fully wrapped warns today; upstream is subtler than that"
+  # Warns right now with the pre-2.19 story ("evaluates twice"). On 2.19+ the value is
+  # resolved once and then evaluated: resolving to a string makes it an indirect expression,
+  # allowed silently, and only a non-string result is deprecated (for 2.23). Which of the
+  # two happens is a runtime type, so neither the current warning nor a flat "deprecated"
+  # is honest — T-117.
   ansible.builtin.include_tasks: sibling.yml
   when: "{{ demo_override }}"
 
