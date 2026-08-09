@@ -38,7 +38,10 @@ impl FileContext {
         let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
         let (role_dir, role_anchor_dir) = find_role(&file_dir, fs);
         let project_root = find_project_root(&file_dir, fs);
-        let config = project_root.as_deref().map(config).unwrap_or_default();
+        // No ansible.cfg above the file still leaves the env and `~/.ansible` layers — a
+        // galaxy role must resolve for a rootless playbook — so load with the file's own
+        // directory standing in for the root rather than defaulting the whole config.
+        let config = config(project_root.as_deref().unwrap_or(&file_dir));
         Self {
             project_root,
             role_dir,
@@ -79,7 +82,7 @@ impl FileContext {
     /// Directories that contain roles, in search order.
     pub fn roles_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        for p in &self.config.roles_path {
+        for p in self.config.roles_path.iter().flatten() {
             push_unique(&mut dirs, Some(p.clone()));
         }
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("roles")));
@@ -89,9 +92,9 @@ impl FileContext {
             self.role_dir.as_ref().and_then(|r| r.parent()).map(Path::to_path_buf),
         );
         push_unique(&mut dirs, Some(self.file_dir.join("roles")));
-        // Ansible's built-in defaults apply only when ansible.cfg doesn't set
-        // roles_path — the config key replaces them rather than extending them.
-        if self.config.roles_path.is_empty() {
+        // Ansible's built-in defaults apply only when nothing set roles_path — a set
+        // value replaces them rather than extending them, and set-but-empty counts as set.
+        if self.config.roles_path.is_none() {
             push_unique(&mut dirs, self.config.ansible_home.as_ref().map(|h| h.join("roles")));
             for d in ["/usr/share/ansible/roles", "/etc/ansible/roles"] {
                 push_unique(&mut dirs, Some(PathBuf::from(d)));
@@ -121,15 +124,18 @@ impl FileContext {
         }
         push_unique(&mut dirs, Some(self.file_dir.join("library")));
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("library")));
-        if self.config.library.is_empty() {
-            push_unique(
-                &mut dirs,
-                self.config.ansible_home.as_ref().map(|h| h.join("plugins/modules")),
-            );
-            push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/modules")));
-        } else {
-            for p in &self.config.library {
-                push_unique(&mut dirs, Some(p.clone()));
+        match &self.config.library {
+            None => {
+                push_unique(
+                    &mut dirs,
+                    self.config.ansible_home.as_ref().map(|h| h.join("plugins/modules")),
+                );
+                push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/modules")));
+            }
+            Some(list) => {
+                for p in list {
+                    push_unique(&mut dirs, Some(p.clone()));
+                }
             }
         }
         dirs
@@ -147,15 +153,18 @@ impl FileContext {
         }
         push_unique(&mut dirs, Some(self.file_dir.join("action_plugins")));
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("action_plugins")));
-        if self.config.action_plugins.is_empty() {
-            push_unique(
-                &mut dirs,
-                self.config.ansible_home.as_ref().map(|h| h.join("plugins/action")),
-            );
-            push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/action")));
-        } else {
-            for p in &self.config.action_plugins {
-                push_unique(&mut dirs, Some(p.clone()));
+        match &self.config.action_plugins {
+            None => {
+                push_unique(
+                    &mut dirs,
+                    self.config.ansible_home.as_ref().map(|h| h.join("plugins/action")),
+                );
+                push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/action")));
+            }
+            Some(list) => {
+                for p in list {
+                    push_unique(&mut dirs, Some(p.clone()));
+                }
             }
         }
         dirs
@@ -163,7 +172,7 @@ impl FileContext {
 
     pub fn collection_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        for p in &self.config.collections_path {
+        for p in self.config.collections_path.iter().flatten() {
             push_unique(&mut dirs, Some(p.join("ansible_collections")));
         }
         push_unique(
@@ -290,6 +299,42 @@ mod tests {
         assert!(
             !all.iter().any(|p| p.starts_with("/home/t")),
             "the relocated home fully replaces `$HOME/.ansible`: {all:?}"
+        );
+    }
+
+    /// A file with no ansible.cfg anywhere above it still searches the env-derived home
+    /// dirs — a galaxy role in `~/.ansible/roles` must resolve for a rootless playbook.
+    #[test]
+    fn a_rootless_file_still_gets_the_home_derived_default_dirs() {
+        use crate::config::{AnsibleConfig, EnvMap};
+        let fs = crate::testing::MemFs::new(&[("/nowhere/play.yml", "")]);
+        let env = EnvMap::from_pairs(&[("HOME", "/home/t")]);
+        let ctx = FileContext::discover_with(Path::new("/nowhere/play.yml"), &fs, |root| {
+            AnsibleConfig::builder(root).fs(&fs).env(&env).load()
+        });
+        assert!(ctx.project_root.is_none(), "fixture really is rootless");
+        assert!(ctx.roles_roots().contains(&PathBuf::from("/home/t/.ansible/roles")));
+        assert!(ctx
+            .legacy_module_dirs()
+            .contains(&PathBuf::from("/home/t/.ansible/plugins/modules")));
+    }
+
+    /// An explicitly emptied path list disables the built-in defaults instead of
+    /// resurrecting them — set-but-empty is set.
+    #[test]
+    fn an_explicitly_emptied_roles_path_disables_the_default_dirs() {
+        use crate::config::{AnsibleConfig, EnvMap};
+        let fs = crate::testing::MemFs::new(&[("/p/ansible.cfg", ""), ("/p/play.yml", "")]);
+        let env =
+            EnvMap::from_pairs(&[("HOME", "/home/t"), ("ANSIBLE_ROLES_PATH", "")]);
+        let ctx = FileContext::discover_with(Path::new("/p/play.yml"), &fs, |root| {
+            AnsibleConfig::builder(root).fs(&fs).env(&env).load()
+        });
+        let roots = ctx.roles_roots();
+        assert!(
+            !roots.contains(&PathBuf::from("/home/t/.ansible/roles"))
+                && !roots.contains(&PathBuf::from("/usr/share/ansible/roles")),
+            "user disabled the defaults; they must not come back: {roots:?}"
         );
     }
 

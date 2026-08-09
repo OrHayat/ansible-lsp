@@ -300,10 +300,15 @@ impl AnsibleInstall {
         }
         // `ANSIBLE_HOME` relocates `~/.ansible` (`base.yml:95-104`). The `home` ini key can
         // too, but install discovery is project-independent — there is no ansible.cfg in
-        // scope here — so only the env half applies.
-        let ansible_home = std::env::var("ANSIBLE_HOME").map(PathBuf::from).ok().or_else(|| {
-            std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".ansible"))
-        });
+        // scope here — so only the env half applies. `~` forms expand through the same
+        // helper config.rs uses, so the two halves of the tool agree on the directory.
+        let env = crate::config::EnvMap::from_process();
+        let ansible_home = env
+            .var("ANSIBLE_HOME")
+            .map(|v| {
+                crate::config::expand_path(v, &std::env::current_dir().unwrap_or_default(), &env)
+            })
+            .or_else(|| env.var("HOME").map(|h| PathBuf::from(h).join(".ansible")));
         if let Some(h) = ansible_home {
             roots.push(h.join("collections"));
         }

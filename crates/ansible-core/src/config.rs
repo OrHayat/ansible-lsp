@@ -14,7 +14,13 @@ pub struct EnvMap(HashMap<String, String>);
 
 impl EnvMap {
     pub fn from_process() -> Self {
-        Self(std::env::vars().collect())
+        // `vars_os` + filter, not `vars()`: the latter panics on a non-Unicode value, and
+        // a config reader must treat such a variable as unset, not kill the server.
+        Self(
+            std::env::vars_os()
+                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                .collect(),
+        )
     }
 
     pub fn empty() -> Self {
@@ -32,14 +38,18 @@ impl EnvMap {
 
 #[derive(Debug, Clone, Default)]
 pub struct AnsibleConfig {
-    pub roles_path: Vec<PathBuf>,
-    pub collections_path: Vec<PathBuf>,
+    /// Every path list is `None` = never set (the built-in defaults apply) vs
+    /// `Some(vec![])` = explicitly emptied (`ANSIBLE_ROLES_PATH=`, a bare `roles_path =`),
+    /// which *disables* the defaults — Ansible's pathlist turns "" into [], replacing the
+    /// default like any other value, so the two cases must not collapse.
+    pub roles_path: Option<Vec<PathBuf>>,
+    pub collections_path: Option<Vec<PathBuf>>,
     /// The `library` key — `DEFAULT_MODULE_PATH`'s ini name (`config/base.yml:945-951`).
     /// When set it *replaces* the default legacy module dirs, not appends.
-    pub library: Vec<PathBuf>,
+    pub library: Option<Vec<PathBuf>>,
     /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
     /// controller-side plugin dirs; a plugin here overrides a same-named module.
-    pub action_plugins: Vec<PathBuf>,
+    pub action_plugins: Option<Vec<PathBuf>>,
     /// Where `~/.ansible` actually is (`ANSIBLE_HOME`, `base.yml:95-104`): env → the `home`
     /// ini key → `~/.ansible`. Every path default below is templated on it, which is why the
     /// hardcoded `.ansible` dirs in `workspace.rs` read this instead of `HOME`. `None` when
@@ -146,10 +156,10 @@ impl AnsibleConfig {
             let paths = || expand_list(&value, base, env);
             match key.as_str() {
                 "home" => home_key = Some(value.clone()),
-                "roles_path" => cfg.roles_path = paths(),
-                "collections_path" | "collections_paths" => cfg.collections_path = paths(),
-                "library" => cfg.library = paths(),
-                "action_plugins" => cfg.action_plugins = paths(),
+                "roles_path" => cfg.roles_path = Some(paths()),
+                "collections_path" | "collections_paths" => cfg.collections_path = Some(paths()),
+                "library" => cfg.library = Some(paths()),
+                "action_plugins" => cfg.action_plugins = Some(paths()),
                 "network_group_modules" => {
                     cfg.network_group_modules = Some(name_list(&value));
                 }
@@ -163,17 +173,18 @@ impl AnsibleConfig {
         }
         // Env beats the ini file, which beats the shipped default — and it applies whether
         // or not an `ansible.cfg` was found, so it can't ride inside the block above.
-        if let Some(v) = env.var("ANSIBLE_ROLES_PATH") {
-            cfg.roles_path = expand_list(v, base, env);
-        }
-        if let Some(v) = env.var("ANSIBLE_COLLECTIONS_PATH") {
-            cfg.collections_path = expand_list(v, base, env);
-        }
-        if let Some(v) = env.var("ANSIBLE_LIBRARY") {
-            cfg.library = expand_list(v, base, env);
-        }
-        if let Some(v) = env.var("ANSIBLE_ACTION_PLUGINS") {
-            cfg.action_plugins = expand_list(v, base, env);
+        // Ansible resolves env path values against the invocation CWD; an editor has no
+        // meaningful one, so the project root stands in — NOT `base`, which may be an
+        // env-selected config's unrelated directory.
+        for (var, slot) in [
+            ("ANSIBLE_ROLES_PATH", &mut cfg.roles_path),
+            ("ANSIBLE_COLLECTIONS_PATH", &mut cfg.collections_path),
+            ("ANSIBLE_LIBRARY", &mut cfg.library),
+            ("ANSIBLE_ACTION_PLUGINS", &mut cfg.action_plugins),
+        ] {
+            if let Some(v) = env.var(var) {
+                *slot = Some(expand_list(v, project_root, env));
+            }
         }
         cfg.ansible_home = env
             .var("ANSIBLE_HOME")
@@ -238,10 +249,16 @@ impl<'a> AnsibleConfigBuilder<'a> {
 /// value resolves against the process CWD, as it does in Ansible.
 fn env_config_file(fs: &dyn Fs, env: &EnvMap) -> Option<PathBuf> {
     let raw = env.var("ANSIBLE_CONFIG")?;
-    let mut p = match raw.strip_prefix("~/") {
-        Some(rest) => PathBuf::from(env.var("HOME")?).join(rest),
-        None => PathBuf::from(raw),
-    };
+    // Ansible unfrackpaths the value against the invocation CWD (`manager.py:267`); the
+    // server's own CWD is the nearest thing it has, and keeping the path relative would
+    // poison `base` and every list expanded against it. `~user` (pwd-database) forms and
+    // a HOME-less `~` stay literal and fall through to the project file — a documented
+    // gap, not a crash.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut p = expand_path(raw, &cwd, env);
+    if p.is_relative() {
+        p = cwd.join(p);
+    }
     if fs.is_dir(&p) {
         p = p.join("ansible.cfg");
     }
@@ -318,14 +335,21 @@ fn expand_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
         .collect()
 }
 
-/// One entry of an [`expand_list`], and the shape of every `type: path` value.
-fn expand_path(s: &str, base: &Path, env: &EnvMap) -> PathBuf {
+/// One entry of an [`expand_list`], and the shape of every `type: path` value. A `~` that
+/// can't expand (no `HOME`, or the pwd-database `~user` form) stays literal rather than
+/// anchoring to `base` — a wrong-but-absolute guess would be worse than a miss.
+pub(crate) fn expand_path(s: &str, base: &Path, env: &EnvMap) -> PathBuf {
+    if s == "~" {
+        if let Some(home) = env.var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
     match s.strip_prefix("~/") {
         Some(rest) => match env.var("HOME") {
             Some(home) => PathBuf::from(home).join(rest),
             None => PathBuf::from(s),
         },
-        None if Path::new(s).is_absolute() => PathBuf::from(s),
+        None if Path::new(s).is_absolute() || s.starts_with('~') => PathBuf::from(s),
         None => base.join(s.trim_start_matches("./")),
     }
 }
@@ -411,10 +435,11 @@ mod tests {
             .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
             .load();
 
-        assert_eq!(cfg.roles_path.len(), 2, "a colon splits entries: {:?}", cfg.roles_path);
-        assert_eq!(cfg.roles_path[0], PathBuf::from("/home/t/ansible/roles"));
-        assert_eq!(cfg.roles_path[1], root.join("roles"), "`./` is project-root relative");
-        assert!(cfg.collections_path.contains(&root.join("collections")));
+        let roles = cfg.roles_path.expect("set by the cfg");
+        assert_eq!(roles.len(), 2, "a colon splits entries: {roles:?}");
+        assert_eq!(roles[0], PathBuf::from("/home/t/ansible/roles"));
+        assert_eq!(roles[1], root.join("roles"), "`./` is project-root relative");
+        assert!(cfg.collections_path.expect("set").contains(&root.join("collections")));
     }
 
     /// T-072, moved from its own single-test binary when `EnvMap` made env injectable.
@@ -478,11 +503,11 @@ mod tests {
             .load();
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/elsewhere/mods")],
+            Some(vec![PathBuf::from("/elsewhere/mods")]),
             "the env file's relative entries anchor to its own directory, not the project"
         );
         assert!(
-            c.roles_path.is_empty(),
+            c.roles_path.is_none(),
             "first hit wins whole: the project file is not read, let alone merged"
         );
     }
@@ -500,13 +525,13 @@ mod tests {
         let load = |env: &EnvMap| AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(env).load();
 
         let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/d")]));
-        assert_eq!(c.roles_path, vec![PathBuf::from("/elsewhere/d/shared")]);
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/elsewhere/d/shared")]));
 
         let c = load(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/nowhere/ansible.cfg")]));
-        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")]);
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/roles")]));
 
         let c = load(&EnvMap::empty());
-        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")], "unset: the walk's file");
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/roles")]), "unset: the walk's file");
     }
 
     /// T-145. Verified against Python 3 configparser, the parser `manager.py:432` builds:
@@ -517,15 +542,15 @@ mod tests {
         let c = cfg("[defaults]\nroles_path = %(base)s/roles:%(BASE)s/extra\nbase = /opt\n");
         assert_eq!(
             c.roles_path,
-            vec![PathBuf::from("/opt/roles"), PathBuf::from("/opt/extra")],
+            Some(vec![PathBuf::from("/opt/roles"), PathBuf::from("/opt/extra")]),
             "forward + case-insensitive reference: configparser resolves after the parse"
         );
 
         let c = cfg("[defaults]\nlibrary = /x/50%%pct\n");
-        assert_eq!(c.library, vec![PathBuf::from("/x/50%pct")], "%% is a literal %");
+        assert_eq!(c.library, Some(vec![PathBuf::from("/x/50%pct")]), "%% is a literal %");
 
         let c = cfg("[defaults]\nRoles_Path = ./r\n");
-        assert_eq!(c.roles_path, vec![PathBuf::from("/p/r")], "keys are case-folded");
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/r")]), "keys are case-folded");
     }
 
     /// T-145. Where configparser aborts every ansible command — unknown reference, bare
@@ -536,21 +561,21 @@ mod tests {
         let c = cfg("[defaults]\nlibrary = /x/%(missing)s\n");
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/x/%(missing)s")],
+            Some(vec![PathBuf::from("/x/%(missing)s")]),
             "unknown key: InterpolationMissingOptionError in Ansible"
         );
 
         let c = cfg("[defaults]\nlibrary = /x/50%\n");
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/x/50%")],
+            Some(vec![PathBuf::from("/x/50%")]),
             "bare %: InterpolationSyntaxError in Ansible"
         );
 
         let c = cfg("[defaults]\nlibrary = %(a)s\na = %(library)s\n");
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/p/%(a)s")],
+            Some(vec![PathBuf::from("/p/%(a)s")]),
             "cycle: InterpolationDepthError in Ansible; raw value, base-anchored"
         );
     }
@@ -560,13 +585,53 @@ mod tests {
     #[test]
     fn an_inline_semicolon_comment_is_stripped_from_the_value() {
         let c = cfg("[defaults]\nroles_path = ./roles ; team convention\n");
-        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")]);
+        assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/roles")]));
 
         let c = cfg("[defaults]\nlibrary = /a;b\n");
-        assert_eq!(c.library, vec![PathBuf::from("/a;b")], "no preceding whitespace");
+        assert_eq!(c.library, Some(vec![PathBuf::from("/a;b")]), "no preceding whitespace");
 
         let c = cfg("[defaults]\nlibrary = /a #x\n");
-        assert_eq!(c.library, vec![PathBuf::from("/a #x")], "# is not an inline prefix");
+        assert_eq!(c.library, Some(vec![PathBuf::from("/a #x")]), "# is not an inline prefix");
+    }
+
+    /// Set-but-empty is not unset: `ANSIBLE_ROLES_PATH=` deliberately disables the
+    /// built-in default dirs, exactly as an empty value does in Ansible's pathlist.
+    #[test]
+    fn an_empty_path_env_var_is_set_not_unset() {
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::none())
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_ROLES_PATH", "")]))
+            .load();
+        assert_eq!(c.roles_path, Some(Vec::new()), "explicitly emptied");
+        assert!(c.library.is_none(), "the untouched lists stay unset");
+    }
+
+    /// Env path values anchor to the project root (our stand-in for Ansible's CWD) even
+    /// when `ANSIBLE_CONFIG` moved the config elsewhere — never to the config file's dir.
+    #[test]
+    fn env_path_values_anchor_to_the_project_not_the_env_config() {
+        use crate::testing::MemFs;
+        let fs = MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/shared/team.cfg", "[defaults]\nlibrary = ./mods\n"),
+        ]);
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&fs)
+            .env(&EnvMap::from_pairs(&[
+                ("ANSIBLE_CONFIG", "/shared/team.cfg"),
+                ("ANSIBLE_ROLES_PATH", "./roles"),
+            ]))
+            .load();
+        assert_eq!(
+            c.roles_path,
+            Some(vec![PathBuf::from("/p/roles")]),
+            "the env value means the project's roles, not /shared/roles"
+        );
+        assert_eq!(
+            c.library,
+            Some(vec![PathBuf::from("/shared/mods")]),
+            "the ini's own entries keep anchoring to their config file"
+        );
     }
 
     /// T-098. `ANSIBLE_HOME` resolves env → the `home` ini key → `~/.ansible`.
@@ -609,7 +674,7 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
             c.roles_path,
-            vec![PathBuf::from("/p/from_ini")],
+            Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
         );
@@ -617,14 +682,14 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.roles_path,
-            vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
+            Some(vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")]),
             "env replaces the cfg key wholesale, with the usual `:`-split and `~` expansion"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
         assert_eq!(
             c.roles_path,
-            vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
+            Some(vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")]),
             "env applies with no ansible.cfg at all"
         );
     }
@@ -639,7 +704,7 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
             c.collections_path,
-            vec![PathBuf::from("/p/from_ini")],
+            Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
         );
@@ -647,12 +712,12 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.collections_path,
-            vec![PathBuf::from("/site/coll")],
+            Some(vec![PathBuf::from("/site/coll")]),
             "env replaces the cfg key wholesale"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
-        assert_eq!(c.collections_path, vec![PathBuf::from("/site/coll")], "no ansible.cfg");
+        assert_eq!(c.collections_path, Some(vec![PathBuf::from("/site/coll")]), "no ansible.cfg");
     }
 
     /// T-098.
@@ -664,7 +729,7 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/p/from_ini")],
+            Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
         );
@@ -672,12 +737,12 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.library,
-            vec![PathBuf::from("/site/modules")],
+            Some(vec![PathBuf::from("/site/modules")]),
             "env replaces the cfg key wholesale"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
-        assert_eq!(c.library, vec![PathBuf::from("/site/modules")], "no ansible.cfg");
+        assert_eq!(c.library, Some(vec![PathBuf::from("/site/modules")]), "no ansible.cfg");
     }
 
     /// T-098. The last of the four path overrides — with it, every ini key `load_resolved`
@@ -690,7 +755,7 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
             c.action_plugins,
-            vec![PathBuf::from("/p/from_ini")],
+            Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
         );
@@ -698,12 +763,12 @@ mod tests {
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
             c.action_plugins,
-            vec![PathBuf::from("/site/action")],
+            Some(vec![PathBuf::from("/site/action")]),
             "env replaces the cfg key wholesale"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
-        assert_eq!(c.action_plugins, vec![PathBuf::from("/site/action")], "no ansible.cfg");
+        assert_eq!(c.action_plugins, Some(vec![PathBuf::from("/site/action")]), "no ansible.cfg");
     }
 
     #[test]

@@ -23,14 +23,14 @@ all of them for the settings `config.rs` consumes:
 
 | Env var                           | Overrides                          | Modelled today?     |
 | --------------------------------- | ---------------------------------- | ------------------- |
-| `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:201` |
-| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:164` (`install.rs:304` env-only: no project cfg in scope there) |
-| `ANSIBLE_ROLES_PATH`              | `roles_path`                       | yes, `config.rs:152` |
-| `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | yes, `config.rs:155` |
-| `ANSIBLE_LIBRARY`                 | `library`                          | yes, `config.rs:158` |
-| `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | yes, `config.rs:161` |
-| `ANSIBLE_NETWORK_GROUP_MODULES`   | `network_group_modules`            | yes, `config.rs:145` |
-| `ANSIBLE_DUPLICATE_YAML_DICT_KEY` | `duplicate_dict_key`               | yes, `config.rs:149` |
+| `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:250` |
+| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:189` (`install.rs:305` env-only: no project cfg in scope there) |
+| `ANSIBLE_ROLES_PATH`              | `roles_path`                       | yes, `config.rs:180` |
+| `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | yes, `config.rs:180` |
+| `ANSIBLE_LIBRARY`                 | `library`                          | yes, `config.rs:180` |
+| `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | yes, `config.rs:180` |
+| `ANSIBLE_NETWORK_GROUP_MODULES`   | `network_group_modules`            | yes, `config.rs:194` |
+| `ANSIBLE_DUPLICATE_YAML_DICT_KEY` | `duplicate_dict_key`               | yes, `config.rs:198` |
 
 Each override replaces the ini value wholesale — no merging. And a world-writable CWD makes
 its `ansible.cfg` silently skipped (`manager.py:279-284`).
@@ -58,7 +58,7 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
 
 ## Done when
 
-- [x] `ANSIBLE_CONFIG` is honoured when set — `env_config_file` (`config.rs:201`); unit-tested via the
+- [x] `ANSIBLE_CONFIG` is honoured when set — `env_config_file` (`config.rs:250`); unit-tested via the
       `EnvMap` seam, real-env plumbing in `tests/process_env_snapshot.rs`
 - [x] `ANSIBLE_ROLES_PATH` overrides the ini's `roles_path`
 - [x] `ANSIBLE_COLLECTIONS_PATH` overrides the ini's `collections_path`
