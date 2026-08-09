@@ -252,6 +252,7 @@ T-021 is now unblocked on that side.
 | T-076 | [Var-index re-walks shared files per consumer](closed/T-076-var-index-redundant-walk.md) | done     |
 | T-117 | [when: is strict since 2.19 — audit condition.rs](closed/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | done     |
 | T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](closed/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | done     |
+| T-145 | **bug** · [ansible.cfg %-interpolation: values read raw](closed/T-145-ansible-cfg-interpolation-values-read-raw.md) | done     |
 
 ## Settled — don't re-derive these
 

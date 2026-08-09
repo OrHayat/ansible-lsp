@@ -114,6 +114,9 @@ impl AnsibleConfig {
         let file = env_config_file(fs, env).unwrap_or_else(|| project_root.join("ansible.cfg"));
         let base = file.parent().unwrap_or(project_root);
         let mut home_key = None;
+        // Two passes, because configparser interpolates at read time over the whole parsed
+        // section — `%(key)s` may reference an entry defined later in the file (T-145).
+        let mut entries = Vec::new();
         if let Some(text) = fs.read(&file) {
             let mut in_defaults = false;
             for line in text.lines() {
@@ -128,23 +131,34 @@ impl AnsibleConfig {
                 let Some((key, value)) = line.split_once('=') else {
                     continue;
                 };
-                let paths = || expand_list(value.trim(), base, env);
-                match key.trim() {
-                    "home" => home_key = Some(value.trim().to_string()),
-                    "roles_path" => cfg.roles_path = paths(),
-                    "collections_path" | "collections_paths" => cfg.collections_path = paths(),
-                    "library" => cfg.library = paths(),
-                    "action_plugins" => cfg.action_plugins = paths(),
-                    "network_group_modules" => {
-                        cfg.network_group_modules = Some(name_list(value.trim()));
-                    }
-                    "duplicate_dict_key" => {
-                        if let Some(v) = DuplicateDictKey::parse(value.trim()) {
-                            cfg.duplicate_dict_key = v;
-                        }
-                    }
-                    _ => {}
+                // Keys are case-folded (configparser's `optionxform`), and `;` after
+                // whitespace starts an inline comment — `manager.py:432` enables exactly
+                // that prefix and no other, so an inline `#` is part of the value.
+                entries.push((
+                    key.trim().to_lowercase(),
+                    strip_inline_comment(value.trim()).to_string(),
+                ));
+            }
+        }
+        let section: HashMap<String, String> = entries.iter().cloned().collect();
+        for (key, value) in &entries {
+            let value = interpolate(value, &section);
+            let paths = || expand_list(&value, base, env);
+            match key.as_str() {
+                "home" => home_key = Some(value.clone()),
+                "roles_path" => cfg.roles_path = paths(),
+                "collections_path" | "collections_paths" => cfg.collections_path = paths(),
+                "library" => cfg.library = paths(),
+                "action_plugins" => cfg.action_plugins = paths(),
+                "network_group_modules" => {
+                    cfg.network_group_modules = Some(name_list(&value));
                 }
+                "duplicate_dict_key" => {
+                    if let Some(v) = DuplicateDictKey::parse(&value) {
+                        cfg.duplicate_dict_key = v;
+                    }
+                }
+                _ => {}
             }
         }
         // Env beats the ini file, which beats the shipped default — and it applies whether
@@ -232,6 +246,53 @@ fn env_config_file(fs: &dyn Fs, env: &EnvMap) -> Option<PathBuf> {
         p = p.join("ansible.cfg");
     }
     fs.is_file(&p).then_some(p)
+}
+
+/// Python configparser's `BasicInterpolation`, on for `ansible.cfg` (`manager.py:432`):
+/// `%(key)s` references another `[defaults]` value — case-insensitive, forward references
+/// allowed — and `%%` is a literal `%`. Where configparser aborts every ansible command
+/// (unknown key, bare `%`, a cycle past its depth cap of 10) the raw value stands instead,
+/// the [`DuplicateDictKey::parse`] divergence: going dark over one config line is worse.
+/// All verified live against Python 3 configparser (T-145).
+fn interpolate(value: &str, section: &HashMap<String, String>) -> String {
+    fn go(value: &str, section: &HashMap<String, String>, depth: u8) -> Option<String> {
+        if depth == 0 {
+            return None;
+        }
+        let mut out = String::with_capacity(value.len());
+        let mut rest = value;
+        while let Some(i) = rest.find('%') {
+            out.push_str(&rest[..i]);
+            rest = &rest[i + 1..];
+            if let Some(t) = rest.strip_prefix('%') {
+                out.push('%');
+                rest = t;
+            } else if let Some(t) = rest.strip_prefix('(') {
+                let end = t.find(')')?;
+                let referenced = section.get(&t[..end].to_lowercase())?;
+                out.push_str(&go(referenced, section, depth - 1)?);
+                rest = t[end + 1..].strip_prefix('s')?;
+            } else {
+                return None;
+            }
+        }
+        out.push_str(rest);
+        Some(out)
+    }
+    go(value, section, 10).unwrap_or_else(|| value.to_string())
+}
+
+/// `;` preceded by whitespace cuts the value; nothing else does — not `#`, not a `;` glued
+/// to the value (both verified against configparser with `manager.py:432`'s prefixes).
+fn strip_inline_comment(value: &str) -> &str {
+    let mut prev_ws = false;
+    for (i, ch) in value.char_indices() {
+        if ch == ';' && prev_ws {
+            return value[..i].trim_end();
+        }
+        prev_ws = ch.is_whitespace();
+    }
+    value
 }
 
 /// A generic `type: list` value: comma-separated plain names. Unlike the path keys, which
@@ -446,6 +507,66 @@ mod tests {
 
         let c = load(&EnvMap::empty());
         assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")], "unset: the walk's file");
+    }
+
+    /// T-145. Verified against Python 3 configparser, the parser `manager.py:432` builds:
+    /// forward and case-insensitive `%(key)s` references expand, `%%` unescapes, and keys
+    /// themselves are case-folded.
+    #[test]
+    fn percent_interpolation_expands_references() {
+        let c = cfg("[defaults]\nroles_path = %(base)s/roles:%(BASE)s/extra\nbase = /opt\n");
+        assert_eq!(
+            c.roles_path,
+            vec![PathBuf::from("/opt/roles"), PathBuf::from("/opt/extra")],
+            "forward + case-insensitive reference: configparser resolves after the parse"
+        );
+
+        let c = cfg("[defaults]\nlibrary = /x/50%%pct\n");
+        assert_eq!(c.library, vec![PathBuf::from("/x/50%pct")], "%% is a literal %");
+
+        let c = cfg("[defaults]\nRoles_Path = ./r\n");
+        assert_eq!(c.roles_path, vec![PathBuf::from("/p/r")], "keys are case-folded");
+    }
+
+    /// T-145. Where configparser aborts every ansible command — unknown reference, bare
+    /// `%`, reference cycle — the raw value stands and we keep serving: the deliberate
+    /// [`DuplicateDictKey`] divergence. (A rule flagging the fatal line is future work.)
+    #[test]
+    fn broken_interpolation_keeps_the_raw_value() {
+        let c = cfg("[defaults]\nlibrary = /x/%(missing)s\n");
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/x/%(missing)s")],
+            "unknown key: InterpolationMissingOptionError in Ansible"
+        );
+
+        let c = cfg("[defaults]\nlibrary = /x/50%\n");
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/x/50%")],
+            "bare %: InterpolationSyntaxError in Ansible"
+        );
+
+        let c = cfg("[defaults]\nlibrary = %(a)s\na = %(library)s\n");
+        assert_eq!(
+            c.library,
+            vec![PathBuf::from("/p/%(a)s")],
+            "cycle: InterpolationDepthError in Ansible; raw value, base-anchored"
+        );
+    }
+
+    /// T-145. `manager.py:432` sets `inline_comment_prefixes=(';',)`: a `;` after
+    /// whitespace cuts the value; a glued `;` and an inline `#` do not.
+    #[test]
+    fn an_inline_semicolon_comment_is_stripped_from_the_value() {
+        let c = cfg("[defaults]\nroles_path = ./roles ; team convention\n");
+        assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")]);
+
+        let c = cfg("[defaults]\nlibrary = /a;b\n");
+        assert_eq!(c.library, vec![PathBuf::from("/a;b")], "no preceding whitespace");
+
+        let c = cfg("[defaults]\nlibrary = /a #x\n");
+        assert_eq!(c.library, vec![PathBuf::from("/a #x")], "# is not an inline prefix");
     }
 
     /// T-098. `ANSIBLE_HOME` resolves env → the `home` ini key → `~/.ansible`.
