@@ -24,8 +24,8 @@ all of them for the settings `config.rs` consumes:
 | Env var                           | Overrides                          | Modelled today?     |
 | --------------------------------- | ---------------------------------- | ------------------- |
 | `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:201` |
-| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:152` (`install.rs:304` env-only: no project cfg in scope there) |
-| `ANSIBLE_ROLES_PATH`              | `roles_path`                       | no                  |
+| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:155` (`install.rs:304` env-only: no project cfg in scope there) |
+| `ANSIBLE_ROLES_PATH`              | `roles_path`                       | yes, `config.rs:152` |
 | `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | no                  |
 | `ANSIBLE_LIBRARY`                 | `library`                          | no                  |
 | `ANSIBLE_ACTION_PLUGINS`          | `action_plugins`                   | no                  |
@@ -60,8 +60,10 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
 
 - [x] `ANSIBLE_CONFIG` is honoured when set — `env_config_file` (`config.rs:201`); unit-tested via the
       `EnvMap` seam, real-env plumbing in `tests/process_env_snapshot.rs`
-- [ ] the four path env vars override the ini (`ANSIBLE_ROLES_PATH`, `ANSIBLE_COLLECTIONS_PATH`,
-      `ANSIBLE_LIBRARY`, `ANSIBLE_ACTION_PLUGINS`)
+- [x] `ANSIBLE_ROLES_PATH` overrides the ini's `roles_path`
+- [ ] `ANSIBLE_COLLECTIONS_PATH` overrides the ini's `collections_path`
+- [ ] `ANSIBLE_LIBRARY` overrides the ini's `library`
+- [ ] `ANSIBLE_ACTION_PLUGINS` overrides the ini's `action_plugins`
 - [x] `ANSIBLE_HOME` (env, or the `home` ini key) relocates the hardcoded `~/.ansible`
       defaults in `workspace.rs` and `install.rs` — `AnsibleConfig::ansible_home`, resolved
       env → ini → `~/.ansible`; install discovery honours the env half only, having no

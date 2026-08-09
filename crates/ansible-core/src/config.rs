@@ -149,6 +149,9 @@ impl AnsibleConfig {
         }
         // Env beats the ini file, which beats the shipped default — and it applies whether
         // or not an `ansible.cfg` was found, so it can't ride inside the block above.
+        if let Some(v) = env.var("ANSIBLE_ROLES_PATH") {
+            cfg.roles_path = expand_list(v, base, env);
+        }
         cfg.ansible_home = env
             .var("ANSIBLE_HOME")
             .map(|v| expand_path(v, base, env))
@@ -464,6 +467,30 @@ mod tests {
             .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
             .load();
         assert_eq!(c.ansible_home, Some(PathBuf::from("/home/t/ans")));
+    }
+
+    /// T-098. `ANSIBLE_ROLES_PATH` replaces the ini's `roles_path` wholesale — no merging,
+    /// same as every layer of the ladder.
+    #[test]
+    fn the_roles_path_env_var_beats_the_cfg_key() {
+        let env = EnvMap::from_pairs(&[("ANSIBLE_ROLES_PATH", "/abs/roles:~/r"), ("HOME", "/home/t")]);
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nroles_path = ./from_ini\n"))
+            .env(&env)
+            .load();
+        assert_eq!(
+            c.roles_path,
+            vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
+            "env replaces the cfg key wholesale, with the usual `:`-split and `~` expansion"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
+        assert_eq!(
+            c.roles_path,
+            vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
+            "env applies with no ansible.cfg at all"
+        );
     }
 
     #[test]
