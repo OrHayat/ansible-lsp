@@ -1,8 +1,14 @@
 # T-154 — Vaulted vars files are invisible to the index, so var-undefined lies
 
-| Status | Kind | Priority | Size | Depends on |
-| ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | S    | —          |
+| Status       | Kind | Priority | Size | Depends on |
+| ------------ | ---- | -------- | ---- | ---------- |
+| **rejected** | bug  | P1       | S    | —          |
+
+**Rejected as a duplicate**: T-037 (Vault awareness) already owned this finding — filed
+without checking the open list first. The probe result, the three postures, and the
+inline-vault analysis below were folded into T-037, including the correction that
+`unparseable` does NOT fire (this file's body is a valid plain multiline scalar), against
+T-037's original claim.
 
 ## Symptom
 

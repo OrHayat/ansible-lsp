@@ -13,13 +13,31 @@ $ANSIBLE_VAULT;1.1;AES256
 33623462...
 ```
 
-So every rule that reads files trips on it. Most urgently, T-013 now publishes a red
-`unparseable` **error** on any vaulted file — a false positive on every repo that uses vault.
-`vars_files:`/`include_vars:` (T-016/T-017) pointing at a vault file, and T-033's "defined
-nowhere" (a var may be defined *only* inside a vaulted vars file), are wrong the same way.
+**Probed 2026-08-09** (while filing what became the duplicate T-154), which corrects this
+ticket's original premise: the body IS valid YAML — hex lines form one plain multiline
+scalar, so the file parses (1 node, `Ast::Other`) and `unparseable` does **not** fire.
+The live lie is `var-undefined`: a playbook with `vars_files: [secrets.yml]` where
+`secrets.yml` is vaulted warns
 
-Vault is common. Without this, the loud diagnostics we just shipped are untrustworthy exactly
-where security-conscious repos live.
+```
+`db_password` is never defined in any file reachable from this playbook — ...
+```
+
+on every use — the file is reachable and does define it. Same failure for vaulted
+`group_vars/`/`include_vars` sources, i.e. exactly where security-conscious repos keep
+secrets.
+
+## The three postures
+
+1. **Decrypt** — the LSP could find the password the way Ansible does
+   (`vault_password_file`, config). Rejected by design: decrypted secrets in editor
+   memory and LSP traffic, to gain diagnostics precision, is the wrong trade.
+2. **Pretend the file is empty** — today's behaviour, the lie above.
+3. **Opaque: know that we don't know** — the header alone proves "some unknown set of
+   vars is defined here". This is the fix. Cost: along a vaulted path a genuine typo
+   (`db_pasword`) is also conceded — both names are "maybe in the box". Scope the
+   opacity per-path so playbooks that never reach a vaulted file keep full coverage,
+   and make the concession name the box ("may be defined in vaulted `secrets.yml`").
 
 ## What's knowable vs not
 
@@ -42,10 +60,14 @@ where security-conscious repos live.
 
 ## Done when
 
-- [ ] a vaulted file yields no `unparseable` error (and no missing/undefined noise)
+- [ ] a vaulted file yields no `unparseable` error (probe says none fires today — pin it
+      as a regression test) and no missing/undefined noise
 - [ ] the vault-id label surfaces on hover
-- [ ] `!vault` scalars count as defined vars and don't produce "undefined" hedged-away warnings
-- [ ] T-033 hedges instead of warning whenever a vaulted vars source is in scope
+- [ ] `!vault` scalars count as defined vars, resolve go-to-definition, and don't
+      produce "undefined" warnings (test a task `vars:` and a vars-file entry)
+- [ ] definedness hedges instead of warning whenever a vaulted vars source is reachable,
+      the hedge names the vaulted file, and opacity is per-path — playbooks that reach
+      no vault keep full coverage
 - [ ] a test fixture with a real vault header is pinned
 
 Docs: https://docs.ansible.com/ansible/latest/vault_guide/index.html
