@@ -152,6 +152,9 @@ impl AnsibleConfig {
         if let Some(v) = env.var("ANSIBLE_ROLES_PATH") {
             cfg.roles_path = expand_list(v, base, env);
         }
+        if let Some(v) = env.var("ANSIBLE_COLLECTIONS_PATH") {
+            cfg.collections_path = expand_list(v, base, env);
+        }
         cfg.ansible_home = env
             .var("ANSIBLE_HOME")
             .map(|v| expand_path(v, base, env))
@@ -491,6 +494,26 @@ mod tests {
             vec![PathBuf::from("/abs/roles"), PathBuf::from("/home/t/r")],
             "env applies with no ansible.cfg at all"
         );
+    }
+
+    /// T-098. Note the spelling: the env var is singular (`base.yml:281-283`); only the
+    /// ini key still accepts the legacy plural.
+    #[test]
+    fn the_collections_path_env_var_beats_the_cfg_key() {
+        let env = EnvMap::from_pairs(&[("ANSIBLE_COLLECTIONS_PATH", "/site/coll")]);
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\ncollections_path = ./from_ini\n"))
+            .env(&env)
+            .load();
+        assert_eq!(
+            c.collections_path,
+            vec![PathBuf::from("/site/coll")],
+            "env replaces the cfg key wholesale"
+        );
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
+        assert_eq!(c.collections_path, vec![PathBuf::from("/site/coll")], "no ansible.cfg");
     }
 
     #[test]
