@@ -217,16 +217,10 @@ pub enum KeyContext {
     LoopControl,
 }
 
-/// Is `key` accepted by ansible-core in this context? Exact — reproduces the
-/// `frozenset(self.fattributes)` membership check of `base.py:217-220`, plus the
-/// preprocess-level escapes that run before it (`user:` on a play, `play.py:166-174`).
-///
-/// The module key on a task and `local_action`/`with_*` are *not* in these sets — they
-/// are consumed by the args parser before validation, so callers must exclude them first
-/// (`mod_args.py:330-333`), as must role params on a `roles:` entry
-/// (`definition.py:200-224`).
-pub fn legal_key(ctx: KeyContext, key: &str) -> bool {
-    let mixins_of_task: &[&[&str]] = &[
+/// The sets whose union is the legal vocabulary of `ctx`, plus preprocess-level escapes
+/// that never reach `fattributes` (`user:` on a play, `play.py:166-174`).
+fn sets_of(ctx: KeyContext) -> (&'static [&'static [&'static str]], &'static [&'static str]) {
+    const TASK_SETS: &[&[&str]] = &[
         BASE,
         CONDITIONAL,
         TAGGABLE,
@@ -236,21 +230,42 @@ pub fn legal_key(ctx: KeyContext, key: &str) -> bool {
         TASK_OWN,
     ];
     match ctx {
-        // `user:` is renamed to `remote_user` in preprocess, before validation.
-        KeyContext::Play => {
-            key == "user" || in_set(&[BASE, TAGGABLE, COLLECTION_SEARCH, PLAY_OWN], key)
-        }
-        KeyContext::Block => in_set(
+        KeyContext::Play => (&[BASE, TAGGABLE, COLLECTION_SEARCH, PLAY_OWN], &["user"]),
+        KeyContext::Block => (
             &[BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, NOTIFIABLE, BLOCK_OWN],
-            key,
+            &[],
         ),
-        KeyContext::Task => in_set(mixins_of_task, key),
-        KeyContext::Handler => in_set(mixins_of_task, key) || in_set(&[HANDLER_OWN], key),
-        KeyContext::DynamicInclude => in_set(&[DYNAMIC_INCLUDE], key),
-        KeyContext::DynamicHandlerInclude => in_set(&[DYNAMIC_INCLUDE, HANDLER_OWN], key),
-        KeyContext::RoleMetadata => in_set(&[BASE, COLLECTION_SEARCH, ROLE_METADATA_OWN], key),
-        KeyContext::LoopControl => in_set(&[LOOP_CONTROL_KEYS], key),
+        KeyContext::Task => (TASK_SETS, &[]),
+        KeyContext::Handler => (
+            &[BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, NOTIFIABLE, TASK_OWN,
+              HANDLER_OWN],
+            &[],
+        ),
+        KeyContext::DynamicInclude => (&[DYNAMIC_INCLUDE], &[]),
+        KeyContext::DynamicHandlerInclude => (&[DYNAMIC_INCLUDE, HANDLER_OWN], &[]),
+        KeyContext::RoleMetadata => (&[BASE, COLLECTION_SEARCH, ROLE_METADATA_OWN], &[]),
+        KeyContext::LoopControl => (&[LOOP_CONTROL_KEYS], &[]),
     }
+}
+
+/// Is `key` accepted by ansible-core in this context? Exact — reproduces the
+/// `frozenset(self.fattributes)` membership check of `base.py:217-220`, plus the
+/// preprocess-level escapes that run before it (`user:` on a play, `play.py:166-174`).
+///
+/// The module key on a task and `local_action`/`with_*` are *not* in these sets — they
+/// are consumed by the args parser before validation, so callers must exclude them first
+/// (`mod_args.py:330-333`), as must role params on a `roles:` entry
+/// (`definition.py:200-224`).
+pub fn legal_key(ctx: KeyContext, key: &str) -> bool {
+    let (sets, escapes) = sets_of(ctx);
+    escapes.contains(&key) || in_set(sets, key)
+}
+
+/// Every key [`legal_key`] accepts in `ctx`, for near-miss suggestions. Unsorted and
+/// possibly with duplicates across mixins — callers scan, they don't display the list.
+pub fn legal_keys(ctx: KeyContext) -> impl Iterator<Item = &'static str> {
+    let (sets, escapes) = sets_of(ctx);
+    sets.iter().flat_map(|s| s.iter()).chain(escapes.iter()).copied()
 }
 
 // ---------------------------------------------------------------------------------------

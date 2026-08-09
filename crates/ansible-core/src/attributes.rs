@@ -104,10 +104,43 @@ fn class_name(t: &Task, u: &UnknownKey, in_handlers: bool) -> &'static str {
 }
 
 fn fatal(u: &UnknownKey, class: &str) -> Problem {
+    let hint = match suggestion(&u.key, u.ctx) {
+        Some(s) => format!(" (did you mean '{s}'?)"),
+        None => String::new(),
+    };
     Problem {
         span: u.key_span,
         tier: Tier::Error,
-        message: format!("'{}' is not a valid attribute for a {}", u.key, class),
+        message: format!("'{}' is not a valid attribute for a {}{}", u.key, class, hint),
+    }
+}
+
+/// A legal key of `ctx` one edit away from the typo — `vars_file` → `vars_files`,
+/// `task` → `tasks` (T-088). One edit only: with a ~40-word dictionary, distance 2 starts
+/// pairing unrelated keywords.
+fn suggestion(key: &str, ctx: KeyContext) -> Option<&'static str> {
+    keywords::legal_keys(ctx).find(|k| one_edit_apart(key, k))
+}
+
+/// Levenshtein distance 1 (plus adjacent transposition), without building the matrix:
+/// walk to the first mismatch, then require the tails to line up under exactly one of
+/// skip-a-char / drop-a-char / swap-the-pair.
+fn one_edit_apart(a: &str, b: &str) -> bool {
+    if a == b {
+        return false;
+    }
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let i = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (ta, tb) = (&a[i..], &b[i..]);
+    match (ta.len(), tb.len()) {
+        (0, 1) | (1, 0) => true,                                  // insert / delete at end
+        (x, y) if x == y => {
+            ta[1..] == tb[1..]                                    // substitution
+                || (ta.len() >= 2 && ta[0] == tb[1] && ta[1] == tb[0] && ta[2..] == tb[2..])
+        }
+        (x, y) if x + 1 == y => ta[..] == tb[1..],                // insertion
+        (x, y) if x == y + 1 => ta[1..] == tb[..],                // deletion
+        _ => false,
     }
 }
 
@@ -187,6 +220,25 @@ mod tests {
         assert_eq!(
             got,
             [(Tier::Error, "'name' is not a valid attribute for a LoopControl".into())]
+        );
+    }
+
+    /// T-088: the live-verified typo that filed the ticket, plus the no-hint case.
+    #[test]
+    fn a_one_edit_typo_gets_a_suggestion() {
+        let got = check("- hosts: web\n  vars_file: x.yml\n  tasks:\n    - debug:\n", true);
+        assert_eq!(
+            got,
+            [(
+                Tier::Error,
+                "'vars_file' is not a valid attribute for a Play (did you mean 'vars_files'?)"
+                    .into()
+            )]
+        );
+        let got = check("- hosts: web\n  frobnicate: x\n  tasks:\n    - debug:\n", true);
+        assert_eq!(
+            got,
+            [(Tier::Error, "'frobnicate' is not a valid attribute for a Play".into())]
         );
     }
 

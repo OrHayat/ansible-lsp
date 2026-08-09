@@ -2394,6 +2394,51 @@ mod tests {
         assert_eq!(got[0].range.start.line, got[0].range.end.line);
     }
 
+    /// T-088: no false positives — every demo file except the one built to demonstrate
+    /// the rule stays free of invalid-attribute diagnostics.
+    #[test]
+    fn every_other_demo_file_is_free_of_invalid_attribute_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "invalid_attributes.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-attribute")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-088: `# noqa: invalid-attribute` on the offending line silences the rule.
+    #[test]
+    fn noqa_suppresses_invalid_attribute() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let flagged = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-attribute")
+                })
+                .count()
+        };
+        let bad = "- hosts: web\n  vars_file: x.yml\n  tasks:\n    - debug:\n";
+        assert_eq!(flagged(bad), 1);
+        let silenced = "- hosts: web\n  vars_file: x.yml # noqa: invalid-attribute\n  tasks:\n    - debug:\n";
+        assert_eq!(flagged(silenced), 0);
+    }
+
     /// T-016: the messages must describe what Ansible actually does with a missing
     /// vars_files entry — silent skip — and never claim the play would fail.
     #[test]
