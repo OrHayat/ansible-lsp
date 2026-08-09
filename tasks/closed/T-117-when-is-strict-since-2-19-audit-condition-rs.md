@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-114 | T-138      |
+| done   | task | P1       | S    | T-114 | T-138      |
 
 ## Problem
 
@@ -72,7 +72,7 @@ So three of the four shipped rules are confirmed untouched by 2.19. Only `when-j
 describes the wrong runtime, and correcting it is the one change this ticket makes to an
 existing rule.
 
-### The gate is binary
+### The gate: ERROR at 2.19+, WARNING below it
 
 Same two cases on **2.18.6** (isolated `uvx --from ansible-core==2.18.6`):
 
@@ -81,14 +81,24 @@ Same two cases on **2.18.6** (isolated `uvx --from ansible-core==2.18.6`):
 | `when: ""` | **runs, no warning** | fatal |
 | `when: "'bad'"` | **runs, no warning** | fatal |
 
-There is no warning tier before 2.19 — the task simply runs, since empty is True and a truthy
-non-boolean is accepted. `ALLOW_BROKEN_CONDITIONALS` arrived *with* 2.19 as the escape hatch,
-and enabling it is what downgrades the error to a deprecation. So the gate has two states, not
-three: **silent below 2.19, ERROR at 2.19+**. Anything else would false-positive on code that
-genuinely works.
+Upstream has no warning tier before 2.19 — the task simply runs, since empty is True and a
+truthy non-boolean is accepted. `ALLOW_BROKEN_CONDITIONALS` arrived *with* 2.19 as the escape
+hatch, and enabling it is what downgrades the error to a deprecation.
 
-This is also the argument for the rule's value: on 2.18 a `when: ""` runs today and hard-fails
-on upgrade, with nothing warning in between.
+We should not mirror that silence. Pre-2.19 the code works *today* and hard-fails the moment
+the user upgrades, with nothing between here and there to tell them. A latent break is worth
+saying out loud; that is most of why an editor is better placed than the runtime.
+
+So the severity carries the version and the rule does not fork:
+
+| Detected core | Tier | What it says |
+| ------------- | ---- | ------------ |
+| ≥ 2.19 | **ERROR** | this fails now |
+| < 2.19 | **WARNING** | this works now and dies on upgrade |
+| undetected | **WARNING** | correct either way; only understates on 2.19+ |
+
+One rule id, one message plus a clause naming the version. The undetected case needs no separate
+policy, which is what makes this better than gating the rule's existence on the version.
 
 Three consequences:
 
@@ -118,21 +128,50 @@ The audit above is done. What is left is encoding it: two new rules (empty-strin
 bare-literal condition) and one correction (the fully-wrapped message and tier), with the
 embedded case deliberately not implemented.
 
-Gate anything version-sensitive on the detected ansible-core version. `AnsibleInstall.version`
-now exists — T-138 added it by reading `<package_dir>/release.py`. Decide what an *undetected*
-version means: the recommendation is to assume 2.19+ for the new rules, since silence about a
-fatal is the worse failure, but never to escalate an existing WARNING to ERROR without a
-detected version.
+The version decides the **severity**, not whether the rule runs — see the gate table above.
+`AnsibleInstall.version` now exists (T-138, via `<package_dir>/release.py`), and an undetected
+version falls to WARNING with no special case.
 
 Diagnostics carry one hardcoded severity today (`main.rs:551-558`), so `Problem` needs a
-`severity()` beside `rule_id()`/`message()`. `duplicate_key_diagnostics` (`main.rs:479-484`) is
-the precedent for a per-diagnostic severity.
+`severity(version: Option<Version>)` beside `rule_id()`/`message()`. `duplicate_key_diagnostics`
+(`main.rs:479-484`) is the precedent for a per-diagnostic severity. The three rules that 2.19
+did not change keep their current WARNING whatever the version — only the strictness rules read
+it.
 
 ## Done when
 
-- [ ] each existing `when-*` rule is confirmed against 2.19+ or corrected
-- [ ] a clause that is a string stripping to empty is an ERROR; null and `[]` stay silent
-- [ ] a fully-wrapped `when: "{{ x }}"` is a HINT that does not claim the deprecation as fact
-- [ ] a condition that is a bare literal (`"'bad'"`, a number, a list) is an ERROR
-- [ ] version-sensitive rules are gated on the detected ansible-core version
-- [ ] the corpus re-run still finds zero broken conditions, or explains what changed
+- [x] each existing `when-*` rule is confirmed against 2.19+ or corrected
+- [x] a clause that is a string stripping to empty is reported; null and `[]` stay silent
+- [x] a fully-wrapped `when: "{{ x }}"` is a HINT that does not claim the deprecation as fact
+- [x] a condition that is a bare literal (`"'bad'"`, a number, a list) is reported
+- [x] the strictness rules are ERROR at 2.19+, WARNING below it or undetected, and say which
+- [x] the corpus re-run still finds zero broken conditions, or explains what changed
+
+## Outcome
+
+Two rules added — `when-empty` and `when-not-boolean` — and one corrected: on 2.19+
+`when-jinja-delimiters` drops to a HINT and its message stops claiming the value "evaluates
+twice", which stopped being true in 2.19. `Problem` grew `tier(core)` and a version-aware
+`message(core)`; `diagnostics_of` takes the version as an argument (`diagnostics_with`) rather
+than reading the global, so the tiers are testable without an install.
+
+**The parser needed fixing first.** The rule false-positived on the demo's own GOOD case: a null
+`when:` and `when: ""` both reached us as `Scalar { value: "" }`, and Ansible treats them as
+absence and a fatal error. libyaml keeps them apart only in the marks — `""` spans its two
+quotes, a null spans nothing — so `Node` gained a `Null` variant and a plain empty scalar builds
+that. It is deliberately not folded into `Other`, which means "an alias or something we do not
+model"; null is a value YAML has, and conflating the two hides the distinction the rule needs.
+That variant is the whole reason the empty rule can be a one-line string test.
+
+Deliberately not done:
+
+- **Embedded templates.** `ALLOW_EMBEDDED_TEMPLATES` defaults `true` and 2.21.2 emitted no
+  deprecation for the documented shape. A diagnostic would be louder than the runtime.
+- **Non-boolean beyond literals.** `n | length` and `s and s` are equally fatal and need filter
+  return types (T-115) and a type model (T-116). Recorded in T-114's parser note.
+- **The other four keywords.** `changed_when: "'bad'"` in the demo has a rule waiting for it and
+  stays silent until T-141 routes it.
+
+Corpus is clean: no false positive on the 416 real expressions. Worth noting *why* that is weak
+evidence and still meaningful — the corpus contains no empty or bare-literal condition at all,
+which is itself the point: these shapes do not occur in code that ships.

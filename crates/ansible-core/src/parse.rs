@@ -52,6 +52,13 @@ pub enum Node {
         entries: Vec<(Node, Node)>,
         span: Span,
     },
+    /// YAML null — a key written with no value. Distinct from `Scalar { value: "" }`, which
+    /// is an explicitly empty *string*: Ansible reads the first as absence and the second as
+    /// a value, and for a conditional that is the difference between fine and fatal (T-117).
+    /// The span is empty and sits where the value would have been.
+    Null {
+        span: Span,
+    },
     Other {
         span: Span,
     },
@@ -63,6 +70,7 @@ impl Node {
             Node::Scalar { span, .. }
             | Node::Sequence { span, .. }
             | Node::Mapping { span, .. }
+            | Node::Null { span }
             | Node::Other { span } => *span,
         }
     }

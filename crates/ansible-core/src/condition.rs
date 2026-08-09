@@ -9,6 +9,8 @@
 //! the variable is unset, so the condition carries its own default-run answer without
 //! resolving anything. That matters — Ansible has 22 variable precedence levels.
 
+use crate::install::Version;
+
 /// Jinja tests and filters that are not variable references.
 const NOT_VARIABLES: &[&str] = &[
     // filters
@@ -238,6 +240,33 @@ pub enum Problem {
     AssignmentNotComparison,
     /// Unbalanced `(`/`)` or an odd number of quotes — a Jinja syntax error.
     UnbalancedDelimiters,
+    /// A clause that is a string stripping to empty. Refused outright since 2.19;
+    /// silently True before it. Absence of a clause is not this — see [`problems`].
+    EmptyCondition,
+    /// The whole condition is a literal, so its result cannot be a boolean. Fatal since
+    /// 2.19 ("Conditionals must have a boolean result"); silently truthy before it.
+    NonBooleanLiteral,
+}
+
+/// How loudly a [`Problem`] should be reported. The strictness rules mean different things
+/// on either side of 2.19, and the severity is where that difference lives — see
+/// [`Problem::tier`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    Error,
+    Warning,
+    Hint,
+}
+
+/// Conditionals became strict here: empty and non-boolean results turned fatal, and a
+/// fully-wrapped condition became a resolve-then-evaluate with a deprecation attached.
+const STRICT: Version = Version { major: 2, minor: 19, patch: 0 };
+
+/// Whether the runtime we are describing refuses broken conditionals. An **undetected**
+/// version is deliberately not strict: it lowers the strictness rules to a warning, which
+/// is right on an old core and merely understated on a new one.
+fn is_strict(core: Option<Version>) -> bool {
+    matches!(core, Some(v) if v >= STRICT)
 }
 
 impl Problem {
@@ -247,27 +276,84 @@ impl Problem {
             Problem::ItemWithoutLoop => "when-item-without-loop",
             Problem::AssignmentNotComparison => "when-assignment",
             Problem::UnbalancedDelimiters => "when-unbalanced",
+            Problem::EmptyCondition => "when-empty",
+            Problem::NonBooleanLiteral => "when-not-boolean",
         }
     }
 
-    pub fn message(&self) -> &'static str {
+    /// `core` is the detected ansible-core version, if any. The three rules 2.19 did not
+    /// touch stay a warning whatever it says; only the strictness rules read it.
+    pub fn tier(&self, core: Option<Version>) -> Tier {
         match self {
+            Problem::EmptyCondition | Problem::NonBooleanLiteral => {
+                if is_strict(core) {
+                    Tier::Error
+                } else {
+                    Tier::Warning
+                }
+            }
+            // On 2.19+ this is no longer "evaluates twice": the value is resolved once and
+            // then evaluated, and whether that deprecates depends on the runtime type of
+            // the result. A hint can point at it; a warning would overstate it.
+            Problem::JinjaDelimiters if is_strict(core) => Tier::Hint,
+            _ => Tier::Warning,
+        }
+    }
+
+    pub fn message(&self, core: Option<Version>) -> String {
+        let strict = is_strict(core);
+        match self {
+            Problem::JinjaDelimiters if strict => {
+                "`when:` is already a Jinja expression. This is resolved once and the result \
+                 evaluated: if it resolves to a string it is an indirect expression, otherwise \
+                 it is deprecated for removal in 2.23. Drop the delimiters and write the \
+                 expression directly."
+                    .into()
+            }
             Problem::JinjaDelimiters => {
                 "`when:` is already a Jinja expression — `{{ }}` here evaluates twice \
                  and misbehaves on bare variables. Drop the delimiters."
+                    .into()
             }
             Problem::ItemWithoutLoop => {
                 "`item` is only defined inside a loop, and this task has no \
                  `loop:`/`with_*` — the condition can never evaluate."
+                    .into()
             }
             Problem::AssignmentNotComparison => {
                 "single `=` is assignment, not comparison — Jinja raises a syntax \
                  error here at runtime. Use `==`."
+                    .into()
             }
             Problem::UnbalancedDelimiters => {
                 "unbalanced parentheses or quotes — Jinja raises a syntax error here \
                  at runtime."
+                    .into()
             }
+            Problem::EmptyCondition => format!(
+                "an empty condition {}. Remove the clause — an absent `when:` and `when: []` \
+                 both mean \"no condition\" and are fine; only an empty string is refused.",
+                Self::since_219(strict, core, "is refused outright", "evaluates as true")
+            ),
+            Problem::NonBooleanLiteral => format!(
+                "this condition is a literal, so it cannot evaluate to a boolean, and a \
+                 non-boolean result {}. Note that YAML quoting is invisible here: `\"x\"` is \
+                 the variable `x`, while `\"'x'\"` is this literal.",
+                Self::since_219(strict, core, "is an error", "is accepted as truthy")
+            ),
+        }
+    }
+
+    /// Both strictness messages need the same clause: what the runtime in front of the user
+    /// does, and — when it is an old one — that upgrading changes the answer.
+    fn since_219(strict: bool, core: Option<Version>, now: &str, before: &str) -> String {
+        match (strict, core) {
+            (true, Some(v)) => format!("{now} on the ansible-core {v} in use"),
+            (true, None) => now.to_string(),
+            (false, Some(v)) => {
+                format!("{before} on the ansible-core {v} in use, and {now} from 2.19")
+            }
+            (false, None) => format!("{now} from ansible-core 2.19, and {before} before it"),
         }
     }
 }
@@ -276,8 +362,16 @@ impl Problem {
 /// a `loop:`/`with_*`, which `item` depends on.
 pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
     let mut out = Vec::new();
+    // Stripped before the check upstream, so whitespace counts as empty. Nothing else can
+    // be said about an empty string, so this is the whole verdict rather than one of many.
+    if cond.trim().is_empty() {
+        return vec![Problem::EmptyCondition];
+    }
     if cond.contains("{{") || cond.contains("{%") {
         out.push(Problem::JinjaDelimiters);
+    }
+    if is_bare_literal(cond) {
+        out.push(Problem::NonBooleanLiteral);
     }
     let bare = strip_strings(cond);
     if !has_loop && has_word(&bare, "item") {
@@ -704,6 +798,30 @@ fn is_falsy(s: &str) -> bool {
     matches!(unquote(s.trim()), "false" | "False" | "no" | "0")
 }
 
+/// The whole condition is a Jinja literal, so no value of any variable can make its result a
+/// boolean. Only unambiguous shapes count: `'a' == b` is built *from* a literal but is not
+/// one, and a YAML boolean is the correct spelling of a constant condition rather than a
+/// fault — `when: true` is demonstrated in the demo as `Verdict::Always`.
+fn is_bare_literal(cond: &str) -> bool {
+    let t = cond.trim();
+    let b = t.as_bytes();
+    if t.is_empty() || matches!(t, "true" | "True" | "false" | "False") {
+        return false;
+    }
+    // A quoted string whose closing quote is the last character. The same quote appearing
+    // in between means the value is an expression joining literals, not a single one.
+    if b.len() >= 2 && (b[0] == b'\'' || b[0] == b'"') && b[b.len() - 1] == b[0] {
+        return !t[1..t.len() - 1].contains(b[0] as char);
+    }
+    // A number — int or float, both non-boolean.
+    if t.parse::<f64>().is_ok() {
+        return true;
+    }
+    // A list or dict display. `{{ … }}` is a template, not a dict.
+    (t.starts_with('[') && t.ends_with(']'))
+        || (t.starts_with('{') && t.ends_with('}') && !t.starts_with("{{"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,6 +1109,76 @@ mod tests {
                 "T-140 silenced a real assignment: {bad}"
             );
         }
+    }
+
+    /// T-117. An empty clause is refused since 2.19, and it is the *string* that decides:
+    /// whitespace strips to empty and counts. Absence never reaches here — the parser makes a
+    /// null `when:` a non-string, so it produces no clause at all.
+    #[test]
+    fn an_empty_condition_is_a_problem() {
+        for c in ["", "   ", "\t", "\n "] {
+            assert_eq!(problems(c, false), vec![Problem::EmptyCondition], "{c:?}");
+        }
+    }
+
+    /// T-117. A literal cannot evaluate to a boolean, and 2.19 refuses a non-boolean result.
+    /// Provable with no variable knowledge, which is what separates it from the rest of the
+    /// boolean-result check.
+    #[test]
+    fn a_literal_condition_cannot_be_boolean() {
+        for c in ["'bad'", "\"bad\"", "1", "0", "2.5", "[]", "[1, 2]", "{'a': 1}"] {
+            assert!(problems(c, false).contains(&Problem::NonBooleanLiteral), "{c}");
+        }
+        // Built *from* literals is not the same as being one; a YAML boolean is the correct
+        // spelling of a constant condition, not a fault; and a template is not a dict.
+        for c in
+            ["'a' == 'b'", "x == 'bad'", "true", "false", "x", "x | length > 0", "{{ x }}"]
+        {
+            assert!(!problems(c, false).contains(&Problem::NonBooleanLiteral), "{c}");
+        }
+    }
+
+    /// T-117. The version picks the severity, never whether we speak. Measured upstream: on
+    /// 2.18.6 an empty condition runs silently, on 2.21.2 it is fatal — so an old core earns a
+    /// warning that it breaks on upgrade rather than the silence upstream gives it.
+    #[test]
+    fn strictness_severity_follows_the_detected_core() {
+        let v = |minor, patch| Some(Version { major: 2, minor, patch });
+        for p in [Problem::EmptyCondition, Problem::NonBooleanLiteral] {
+            assert_eq!(p.tier(v(21, 2)), Tier::Error, "{p:?} on 2.21.2");
+            assert_eq!(p.tier(v(19, 0)), Tier::Error, "{p:?} on 2.19.0, the boundary");
+            assert_eq!(p.tier(v(18, 6)), Tier::Warning, "{p:?} on 2.18.6");
+            assert_eq!(p.tier(None), Tier::Warning, "{p:?} undetected");
+        }
+        // The wrapped case is no longer "evaluates twice": on 2.19+ it is one of two outcomes
+        // we cannot tell apart, so it drops to a hint and keeps its warning on an old core.
+        assert_eq!(Problem::JinjaDelimiters.tier(v(21, 2)), Tier::Hint);
+        assert_eq!(Problem::JinjaDelimiters.tier(v(18, 6)), Tier::Warning);
+        // The three rules 2.19 did not touch never read the version.
+        for p in [
+            Problem::ItemWithoutLoop,
+            Problem::AssignmentNotComparison,
+            Problem::UnbalancedDelimiters,
+        ] {
+            assert_eq!(p.tier(v(21, 2)), Tier::Warning, "{p:?}");
+            assert_eq!(p.tier(None), Tier::Warning, "{p:?}");
+        }
+    }
+
+    /// A warning on an old core reads as "this is broken" unless it says otherwise — the point
+    /// there is "this breaks when you upgrade", so the message has to name both runtimes.
+    #[test]
+    fn the_strictness_message_names_the_version_case() {
+        let old = Problem::EmptyCondition.message(Some(Version { major: 2, minor: 18, patch: 6 }));
+        assert!(old.contains("2.18.6"), "{old}");
+        assert!(old.contains("2.19"), "names the upgrade that changes it: {old}");
+
+        let new = Problem::NonBooleanLiteral.message(Some(Version { major: 2, minor: 21, patch: 2 }));
+        assert!(new.contains("2.21.2"), "{new}");
+
+        // An unchanged rule reads the same whatever the version.
+        let p = Problem::AssignmentNotComparison;
+        assert_eq!(p.message(None), p.message(Some(Version { major: 2, minor: 21, patch: 2 })));
     }
 
     #[test]

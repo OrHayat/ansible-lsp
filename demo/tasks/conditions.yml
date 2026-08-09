@@ -141,8 +141,9 @@
 # ====================================== FATAL SINCE ansible-core 2.19 — not yet flagged
 # 2.19 made conditionals strict. The rule, verified on core 2.21.2, is narrower than it
 # sounds: a clause that is a *string* stripping to empty is refused outright. Absence of a
-# clause is not. The editor is silent on all of these, which is what T-117 fixes — gated on
-# the core version `AnsibleInstall` detects, since none of it applies before 2.19.
+# clause is not. The editor is silent on all of these, which is what T-117 fixes. The detected
+# core version picks the severity rather than whether to speak: an error at 2.19+, a warning
+# below it, where the task still runs today but dies the moment you upgrade.
 
 - name: "PENDING — an empty conditional is an error since 2.19"
   ansible.builtin.include_tasks: sibling.yml
@@ -157,6 +158,12 @@
   when:
     - demo_mode | default('native') == 'native'
     - ""
+
+- name: "BAD — when-not-boolean: a literal cannot evaluate to a boolean"
+  # YAML quoting is invisible to Ansible: it strips one layer and evaluates the rest as an
+  # expression. `when: "bad"` is the *variable* bad; only this inner-quoted form is a literal.
+  ansible.builtin.include_tasks: sibling.yml
+  when: "'bad'"
 
 - name: "GOOD — a null when: is absence, not an empty condition, and runs"
   # The trap, and the reason the rule has to test the string rather than the clause count:
@@ -200,9 +207,8 @@
   changed_when: "{{ demo_result.rc != 0 }}"
 
 - name: "PENDING — changed_when: a literal is not a boolean, fatal since 2.19"
-  # Live on core 2.21.2: "Conditional result (True) was derived from value of type 'str'.
-  # Conditionals must have a boolean result." Provable without knowing any variable, so
-  # unlike the rest of the non-boolean check this one is a static rule — T-117.
+  # The same fault as the `when:` case above, and T-117 built the rule for it — but nothing
+  # feeds `changed_when` to the rules yet, so this stays silent until T-141 routes it.
   ansible.builtin.command: echo hi
   changed_when: "'bad'"
 

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ansible_core::cache::ScanCache;
 use ansible_core::config::DuplicateDictKey;
 use ansible_core::fs::{Counting, StdFs};
-use ansible_core::install::AnsibleInstall;
+use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Loader, Node, Span};
@@ -513,6 +513,12 @@ impl Backend {
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {
+        Self::diagnostics_with(a, AnsibleInstall::detected().and_then(|i| i.version))
+    }
+
+    /// `core` is the detected ansible-core version, taken as an argument rather than read
+    /// from the global so the version-sensitive tiers are testable without an install.
+    fn diagnostics_with(a: &Analysis, core: Option<Version>) -> Vec<Diagnostic> {
         let range_of = |s: ansible_core::parse::Span| {
             let (sl, sc) = a.doc.byte_to_lsp(s.start);
             let (el, ec) = a.doc.byte_to_lsp(s.end);
@@ -535,6 +541,9 @@ impl Backend {
         // Conditions that cannot work whatever the variables hold. Anchored on the
         // `when:` itself, and deduplicated: one task can hold several references
         // sharing one condition.
+        // 2.19 made conditionals strict, so the same fault is an error on a new core and a
+        // warning-of-a-future-break on an old one. The version picks the severity, never
+        // whether we speak; undetected falls to the warning, which is right either way (T-117).
         let mut seen = HashSet::new();
         let broken: Vec<Diagnostic> = a
             .refs
@@ -550,10 +559,14 @@ impl Backend {
             .filter(|(p, span)| !a.doc.is_suppressed(span.start, p.rule_id()))
             .map(|(p, span)| Diagnostic {
                 range: range_of(span),
-                severity: Some(DiagnosticSeverity::WARNING),
+                severity: Some(match p.tier(core) {
+                    condition::Tier::Error => DiagnosticSeverity::ERROR,
+                    condition::Tier::Warning => DiagnosticSeverity::WARNING,
+                    condition::Tier::Hint => DiagnosticSeverity::HINT,
+                }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule_id().into())),
-                message: p.message().into(),
+                message: p.message(core),
                 ..Default::default()
             })
             .collect();
@@ -2267,6 +2280,59 @@ mod tests {
         assert!(
             !missing.iter().any(|d| d.message.contains("site-local")),
             "a satisfied group stays silent"
+        );
+    }
+
+    /// T-117. The detected core version decides how loudly a strictness fault is reported,
+    /// and the demo fixture carries both shapes. Measured upstream: an empty condition runs
+    /// silently on 2.18.6 and is fatal on 2.21.2, so the old core gets a warning that it
+    /// breaks on upgrade rather than the silence Ansible itself gives it.
+    #[test]
+    fn strictness_diagnostics_take_their_severity_from_the_core_version() {
+        use ansible_core::install::Version;
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/tasks/conditions.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+
+        let strict = |core| {
+            super::Backend::diagnostics_with(&a, core)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == "when-empty" || s == "when-not-boolean")
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let new = strict(Some(Version { major: 2, minor: 21, patch: 2 }));
+        assert!(!new.is_empty(), "the demo must keep demonstrating these");
+        assert!(
+            new.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)),
+            "fatal on 2.21.2, so an error: {new:#?}"
+        );
+        assert!(
+            new.iter().any(|d| d.message.contains("2.21.2")),
+            "the message names the runtime it describes"
+        );
+
+        // Same faults, same count, quieter — never silent, or the upgrade break goes unsaid.
+        let old = strict(Some(Version { major: 2, minor: 18, patch: 6 }));
+        assert_eq!(old.len(), new.len(), "an old core hides nothing");
+        assert!(old.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+        assert!(old.iter().any(|d| d.message.contains("2.19")), "names the upgrade");
+
+        // No install detected is the common case and must behave like the old core.
+        assert!(strict(None).iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+
+        // A null `when:` is absence, not an empty condition — the parser has to keep them
+        // apart or this fires on the demo's GOOD case.
+        assert_eq!(
+            new.iter().filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "when-empty")).count(),
+            3,
+            "exactly the three empty-string cases, not the null one"
         );
     }
 

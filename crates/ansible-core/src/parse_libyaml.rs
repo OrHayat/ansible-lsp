@@ -174,6 +174,13 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
         end: ev.end_mark.index as usize,
     };
     match &ev.data {
+        // A plain scalar with no content is YAML null, not an empty string. Both arrive here
+        // as `value: ""` and the marks are the only place the difference survives: `""` spans
+        // its two quotes, a null spans nothing. It matters because `when:` and `when: ""` are
+        // absence and a fatal error respectively (T-117).
+        EventData::Scalar { value, .. } if value.is_empty() && raw.start == raw.end => {
+            (Some(Node::Null { span: raw }), i + 1)
+        }
         EventData::Scalar { value, .. } => {
             (Some(Node::Scalar { value: value.clone(), span: unquote(raw, text) }), i + 1)
         }
@@ -225,6 +232,36 @@ fn unquote(mut span: Span, text: &str) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-117. `when:` is YAML null and `when: ""` is an empty string; Ansible treats the first
+    /// as absence and the second as fatal. libyaml hands both to us as an empty value, so the
+    /// marks are the only thing that tells them apart — a null spans nothing, `""` spans its
+    /// quotes. Getting this wrong warns on a task that runs perfectly well.
+    #[test]
+    fn a_plain_empty_scalar_is_null_not_an_empty_string() {
+        let when = |src: &str| {
+            let doc = crate::parse::Document::new(src.to_string());
+            let nodes = doc.parse().expect("valid yaml");
+            nodes[0].items()[0].get("when").cloned().expect("a when: key")
+        };
+        // The variant, not just `as_str()` — `Other` also has no string, so asserting only
+        // the absence of one would pass with null folded back into it. It must not be: `Other`
+        // means an alias or a shape we do not model, and null is neither.
+        assert!(matches!(when("- when:\n  debug: x\n"), Node::Null { .. }));
+        assert!(matches!(when("- when: ~\n  debug: x\n"), Node::Scalar { .. }), "`~` is written");
+
+        let empty = when("- when: \"\"\n  debug: x\n");
+        assert!(matches!(empty, Node::Scalar { .. }), "an explicit empty string is a value");
+        assert_eq!(empty.as_str(), Some(""));
+        assert_eq!(when("- when: '  '\n  debug: x\n").as_str(), Some("  "));
+
+        // The span of a null sits where the value would have been, so a diagnostic anchored
+        // on it still lands on the right line rather than at the top of the file.
+        let src = "- when:\n  debug: x\n";
+        let Node::Null { span } = when(src) else { unreachable!() };
+        assert_eq!(span.start, span.end);
+        assert_eq!(&src[..span.start], "- when:", "positioned after its key");
+    }
 
     /// The three placements the demo fixture covers, in one file. Live-verified on
     /// ansible-core 2.21.2: four warnings, each anchored at the later occurrence.

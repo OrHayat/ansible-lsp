@@ -275,7 +275,8 @@ fn walk_uses(
                 walk_uses(v, is_when, g, out, ex);
             }
         }
-        Node::Other { .. } => {}
+        // Null holds no text, so there is nothing to scan for variable uses.
+        Node::Null { .. } | Node::Other { .. } => {}
     }
 }
 
