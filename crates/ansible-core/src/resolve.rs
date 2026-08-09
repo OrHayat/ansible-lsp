@@ -159,6 +159,16 @@ fn expand_magic(value: &str, ctx: &FileContext, in_playbook: bool) -> (Vec<Strin
             .collect()
     };
     apply("playbook_dir", playbook_dirs, &mut out);
+    // `ansible_config_file` needs no play, host or task — `_get_magic_variables` sets it
+    // to the config actually in effect (`vars/manager.py:457`), which is exactly the file
+    // discovery recorded, so unlike the guessed variables there is nothing to approximate.
+    // No config found → `C.CONFIG_FILE` is None and the variable is undefined at runtime:
+    // stay templated rather than substitute an empty string. (T-098)
+    apply(
+        "ansible_config_file",
+        ctx.config.config_file.iter().cloned().collect(),
+        &mut out,
+    );
     // `inventory_dir` deliberately not substituted. It is per-host — the directory of the
     // inventory source that first defined the host (`inventory/data.py:197-202`), set by
     // `-i`/ansible.cfg at launch, `None` for add_host hosts — nothing like a playbook dir.
@@ -1814,6 +1824,24 @@ mod tests {
         // difference is deliberate rather than accidental.
         let out = mem_src("/p/tasks/t.yml", "- include_tasks: root_only.yml\n", &fs);
         assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
+    }
+
+    /// T-098. `{{ ansible_config_file }}` is the file discovery found — exact when it
+    /// appears, unlike the guessed variables — and stays templated when no config exists,
+    /// since the runtime value would be undefined. Through `include_tasks`, because the
+    /// `include_vars` path has its own search model that never magic-expands (T-097).
+    #[test]
+    fn ansible_config_file_expands_to_the_discovered_config() {
+        let fs = crate::testing::MemFs::new(&[("/p/ansible.cfg", "[defaults]\n"), ("/p/site.yml", "")]);
+        let res = mem_in("/p/site.yml", "\"{{ ansible_config_file }}\"", &fs);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/ansible.cfg")]);
+
+        // No config anywhere: undefined at runtime, so it must stay templated (globbed,
+        // never warned) rather than expand to an empty string.
+        let fs = crate::testing::MemFs::new(&[("/q/site.yml", "")]);
+        let res = mem_in("/q/site.yml", "\"{{ ansible_config_file }}\"", &fs);
+        assert_ne!(res.status, Status::Missing, "templated paths never warn");
     }
 
     /// In a playbook file `playbook_dir` is that file's own directory — not a guess, and

@@ -50,6 +50,11 @@ pub struct AnsibleConfig {
     /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
     /// controller-side plugin dirs; a plugin here overrides a same-named module.
     pub action_plugins: Option<Vec<PathBuf>>,
+    /// The file discovery settled on — the env-selected or walk-found `ansible.cfg` that
+    /// was actually read; `None` when neither existed. The scan report prints it, and it
+    /// is `{{ ansible_config_file }}`'s value (`vars/manager.py:457` — the magic var is
+    /// the config in effect, undefined when there is none).
+    pub config_file: Option<PathBuf>,
     /// Where `~/.ansible` actually is (`ANSIBLE_HOME`, `base.yml:95-104`): env → the `home`
     /// ini key → `~/.ansible`. Every path default below is templated on it, which is why the
     /// hardcoded `.ansible` dirs in `workspace.rs` read this instead of `HOME`. `None` when
@@ -127,7 +132,11 @@ impl AnsibleConfig {
         // Two passes, because configparser interpolates at read time over the whole parsed
         // section — `%(key)s` may reference an entry defined later in the file (T-145).
         let mut entries = Vec::new();
-        if let Some(text) = fs.read(&file) {
+        let text = fs.read(&file);
+        if text.is_some() {
+            cfg.config_file = Some(file.clone());
+        }
+        if let Some(text) = text {
             let mut in_defaults = false;
             for line in text.lines() {
                 let line = line.trim();
@@ -592,6 +601,30 @@ mod tests {
 
         let c = cfg("[defaults]\nlibrary = /a #x\n");
         assert_eq!(c.library, Some(vec![PathBuf::from("/a #x")]), "# is not an inline prefix");
+    }
+
+    /// T-098. The file discovery settled on is recorded — the scan report and
+    /// `{{ ansible_config_file }}` both need to know it, including that there was none.
+    #[test]
+    fn the_discovered_config_file_is_recorded() {
+        use crate::testing::MemFs;
+        let fs = MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            ("/elsewhere/team.cfg", "[defaults]\n"),
+        ]);
+
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&fs).env(&EnvMap::empty()).load();
+        assert_eq!(c.config_file, Some(PathBuf::from("/p/ansible.cfg")));
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&fs)
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", "/elsewhere/team.cfg")]))
+            .load();
+        assert_eq!(c.config_file, Some(PathBuf::from("/elsewhere/team.cfg")));
+
+        let c =
+            AnsibleConfig::builder(Path::new("/q")).fs(&fs).env(&EnvMap::empty()).load();
+        assert_eq!(c.config_file, None, "no config anywhere: recorded as such");
     }
 
     /// Set-but-empty is not unset: `ANSIBLE_ROLES_PATH=` deliberately disables the

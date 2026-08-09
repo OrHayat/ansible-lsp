@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | —          |
+| done   | bug  | P1       | M    | T-090 | —          |
 
 ## Symptom
 
@@ -70,6 +70,8 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
       project cfg in scope
 - [x] the ancestor walk is commented as an editor heuristic, not Ansible behaviour —
       `find_project_root`'s doc: the walk predicts the CWD the user will run from
-- [ ] the scan report says which config file was used
-- [ ] `{{ ansible_config_file }}` expands to the discovered file, and stays templated when
-      none was found
+- [x] the scan report says which config file was used — one line per project root with its
+      cfg and file count; `none found` and the `ANSIBLE_CONFIG` override each get a line
+- [x] `{{ ansible_config_file }}` expands to the discovered file, and stays templated when
+      none was found — `AnsibleConfig::config_file` feeds `expand_magic`, and the name
+      joined the `MAGIC` list so definedness never flags it

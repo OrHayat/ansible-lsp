@@ -105,7 +105,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
-| T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](open/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -253,6 +252,7 @@ T-021 is now unblocked on that side.
 | T-117 | [when: is strict since 2.19 — audit condition.rs](closed/T-117-when-is-strict-since-2-19-audit-condition-rs.md) | done     |
 | T-141 | **bug** · [Condition rules only see when:, not the other four expression keywords](closed/T-141-condition-rules-only-see-when-not-the-other-four-expression.md) | done     |
 | T-145 | **bug** · [ansible.cfg %-interpolation: values read raw](closed/T-145-ansible-cfg-interpolation-values-read-raw.md) | done     |
+| T-098 | **bug** · [ansible.cfg discovery ignores env overrides and the CWD rule](closed/T-098-ansible-cfg-discovery-ignores-env-overrides-and-the-cwd-rule.md) | done     |
 
 ## Settled — don't re-derive these
 

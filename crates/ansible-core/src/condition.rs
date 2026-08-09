@@ -34,6 +34,10 @@ const MAGIC: &[&str] = &[
     "inventory_hostname", "groups", "group_names", "hostvars", "item", "omit",
     "play_hosts", "role_name", "role_path", "playbook_dir", "inventory_dir",
     "inventory_hostname_short", "ansible_check_mode", "ansible_verbosity", "vars",
+    // Set even with no play/host/task (`vars/manager.py:457`); its value, when a config
+    // exists, is what T-098's discovery records. Undefined only when no config was found
+    // — a case the definedness rule cannot assume, so never flag it.
+    "ansible_config_file",
 ];
 
 /// Shared with the definedness diagnostic (T-051): a magic name must never be

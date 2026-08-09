@@ -36,7 +36,7 @@ the same argument applied one layer up.
 - [x] T-095 — Templated import_playbook is reported missing
 - [ ] T-096 — project_root stands in for the playbook dir
 - [ ] T-097 — include_vars searches paths Ansible never tries
-- [ ] T-098 — ansible.cfg discovery ignores env overrides and the CWD rule
+- [x] T-098 — ansible.cfg discovery ignores env overrides and the CWD rule
 - [x] T-001 — YAML crate spike
 - [x] T-003 — `ansible.cfg` roots
 - [x] T-004 — Roles: `include_role`, `roles:`, `tasks_from`

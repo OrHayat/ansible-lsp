@@ -48,6 +48,9 @@ fn main() {
     let mut tmpl_vars: BTreeMap<String, usize> = BTreeMap::new();
     let mut broken_when: Vec<String> = Vec::new();
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
+    // Per project root: the ansible.cfg that governed it, and how many files it covers
+    // (T-098). Rootless files group under `None`.
+    let mut configs_used: BTreeMap<Option<PathBuf>, (Option<PathBuf>, usize)> = BTreeMap::new();
 
     for path in &files {
         // Through the cache: one read *and* one parse per file, shared with the var walk
@@ -68,6 +71,10 @@ fn main() {
             continue;
         };
         let ctx = cache.context(path);
+        configs_used
+            .entry(ctx.project_root.clone())
+            .or_insert_with(|| (ctx.config.config_file.clone(), 0))
+            .1 += 1;
         let mut refs = extract(&nodes);
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
@@ -195,6 +202,19 @@ fn main() {
     }
 
     let c = cache.stats();
+    if let Some(v) = env.var("ANSIBLE_CONFIG") {
+        println!("config override: ANSIBLE_CONFIG={v}");
+    }
+    for (proot, (cfg_file, n)) in &configs_used {
+        let shown = match cfg_file {
+            Some(f) => f.display().to_string(),
+            None => "none found; built-in defaults".to_string(),
+        };
+        match proot {
+            Some(r) => println!("config: {} -> {shown}  ({n} files)", r.display()),
+            None => println!("config: <no project root> -> {shown}  ({n} files)"),
+        }
+    }
     println!("{} files, {} unparseable", files.len(), unparseable.len());
     println!(
         "var-walk: {} edges -> {} files ({} uncached), {} reads, {} contexts, \
