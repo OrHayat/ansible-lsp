@@ -152,6 +152,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 | T-147 | [Validate role meta/main.yml against the RoleMetadata set](open/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | S    | —    |
+| T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -190,6 +191,9 @@ T-021 is now unblocked on that side.
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | S    | —          |
 | T-148 | [Audit how ansible-core validates meta/runtime.yml, then mirror it](open/T-148-audit-how-ansible-core-validates-meta-runtime-yml-then-mirro.md) | M    | —          |
 | T-149 | [Validate meta/argument_specs.yml itself, not just call sites](open/T-149-validate-meta-argument-specs-yml-itself-not-just-call-sites.md) | M    | —          |
+| T-151 | [Validate galaxy.yml and requirements.yml against the galaxy schemas](open/T-151-validate-galaxy-yml-and-requirements-yml-against-the-galaxy.md) | M    | —          |
+| T-152 | [YAML inventory files: index them and check the all/hosts/children shape](open/T-152-yaml-inventory-files-index-them-and-check-the-all-hosts-chil.md) | M    | —          |
+| T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
