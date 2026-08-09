@@ -298,8 +298,14 @@ impl AnsibleInstall {
         if let Some(env) = std::env::var_os("ANSIBLE_COLLECTIONS_PATH") {
             roots.extend(std::env::split_paths(&env));
         }
-        if let Ok(home) = std::env::var("HOME") {
-            roots.push(PathBuf::from(home).join(".ansible/collections"));
+        // `ANSIBLE_HOME` relocates `~/.ansible` (`base.yml:95-104`). The `home` ini key can
+        // too, but install discovery is project-independent — there is no ansible.cfg in
+        // scope here — so only the env half applies.
+        let ansible_home = std::env::var("ANSIBLE_HOME").map(PathBuf::from).ok().or_else(|| {
+            std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".ansible"))
+        });
+        if let Some(h) = ansible_home {
+            roots.push(h.join("collections"));
         }
         roots.push(PathBuf::from("/usr/share/ansible/collections"));
         for r in roots {

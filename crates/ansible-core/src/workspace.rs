@@ -92,8 +92,9 @@ impl FileContext {
         // Ansible's built-in defaults apply only when ansible.cfg doesn't set
         // roles_path — the config key replaces them rather than extending them.
         if self.config.roles_path.is_empty() {
-            for d in ["~/.ansible/roles", "/usr/share/ansible/roles", "/etc/ansible/roles"] {
-                push_unique(&mut dirs, expand_home(d));
+            push_unique(&mut dirs, self.config.ansible_home.as_ref().map(|h| h.join("roles")));
+            for d in ["/usr/share/ansible/roles", "/etc/ansible/roles"] {
+                push_unique(&mut dirs, Some(PathBuf::from(d)));
             }
         }
         dirs
@@ -121,9 +122,10 @@ impl FileContext {
         push_unique(&mut dirs, Some(self.file_dir.join("library")));
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("library")));
         if self.config.library.is_empty() {
-            if let Ok(home) = std::env::var("HOME") {
-                push_unique(&mut dirs, Some(PathBuf::from(home).join(".ansible/plugins/modules")));
-            }
+            push_unique(
+                &mut dirs,
+                self.config.ansible_home.as_ref().map(|h| h.join("plugins/modules")),
+            );
             push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/modules")));
         } else {
             for p in &self.config.library {
@@ -146,9 +148,10 @@ impl FileContext {
         push_unique(&mut dirs, Some(self.file_dir.join("action_plugins")));
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("action_plugins")));
         if self.config.action_plugins.is_empty() {
-            if let Ok(home) = std::env::var("HOME") {
-                push_unique(&mut dirs, Some(PathBuf::from(home).join(".ansible/plugins/action")));
-            }
+            push_unique(
+                &mut dirs,
+                self.config.ansible_home.as_ref().map(|h| h.join("plugins/action")),
+            );
             push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/action")));
         } else {
             for p in &self.config.action_plugins {
@@ -211,13 +214,6 @@ pub fn yaml_files_in(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
     out
 }
 
-fn expand_home(p: &str) -> Option<PathBuf> {
-    match p.strip_prefix("~/") {
-        Some(rest) => std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(rest)),
-        None => Some(PathBuf::from(p)),
-    }
-}
-
 fn push_unique(dirs: &mut Vec<PathBuf>, p: Option<PathBuf>) {
     if let Some(p) = p {
         if !dirs.contains(&p) {
@@ -265,6 +261,37 @@ fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-098. The `.ansible` halves of the default search dirs follow `ansible_home`
+    /// rather than hardcoding `$HOME/.ansible`.
+    #[test]
+    fn ansible_home_relocates_the_default_search_dirs() {
+        use crate::config::{AnsibleConfig, EnvMap};
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nhome = /opt/ans\n"),
+            ("/p/play.yml", ""),
+        ]);
+        let env = EnvMap::from_pairs(&[("HOME", "/home/t")]);
+        let ctx = FileContext::discover_with(Path::new("/p/play.yml"), &fs, |root| {
+            AnsibleConfig::builder(root).fs(&fs).env(&env).load()
+        });
+
+        assert!(ctx.roles_roots().contains(&PathBuf::from("/opt/ans/roles")));
+        assert!(ctx.legacy_module_dirs().contains(&PathBuf::from("/opt/ans/plugins/modules")));
+        assert!(ctx
+            .legacy_action_plugin_dirs()
+            .contains(&PathBuf::from("/opt/ans/plugins/action")));
+        let all: Vec<_> = ctx
+            .roles_roots()
+            .into_iter()
+            .chain(ctx.legacy_module_dirs())
+            .chain(ctx.legacy_action_plugin_dirs())
+            .collect();
+        assert!(
+            !all.iter().any(|p| p.starts_with("/home/t")),
+            "the relocated home fully replaces `$HOME/.ansible`: {all:?}"
+        );
+    }
 
     /// A task file two levels inside a role's `tasks/` must still anchor at `tasks/`, not at
     /// its own directory — otherwise `query/exists.yml` resolves to

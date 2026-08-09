@@ -40,6 +40,11 @@ pub struct AnsibleConfig {
     /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
     /// controller-side plugin dirs; a plugin here overrides a same-named module.
     pub action_plugins: Vec<PathBuf>,
+    /// Where `~/.ansible` actually is (`ANSIBLE_HOME`, `base.yml:95-104`): env → the `home`
+    /// ini key → `~/.ansible`. Every path default below is templated on it, which is why the
+    /// hardcoded `.ansible` dirs in `workspace.rs` read this instead of `HOME`. `None` when
+    /// nothing resolves it — no setting and no `HOME`, as on Windows.
+    pub ansible_home: Option<PathBuf>,
     /// The `network_group_modules` key (`config/base.yml:1779-1788`). `None` means the key
     /// was never set, so [`DEFAULT_NETWORK_GROUP_MODULES`] applies; `Some(vec![])` is a
     /// deliberate "no platforms". Like every list key it *replaces* the default rather
@@ -108,6 +113,7 @@ impl AnsibleConfig {
         // when the env file exists the project's is not read, let alone merged.
         let file = env_config_file(fs, env).unwrap_or_else(|| project_root.join("ansible.cfg"));
         let base = file.parent().unwrap_or(project_root);
+        let mut home_key = None;
         if let Some(text) = fs.read(&file) {
             let mut in_defaults = false;
             for line in text.lines() {
@@ -124,6 +130,7 @@ impl AnsibleConfig {
                 };
                 let paths = || expand_list(value.trim(), base, env);
                 match key.trim() {
+                    "home" => home_key = Some(value.trim().to_string()),
                     "roles_path" => cfg.roles_path = paths(),
                     "collections_path" | "collections_paths" => cfg.collections_path = paths(),
                     "library" => cfg.library = paths(),
@@ -142,6 +149,11 @@ impl AnsibleConfig {
         }
         // Env beats the ini file, which beats the shipped default — and it applies whether
         // or not an `ansible.cfg` was found, so it can't ride inside the block above.
+        cfg.ansible_home = env
+            .var("ANSIBLE_HOME")
+            .map(|v| expand_path(v, base, env))
+            .or_else(|| home_key.map(|v| expand_path(&v, base, env)))
+            .or_else(|| env.var("HOME").map(|h| PathBuf::from(h).join(".ansible")));
         if let Some(v) = env.var("ANSIBLE_NETWORK_GROUP_MODULES") {
             cfg.network_group_modules = Some(name_list(v));
         }
@@ -229,15 +241,20 @@ fn expand_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
         .split(':')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| match s.strip_prefix("~/") {
-            Some(rest) => match env.var("HOME") {
-                Some(home) => PathBuf::from(home).join(rest),
-                None => PathBuf::from(s),
-            },
-            None if Path::new(s).is_absolute() => PathBuf::from(s),
-            None => base.join(s.trim_start_matches("./")),
-        })
+        .map(|s| expand_path(s, base, env))
         .collect()
+}
+
+/// One entry of an [`expand_list`], and the shape of every `type: path` value.
+fn expand_path(s: &str, base: &Path, env: &EnvMap) -> PathBuf {
+    match s.strip_prefix("~/") {
+        Some(rest) => match env.var("HOME") {
+            Some(home) => PathBuf::from(home).join(rest),
+            None => PathBuf::from(s),
+        },
+        None if Path::new(s).is_absolute() => PathBuf::from(s),
+        None => base.join(s.trim_start_matches("./")),
+    }
 }
 
 #[cfg(test)]
@@ -417,5 +434,44 @@ mod tests {
 
         let c = load(&EnvMap::empty());
         assert_eq!(c.roles_path, vec![PathBuf::from("/p/roles")], "unset: the walk's file");
+    }
+
+    /// T-098. `ANSIBLE_HOME` resolves env → the `home` ini key → `~/.ansible`.
+    #[test]
+    fn ansible_home_defaults_under_home_and_is_none_without_one() {
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::none())
+            .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
+            .load();
+        assert_eq!(c.ansible_home, Some(PathBuf::from("/home/t/.ansible")));
+
+        let c =
+            AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&EnvMap::empty()).load();
+        assert_eq!(c.ansible_home, None, "no setting and no HOME: nothing to resolve");
+    }
+
+    #[test]
+    fn the_home_ini_key_relocates_ansible_home() {
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nhome = /opt/ans\n"))
+            .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
+            .load();
+        assert_eq!(c.ansible_home, Some(PathBuf::from("/opt/ans")), "ini beats the default");
+
+        // A `~` value goes through the same expansion as every path key.
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nhome = ~/ans\n"))
+            .env(&EnvMap::from_pairs(&[("HOME", "/home/t")]))
+            .load();
+        assert_eq!(c.ansible_home, Some(PathBuf::from("/home/t/ans")));
+    }
+
+    #[test]
+    fn the_ansible_home_env_var_beats_the_home_ini_key() {
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nhome = /opt/ini\n"))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_HOME", "/opt/env"), ("HOME", "/home/t")]))
+            .load();
+        assert_eq!(c.ansible_home, Some(PathBuf::from("/opt/env")));
     }
 }

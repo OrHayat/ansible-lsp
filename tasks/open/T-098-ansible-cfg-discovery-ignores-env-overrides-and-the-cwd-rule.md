@@ -24,7 +24,7 @@ all of them for the settings `config.rs` consumes:
 | Env var                           | Overrides                          | Modelled today?     |
 | --------------------------------- | ---------------------------------- | ------------------- |
 | `ANSIBLE_CONFIG`                  | which config file is read at all   | yes, `config.rs:201` |
-| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default — hardcoded at `workspace.rs:95,125,150`, `install.rs:302` | no |
+| `ANSIBLE_HOME` (ini: `home`)      | the `~/.ansible` half of every path default | yes, `config.rs:152` (`install.rs:304` env-only: no project cfg in scope there) |
 | `ANSIBLE_ROLES_PATH`              | `roles_path`                       | no                  |
 | `ANSIBLE_COLLECTIONS_PATH`        | `collections_path`                 | no                  |
 | `ANSIBLE_LIBRARY`                 | `library`                          | no                  |
@@ -62,8 +62,10 @@ is undefined at runtime. Do not substitute an empty string; leave it templated.
       `EnvMap` seam, real-env plumbing in `tests/process_env_snapshot.rs`
 - [ ] the four path env vars override the ini (`ANSIBLE_ROLES_PATH`, `ANSIBLE_COLLECTIONS_PATH`,
       `ANSIBLE_LIBRARY`, `ANSIBLE_ACTION_PLUGINS`)
-- [ ] `ANSIBLE_HOME` (env, or the `home` ini key) relocates the hardcoded `~/.ansible`
-      defaults in `workspace.rs` and `install.rs`
+- [x] `ANSIBLE_HOME` (env, or the `home` ini key) relocates the hardcoded `~/.ansible`
+      defaults in `workspace.rs` and `install.rs` — `AnsibleConfig::ansible_home`, resolved
+      env → ini → `~/.ansible`; install discovery honours the env half only, having no
+      project cfg in scope
 - [ ] the ancestor walk is commented as an editor heuristic, not Ansible behaviour
 - [ ] the scan report says which config file was used
 - [ ] `{{ ansible_config_file }}` expands to the discovered file, and stays templated when
