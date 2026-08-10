@@ -288,14 +288,9 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if exclusions(node, On::Task, out) {
         return;
     }
-    // Row 12, from the same parse: the `action`/`local_action` check is `mod_args.py:322`, the
-    // candidate walk that raises this one is `mod_args.py:330-354`, so row 11 goes first.
-    if conflicting_actions(node, out) {
-        return;
-    }
-    // Row 22, the far end of the same walk (`mod_args.py:368`), so it sits here rather than
-    // with the `Task.load` rules below.
-    if no_module_at_all(node, out) {
+    // Rows 12 and 22, the two ends of one candidate walk (`mod_args.py:330-368`). Row 11's
+    // check is `mod_args.py:322`, above it, which is why the exclusions go first.
+    if action_walk(node, out) {
         return;
     }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
@@ -682,42 +677,33 @@ fn action_candidates(node: &Node) -> Vec<(Span, &str, &Node)> {
 /// rejects raises `unexpected parameter type in action` there instead — measured on a list.
 /// Scalars are assumed to be strings, since the parse tree keeps no scalar style; a bare int
 /// first value is the one shape where we give the wrong message rather than none.
-fn conflicting_actions(node: &Node, out: &mut Vec<Problem>) -> bool {
-    let candidates = action_candidates(node);
-    let ([first, second] | [first, second, ..]) = candidates.as_slice() else {
-        return false;
-    };
-    if matches!(first.2, Node::Sequence { .. }) {
-        return false;
+fn action_walk(node: &Node, out: &mut Vec<Problem>) -> bool {
+    match action_candidates(node).as_slice() {
+        // Row 22 (`mod_args.py:368`): nothing to run. `action:`/`local_action:` are Task
+        // attributes so they never appear as candidates, but each sets the action in its own
+        // branch above the walk — measured, both load clean alone.
+        [] => {
+            if node.get("action").is_some() || node.get("local_action").is_some() {
+                return false;
+            }
+            out.push(error(node.span(), NO_MODULE.into()));
+            true
+        }
+        [_] => false,
+        // Row 12 (`mod_args.py:353-354`): the second candidate is the one that raises, so it is
+        // the one underlined. The first's value is normalized before the second is looked at,
+        // so a value `_normalize_parameters` rejects raises there instead — measured on a list.
+        [first, second, ..] => {
+            if matches!(first.2, Node::Sequence { .. }) {
+                return false;
+            }
+            out.push(error(
+                second.0,
+                format!("conflicting action statements: {}, {}", first.1, second.1),
+            ));
+            true
+        }
     }
-    out.push(error(
-        second.0,
-        format!(
-            "conflicting action statements: {}, {}",
-            first.1, second.1
-        ),
-    ));
-    true
-}
-
-/// Row 22 (`mod_args.py:368`), the other end of the same walk: no action candidate at all, and
-/// no `action:`/`local_action:` to supply one from its own branch above it. Both of those are
-/// Task attributes, so they never appear as candidates — measured, each alone loads clean.
-///
-/// Fires on a task carrying only `name:`, only `with_items:`, or nothing at all — all measured.
-/// Anchored on the whole entry, since no single key is at fault.
-///
-/// The neighbouring `couldn't resolve module/action '%s'` (`mod_args.py:365`) is **not** ours:
-/// it needs the resolving parse inside `Task.load`, so it is T-046's when that lands.
-fn no_module_at_all(node: &Node, out: &mut Vec<Problem>) -> bool {
-    if !action_candidates(node).is_empty()
-        || node.get("action").is_some()
-        || node.get("local_action").is_some()
-    {
-        return false;
-    }
-    out.push(error(node.span(), NO_MODULE.into()));
-    true
 }
 
 /// Row 9. `PlaybookInclude.preprocess_data` collects the `import_playbook` spellings present as
