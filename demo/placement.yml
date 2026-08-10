@@ -340,6 +340,33 @@
     - action: debug msg=x # GOOD: either key alone is fine
     - local_action: debug msg=y # GOOD
 
+# Row 12. No module resolution is involved, which is the surprise: `load_list_of_tasks` calls
+# `parse(skip_action_validation=True)` (`helpers.py:121`), so EVERY key that is not a task
+# attribute is an action candidate — whether or not it names a real module. The resolving parse
+# is a second one inside `Task.load`, and it only ever sees a single candidate, which is why a
+# lone unknown key gets `couldn't resolve module/action` instead of this.
+- name: two module keys on one task
+  hosts: localhost
+  tasks:
+    - debug: { msg: x }
+      frobnicate: y # BAD: conflicting action statements: debug, frobnicate — and `frobnicate`
+      # resolves to nothing at all, which is exactly the point
+
+    - ansible.builtin.debug: { msg: x }
+      nmae: oops # BAD: a typo is an action candidate too, so upstream reports the conflict
+      # rather than an unknown attribute. Quoted as written, FQCN included.
+
+    - foo: [1, 2]
+      bar: x # GOOD here: the FIRST candidate's value is normalized before the second is even
+      # looked at, so a list raises `unexpected parameter type in action` — a different rule's
+
+    - debug: { msg: x }
+      when: true # GOOD: task attributes are filtered out of the candidate set
+      register: r
+      with_items: [1]
+      static: yes # GOOD for this rule — `'static' is not a valid attribute for a Task` is
+      # T-107's message, and it is what ansible gives here too
+
 # Row 9. `PlaybookInclude.preprocess_data` gathers the spellings as a SET and demands exactly
 # one, so any two of the three collide — and the names are printed SORTED, not in the order
 # they were written. Both measured.

@@ -2509,6 +2509,8 @@ mod tests {
                 "flush_handlers cannot be used as a handler",
                 "action and local_action are mutually exclusive",
                 "action and local_action are mutually exclusive",
+                "conflicting action statements: debug, frobnicate",
+                "conflicting action statements: ansible.builtin.debug, nmae",
                 "Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
                  import_playbook",
                 "playbook entries must be either valid plays or 'import_playbook' statements",

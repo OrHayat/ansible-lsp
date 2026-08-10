@@ -87,7 +87,7 @@ shape of a whole file.
 | 9  | playbook entry    | co-occur | err  | **done** — `conflicting_import_playbook`; set, not a pair    |
 | 10 | task              | co-occur | err  | **done** — `duplicate_loop`; the only order-sensitive rule  |
 | 11 | task              | co-occur | err  | **done** — `EXCLUSIONS`; beats the loop rules                |
-| 12 | task              | co-occur | err  | open — needs module resolution (T-046)                      |
+| 12 | task              | co-occur | err  | **done** — `conflicting_actions`; needs no resolution        |
 | 13 | play              | co-occur | err  | **done** — `EXCLUSIONS`                                      |
 | 14 | play              | value    | err  | **done** — `hosts`                                          |
 | 15 | play              | value    | err  | **done** — `hosts`                                          |
@@ -273,7 +273,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
 - [x] 11 — `action:` and `local_action:` together (`mod_args.py:322`) — raised by
       `ModuleArgsParser`, which runs before `Task.load`, so it beats the `preprocess_data`
       rules; measured on a task carrying both. A null trigger is a different message.
-- [ ] 12 — two resolvable module keys in one task (`mod_args.py:353-354`)
+- [x] 12 — two resolvable module keys in one task (`mod_args.py:353-354`) — **no resolution
+      needed**, which this ticket had wrong: `load_list_of_tasks` passes
+      `skip_action_validation=True` (`helpers.py:121`), so every non-attribute key is a
+      candidate whether or not it names a module. Measured on `frobnicate`, which names none.
+      Known miss: a first value `_normalize_parameters` rejects raises there instead.
 - [x] 13 — both `user:` and `remote_user:` in one play (`play.py:170`)
 - [x] 14 — `hosts:` empty (`play.py:123`)
 - [x] 15 — `hosts:` entry is `None` (`play.py:129`)

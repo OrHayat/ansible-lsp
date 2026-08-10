@@ -287,6 +287,11 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if exclusions(node, On::Task, out) {
         return;
     }
+    // Row 12, from the same parse: the `action`/`local_action` check is `mod_args.py:322`, the
+    // candidate walk that raises this one is `mod_args.py:330-354`, so row 11 goes first.
+    if conflicting_actions(node, out) {
+        return;
+    }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
     // value — is raised before the field loaders run and long before `helpers.py` asks what
     // the action was. One fault, one message, in Ansible's own order.
@@ -637,6 +642,56 @@ fn exclusions(node: &Node, on: On, out: &mut Vec<Problem>) -> bool {
         }
     }
     fatal
+}
+
+/// The keys `ModuleArgsParser` treats as possible module names, in document order:
+/// `non_task_ds` is everything that is not a Task or Handler attribute, not `local_action` or
+/// `static`, and does not start with `with_` (`mod_args.py:128-132,330`).
+///
+/// [`keywords::is_task_directive`] is that set already, except for `static` — which is a task
+/// attribute upstream but absent from our tables, so it is excluded by name here. A dotted key
+/// is never a directive, matching `ast::find_action` and upstream both.
+fn action_candidates(node: &Node) -> Vec<(Span, &str, &Node)> {
+    node.entries()
+        .iter()
+        .filter_map(|(k, v)| {
+            let key = k.as_str()?;
+            let is_attr =
+                key == "static" || (!key.contains('.') && keywords::is_task_directive(key));
+            (!is_attr).then_some((k.span(), key, v))
+        })
+        .collect()
+}
+
+/// Row 12, and **no module resolution is involved** — the ticket had that wrong.
+/// `load_list_of_tasks` calls `parse(skip_action_validation=True)` (`helpers.py:121`), and that
+/// flag makes every surviving key an action candidate whether or not it names a real module.
+/// Measured: `debug:` beside a `frobnicate:` conflicts, and `frobnicate` resolves to nothing.
+/// The resolving parse is a *second* one inside `Task.load` (`task.py:305`), which only ever
+/// sees a single candidate — which is why a lone unresolvable key gets `couldn't resolve
+/// module/action` instead.
+///
+/// Anchored on the second key, the one whose arrival raises. Known miss: the first candidate's
+/// value is normalized before the second is looked at, so a value `_normalize_parameters`
+/// rejects raises `unexpected parameter type in action` there instead — measured on a list.
+/// Scalars are assumed to be strings, since the parse tree keeps no scalar style; a bare int
+/// first value is the one shape where we give the wrong message rather than none.
+fn conflicting_actions(node: &Node, out: &mut Vec<Problem>) -> bool {
+    let candidates = action_candidates(node);
+    let ([first, second] | [first, second, ..]) = candidates.as_slice() else {
+        return false;
+    };
+    if matches!(first.2, Node::Sequence { .. }) {
+        return false;
+    }
+    out.push(error(
+        second.0,
+        format!(
+            "conflicting action statements: {}, {}",
+            first.1, second.1
+        ),
+    ));
+    true
 }
 
 /// Row 9. `PlaybookInclude.preprocess_data` collects the `import_playbook` spellings present as
@@ -1125,6 +1180,65 @@ mod tests {
         }
         // `delegate_to` with a plain module is the ordinary, correct spelling.
         assert!(check("- hosts: web\n  tasks:\n    - debug: {msg: y}\n      delegate_to: other\n").is_empty());
+    }
+
+    /// Row 12, and the headline is that no module resolution is involved: `load_list_of_tasks`
+    /// passes `skip_action_validation=True`, so a key that names nothing at all is still an
+    /// action candidate. Measured — `frobnicate` resolves to no module and still conflicts.
+    #[test]
+    fn two_action_candidates_conflict_without_resolving_either() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: x}\n      frobnicate: y\n"),
+            ["conflicting action statements: debug, frobnicate"]
+        );
+        // A typo'd keyword is an action candidate too, which is why upstream reports the
+        // conflict rather than an unknown attribute — measured on `nmae` and `whne`.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: x}\n      nmae: foo\n"),
+            ["conflicting action statements: debug, nmae"]
+        );
+        // FQCN keys are never directives, so they count and are quoted as written.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - ansible.builtin.debug: {msg: x}\n      frobnicate: y\n"),
+            ["conflicting action statements: ansible.builtin.debug, frobnicate"]
+        );
+    }
+
+    /// What `non_task_ds` filters out (`mod_args.py:330`): task and handler attributes,
+    /// `with_*`, `local_action`, and `static`. None of them is a second module.
+    #[test]
+    fn task_attributes_are_not_action_candidates() {
+        for second in ["when: true", "with_items: [1]", "register: r", "listen: x"] {
+            assert!(
+                check(&format!(
+                    "- hosts: web\n  tasks:\n    - debug: {{msg: x}}\n      {second}\n"
+                ))
+                .is_empty(),
+                "{second} must not count as an action"
+            );
+        }
+        // `static` is in `_task_attrs` upstream but absent from our tables, so it is excluded
+        // by name — otherwise it would read as a second module. Its own diagnostic
+        // (`'static' is not a valid attribute for a Task`) is T-107's, and matches upstream.
+        assert!(check("- hosts: web\n  tasks:\n    - debug: {msg: x}\n      static: yes\n").is_empty());
+    }
+
+    /// The first candidate's value is normalized before the second is examined, so a value
+    /// `_normalize_parameters` rejects raises there instead — measured on a list. A scalar is
+    /// assumed to be a string, since the parse tree keeps no scalar style.
+    #[test]
+    fn row_12_defers_when_the_first_value_would_fail_normalization() {
+        assert!(
+            check("- hosts: web\n  tasks:\n    - foo: [1, 2]\n      bar: x\n").is_empty(),
+            "a list first value is `unexpected parameter type in action` upstream"
+        );
+        for first in ["foo: \"a string\"", "foo:"] {
+            assert_eq!(
+                check(&format!("- hosts: web\n  tasks:\n    - {first}\n      bar: x\n")),
+                ["conflicting action statements: foo, bar"],
+                "for {first}"
+            );
+        }
     }
 
     /// Row 9. A **set** of spellings, so any two of the three collide and the names come out
