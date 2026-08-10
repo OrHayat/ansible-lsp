@@ -762,6 +762,8 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
         // falsy, so both take the same branch and the same message.
         Node::Null { .. } => out.push(error(value.span(), HOSTS_EMPTY.into())),
         Node::Scalar { value: s, span } if s.is_empty() => out.push(error(*span, HOSTS_EMPTY.into())),
+        // A non-empty scalar is the ordinary `hosts: web`, and also where the `hosts: 42` miss
+        // above lands: no scalar style in the tree, so we take every scalar for a string.
         Node::Scalar { .. } => {}
         Node::Sequence { items, span } if items.is_empty() => {
             out.push(error(*span, HOSTS_EMPTY.into()))
@@ -784,6 +786,8 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
             }
         }
         Node::Mapping { .. } => out.push(error(value.span(), HOSTS_SHAPE.into())),
+        // An alias (`hosts: *webservers`), which resolves to whatever the anchor holds —
+        // unknowable without resolving anchors, so it is not ours to judge.
         Node::Other { .. } => {}
     }
 }
