@@ -39,6 +39,10 @@ pub const MISPLACED_IMPORT_PLAYBOOK_RULE_ID: &str = "misplaced-import-playbook";
 /// quoting it — see `upstream/ansible-malformed-task-entry.md`.
 pub const MALFORMED_TASK_ENTRY_RULE_ID: &str = "malformed-task-entry";
 
+/// Row 29. Upstream's own wording, but its order is randomised per process, so ours sorts the
+/// names and takes its own id rather than claiming to be a verbatim replication.
+pub const RESERVED_TAG_RULE_ID: &str = "reserved-tag-name";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -76,6 +80,7 @@ const DISCARDED_DELEGATE_TO: &str = "`local_action` already delegates to localho
 const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
 const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
+const TAGS_SHAPE: &str = "tags must be specified as a list";
 const NOT_A_MAPPING: &str = "every entry in a task list must be a mapping — a task, or a \
                              `block:`. Ansible refuses to load this file.";
 /// Verbatim, wording included. `preprocess_vars` is shared with vars-file loading
@@ -343,6 +348,9 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     }
     if is_block {
         rescue_without_block(node, out);
+        // A Block is Taggable too, and its children are loaded whatever the block's own tags
+        // say, so a fatal `tags:` here does not stop the recursion below.
+        tags_checks(node, out);
         for key in keywords::BLOCK_TASK_CONTAINERS {
             if let Some(list) = node.get(key) {
                 for child in list.items() {
@@ -367,6 +375,11 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     // value — is raised before the field loaders run and long before `helpers.py` asks what
     // the action was. One fault, one message, in Ansible's own order.
     if duplicate_loop(node, out) {
+        return;
+    }
+    // `tags` is declared on `Base`, so its loader runs before `Task`'s own — measured, a task
+    // carrying both a bad `tags:` and a bad `loop_control:` reports the tags one.
+    if tags_checks(node, out) {
         return;
     }
     // `_load_loop_control` is a field loader inside `Task.load`; the import rule is back up in
@@ -465,6 +478,63 @@ fn loop_control_checks(node: &Node, out: &mut Vec<Problem>) -> bool {
         rule: DEAD_LOOP_CONTROL_RULE_ID,
     });
     // Ours, and a warning: Ansible loads the task fine, so the rules after this one still apply.
+    false
+}
+
+/// Rows 28 and 29, one read of `tags:` (`taggable.py:46-59`). `Taggable` is mixed into Play,
+/// Task, Block and Role, so this is called from all of them.
+///
+/// Row 28 is what `_load_tags` accepts: a list, or a string it splits on commas. Anything else
+/// — a mapping, a number, a **null** — raises. That last one is why a valueless `tags:` is the
+/// single play key measured fatal while eleven others load clean (T-161).
+///
+/// A bare number is a documented miss, the same one row 17 takes on `hosts: 42`: the parser
+/// keeps no scalar style, so `tags: 42` and `tags: "42"` are one node here and only the first
+/// is fatal. Guessing from the digits would flag the legal spelling, so this stays silent.
+///
+/// Row 29 is the reserved-name warning one line below, and it is where this stops being a
+/// replication. Upstream interpolates `list(set_intersection)`, and Python randomises string
+/// hashing per process: five runs of the same file printed four different orders. There is no
+/// verbatim message to copy for more than one name, so ours sorts them — the same sentence,
+/// made reproducible. Its own id, since someone using these names deliberately wants to
+/// silence this rule and not every replication on the line.
+///
+/// Returns whether row 28 fired, which is fatal and suppresses the rules below it.
+fn tags_checks(node: &Node, out: &mut Vec<Problem>) -> bool {
+    let Some(value) = node.get("tags") else { return false };
+    let Some(anchor) = key_span(node, "tags") else { return false };
+    // `isinstance(ds, list)` then `isinstance(ds, str)`, in that order.
+    let names: Vec<&str> = match value {
+        Node::Sequence { items, .. } => items.iter().filter_map(Node::as_str).collect(),
+        // An alias may hold either shape. T-160.
+        Node::Other { .. } => return false,
+        other => match other.as_str() {
+            // A bare `tags:` is `None`, not a string, so it lands here and is fatal.
+            None => {
+                out.push(error(anchor, TAGS_SHAPE.into()));
+                return true;
+            }
+            Some(s) => s.split(',').map(str::trim).collect(),
+        },
+    };
+    let mut found: Vec<&str> = keywords::RESERVED_TAGS
+        .iter()
+        .filter(|r| names.contains(*r))
+        .copied()
+        .collect();
+    found.sort_unstable();
+    if !found.is_empty() {
+        let list = found.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ");
+        out.push(Problem {
+            span: anchor,
+            tier: Tier::Warning,
+            message: format!(
+                "Found reserved tagnames in tags: [{list}], we do not recommend doing this as \
+                 it might give unexpected results"
+            ),
+            rule: RESERVED_TAG_RULE_ID,
+        });
+    }
     false
 }
 
@@ -612,6 +682,7 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     if let Some(prompts) = node.get("vars_prompt") {
         vars_prompt(prompts, out);
     }
+    tags_checks(node, out);
     // `pre_tasks`, `tasks`, `post_tasks` and `handlers` all reach the same
     // `load_list_of_tasks`, so the task-shaped rules apply identically in each. Only row 1
     // cares which list it is, and only below the top level.
@@ -1543,6 +1614,86 @@ mod tests {
         assert_eq!(
             check("- hosts: web\n  vars_prompt:\n    prompt: Password?\n  tasks: []\n"),
             ["Invalid vars_prompt data structure, missing 'name' key"]
+        );
+    }
+
+    /// Row 28, in all three positions `Taggable` is mixed into that this module walks.
+    #[test]
+    fn tags_must_be_a_list_or_a_string() {
+        for src in [
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: {a: b}\n",
+            // A valueless `tags:` is `None`, which is neither — the one null play key that is
+            // fatal where eleven others load clean.
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags:\n",
+            "- hosts: web\n  tags:\n  tasks: []\n",
+            "- hosts: web\n  tasks:\n    - block: [{debug: {msg: ok}}]\n      tags: {a: b}\n",
+        ] {
+            assert_eq!(check(src), ["tags must be specified as a list"], "{src}");
+        }
+        // The documented miss, and the reason for it: these two are one node to us, and only
+        // the first is fatal. Silence beats flagging the legal spelling.
+        assert!(check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: 42\n").is_empty());
+        assert!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: \"42\"\n").is_empty()
+        );
+    }
+
+    #[test]
+    fn a_legal_tags_value_stays_silent() {
+        for src in [
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [a, b]\n",
+            // The string spelling, which ansible splits on commas.
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: a,b\n",
+            // `listof=(str, int)`, and an empty list is fine.
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [1, 2]\n",
+            "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: []\n",
+        ] {
+            assert!(check(src).is_empty(), "{src}: {:?}", check(src));
+        }
+    }
+
+    /// Row 29. The names are sorted, which upstream's are not — see [`tags_checks`].
+    #[test]
+    fn reserved_tag_names_warn_with_a_reproducible_order() {
+        let src = "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      \
+                   tags: [untagged, all, tagged]\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src);
+        assert_eq!(
+            got.iter().map(|p| p.message.as_str()).collect::<Vec<_>>(),
+            ["Found reserved tagnames in tags: ['all', 'tagged', 'untagged'], we do not \
+              recommend doing this as it might give unexpected results"]
+        );
+        assert_eq!(got[0].tier, Tier::Warning);
+        assert_eq!(got[0].rule, RESERVED_TAG_RULE_ID);
+        // The comma-string spelling is split first, so it is caught too — measured.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: all,deploy\n").len(),
+            1
+        );
+        // A tag that merely contains a reserved word is not one.
+        assert!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [install]\n")
+                .is_empty()
+        );
+    }
+
+    /// `tags` is declared on `Base`, so its loader runs before `Task`'s own.
+    #[test]
+    fn a_fatal_tags_value_beats_loop_control_and_loses_to_a_duplicate_loop() {
+        assert_eq!(
+            check(
+                "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: {a: b}\n      \
+                 loop: [1]\n      loop_control: 5\n"
+            ),
+            ["tags must be specified as a list"]
+        );
+        assert_eq!(
+            check(
+                "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: {a: b}\n      \
+                 loop: [1]\n      with_items: [2]\n"
+            ),
+            ["duplicate loop in task: items"]
         );
     }
 

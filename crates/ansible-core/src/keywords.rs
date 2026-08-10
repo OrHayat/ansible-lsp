@@ -191,6 +191,10 @@ pub const ROLE_INCLUDE_KEYS: &[&str] = &[
     "vars_from",
 ];
 
+/// Tag names ansible reserves for `--tags`/`--skip-tags` selection (`taggable.py:42`). Using
+/// one as a real tag is a warning, not an error — it loads and then behaves unexpectedly.
+pub const RESERVED_TAGS: &[&str] = &["all", "tagged", "untagged"];
+
 /// Keys of one `vars_prompt:` entry (`play.py:246`). A closed set checked inline at load,
 /// not a `FieldAttribute` class — an unknown key is `Invalid vars_prompt data structure,
 /// found unsupported key '%s'`, fatal regardless of `invalid_task_attribute_failed`.

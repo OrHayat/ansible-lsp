@@ -59,6 +59,25 @@
   tasks:
     - debug: { msg: ok }
 
+# `_load_tags` (`taggable.py:48-55`) takes a list or a comma string and nothing else, so a
+# valueless `tags:` is fatal — the one null play key that is, where `vars:`, `handlers:` and
+# nine others load clean. One line below it, a reserved name warns.
+- name: tags have a shape and three names you should not use
+  hosts: localhost
+  tasks:
+    - debug: { msg: ok }
+      tags: [deploy, web] # GOOD
+    - debug: { msg: ok }
+      tags: web,deploy # GOOD: a comma string, which ansible splits
+    - debug: { msg: ok }
+      tags: # BAD: tags must be specified as a list
+    - debug: { msg: ok }
+      tags: { name: web } # BAD: tags must be specified as a list
+    - debug: { msg: ok }
+      # BAD: reserved for --tags selection. Ansible lists the names in a randomised order;
+      # ours sorts them, which is the one place this rule is not verbatim.
+      tags: [all, deploy]
+
 # `preprocess_vars` (`vars/manager.py:102-107`) refuses a non-mapping entry before
 # `_load_vars_prompt` reads a single key, and it borrows the vars-file wording to say so.
 - name: every vars_prompt entry must be a mapping

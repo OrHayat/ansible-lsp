@@ -2518,6 +2518,8 @@ mod tests {
                 "Invalid vars_prompt data structure, found unsupported key 'promt'",
                 "Invalid vars_prompt data structure, missing 'name' key",
                 "Invalid vars_prompt data structure, missing 'name' key",
+                "tags must be specified as a list",
+                "tags must be specified as a list",
                 "Invalid variable file contents.",
                 "Invalid variable file contents.",
                 "You cannot use loops on 'import_tasks' statements. You should use \
@@ -2850,6 +2852,32 @@ mod tests {
         let silenced =
             "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
         assert_eq!(flagged(silenced), 0);
+    }
+
+    /// Row 29. Its own id, because someone using a reserved name on purpose wants to silence
+    /// this and not every replication sharing the line — and because the message is not one:
+    /// upstream randomises the order of the names, so ours sorts them.
+    #[test]
+    fn the_reserved_tag_rule_is_its_own_and_sorts_its_names() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "reserved-tag-name"),
+            )
+            .collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(
+            got[0].message,
+            "Found reserved tagnames in tags: ['all'], we do not recommend doing this as it \
+             might give unexpected results"
+        );
     }
 
     /// Rows 5 and 23 suppress on their own ids. Two ids rather than one because the author's

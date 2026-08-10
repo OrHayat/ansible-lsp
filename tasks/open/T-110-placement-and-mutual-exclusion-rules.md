@@ -43,7 +43,7 @@ predate it and were re-checked against the same tree.
 | 26 | a task-list entry that is not a mapping                                     | error    | `helpers.py:100-102`         | ours — upstream's names the list, not the entry, and carries no position       |
 | 27 | a `vars_prompt` entry that is not a mapping                                 | error    | `vars/manager.py:102-107`    | Invalid variable file contents.                                                |
 | 28 | `tags:` that is neither a list nor a string — a null one included           | error    | `taggable.py:48-55`          | tags must be specified as a list                                               |
-| 29 | a reserved tag name (`all`, `tagged`, `untagged`)                           | warning  | `taggable.py:58-59`          | Found reserved tagnames in tags: %r, we do not recommend doing this as it might give unexpected results |
+| 29 | a reserved tag name (`all`, `tagged`, `untagged`)                           | warning  | `taggable.py:58-59`          | ours — upstream's names are in a per-process random order, so there is nothing verbatim to copy |
 
 Row 23 has an asymmetric twin worth knowing: an empty role `tasks/main.yml` is fully silent,
 so the warning is scoped to imports, not to every empty task file.
@@ -108,8 +108,8 @@ shape of a whole file.
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
 | 26 | any task list     | value    | err  | **done** — `stmt`; ours, `malformed-task-entry`              |
 | 27 | vars_prompt entry | value    | err  | **done** — `vars_prompt`; the same guard, written correctly  |
-| 28 | play/task/block   | value    | err  | open — one `Taggable`, so one function for all three         |
-| 29 | play/task/block   | value    | warn | open — same walk as 28, a closed set of three names          |
+| 28 | play/task/block   | value    | err  | **done** — `tags_checks`; miss: `tags: 42`, no scalar style  |
+| 29 | play/task/block   | value    | warn | **done** — `tags_checks`; ours, `reserved-tag-name`          |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -344,10 +344,17 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       points a caret at it, and adds a help text. Replicated verbatim rather than reworded.
       Scalar, sequence and **null** entries all fatal — the null is the asymmetry worth knowing,
       since the same bare `-` in a task list loads clean. Aliases stay silent until T-160.
-- [ ] 28 — `tags:` that is neither a list nor a string (`taggable.py:48-55`) — found while
+- [x] 28 — `tags:` that is neither a list nor a string (`taggable.py:48-55`) — found while
       measuring null-valued keys for T-161. `_load_tags` accepts a list or a comma string and
       nothing else, so a **null** `tags:` is fatal where every other null play key loads clean.
-      `Taggable` is mixed into Play, Task, Block and Role, so all four positions share it.
-- [ ] 29 — a reserved tag name (`taggable.py:58-59`) — a real `_display.warning` with an `obj=`,
-      so it has a position and is replicable verbatim. `all`, `tagged`, `untagged`.
+      `Taggable` is mixed into Play, Task, Block and Role; the first three are wired, and a
+      `roles:` entry is not walked by this module at all. Known miss, shared with row 17:
+      `tags: 42` is one node with `tags: "42"` to a parser that keeps no scalar style, and only
+      the first is fatal — so it stays silent rather than flagging the legal spelling.
+- [x] 29 — a reserved tag name (`taggable.py:58-59`) — `all`, `tagged`, `untagged`, and the
+      comma-string spelling is split before the check so `tags: all,deploy` counts too. **Not**
+      a verbatim replication, which the sweep assumed it would be: upstream interpolates
+      `list(set_intersection)`, and Python randomises string hashing per process, so five runs
+      of one file printed four different orders. There is no single message to copy. Ours sorts
+      the names and takes its own id, `reserved-tag-name`.
 - [ ] a fixture file exercises every row above, good and bad
