@@ -2511,6 +2511,8 @@ mod tests {
                 "action and local_action are mutually exclusive",
                 "conflicting action statements: debug, frobnicate",
                 "conflicting action statements: ansible.builtin.debug, nmae",
+                "no module/action detected in task.",
+                "no module/action detected in task.",
                 "Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
                  import_playbook",
                 "playbook entries must be either valid plays or 'import_playbook' statements",

@@ -97,7 +97,7 @@ shape of a whole file.
 | 19 | vars_prompt entry | keyset   | err  | **done** — `vars_prompt`                                    |
 | 20 | task              | value    | err  | **done** — `duplicate_loop`                                 |
 | 21 | task              | value    | err  | **done** — `loop_control_checks`                            |
-| 22 | task              | required | err  | open — needs module resolution (T-046)                      |
+| 22 | task              | required | err  | **done** — `no_module_at_all`; no resolution either          |
 | 23 | include target    | doc      | warn | open — needs the included file's contents                   |
 | 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
@@ -289,7 +289,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       `with_items: ""` and `with_items: []` both run clean upstream
 - [x] 21 — `loop_control:` whose value is not a dict (`task.py:346-352`) — stricter than the
       `loop:` guard: a valueless `loop_control:` is fatal too, and so is a templated scalar
-- [ ] 22 — a task with no module/action at all (`mod_args.py:368`)
+- [x] 22 — a task with no module/action at all (`mod_args.py:368`) — the far end of row 12's
+      walk, so it needs no resolution either. `action:`/`local_action:` are task attributes and
+      never appear as candidates, but each supplies the action from its own branch. The
+      neighbouring `couldn't resolve module/action` stays T-046's: it needs the second,
+      resolving parse inside `Task.load`.
 - [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays silent (`helpers.py:210-212`)
 - [x] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,325`)
       — ours, on rule id `discarded-delegate-to`. Proven with a control: `delegate_to: other`

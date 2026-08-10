@@ -56,6 +56,7 @@ const LOOP_CONTROL_SHAPE: &str = "the `loop_control` value must be specified as 
                                   and cannot be a variable itself (though it can contain \
                                   variables)";
 const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
+const NO_MODULE: &str = "no module/action detected in task.";
 const USER_AND_REMOTE_USER: &str = "both 'user' and 'remote_user' are set for this play. The \
                                     use of 'user' is deprecated, and should be removed";
 const ACTION_AND_LOCAL_ACTION: &str = "action and local_action are mutually exclusive";
@@ -290,6 +291,11 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     // Row 12, from the same parse: the `action`/`local_action` check is `mod_args.py:322`, the
     // candidate walk that raises this one is `mod_args.py:330-354`, so row 11 goes first.
     if conflicting_actions(node, out) {
+        return;
+    }
+    // Row 22, the far end of the same walk (`mod_args.py:368`), so it sits here rather than
+    // with the `Task.load` rules below.
+    if no_module_at_all(node, out) {
         return;
     }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
@@ -691,6 +697,26 @@ fn conflicting_actions(node: &Node, out: &mut Vec<Problem>) -> bool {
             first.1, second.1
         ),
     ));
+    true
+}
+
+/// Row 22 (`mod_args.py:368`), the other end of the same walk: no action candidate at all, and
+/// no `action:`/`local_action:` to supply one from its own branch above it. Both of those are
+/// Task attributes, so they never appear as candidates — measured, each alone loads clean.
+///
+/// Fires on a task carrying only `name:`, only `with_items:`, or nothing at all — all measured.
+/// Anchored on the whole entry, since no single key is at fault.
+///
+/// The neighbouring `couldn't resolve module/action '%s'` (`mod_args.py:365`) is **not** ours:
+/// it needs the resolving parse inside `Task.load`, so it is T-046's when that lands.
+fn no_module_at_all(node: &Node, out: &mut Vec<Problem>) -> bool {
+    if !action_candidates(node).is_empty()
+        || node.get("action").is_some()
+        || node.get("local_action").is_some()
+    {
+        return false;
+    }
+    out.push(error(node.span(), NO_MODULE.into()));
     true
 }
 
@@ -1239,6 +1265,34 @@ mod tests {
                 "for {first}"
             );
         }
+    }
+
+    /// Row 22, the far end of row 12's walk: no candidate at all. Measured on each of these.
+    #[test]
+    fn a_task_with_no_module_at_all() {
+        for body in [
+            "- name: just a name\n      when: true",
+            "- name: just a name",
+            "- {}",
+            "- with_items: [1]",
+        ] {
+            assert_eq!(
+                check(&format!("- hosts: web\n  tasks:\n    {body}\n")),
+                [NO_MODULE],
+                "for {body:?}"
+            );
+        }
+    }
+
+    /// `action:` and `local_action:` are Task attributes, so they never show up as candidates —
+    /// but each sets the action in its own branch above the walk, so neither is row 22.
+    /// Measured: both load clean on their own.
+    #[test]
+    fn action_and_local_action_each_supply_a_module() {
+        assert!(check("- hosts: web\n  tasks:\n    - action: debug msg=x\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - local_action: debug msg=x\n").is_empty());
+        // A block is not a task and never reaches this rule.
+        assert!(check("- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: x}\n").is_empty());
     }
 
     /// Row 9. A **set** of spellings, so any two of the three collide and the names come out

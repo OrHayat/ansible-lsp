@@ -367,6 +367,20 @@
       static: yes # GOOD for this rule — `'static' is not a valid attribute for a Task` is
       # T-107's message, and it is what ansible gives here too
 
+# Row 22 is the far end of the same walk (`mod_args.py:368`): no candidate at all. `action:`
+# and `local_action:` are task attributes so they never appear as candidates, but each sets the
+# action in its own branch above the walk — measured, both load clean alone.
+- name: tasks with nothing to run
+  hosts: localhost
+  tasks:
+    - name: a name and a condition, and no module # BAD: no module/action detected in task.
+      when: true
+
+    - with_items: [1] # BAD: a loop keyword is not a module either
+
+    - action: debug msg=x # GOOD: `action:` supplies the module
+    - local_action: debug msg=x # GOOD: so does `local_action:`
+
 # Row 9. `PlaybookInclude.preprocess_data` gathers the spellings as a SET and demands exactly
 # one, so any two of the three collide — and the names are printed SORTED, not in the order
 # they were written. Both measured.
