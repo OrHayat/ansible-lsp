@@ -44,6 +44,7 @@ sibling epic).
 - [ ] T-110 — Placement and mutual-exclusion rules
 - [ ] T-111 — module_defaults: shape, the 3-segment rule, and action groups
 - [ ] T-147 — Validate role meta/main.yml against the RoleMetadata set
+- [ ] T-159 — Task-level invalid-attribute fires where ansible reports a conflicting action
 
 ## Done when
 
