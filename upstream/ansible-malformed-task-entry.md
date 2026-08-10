@@ -1,9 +1,9 @@
-# Upstream issue to file against ansible/ansible — a non-dict task entry reports the wrong value, the wrong type, and no location
+# Upstream issue to file against ansible/ansible — an internal assertion is on a user-reachable path, so a non-dict task entry reports the wrong value, the wrong type, and no location
 
 Not filed yet. Measured on ansible-core **2.21.2** (`lib/ansible/release.py:20`); the code is
 two lines and long-standing.
 
-## Issue 1 — `load_list_of_tasks` interpolates the list where it means the item, and raises with no `obj`
+## Issue 1 — `load_list_of_tasks` raises a developer assertion at the user, naming the list where it means the entry
 
 **Component:** `lib/ansible/playbook/helpers.py`
 
@@ -54,22 +54,42 @@ appears even when the entry is in a plain `tasks:` list.
 **null** entry (a bare `-`) is not affected — `load_list_of_blocks` drops it before this point
 (`helpers.py:53,65`), and the play loads clean.
 
+**Why it reads like debug output: it is.** `AnsibleAssertionError` is
+`"""Invalid assertion."""` (`errors/__init__.py:183`), inheriting Python's `AssertionError` —
+an internal "this cannot happen" class. Of its **24** raise sites across `lib/ansible`,
+**none** passes `obj=`. It was never meant to reach a user, so nobody gave it a position or a
+sentence. This particular guard just happens to sit where ordinary input arrives: a string in a
+task list is valid YAML that a human writes by accident.
+
+Someone did notice it leaks. `Block._load` catches `AssertionError` and re-raises it wrapped in
+a human sentence (`block.py:113-124`) — the `A malformed block was encountered while loading
+block` prefix. That wrap treats the symptom and leaves the assertion as it is.
+
+**Why `Origin: <unknown>` survives the wrap.** The wrapper *does* pass `obj=self._ds`. But for
+a bare task list `preprocess_data` synthesises the block it is loading —
+`dict(block=ds)` (`block.py:107-110`) — and that fresh dict carries no YAML origin tag, so
+there is nothing to report a position from. The only object here that knows where it came from
+is `task_ds` itself, and it is the one object the raise does not mention.
+
 **Expected.** Name the entry that is wrong, its real type, and where it is.
 
-**Suggested fix.** Two tokens and an `obj`:
+**Suggested fix.** Make it a parser error rather than an assertion, so it carries its own
+position and is not swallowed by the `AssertionError` handler above it:
 
 ```python
      for task_ds in ds:
          if not isinstance(task_ds, dict):
 -            raise AnsibleAssertionError('The ds (%s) should be a dict but was a %s' % (ds, type(ds)))
-+            raise AnsibleAssertionError(
-+                'The task (%s) should be a dict but was a %s' % (task_ds, type(task_ds)),
++            raise AnsibleParserError(
++                'A task must be a dict, but was a %s' % type(task_ds).__name__,
 +                obj=task_ds,
 +            )
 ```
 
-`obj=task_ds` is what restores the `Origin:` line — the same mechanism every neighbouring raise
-in this file already uses (`helpers.py:106`, `helpers.py:154`, `helpers.py:247`).
+`AnsibleParserError` is what every neighbouring user-facing raise in this file already uses
+(`helpers.py:106`, `154`, `247`), and it is deliberately *not* an `AssertionError`, so
+`Block._load` stops catching it and the error propagates with the origin of the offending entry
+instead of the synthesised block's absence of one.
 
 Worth checking the sibling at `helpers.py:96-97` in the same pass: `The ds (%s) should be a list
 but was a %s` has the same shape and is correct there, since `ds` really is the subject — which
