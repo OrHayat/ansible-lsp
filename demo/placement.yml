@@ -276,6 +276,41 @@
     - include_role: { name: notifier } # GOOD
     - import_role: { name: notifier } # GOOD
 
+# Rows 6 and 25, the two `meta:` refusals. 6a and 25 are handler-position rules like rows 1-2.
+# 6b is the other half of the same upstream `if`: `role is None`. We never prove a statement IS
+# in a role — only that a play's own task list is a position where it provably is NOT, which
+# holds even when the play also has `roles:` (measured). Row 25 is the one raised at run time
+# (`strategy/__init__.py:883`) rather than at load, so `--syntax-check` alone would miss it.
+# Note on `end_role`: there is no GOOD case for it anywhere in THIS file, and that is not an
+# omission. `meta: end_role` ends the enclosing role early, so it is legal only inside a role's
+# own `tasks/` files — a different file entirely. The word "tasks" collides and hides that: a
+# play has a `tasks:` KEY (never in a role), a role has a `tasks/` DIRECTORY (always in one).
+# Blocks are transparent to this — measured legal at any depth inside a role, fatal at any
+# depth in a play — which is why `Pos::PlayTasks` survives `inside()`.
+- name: meta words that cannot be handlers
+  hosts: localhost
+  tasks:
+    - debug: { msg: t }
+    - meta: flush_handlers # GOOD: this is what flush_handlers is FOR
+    - meta: clear_facts # GOOD
+    - meta: end_role # BAD: this `tasks:` is a PLAY's, so there is no role to end
+    - block:
+        - meta: end_role # BAD: a block does not put you in a role — still a play task list
+  handlers:
+    - name: h1
+      meta: end_role # BAD: Cannot execute 'end_role' from a handler — `use_handlers`
+      # short-circuits before the role check, so this fires in a role's handlers/ file too
+
+    - name: h2
+      meta: flush_handlers # BAD: flush_handlers cannot be used as a handler
+
+    - name: h3
+      block:
+        - ansible.builtin.meta: flush_handlers # BAD: either handler depth, any core spelling
+
+    - name: h4
+      meta: clear_facts # GOOD: only end_role and flush_handlers are refused here
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

@@ -2502,6 +2502,11 @@ mod tests {
                 "Using 'ansible.builtin.import_role' as a handler is not supported.",
                 "Using 'include_role' as a handler is not supported.",
                 "Using 'include_role' as a handler is not supported.",
+                "Cannot execute 'end_role' from outside of a role",
+                "Cannot execute 'end_role' from outside of a role",
+                "Cannot execute 'end_role' from a handler",
+                "flush_handlers cannot be used as a handler",
+                "flush_handlers cannot be used as a handler",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \

@@ -5,8 +5,9 @@
 //! Each rule is a shape test on a node and its parent: no resolution, no index, no variables.
 //! Measured against ansible-core 2.21.2.
 //!
-//! Shipped so far: the play/playbook batch, the loop and `loop_control` rules, row 7, and
-//! row 1. The rest of handler placement, the file-level shapes and the `mod_args` pair are
+//! The rules fall into three shapes, and only the first is data: *position* rules, which turn
+//! on where a statement sits and live in [`REFUSED`]; *co-occurrence* rules, which turn on two
+//! keys of one node; and per-key value rules. The file-level shapes and the `mod_args` pair are
 //! later batches of the same ticket.
 
 use crate::keywords;
@@ -51,6 +52,9 @@ const LOOP_CONTROL_SHAPE: &str = "the `loop_control` value must be specified as 
                                   and cannot be a variable itself (though it can contain \
                                   variables)";
 const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
+const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
+const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
+const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
 
 /// Every placement problem in the file. `src` is the document text, needed only to quote a
 /// bad `hosts:` entry back at the author.
@@ -68,14 +72,17 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
         .iter()
         .any(|it| keywords::is_play(it.entries().iter().filter_map(|(k, _)| k.as_str())));
     if !looks_like_plays {
-        // A standalone task file: `tasks/main.yml`, a handler file, an include target.
+        // A standalone task file, and every position rule is a documented miss here.
         //
-        // Row 1 is a documented miss here. A role's `handlers/main.yml` does fire it upstream
-        // — measured — but content alone cannot tell that file from `tasks/main.yml`, where the
-        // same nesting is legal and common. `Pos::Ordinary` makes it a miss rather than a false
-        // error on every role. Liftable once T-150's file-kind matrix lands.
+        // Two different unknowns, neither answerable from content. Whether this is a handler
+        // file: a role's `handlers/main.yml` fires rows 1, 2, 6a and 25 upstream, but it reads
+        // exactly like `tasks/main.yml`, where the same nesting is legal and common. And
+        // whether we are in a role, for row 6b — measured, a byte-identical include target is
+        // legal when a role includes it and fatal when a play does, so the *file* has no answer
+        // at all. The first wants T-150's file-kind matrix; the second wants T-020's reverse
+        // index. Until then: a miss, never a false error.
         for item in items {
-            stmt(item, Pos::Ordinary, &mut out);
+            stmt(item, Pos::Standalone, &mut out);
         }
         return out;
     }
@@ -93,31 +100,147 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
     out
 }
 
-/// Where a statement sits relative to a play's `handlers:` list, which is all row 1 needs.
+/// Where a statement sits. Every rule in [`REFUSED`] turns on this and nothing else.
 ///
-/// `use_handlers` is threaded through both loaders, but `Play._load_handlers` reaches
-/// `load_list_of_blocks` (`play.py:205`), which loads a top-level entry as a Block without ever
-/// consulting the flag. Only `load_list_of_tasks` checks it (`helpers.py:104-106`), and that is
-/// one level down — so the same `block:` is legal as a handler and fatal inside one.
+/// The handler split is not arbitrary: `use_handlers` is threaded through both loaders, but
+/// `Play._load_handlers` reaches `load_list_of_blocks` (`play.py:205`), which loads a top-level
+/// entry as a Block without ever consulting the flag. Only `load_list_of_tasks` checks it
+/// (`helpers.py:104-106`), one level down. A plain (non-block) entry *is* re-loaded through
+/// that path, wrapped in an implicit block — which is why a block is legal as a handler and
+/// fatal inside one, while a role include is fatal in both.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pos {
-    /// Anywhere outside a play's `handlers:` — `tasks:`, `pre_tasks:`, `post_tasks:`, or a
-    /// standalone file, where a nested block is perfectly legal.
-    Ordinary,
+    /// A play's own `pre_tasks:`/`tasks:`/`post_tasks:`. Provably outside any role — measured
+    /// still fatal for `meta: end_role` even when the play also has `roles:`.
+    PlayTasks,
+    /// A standalone task file. Could be a role's `tasks/main.yml`, its `handlers/main.yml`, or
+    /// an include target — and the caller decides which, so the role- and handler-sensitive
+    /// rules stay quiet here rather than guess. See the note on [`problems`].
+    Standalone,
     /// A top-level entry of `handlers:`. A block here loads; row 1 starts below it.
     HandlerEntry,
-    /// Inside a handler's `block:`/`rescue:`/`always:`, where a block is refused.
+    /// Inside a handler's `block:`/`rescue:`/`always:`.
     HandlerBody,
 }
 
 impl Pos {
-    /// What the children of a node at this position are.
+    /// What the children of a node at this position are. Only the handler boundary moves.
     fn inside(self) -> Self {
         match self {
-            Pos::Ordinary => Pos::Ordinary,
+            Pos::PlayTasks => Pos::PlayTasks,
+            Pos::Standalone => Pos::Standalone,
             Pos::HandlerEntry | Pos::HandlerBody => Pos::HandlerBody,
         }
     }
+}
+
+/// What a [`Refusal`] matches on. Three kinds because the node reads differ: a block is a
+/// *shape*, a role include is a *module key*, and `meta:` needs the key **and** its value.
+enum What {
+    Block,
+    /// Matched through [`keywords::core_action`], so the bare, `ansible.builtin.` and
+    /// `ansible.legacy.` spellings all hit and a collection's own module never does.
+    Action(&'static str),
+    /// A `meta:` whose value is this word.
+    Meta(&'static str),
+}
+
+enum Msg {
+    Lit(&'static str),
+    /// `{}` becomes the module key **as written**, FQCN included.
+    Quoted(&'static str),
+}
+
+/// One row of the position table.
+struct Refusal {
+    what: What,
+    at: &'static [Pos],
+    msg: Msg,
+}
+
+const IN_HANDLERS: &[Pos] = &[Pos::HandlerEntry, Pos::HandlerBody];
+
+/// Rows 1, 2, 6 and 25: everything ansible-core refuses purely because of *where* a statement
+/// sits. One shape, so they are data rather than six near-identical predicates.
+///
+/// `Standalone` appears nowhere on purpose — see [`problems`].
+const REFUSED: &[Refusal] = &[
+    // Row 1 (`helpers.py:104-106`). A block written *as* a handler loads fine; only one nested
+    // inside it is refused.
+    Refusal {
+        what: What::Block,
+        at: &[Pos::HandlerBody],
+        msg: Msg::Lit(BLOCK_AS_HANDLER),
+    },
+    // Row 2 (`helpers.py:245-247`), whose `%s` is the action as written — unlike rows 3-4,
+    // whose messages are literal strings upstream, so the two cannot share a formatter.
+    Refusal {
+        what: What::Action("include_role"),
+        at: IN_HANDLERS,
+        msg: Msg::Quoted("Using '{}' as a handler is not supported."),
+    },
+    Refusal {
+        what: What::Action("import_role"),
+        at: IN_HANDLERS,
+        msg: Msg::Quoted("Using '{}' as a handler is not supported."),
+    },
+    // Row 6a (`helpers.py:278-281`). `use_handlers` short-circuits before the role check, so
+    // this fires in a role's own `handlers/` file too — which the ticket had backwards.
+    Refusal {
+        what: What::Meta("end_role"),
+        at: IN_HANDLERS,
+        msg: Msg::Lit(END_ROLE_HANDLER),
+    },
+    // Row 25 (`strategy/__init__.py:883`), the one raised at run time rather than at load.
+    // Measured in both handler positions.
+    Refusal {
+        what: What::Meta("flush_handlers"),
+        at: IN_HANDLERS,
+        msg: Msg::Lit(FLUSH_AS_HANDLER),
+    },
+    // Row 6b (`helpers.py:283-285`), the `role is None` half. We never have to prove a
+    // statement IS in a role — only to name the position where it provably is not.
+    Refusal {
+        what: What::Meta("end_role"),
+        at: &[Pos::PlayTasks],
+        msg: Msg::Lit(END_ROLE_OUTSIDE),
+    },
+];
+
+/// The last entry naming this action, with the spelling as written. Searched from the end for
+/// the same reason [`Node::get`] is: on a duplicate key Ansible keeps the last.
+fn action_entry<'a>(node: &'a Node, action: &str) -> Option<(Span, &'a str, &'a Node)> {
+    node.entries().iter().rev().find_map(|(k, v)| {
+        let key = k.as_str()?;
+        (keywords::core_action(key) == action).then_some((k.span(), key, v))
+    })
+}
+
+/// Walk the position table. Ansible raises on the first thing it refuses and stops loading, so
+/// this reports one fault per statement and the caller does not recurse past it.
+fn refused_here(node: &Node, pos: Pos, is_block: bool, out: &mut Vec<Problem>) -> bool {
+    for rule in REFUSED {
+        if !rule.at.contains(&pos) {
+            continue;
+        }
+        let hit = match rule.what {
+            What::Block => is_block.then(|| (node.span(), "")),
+            What::Action(name) => action_entry(node, name).map(|(span, key, _)| (span, key)),
+            What::Meta(word) => action_entry(node, "meta")
+                .filter(|(_, _, value)| value.as_str() == Some(word))
+                .map(|(span, key, _)| (span, key)),
+        };
+        let Some((span, written)) = hit else { continue };
+        out.push(error(
+            span,
+            match rule.msg {
+                Msg::Lit(m) => m.to_string(),
+                Msg::Quoted(t) => t.replace("{}", written),
+            },
+        ));
+        return true;
+    }
+    false
 }
 
 /// One entry of a task list: a block, whose three task-holding keys recurse, or a task.
@@ -127,13 +250,16 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     }
     // The same `Block.is_block` test `ast::build_stmt` makes, so the two agree on what a block
     // is. A `rescue:` with no `block:` is one — a malformed one, which is row 7.
-    if keywords::BLOCK_TASK_CONTAINERS.iter().any(|k| node.get(k).is_some()) {
-        // Row 1. Ansible raises on the outermost one and stops loading, so a stack of nested
-        // blocks is one fault, not one per level — hence no recursion past this point.
-        if pos == Pos::HandlerBody {
-            out.push(error(node.span(), BLOCK_AS_HANDLER.into()));
-            return;
-        }
+    let is_block = keywords::BLOCK_TASK_CONTAINERS
+        .iter()
+        .any(|k| node.get(k).is_some());
+    // Position rules first: every one of them raises before the statement is loaded at all, so
+    // they beat the key-level rules below — measured on a handler include_role that also
+    // carried a duplicate loop.
+    if refused_here(node, pos, is_block, out) {
+        return;
+    }
+    if is_block {
         rescue_without_block(node, out);
         for key in keywords::BLOCK_TASK_CONTAINERS {
             if let Some(list) = node.get(key) {
@@ -144,13 +270,6 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
         }
         return;
     }
-    // Row 2, which unlike row 1 applies to a handler's top level too: a plain entry there is
-    // wrapped into an implicit block and re-loaded through `load_list_of_tasks`, while a block
-    // entry is not. The raise sits before the task is loaded at all (`helpers.py:245-247`), so
-    // it beats both loop rules — measured, on a handler include_role carrying a duplicate loop.
-    if pos != Pos::Ordinary && role_include_as_handler(node, out) {
-        return;
-    }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
     // value — is raised before the field loaders run and long before `helpers.py` asks what
     // the action was. One fault, one message, in Ansible's own order.
@@ -159,30 +278,6 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     }
     loop_control_checks(node, out);
     loop_on_import(node, out);
-}
-
-/// Row 2. `_ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES` is `include_role` and `import_role` plus
-/// their `ansible.builtin.`/`ansible.legacy.` spellings and nothing else (`constants.py:31-43`,
-/// `fqcn.py:20-31`) — a collection's own `include_role` is an ordinary module and never reaches
-/// here. All six spellings measured.
-///
-/// The message quotes the key **as written**, FQCN and all, which is why this cannot share a
-/// formatter with rows 3-4, whose messages are literal strings upstream.
-///
-/// Known miss, the same one rows 3-4 take: `action: include_role` fires upstream, since the
-/// action comes from `ModuleArgsParser` rather than the written key.
-fn role_include_as_handler(node: &Node, out: &mut Vec<Problem>) -> bool {
-    for (k, _) in node.entries() {
-        let Some(key) = k.as_str() else { continue };
-        if matches!(keywords::core_action(key), "include_role" | "import_role") {
-            out.push(error(
-                k.span(),
-                format!("Using '{key}' as a handler is not supported."),
-            ));
-            return true;
-        }
-    }
-    false
 }
 
 /// Row 7. `_validate_rescue` and `_validate_always` are the same function
@@ -416,7 +511,7 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     // `load_list_of_tasks`, so the task-shaped rules apply identically in each. Only row 1
     // cares which list it is, and only below the top level.
     for key in keywords::PLAY_TASK_CONTAINERS {
-        let pos = if *key == "handlers" { Pos::HandlerEntry } else { Pos::Ordinary };
+        let pos = if *key == "handlers" { Pos::HandlerEntry } else { Pos::PlayTasks };
         if let Some(list) = node.get(key) {
             for item in list.items() {
                 stmt(item, pos, out);
@@ -723,6 +818,97 @@ mod tests {
             check("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      import_role: {name: r}\n      loop: [1]\n"),
             ["Using 'import_role' as a handler is not supported."]
         );
+    }
+
+    /// Rows 6a and 25, the two `meta:` refusals. Both fire at either handler depth, and both
+    /// take every core spelling of `meta:` since the table matches through `core_action`.
+    #[test]
+    fn meta_end_role_and_flush_handlers_are_refused_as_handlers() {
+        for (word, want) in [
+            ("end_role", END_ROLE_HANDLER),
+            ("flush_handlers", FLUSH_AS_HANDLER),
+        ] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      meta: {word}\n"
+                )),
+                [want],
+                "top-level {word}"
+            );
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - meta: {word}\n"
+                )),
+                [want],
+                "nested {word}"
+            );
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      ansible.builtin.meta: {word}\n"
+                )),
+                [want],
+                "FQCN {word}"
+            );
+        }
+    }
+
+    /// Row 6b. We never prove a statement IS in a role — only that a play's own task list is a
+    /// position where it provably is not. Measured still fatal alongside `roles:`, and inside a
+    /// block, which is why `Pos::PlayTasks` survives `inside()`.
+    #[test]
+    fn meta_end_role_outside_a_role_is_an_error() {
+        for key in ["pre_tasks", "tasks", "post_tasks"] {
+            assert_eq!(
+                check(&format!("- hosts: web\n  {key}:\n    - meta: end_role\n")),
+                [END_ROLE_OUTSIDE],
+                "in {key}"
+            );
+        }
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - block:\n        - meta: end_role\n"),
+            [END_ROLE_OUTSIDE]
+        );
+        assert_eq!(
+            check("- hosts: web\n  roles: [r]\n  tasks:\n    - meta: end_role\n"),
+            [END_ROLE_OUTSIDE],
+            "a play's own tasks are outside its roles"
+        );
+    }
+
+    /// `meta:` words that are not refused anywhere, and the normal use of `flush_handlers` in a
+    /// task list — the table must not turn every `meta:` into a diagnostic.
+    #[test]
+    fn other_meta_words_are_left_alone() {
+        for word in ["clear_facts", "noop", "flush_handlers", "end_play"] {
+            assert!(
+                check(&format!("- hosts: web\n  tasks:\n    - meta: {word}\n")).is_empty(),
+                "meta: {word} in tasks"
+            );
+        }
+        for word in ["clear_facts", "noop"] {
+            assert!(
+                check(&format!(
+                    "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      meta: {word}\n"
+                ))
+                .is_empty(),
+                "meta: {word} as a handler"
+            );
+        }
+    }
+
+    /// Every position rule is a documented miss in a standalone file: whether it is a handler
+    /// file needs T-150, and whether it is inside a role needs T-020 — a byte-identical include
+    /// target is legal from a role and fatal from a play, so the file alone has no answer.
+    #[test]
+    fn the_position_rules_are_all_misses_in_a_standalone_file() {
+        for body in [
+            "- name: h\n  block:\n    - block:\n        - debug: {msg: x}\n",
+            "- name: h\n  include_role: {name: r}\n",
+            "- name: h\n  meta: end_role\n",
+            "- name: h\n  meta: flush_handlers\n",
+        ] {
+            assert!(check(body).is_empty(), "should stay quiet: {body:?}");
+        }
     }
 
     /// Row 13. The one genuine mutual exclusion at play level.

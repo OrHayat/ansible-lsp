@@ -60,6 +60,13 @@ Two diagnostics:
    with no role context (e.g. `include_tasks` straight from a play): that chain crashes at
    runtime. Fires on positive evidence only — templated includes make edges unknowable, so
    "no role chain found" proves nothing, and absence of chains stays silent.
+3. **end_role-outside-role**, the same walk paying for a second rule. T-110 row 6b ships the
+   half that needs no chains — a play's own task list is provably outside every role — but is
+   a documented miss in a standalone file, because the caller decides. Measured: a
+   byte-identical include target is legal when a role includes it and
+   `Cannot execute 'end_role' from outside of a role` when a play does, so the file alone has
+   no answer. Same evidence rule as rule 2: fire only when a known chain reaches it with no
+   role context. Unlike rule 2 this one is fatal at **load**, not at run time.
 
 ## Done when
 
@@ -69,6 +76,7 @@ Two diagnostics:
       silent when the only chains are role chains or none are known
 - [ ] a live two-chain run (role chain + task chain into the same file) confirms both the
       value and the crash, recorded in Settled
+- [ ] rule 3 lifts T-110 row 6b's standalone-file miss, on the same positive-evidence rule
 
 Source: `~/ansible_source/lib/ansible/vars/manager.py:478-484`,
 `~/ansible_source/lib/ansible/playbook/task.py:99,495-497`

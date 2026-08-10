@@ -70,7 +70,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
 | —     | 7               | the block classifier itself         | **done** — see below; belonged to no batch |
-| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | rows 1-2 done (`Pos`); 25, 6 open         |
+| 3     | 1, 2, 6, 25     | the `Pos` position table            | **done** — all four are rows in `REFUSED` |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
 
@@ -186,11 +186,19 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       at a handler's top level too, unlike row 1, since a plain entry there is wrapped into an
       implicit block and re-loaded. Beats both loop rules on the same task. Known miss:
       `action: include_role`, the same trade rows 3-4 take.
-- [ ] 25 — `meta: flush_handlers` used as a handler (`strategy/__init__.py:883`)
+- [x] 25 — `meta: flush_handlers` used as a handler (`strategy/__init__.py:883`) — raised at
+      run time, not load, so `--syntax-check` alone never sees it. Both handler depths.
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
 - [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`)
-- [ ] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:280-285`)
+- [x] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:278-285`) — two
+      independent raises. 6a needs no role knowledge at all: `use_handlers` short-circuits
+      first, so it fires in a role's own `handlers/` file too, which the earlier scoping note
+      had backwards. 6b never proves a statement IS in a role — a play's own task list is a
+      position where it provably is not, measured still fatal alongside `roles:`. Missed in
+      standalone files, and not liftable by T-150: a byte-identical include target is legal
+      from a role and fatal from a play, so the file has no answer. Filed as T-068 rule 3 —
+      the same chain walk, the same positive-evidence rule.
 - [x] 7 — `rescue:`/`always:` without `block:` (`block.py:138-142`) — the guard is
       `if value and not self.block`, so an empty `block: []` still fires and an empty
       `rescue: []` does not; a null value is `_load`'s own message, not this rule's
