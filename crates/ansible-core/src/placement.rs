@@ -5,9 +5,9 @@
 //! Each rule is a shape test on a node and its parent: no resolution, no index, no variables.
 //! Measured against ansible-core 2.21.2.
 //!
-//! Shipped so far: the play/playbook batch, and the two loop-on-import rules. The rest of
-//! the task-level rules (`loop_control`, handler placement, the `mod_args` pair) are the
-//! later batches of the same ticket.
+//! Shipped so far: the play/playbook batch, the loop and `loop_control` rules, and row 7.
+//! Handler placement, the file-level shapes and the `mod_args` pair are later batches of the
+//! same ticket.
 
 use crate::keywords;
 use crate::parse::{Node, Span};
@@ -92,7 +92,10 @@ fn stmt(node: &Node, out: &mut Vec<Problem>) {
     if !matches!(node, Node::Mapping { .. }) {
         return;
     }
-    if node.get("block").is_some() {
+    // The same `Block.is_block` test `ast::build_stmt` makes, so the two agree on what a block
+    // is. A `rescue:` with no `block:` is one — a malformed one, which is row 7.
+    if keywords::BLOCK_TASK_CONTAINERS.iter().any(|k| node.get(k).is_some()) {
+        rescue_without_block(node, out);
         for key in keywords::BLOCK_TASK_CONTAINERS {
             if let Some(list) = node.get(key) {
                 for child in list.items() {
@@ -110,6 +113,36 @@ fn stmt(node: &Node, out: &mut Vec<Problem>) {
     }
     loop_control_checks(node, out);
     loop_on_import(node, out);
+}
+
+/// Row 7. `_validate_rescue` and `_validate_always` are the same function
+/// (`block.py:138-142`), and the guard is `if value and not self.block` — Python truthiness on
+/// both sides, which is what makes the edges what they are:
+///
+/// - an **empty** `block: []` is falsy, so it counts as no block and the rule still fires;
+/// - an empty `rescue: []` is falsy on the other side, so it is no fault at all;
+/// - a null value for any of the three dies earlier in `_load` with its own message
+///   (`A malformed block was encountered...`), so it is not this rule's to report.
+///
+/// `rescue` is reported before `always` whichever order they are written in — measured, and it
+/// follows the FieldAttribute declaration order rather than the document.
+fn rescue_without_block(node: &Node, out: &mut Vec<Problem>) {
+    match node.get("block") {
+        Some(Node::Null { .. }) => return,
+        Some(block) if !block.items().is_empty() => return,
+        _ => {}
+    }
+    for key in ["rescue", "always"] {
+        let Some(value) = node.get(key) else { continue };
+        if value.items().is_empty() {
+            continue;
+        }
+        if let Some(span) = key_span(node, key) {
+            out.push(error(span, format!("'{key}' keyword cannot be used without 'block'")));
+        }
+        // Ansible raises on the first of the two and stops, so one node gets one diagnostic.
+        return;
+    }
 }
 
 /// The span of a task's key, for anchoring. Searched from the end, like [`Node::get`]: on a
@@ -418,6 +451,81 @@ mod tests {
     fn check(src: &str) -> Vec<String> {
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
         problems(&nodes, src).into_iter().map(|p| p.message).collect()
+    }
+
+    /// Row 7, and the classifier fix underneath it. Before this, `Block.is_block`'s any-of-three
+    /// was read as `block:` only, so a bare `rescue:` reached `find_action` and the keyword was
+    /// taken for the module name — the node parsed as a well-formed task and we said nothing.
+    #[test]
+    fn rescue_or_always_without_a_block_is_an_error() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - rescue:\n        - debug: {msg: x}\n"),
+            ["'rescue' keyword cannot be used without 'block'"]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - always:\n        - debug: {msg: x}\n"),
+            ["'always' keyword cannot be used without 'block'"]
+        );
+        // A well-formed block stays silent however deeply it nests — measured legal at any
+        // depth, and inside `rescue:`/`always:` lists too.
+        assert!(check("- hosts: web\n  tasks:\n    - block:\n        - block:\n            - debug: {msg: x}\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: b}\n      rescue:\n        - block:\n            - debug: {msg: r}\n").is_empty());
+    }
+
+    /// The guard is `if value and not self.block` — Python truthiness on both sides, so the
+    /// edges are about emptiness, not about which keys are present.
+    #[test]
+    fn row_7_reads_emptiness_the_way_python_does() {
+        // An empty `block: []` is falsy, so it counts as no block at all.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - block: []\n      rescue:\n        - debug: {msg: r}\n"),
+            ["'rescue' keyword cannot be used without 'block'"]
+        );
+        // An empty `rescue: []` is falsy on the other side, so there is nothing to complain of.
+        assert!(check("- hosts: web\n  tasks:\n    - rescue: []\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - always: []\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - block: []\n").is_empty());
+        // A null value dies earlier, in `_load`, with `A malformed block was encountered` — a
+        // different message that is not this rule's to give.
+        assert!(check("- hosts: web\n  tasks:\n    - rescue:\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - block:\n      rescue:\n        - debug: {msg: r}\n").is_empty());
+    }
+
+    /// `rescue` is validated before `always` whatever order they are written in — the
+    /// FieldAttribute declaration order, not the document's. Ansible raises on the first and
+    /// stops, so a node with both faults gets one diagnostic.
+    #[test]
+    fn row_7_reports_rescue_first_regardless_of_written_order() {
+        for src in [
+            "- hosts: web\n  tasks:\n    - rescue:\n        - debug: {msg: r}\n      always:\n        - debug: {msg: a}\n",
+            "- hosts: web\n  tasks:\n    - always:\n        - debug: {msg: a}\n      rescue:\n        - debug: {msg: r}\n",
+        ] {
+            assert_eq!(check(src), ["'rescue' keyword cannot be used without 'block'"]);
+        }
+    }
+
+    /// On a duplicate key Ansible keeps the last, and row 7 reads emptiness off that one.
+    #[test]
+    fn row_7_follows_the_last_of_a_duplicate_key() {
+        // Last `block:` is empty, so the rescue has nothing to attach to.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: b}\n      block: []\n      rescue:\n        - debug: {msg: r}\n"),
+            ["'rescue' keyword cannot be used without 'block'"]
+        );
+        // Last `block:` is the full one, so this is a well-formed block.
+        assert!(check("- hosts: web\n  tasks:\n    - block: []\n      block:\n        - debug: {msg: b}\n      rescue:\n        - debug: {msg: r}\n").is_empty());
+        // Last `always:` is empty, and an empty value is falsy.
+        assert!(check("- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: b}\n      always:\n        - debug: {msg: a}\n      always: []\n").is_empty());
+    }
+
+    /// The classifier fix also unblinds the walker: a rescue-only body was never recursed into,
+    /// so every task-level rule was silent inside it.
+    #[test]
+    fn the_task_rules_reach_inside_a_malformed_block() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - rescue:\n        - import_tasks: f.yml\n          loop: [1]\n"),
+            ["'rescue' keyword cannot be used without 'block'", NO_LOOP_TASKS]
+        );
     }
 
     /// Row 13. The one genuine mutual exclusion at play level.

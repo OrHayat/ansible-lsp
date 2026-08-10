@@ -69,6 +69,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | ----- | --------------- | ----------------------------------- | ---------------------------------------- |
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
+| —     | 7               | the block classifier itself         | **done** — see below; belonged to no batch |
 | 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | open — scoped by measurement, see below  |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
@@ -99,6 +100,38 @@ parser's `Node::Null`-vs-empty-scalar distinction is what makes that decidable. 
 out **stricter** than the loop guard it sits beside: a valueless `loop_control:` is fatal
 where a valueless `loop:` is not, and a templated scalar is fatal too, which is what the
 message's "cannot be a variable itself" is about. T-155 shipped on the same read of the key.
+
+### Row 7 came first, because the classifier under it was wrong
+
+Row 7 sat in the table and in the done-when list but in **no batch** — and that was not an
+oversight of the batching so much as a symptom. It is the one rule that cannot be written
+without first fixing what counts as a block, and the bug it exposed was ours, not Ansible's.
+
+`Block.is_block` is **any** of `block`/`rescue`/`always` (`block.py:91-98`). Both
+`ast::build_stmt` and `placement::stmt` tested `block:` alone, so a mapping with a `rescue:`
+and no `block:` classified as a **task**. Worse than a mislabel: `find_action` then took
+`rescue` for the module name, which left `unknown_keys` empty, so the node read as a
+perfectly well-formed task and *every* rule downstream stayed silent on it. Measured against
+2.21.2 on five demo files, we were wrong on four — two wrong messages, two silences — and
+right only on the control that had a real `block:`. `is_task_directive` never learned
+`BLOCK_OWN` the way `is_block_directive` did four lines below it (`keywords.rs:314-329`);
+fixing the classifier routes these nodes to `build_block`, so `find_action` never sees them
+and the phantom module goes away as a side effect.
+
+Edges, all measured: the guard is `if value and not self.block` — Python truthiness both
+sides — so an empty `block: []` counts as no block and still fires, while an empty
+`rescue: []` is no fault at all. A null value for any of the three is `_load`'s own
+`A malformed block was encountered...`, a different message and not this rule's. On a
+duplicate key the **last** wins, in both directions, which is what `Node::get` already does.
+`rescue` is reported before `always` regardless of written order — FieldAttribute
+declaration order, not the document's — and Ansible stops at the first, so one node yields
+one diagnostic.
+
+One deliberate divergence, pinned by `a_nested_rescue_only_mapping_is_a_block_too`: upstream
+classifies the same mapping differently depending on nesting depth, and gives an internal
+class name for the nested spelling. We give row 7's message at every depth instead. That is
+an upstream bug rather than a rule we owe —
+`upstream/ansible-nested-block-classification.md` has the measurements and the one-line fix.
 
 ### Batch 3, scoped before writing any of it
 
@@ -150,7 +183,9 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
 - [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`)
 - [ ] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:280-285`)
-- [ ] 7 — `rescue:`/`always:` without `block:` (`block.py:138-142`)
+- [x] 7 — `rescue:`/`always:` without `block:` (`block.py:138-142`) — the guard is
+      `if value and not self.block`, so an empty `block: []` still fires and an empty
+      `rescue: []` does not; a null value is `_load`'s own message, not this rule's
 - [ ] 8 — playbook not a list, empty, or an entry that is not a dict (`playbook/__init__.py:74-91`)
       — the not-a-dict entry ships; the other three need to know the file IS a playbook,
       which only the command line says, so they stay unchecked rather than false-positive on

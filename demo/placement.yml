@@ -162,6 +162,36 @@
         - debug: { msg: x } # not ours — one fault, one rule.
       loop_control: { loop_var: it }
 
+# Row 7. `Block.is_block` is any of `block`/`rescue`/`always` (`block.py:91-98`), so a mapping
+# with a `rescue:` and no `block:` is a malformed BLOCK, not a task calling a module named
+# `rescue`. The guard that rejects it is `if value and not self.block` (`block.py:138-142`) —
+# Python truthiness on both sides, which is what makes the empty cases below go the way they do.
+- name: rescue and always need a block to attach to
+  hosts: localhost
+  tasks:
+    - rescue: # BAD: 'rescue' keyword cannot be used without 'block'
+        - debug: { msg: r }
+
+    - always: # BAD: 'always' keyword cannot be used without 'block'
+        - debug: { msg: a }
+
+    - block: [] # BAD: an EMPTY block is falsy, so it counts as no block at all
+      rescue:
+        - debug: { msg: r }
+
+    - rescue: [] # GOOD: an empty rescue is falsy on the other side — nothing to complain of
+    - always: [] # GOOD: likewise
+
+    - rescue: # GOOD here: a null value dies earlier in `_load`, with a different message
+        # ("A malformed block was encountered while loading rescue"), so it is not row 7's.
+
+    - block: # GOOD: the ordinary shape, and it nests to any depth — measured legal
+        - block:
+            - debug: { msg: x }
+      rescue:
+        - block:
+            - debug: { msg: r }
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

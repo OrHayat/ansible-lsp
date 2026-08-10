@@ -412,7 +412,11 @@ fn build_stmt(node: &Node, handlers: bool) -> Option<Stmt> {
     if !matches!(node, Node::Mapping { .. }) {
         return None;
     }
-    if node.get("block").is_some() {
+    // `Block.is_block` (`block.py:91-98`): any one of the three makes it a block. Testing only
+    // `block:` let a bare `rescue:` fall through to `find_action`, which took the keyword for the
+    // module name — so the node read as a well-formed task and every rule downstream stayed
+    // silent on it.
+    if keywords::BLOCK_TASK_CONTAINERS.iter().any(|k| node.get(k).is_some()) {
         Some(Stmt::Block(build_block(node, handlers)))
     } else {
         Some(Stmt::Task(build_task(node, handlers)))
@@ -706,6 +710,38 @@ mod tests {
         assert_eq!(b.rescue.len(), 1);
         assert_eq!(b.always.len(), 1);
         assert!(b.directives.iter().any(|d| d.key == "when"));
+    }
+
+    /// `Block.is_block` is any of the three, so a `rescue:` with no `block:` is a malformed
+    /// block — not a task calling a module named `rescue`. Testing `block:` alone let the
+    /// keyword through to `find_action`, which named it as the action and left `unknown_keys`
+    /// empty, so the node read as well-formed and every downstream rule stayed silent.
+    #[test]
+    fn rescue_or_always_alone_is_still_a_block() {
+        for key in ["rescue", "always"] {
+            let a = ast(&format!("- {key}:\n    - debug: {{msg: x}}\n"));
+            let Ast::Tasks(stmts) = a else { panic!() };
+            let Stmt::Block(b) = &stmts[0] else {
+                panic!("{key} alone should classify as a block");
+            };
+            assert!(b.block.is_empty());
+            assert_eq!(b.rescue.len() + b.always.len(), 1);
+        }
+    }
+
+    /// The same shape nested one level deeper. Upstream loses the classification here — the
+    /// inner walker tests `'block' in task_ds` (`helpers.py:104`) rather than `is_block`, and
+    /// reports an internal class name at the user. We give row 7's message in both positions.
+    #[test]
+    fn a_nested_rescue_only_mapping_is_a_block_too() {
+        let a = ast("- block:\n    - rescue:\n        - debug: {msg: x}\n");
+        let Ast::Tasks(stmts) = a else { panic!() };
+        let Stmt::Block(outer) = &stmts[0] else { panic!("expected a block") };
+        let Stmt::Block(inner) = &outer.block[0] else {
+            panic!("expected the nested rescue to be a block")
+        };
+        assert!(inner.block.is_empty());
+        assert_eq!(inner.rescue.len(), 1);
     }
 
     #[test]

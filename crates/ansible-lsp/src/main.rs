@@ -2446,8 +2446,8 @@ mod tests {
         }
     }
 
-    /// T-110 batch 1. Every message is ansible-core 2.21.2's own, measured by running each
-    /// case through `--syntax-check` — Ansible stops at the first, we report all nine.
+    /// T-110. Every message is ansible-core 2.21.2's own, measured by running each case through
+    /// `--syntax-check` — Ansible stops at the first fault, we report every one.
     #[test]
     fn placement_diagnostics_match_ansibles_messages() {
         use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
@@ -2492,6 +2492,9 @@ mod tests {
                  variable itself (though it can contain variables)",
                 "the `loop_control` value must be specified as a dictionary and cannot be a \
                  variable itself (though it can contain variables)",
+                "'rescue' keyword cannot be used without 'block'",
+                "'always' keyword cannot be used without 'block'",
+                "'rescue' keyword cannot be used without 'block'",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
