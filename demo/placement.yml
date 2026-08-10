@@ -404,6 +404,21 @@
 # peels these off before any task rule sees them, which is why this stays silent.
 - import_playbook: tasks/sibling.yml
 
+# Every entry in a task list must be a mapping — a task or a `block:`. Ansible refuses the rest,
+# but its message is unusable: `The ds (%s) should be a dict but was a %s` interpolates the
+# whole LIST where it means the offending item, so it always reports `<class 'list'>` and dumps
+# the valid siblings too, and the raise carries no `obj=` so there is no line number at all
+# (`Origin: <unknown>`). Ours says what is wrong and points at it. upstream/ansible-malformed-task-entry.md
+- name: a task list holds mappings, nothing else
+  hosts: localhost
+  tasks:
+    - just a string # BAD (malformed-task-entry): a scalar is not a task
+    - [1, 2] # BAD: nor is a list
+    - # GOOD: a bare `-` is None, and load_list_of_blocks drops it before anything looks
+    - debug: { msg: x } # GOOD: a task
+    - block: # GOOD: a block is a mapping too
+        - debug: { msg: y }
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

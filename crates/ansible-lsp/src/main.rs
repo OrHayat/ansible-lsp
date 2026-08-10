@@ -2652,6 +2652,29 @@ mod tests {
         assert!(got[0].message.contains("import_tasks"), "{}", got[0].message);
     }
 
+    /// A task-list entry that is not a mapping. Ansible refuses it, but reports the whole list
+    /// instead of the offending item, always as `<class 'list'>`, with no line number — so this
+    /// message is ours and carries its own id.
+    #[test]
+    fn the_malformed_task_entry_rule_is_its_own() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "malformed-task-entry"),
+            )
+            .collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+        // Each points at its own entry, which is the thing ansible cannot do at all.
+        assert_ne!(got[0].range.start.line, got[1].range.start.line);
+    }
+
     /// No false positives: every demo file except the one built to demonstrate the rule
     /// stays free of placement diagnostics.
     #[test]

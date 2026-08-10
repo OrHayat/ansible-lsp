@@ -40,6 +40,7 @@ predate it and were re-checked against the same tree.
 | 22 | a task with no module/action at all                                         | error    | `mod_args.py:368`            | no module/action detected in task.                                             |
 | 23 | an imported file that is empty — warns and continues                        | warning  | `helpers.py:210-212`         | —                                                                              |
 | 24 | `local_action:` silently overwrites an explicit `delegate_to:`              | warning  | `mod_args.py:303,324`        | — (silent today; ours would be the only warning)                               |
+| 26 | a task-list entry that is not a mapping                                     | error    | `helpers.py:100-102`         | ours — upstream's names the list, not the entry, and carries no position       |
 
 Row 23 has an asymmetric twin worth knowing: an empty role `tasks/main.yml` is fully silent,
 so the warning is scoped to imports, not to every empty task file.
@@ -102,6 +103,7 @@ shape of a whole file.
 | 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
+| 26 | any task list     | value    | err  | **done** — `stmt`; ours, `malformed-task-entry`              |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -305,4 +307,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       which one you get depends on the value's shape — a raw path gives `does not support raw
       params`, a `{file: ...}` mapping gives `module (import_playbook) is missing`. Nothing to
       borrow, so it names the fault and the fix instead.
+- [x] 26 — a task-list entry that is not a mapping (`helpers.py:100-102`) — not in the original
+      sweep, which caught `raise Ansible*Error` but not this `AnsibleAssertionError` re-raised
+      through `Block._load`. Ours, on `malformed-task-entry`: upstream interpolates the whole
+      list where it means the entry, so it always reports `<class 'list'>`, and the raise has no
+      `obj=` so there is no line number. Filed as `upstream/ansible-malformed-task-entry.md`.
+      A bare `-` is excluded — measured clean, dropped by `load_list_of_blocks`.
 - [ ] a fixture file exercises every row above, good and bad

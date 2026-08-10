@@ -34,6 +34,11 @@ pub const DISCARDED_DELEGATE_TO_RULE_ID: &str = "discarded-delegate-to";
 /// with a message about *parameters* — so the message here is ours, and needs its own id.
 pub const MISPLACED_IMPORT_PLAYBOOK_RULE_ID: &str = "misplaced-import-playbook";
 
+/// A task-list entry that is not a mapping. Fatal upstream, but the message names the wrong
+/// value and the wrong type and carries no position at all, so ours replaces it rather than
+/// quoting it — see `upstream/ansible-malformed-task-entry.md`.
+pub const MALFORMED_TASK_ENTRY_RULE_ID: &str = "malformed-task-entry";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -71,6 +76,8 @@ const DISCARDED_DELEGATE_TO: &str = "`local_action` already delegates to localho
 const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
 const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
+const NOT_A_MAPPING: &str = "every entry in a task list must be a mapping — a task, or a \
+                             `block:`. Ansible refuses to load this file.";
 const IMPORT_PLAYBOOK_IN_TASKS: &str = "`import_playbook` is only valid as a top-level playbook \
                                         entry. Here it is parsed as a module and fails at run \
                                         time. Use `import_tasks:` to pull in a task file, or \
@@ -299,8 +306,25 @@ fn refused_here(node: &Node, pos: Pos, is_block: bool, out: &mut Vec<Problem>) -
 
 /// One entry of a task list: a block, whose three task-holding keys recurse, or a task.
 fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
-    if !matches!(node, Node::Mapping { .. }) {
-        return;
+    match node {
+        Node::Mapping { .. } => {}
+        // A bare `-` is dropped before anything inspects it: `load_list_of_blocks` skips a
+        // `None` entry (`helpers.py:53,65`), so it is not a fault — measured, loads clean.
+        Node::Null { .. } => return,
+        // An alias resolves to whatever the anchor holds, which may well be a mapping.
+        // Judging it needs the substitution T-160 adds.
+        Node::Other { .. } => return,
+        // Everything else is fatal upstream, in every task list — measured in a play's
+        // `tasks:`, inside a block, in `handlers:`, and in a role's `tasks/main.yml`.
+        bad => {
+            out.push(Problem {
+                span: bad.span(),
+                tier: Tier::Error,
+                message: NOT_A_MAPPING.into(),
+                rule: MALFORMED_TASK_ENTRY_RULE_ID,
+            });
+            return;
+        }
     }
     // The same `Block.is_block` test `ast::build_stmt` makes, so the two agree on what a block
     // is. A `rescue:` with no `block:` is one — a malformed one, which is row 7.
@@ -1365,6 +1389,37 @@ mod tests {
         assert!(check("- import_playbook: other.yml\n").is_empty());
         assert!(check("- import_playbook: a.yml\n- hosts: web\n  tasks: []\n").is_empty());
         assert!(check("- ansible.builtin.import_playbook: other.yml\n").is_empty());
+    }
+
+    /// A task-list entry that is not a mapping. Fatal upstream in every task list — measured in
+    /// a play's `tasks:`, inside a block, in `handlers:`, and in a role's `tasks/main.yml` —
+    /// and previously silent here, since `stmt` skipped non-mappings on the way in.
+    #[test]
+    fn a_task_list_entry_must_be_a_mapping() {
+        for entry in ["just a string", "[1, 2]", "42"] {
+            assert_eq!(
+                check(&format!("- hosts: web\n  tasks:\n    - {entry}\n")),
+                [NOT_A_MAPPING],
+                "for {entry}"
+            );
+        }
+        // Every position, since each one funnels through `stmt`.
+        for src in [
+            "- hosts: web\n  tasks:\n    - block:\n        - just a string\n",
+            "- hosts: web\n  tasks: []\n  handlers:\n    - just a string\n",
+            "- just a string\n",
+        ] {
+            assert_eq!(check(src), [NOT_A_MAPPING], "for {src:?}");
+        }
+    }
+
+    /// Two shapes that are **not** faults, for opposite reasons. A bare `-` is dropped by
+    /// `load_list_of_blocks` before anything inspects it — measured, loads clean. An alias
+    /// resolves to whatever the anchor holds, so judging it waits on T-160.
+    #[test]
+    fn a_null_entry_and_an_alias_are_not_malformed() {
+        assert!(check("- hosts: web\n  tasks:\n    -\n    - debug: {msg: x}\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - &anchor {debug: {msg: x}}\n    - *anchor\n").is_empty());
     }
 
     /// Row 9. A **set** of spellings, so any two of the three collide and the names come out
