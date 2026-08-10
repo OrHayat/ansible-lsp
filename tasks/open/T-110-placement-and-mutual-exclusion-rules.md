@@ -42,6 +42,8 @@ predate it and were re-checked against the same tree.
 | 24 | `local_action:` silently overwrites an explicit `delegate_to:`              | warning  | `mod_args.py:303,324`        | — (silent today; ours would be the only warning)                               |
 | 26 | a task-list entry that is not a mapping                                     | error    | `helpers.py:100-102`         | ours — upstream's names the list, not the entry, and carries no position       |
 | 27 | a `vars_prompt` entry that is not a mapping                                 | error    | `vars/manager.py:102-107`    | Invalid variable file contents.                                                |
+| 28 | `tags:` that is neither a list nor a string — a null one included           | error    | `taggable.py:48-55`          | tags must be specified as a list                                               |
+| 29 | a reserved tag name (`all`, `tagged`, `untagged`)                           | warning  | `taggable.py:58-59`          | Found reserved tagnames in tags: %r, we do not recommend doing this as it might give unexpected results |
 
 Row 23 has an asymmetric twin worth knowing: an empty role `tasks/main.yml` is fully silent,
 so the warning is scoped to imports, not to every empty task file.
@@ -106,6 +108,8 @@ shape of a whole file.
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
 | 26 | any task list     | value    | err  | **done** — `stmt`; ours, `malformed-task-entry`              |
 | 27 | vars_prompt entry | value    | err  | **done** — `vars_prompt`; the same guard, written correctly  |
+| 28 | play/task/block   | value    | err  | open — one `Taggable`, so one function for all three         |
+| 29 | play/task/block   | value    | warn | open — same walk as 28, a closed set of three names          |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -321,4 +325,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       points a caret at it, and adds a help text. Replicated verbatim rather than reworded.
       Scalar, sequence and **null** entries all fatal — the null is the asymmetry worth knowing,
       since the same bare `-` in a task list loads clean. Aliases stay silent until T-160.
+- [ ] 28 — `tags:` that is neither a list nor a string (`taggable.py:48-55`) — found while
+      measuring null-valued keys for T-161. `_load_tags` accepts a list or a comma string and
+      nothing else, so a **null** `tags:` is fatal where every other null play key loads clean.
+      `Taggable` is mixed into Play, Task, Block and Role, so all four positions share it.
+- [ ] 29 — a reserved tag name (`taggable.py:58-59`) — a real `_display.warning` with an `obj=`,
+      so it has a position and is replicable verbatim. `all`, `tagged`, `untagged`.
 - [ ] a fixture file exercises every row above, good and bad

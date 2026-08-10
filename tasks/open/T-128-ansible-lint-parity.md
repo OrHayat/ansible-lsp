@@ -35,6 +35,7 @@ is a success, not a failure.
 - [ ] T-129 — Triage every ansible-lint rule: covered, port, reject, out of scope
 - [ ] T-156 — with_<lookup> to loop: modernization, with autofix only where it is provably safe
 - [ ] T-158 — Deprecated play keyword: user: should be remote_user:, with a safe autofix
+- [ ] T-161 — An empty keyword value is either dead weight or a silent override of an inherited one
 
 ## Done when
 
