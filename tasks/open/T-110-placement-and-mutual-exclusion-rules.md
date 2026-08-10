@@ -41,6 +41,7 @@ predate it and were re-checked against the same tree.
 | 23 | an imported file that is empty — warns and continues                        | warning  | `helpers.py:210-212`         | —                                                                              |
 | 24 | `local_action:` silently overwrites an explicit `delegate_to:`              | warning  | `mod_args.py:303,324`        | — (silent today; ours would be the only warning)                               |
 | 26 | a task-list entry that is not a mapping                                     | error    | `helpers.py:100-102`         | ours — upstream's names the list, not the entry, and carries no position       |
+| 27 | a `vars_prompt` entry that is not a mapping                                 | error    | `vars/manager.py:102-107`    | Invalid variable file contents.                                                |
 
 Row 23 has an asymmetric twin worth knowing: an empty role `tasks/main.yml` is fully silent,
 so the warning is scoped to imports, not to every empty task file.
@@ -104,6 +105,7 @@ shape of a whole file.
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
 | 26 | any task list     | value    | err  | **done** — `stmt`; ours, `malformed-task-entry`              |
+| 27 | vars_prompt entry | value    | err  | **done** — `vars_prompt`; the same guard, written correctly  |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -313,4 +315,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       list where it means the entry, so it always reports `<class 'list'>`, and the raise has no
       `obj=` so there is no line number. Filed as `upstream/ansible-malformed-task-entry.md`.
       A bare `-` is excluded — measured clean, dropped by `load_list_of_blocks`.
+- [x] 27 — a `vars_prompt` entry that is not a mapping (`vars/manager.py:102-107`) — found by
+      asking whether row 26's fault repeats elsewhere. It does, and here it is written the way
+      row 26 should have been: an `AnsibleParserError` with `obj=item`, so it names the entry,
+      points a caret at it, and adds a help text. Replicated verbatim rather than reworded.
+      Scalar, sequence and **null** entries all fatal — the null is the asymmetry worth knowing,
+      since the same bare `-` in a task list loads clean. Aliases stay silent until T-160.
 - [ ] a fixture file exercises every row above, good and bad

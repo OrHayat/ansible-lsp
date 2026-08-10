@@ -78,6 +78,10 @@ const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
 const NOT_A_MAPPING: &str = "every entry in a task list must be a mapping — a task, or a \
                              `block:`. Ansible refuses to load this file.";
+/// Verbatim, wording included. `preprocess_vars` is shared with vars-file loading
+/// (`vars/manager.py:357`) and only that caller has a file, but replicating the message is what
+/// makes it greppable — and unlike [`NOT_A_MAPPING`] it is a real error with a real position.
+const NOT_VARS_PROMPT_DATA: &str = "Invalid variable file contents.";
 const IMPORT_PLAYBOOK_IN_TASKS: &str = "`import_playbook` is only valid as a top-level playbook \
                                         entry. Here it is parsed as a module and fails at run \
                                         time. Use `import_tasks:` to pull in a task file, or \
@@ -870,10 +874,17 @@ fn vars_prompt(value: &Node, out: &mut Vec<Problem>) {
         other => vec![other],
     };
     for item in items {
-        // A non-mapping entry dies earlier, in `preprocess_vars` itself, with a different
-        // message ("Invalid variable file contents.") — not this rule's to give.
-        if !matches!(item, Node::Mapping { .. }) {
-            continue;
+        match item {
+            Node::Mapping { .. } => {}
+            // An alias resolves to whatever the anchor holds, which may well be a mapping. T-160.
+            Node::Other { .. } => continue,
+            // Every entry must be a mapping, and `preprocess_vars` says so before
+            // `_load_vars_prompt` looks at a single key (`vars/manager.py:102-107`). A **null**
+            // entry is fatal here — unlike in a task list, where `load_list_of_blocks` drops it.
+            bad => {
+                out.push(error(bad.span(), NOT_VARS_PROMPT_DATA.into()));
+                continue;
+            }
         }
         if item.get("name").is_none() {
             out.push(error(
@@ -1522,6 +1533,27 @@ mod tests {
             check("- hosts: web\n  vars_prompt:\n    prompt: Password?\n  tasks: []\n"),
             ["Invalid vars_prompt data structure, missing 'name' key"]
         );
+    }
+
+    /// Row 27. Every shape that is not a mapping, measured fatal on 2.21.2.
+    #[test]
+    fn a_vars_prompt_entry_that_is_not_a_mapping_is_refused() {
+        let cases = [
+            "- hosts: web\n  vars_prompt:\n    - just a string\n  tasks: []\n",
+            "- hosts: web\n  vars_prompt:\n    - 42\n  tasks: []\n",
+            // Fatal here, where the same entry in a task list is dropped and loads clean.
+            "- hosts: web\n  vars_prompt:\n    -\n  tasks: []\n",
+            "- hosts: web\n  vars_prompt:\n    - - name: pw\n  tasks: []\n",
+            // Not a list at all: `preprocess_vars` wraps it, then refuses the wrapped entry.
+            "- hosts: web\n  vars_prompt: just a string\n  tasks: []\n",
+        ];
+        for src in cases {
+            assert_eq!(check(src), ["Invalid variable file contents."], "{src}");
+        }
+        // The anchor may hold a mapping — measured, `- *entry` loads clean. Silent until T-160.
+        let aliased = "- hosts: web\n  vars:\n    e: &e {name: pw}\n  vars_prompt:\n    - *e\n  \
+                       tasks: []\n";
+        assert!(check(aliased).is_empty(), "{:?}", check(aliased));
     }
 
     #[test]

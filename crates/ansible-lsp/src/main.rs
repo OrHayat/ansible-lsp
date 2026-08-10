@@ -2474,6 +2474,8 @@ mod tests {
                 "Invalid vars_prompt data structure, found unsupported key 'promt'",
                 "Invalid vars_prompt data structure, missing 'name' key",
                 "Invalid vars_prompt data structure, missing 'name' key",
+                "Invalid variable file contents.",
+                "Invalid variable file contents.",
                 "You cannot use loops on 'import_tasks' statements. You should use \
                  'include_tasks' instead.",
                 "You cannot use loops on 'import_tasks' statements. You should use \

@@ -59,6 +59,17 @@
   tasks:
     - debug: { msg: ok }
 
+# `preprocess_vars` (`vars/manager.py:102-107`) refuses a non-mapping entry before
+# `_load_vars_prompt` reads a single key, and it borrows the vars-file wording to say so.
+- name: every vars_prompt entry must be a mapping
+  hosts: localhost
+  vars_prompt:
+    - name: pw # GOOD
+    - just a string # BAD: a scalar where a mapping belongs
+    - # BAD: a null entry — fatal here, where a task list would drop it
+  tasks:
+    - debug: { msg: ok }
+
 - name: imports are expanded at parse time, so a loop has nothing to iterate
   hosts: localhost
   pre_tasks:
