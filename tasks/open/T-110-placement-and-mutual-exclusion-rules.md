@@ -44,6 +44,7 @@ predate it and were re-checked against the same tree.
 | 27 | a `vars_prompt` entry that is not a mapping                                 | error    | `vars/manager.py:102-107`    | Invalid variable file contents.                                                |
 | 28 | `tags:` that is neither a list nor a string — a null one included           | error    | `taggable.py:48-55`          | tags must be specified as a list                                               |
 | 29 | a reserved tag name (`all`, `tagged`, `untagged`)                           | warning  | `taggable.py:58-59`          | ours — upstream's names are in a per-process random order, so there is nothing verbatim to copy |
+| 30 | a `tags:` member that is unhashable, or an `int`                            | error    | `taggable.py:58`, `cli/playbook.py:201,206` | ours — upstream crashes with "this is probably a bug" |
 
 Row 23 has an asymmetric twin worth knowing: an empty role `tasks/main.yml` is fully silent,
 so the warning is scoped to imports, not to every empty task file.
@@ -110,6 +111,7 @@ shape of a whole file.
 | 27 | vars_prompt entry | value    | err  | **done** — `vars_prompt`; the same guard, written correctly  |
 | 28 | play/task/block   | value    | err  | **done** — `tags_checks`; miss: `tags: 42`, no scalar style  |
 | 29 | play/task/block   | value    | warn | **done** — `tags_checks`; ours, `reserved-tag-name`          |
+| 30 | play/task/block   | value    | err  | open — same read as 28/29; three upstream crashes            |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -357,4 +359,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       `list(set_intersection)`, and Python randomises string hashing per process, so five runs
       of one file printed four different orders. There is no single message to copy. Ours sorts
       the names and takes its own id, `reserved-tag-name`.
+- [ ] 30 — a `tags:` member that crashes ansible: a list or mapping (unhashable, dies in the
+      reserved-name intersection at load), or an `int` (declared legal by `listof`, unselectable
+      by `--tags`, and fatal to `--list-tasks`/`--list-tags`). All three report as "Unexpected
+      Exception, this is probably a bug", so the message is ours. Filed as
+      `upstream/ansible-tags-member-types.md`; the same read as rows 28-29, so it is one more
+      branch in `tags_checks` rather than new machinery.
 - [ ] a fixture file exercises every row above, good and bad
