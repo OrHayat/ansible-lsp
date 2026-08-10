@@ -7,6 +7,7 @@ pub mod expressions;
 pub mod fs;
 pub mod glob;
 pub mod guard;
+pub mod include_target;
 pub mod include_vars;
 pub mod install;
 pub mod keywords;

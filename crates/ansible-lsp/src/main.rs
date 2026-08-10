@@ -13,6 +13,7 @@ use ansible_core::cache::ScanCache;
 use ansible_core::config::DuplicateDictKey;
 use ansible_core::expressions;
 use ansible_core::fs::{Counting, StdFs};
+use ansible_core::include_target;
 use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::attributes;
 use ansible_core::condition;
@@ -237,6 +238,9 @@ struct Analysis {
     nodes: Vec<Node>,
     ctx: FileContext,
     refs: Vec<(Reference, Resolution)>,
+    /// T-110 rows 5 and 23, computed during analysis rather than at publish time: they need
+    /// the *target* file's parse, and the scan cache that already holds it is only live here.
+    include_targets: Vec<placement::Problem>,
 }
 
 /// Per-phase time accumulated across a workspace scan (T-074). Sums, not per-file — the
@@ -429,7 +433,7 @@ impl Backend {
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             extracted.extend(references::meta_dependencies(&nodes));
         }
-        let refs = extracted
+        let refs: Vec<(Reference, Resolution)> = extracted
             .into_iter()
             .map(|r| {
                 let res = resolve::resolve_with_in(&r, &ctx, &literals, scan);
@@ -438,7 +442,22 @@ impl Backend {
             .collect();
         t.resolve += s.elapsed();
 
-        Some(Analysis { doc, nodes, ctx, refs })
+        // Only refs that already resolved: an unresolved one is `missing-file`'s to report, and
+        // saying "the file it points at is empty" about a file that isn't there would be two
+        // diagnostics for one fault. `scan.source` is a cache hit whenever the variable walk
+        // above has been through the same file.
+        let include_targets = refs
+            .iter()
+            .filter(|(_, res)| res.status == Status::Resolved)
+            .filter_map(|(r, res)| {
+                let target = res.targets.first()?;
+                let src = scan.source(target)?;
+                let nodes = src.nodes.as_ref()?;
+                include_target::problem(r.kind, nodes, r.span)
+            })
+            .collect();
+
+        Some(Analysis { doc, nodes, ctx, refs, include_targets })
     }
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
@@ -541,6 +560,26 @@ impl Backend {
                 ..Default::default()
             });
 
+        // T-110 rows 5 and 23: the file an `import_tasks:`/`include_tasks:` points at is empty,
+        // or is not a list of tasks. Anchored on the reference here, since the file at fault
+        // may not be open.
+        let bad_targets: Vec<Diagnostic> = a
+            .include_targets
+            .iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(match p.tier {
+                    placement::Tier::Error => DiagnosticSeverity::ERROR,
+                    placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message.clone(),
+                ..Default::default()
+            })
+            .collect();
+
         // Expressions that cannot work whatever the variables hold, anchored on the value
         // they were written in. Read from the tree rather than from the references a task
         // produced: all five bare-expression keywords count, and a task with no reference —
@@ -616,7 +655,12 @@ impl Backend {
             })
             .collect();
 
-        missing.chain(broken).chain(invalid).chain(misplaced).collect()
+        missing
+            .chain(broken)
+            .chain(invalid)
+            .chain(misplaced)
+            .chain(bad_targets)
+            .collect()
     }
 
     /// Condition-aware definedness: a variable *used* under a `when:` that its *definitions*
@@ -2677,6 +2721,63 @@ mod tests {
         assert_ne!(got[0].range.start.line, got[1].range.start.line);
     }
 
+    /// T-110 rows 5 and 23, both spellings. The messages differ only where ansible's behaviour
+    /// does: the error is identical for import and include (measured — the include one just
+    /// arrives at run time), while the empty-file warning says which of the two the author
+    /// would ever have been told about.
+    #[test]
+    fn include_target_diagnostics_cover_both_spellings() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/include_targets.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s))
+                    if s == "empty-task-file" || s == "invalid-task-file")
+            })
+            .collect();
+
+        let seen: Vec<(&str, &str)> = got
+            .iter()
+            .map(|d| {
+                let Some(NumberOrString::String(id)) = &d.code else {
+                    unreachable!()
+                };
+                (id.as_str(), d.message.as_str())
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "empty-task-file",
+                    "the file this imports is empty — no tasks come from it. Ansible warns and \
+                     carries on."
+                ),
+                (
+                    "empty-task-file",
+                    "the file this includes is empty — no tasks come from it. Ansible says \
+                     nothing at all."
+                ),
+                ("invalid-task-file", "included task files must contain a list of tasks"),
+                ("invalid-task-file", "included task files must contain a list of tasks"),
+            ],
+            "{got:?}"
+        );
+        // The empty file is a warning either way; the wrong shape is fatal either way.
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(got[1].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(got[2].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(got[3].severity, Some(DiagnosticSeverity::ERROR));
+        // Anchored on the reference in *this* file, never in the file at fault — it may not
+        // even be open. The templated include at the end has no target, so it says nothing.
+        assert!(got.iter().all(|d| d.range.start.line < 40));
+    }
+
     /// No false positives: every demo file except the one built to demonstrate the rule
     /// stays free of placement diagnostics.
     #[test]
@@ -2695,6 +2796,34 @@ mod tests {
                 .into_iter()
                 .filter(|d| {
                     matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-placement")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// The same guard for rows 5 and 23. It matters more here than for the single-document
+    /// rules: this one reads a *second* file, so a bad verdict on any legitimate import in the
+    /// demo — a role's `tasks/main.yml`, a sibling task file — would show up as a false error
+    /// on a file nobody touched.
+    #[test]
+    fn every_other_demo_file_is_free_of_include_target_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "include_targets.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == "empty-task-file" || s == "invalid-task-file")
                 })
                 .map(|d| d.message)
                 .collect();
@@ -2721,6 +2850,38 @@ mod tests {
         let silenced =
             "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
         assert_eq!(flagged(silenced), 0);
+    }
+
+    /// Rows 5 and 23 suppress on their own ids. Two ids rather than one because the author's
+    /// answer differs: an empty target is often a file not written yet, while the wrong shape
+    /// is always a mistake.
+    #[test]
+    fn noqa_suppresses_the_include_target_rules_separately() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let codes = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            let mut ids: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter_map(|d| match d.code {
+                    Some(NumberOrString::String(s))
+                        if s == "empty-task-file" || s == "invalid-task-file" =>
+                    {
+                        Some(s)
+                    }
+                    _ => None,
+                })
+                .collect();
+            ids.sort();
+            ids
+        };
+        let noisy = "- hosts: web\n  tasks:\n    - import_tasks: tasks/empty_target.yml\n      \
+                     \n    - import_tasks: tasks/mapping_target.yml\n";
+        assert_eq!(codes(noisy), ["empty-task-file", "invalid-task-file"]);
+        // Silencing one leaves the other speaking.
+        let half = "- hosts: web\n  tasks:\n    - import_tasks: tasks/empty_target.yml # noqa: \
+                    empty-task-file\n    - import_tasks: tasks/mapping_target.yml\n";
+        assert_eq!(codes(half), ["invalid-task-file"]);
     }
 
     /// T-110: the divergent rule has its own id, so it suppresses on its own — and the

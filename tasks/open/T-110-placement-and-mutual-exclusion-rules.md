@@ -83,7 +83,7 @@ shape of a whole file.
 | 2  | handler           | pos      | err  | **done** — `REFUSED`; miss: `action:` form, standalone      |
 | 3  | task              | co-occur | err  | **done** — `loop_on_import`; miss: `action:` form           |
 | 4  | task              | co-occur | err  | **done** — `loop_on_import`                                 |
-| 5  | include target    | doc      | err  | open — resolve layer; `refs` + `ScanCache::source`          |
+| 5  | include target    | doc      | err  | **done** — `include_target.rs`; both spellings              |
 | 6a | handler           | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-150)      |
 | 6b | play task list    | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-068 r3)   |
 | 7  | block             | co-occur | err  | **done** — `rescue_without_block`                           |
@@ -102,7 +102,7 @@ shape of a whole file.
 | 20 | task              | value    | err  | **done** — `duplicate_loop`                                 |
 | 21 | task              | value    | err  | **done** — `loop_control_checks`                            |
 | 22 | task              | required | err  | **done** — `no_module_at_all`; no resolution either          |
-| 23 | include target    | doc      | warn | open — resolve layer; ours for the `include_tasks` half     |
+| 23 | include target    | doc      | warn | **done** — `include_target.rs`; ours, `empty-task-file`     |
 | 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
@@ -135,11 +135,18 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
 | —     | 7               | the block classifier itself         | **done** — see below; belonged to no batch |
 | 3     | 1, 2, 6, 25     | the `Pos` position table            | **done** — all four are rows in `REFUSED` |
-| 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
-| 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
+| 4     | 5, 9, 23-24     | file-level / include-entry shapes   | **done** — 5 and 23 in `include_target.rs` |
+| 5     | 11, 12, 22      | the module/args split               | **done** — `placement.rs`; no resolution needed |
 
-Batch 5 is a candidate to split off: rows 12 and 22 need "which keys resolve to a module",
-which is resolution, not shape, so it does not share this ticket's premise.
+Batch 5 looked like T-046's problem and is not: `ModuleArgsParser` runs with
+`skip_action_validation=True` (`helpers.py:121`), so every non-attribute key is a candidate
+without anything being resolved. Rows 12 and 22 are the two ends of that one walk.
+
+Batch 4 is the only one that broke this ticket's premise, and rows 5 and 23 are why it now has
+a second home: they judge the file a reference *points at*, so they need a resolved path and a
+second parse. `include_target.rs` owns them, fed by the `refs` that analysis already resolves —
+so the reference is also what proves the target is a task file, which is the question
+`placement.rs` has to give up on for a standalone file.
 
 Batch 1 shipped as `placement.rs`, rule id `invalid-placement`, one diagnostic per fault
 rather than Ansible's stop-at-the-first. Every message was measured by running the case
@@ -254,10 +261,12 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       run time, not load, so `--syntax-check` alone never sees it. Both handler depths.
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
-- [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`) — and the
+- [x] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`) — and the
       `include_tasks` spelling with it: measured, it gives the *same* message, just as a run-time
       `fatal:` instead of at load. Same fault, later feedback, so it is the more valuable of the
       two to catch in an editor. Fires only where the target is a literal path we resolve.
+      Lives in `include_target.rs`, not `placement.rs`: it judges a *second* file, which the
+      one-document premise there rules out. Rule id `invalid-task-file`.
 - [x] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:278-285`) — two
       independent raises. 6a needs no role knowledge at all: `use_handlers` short-circuits
       first, so it fires in a role's own `handlers/` file too, which the earlier scoping note
@@ -305,11 +314,14 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       never appear as candidates, but each supplies the action from its own branch. The
       neighbouring `couldn't resolve module/action` stays T-046's: it needs the second,
       resolving parse inside `Task.load`.
-- [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays
-      silent (`helpers.py:210-212`). Extend to `include_tasks`, which is silent at load **and**
-      at run time — measured, the play runs straight past it with no output at all. Ours rather
-      than a replication there, since there is no upstream message for that spelling; the
-      `import_tasks` half stays a verbatim replication.
+- [x] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays
+      silent (`helpers.py:210-212`). Extended to `include_tasks`, which is silent at load **and**
+      at run time — measured, the play runs straight past it with no output at all. Rule id
+      `empty-task-file`, ours: upstream's message interpolates the resolved path, and we anchor
+      on the reference where that path is already written, so ours says what the author gains
+      instead — that the line does nothing, and whether ansible would ever have told them.
+      "Empty" is Python truthiness, not a byte count: `[]`, `{}` and a comments-only file are
+      all this rule, not row 5. Measured, all four warn.
 - [x] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,325`)
       — ours, on rule id `discarded-delegate-to`. Proven with a control: `delegate_to: other`
       alone runs `ok: [localhost -> other]`, and the arrow disappears with `local_action`

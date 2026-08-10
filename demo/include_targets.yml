@@ -1,0 +1,36 @@
+# T-110 rows 5 and 23: the file an import or include points *at*. Both faults live in a second
+# file, so no rule that reads one document can see them — the reference is also what proves the
+# target is a task file in the first place.
+#
+# Measured on ansible-core 2.21.2. The two spellings differ, and not in the way you would guess:
+#
+#   target       import_tasks                include_tasks
+#   not a list   error, at load              the SAME error, at run time
+#   empty        warning, at load            nothing, in either phase
+#
+# So the include spelling is the more useful catch: identical mistake, feedback arriving
+# mid-run or never.
+- name: what an import or include points at
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - import_tasks: tasks/sibling.yml # GOOD: a real list of tasks
+    - include_tasks: tasks/sibling.yml # GOOD
+
+    # BAD: `not data` is truthiness upstream, so a comments-only file counts as empty just
+    # like a zero-byte one. Ansible warns here and carries on.
+    - import_tasks: tasks/empty_target.yml
+
+    # BAD: the same empty file behind the dynamic spelling. Ansible says nothing at all — no
+    # load error, no run-time warning, the play simply runs past it.
+    - include_tasks: tasks/empty_target.yml
+
+    # BAD: included task files must contain a list of tasks. Fatal at load.
+    - import_tasks: tasks/mapping_target.yml
+
+    # BAD: the same message, but not until the task actually runs.
+    - include_tasks: tasks/mapping_target.yml
+
+    # A miss, on purpose: the target is a runtime value, so there is no file to judge. Silent
+    # rather than guessing — the standing trade everywhere in this codebase.
+    - include_tasks: "tasks/{{ which }}.yml"

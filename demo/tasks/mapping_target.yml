@@ -1,0 +1,5 @@
+# A task file whose top level is a mapping rather than a list — the shape you get by forgetting
+# the `-` on every entry. Non-empty, so it is the error rather than the empty-file warning.
+name: install the thing
+ansible.builtin.debug:
+  msg: this is one task written without its list

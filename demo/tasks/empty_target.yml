@@ -1,0 +1,2 @@
+# Deliberately holds no tasks. `not data` upstream is Python truthiness, not a byte count, so
+# a comments-only file is "empty" exactly like a zero-byte one — measured, both warn.
