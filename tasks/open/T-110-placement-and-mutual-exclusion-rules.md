@@ -15,12 +15,13 @@ predate it and were re-checked against the same tree.
 
 | #  | Rule                                                                        | Severity | Cite                         | Message                                                                        |
 | -- | --------------------------------------------------------------------------- | -------- | ---------------------------- | ------------------------------------------------------------------------------ |
-| 1  | `block:` used as a handler                                                  | error    | `helpers.py:104-106`         | Using a block as a handler is not supported.                                   |
-| 2  | `include_role`/`import_role` inside `handlers:`                             | error    | `helpers.py:245-247`         | Using '%s' as a handler is not supported.                                      |
+| 1  | a block **nested inside** a handler's `block:`/`rescue:`/`always:`          | error    | `helpers.py:104-106`         | Using a block as a handler is not supported.                                   |
+| 2  | `include_role`/`import_role` inside `handlers:`                             | error    | `helpers.py:245-247`         | Using '%s' as a handler is not supported. — `%s` is the action **as written**, FQCN included |
 | 3  | `loop:`/`with_*` on `import_tasks`                                          | error    | `helpers.py:152-154`         | You cannot use loops on 'import_tasks' statements. Use 'include_tasks' instead.|
 | 4  | `loop:` on `import_role`                                                    | error    | `helpers.py:258-260`         | You cannot use loops on 'import_role' statements. Use 'include_role' instead.  |
 | 5  | an imported file that is not a list of tasks                                | error    | `helpers.py:213-214`         | included task files must contain a list of tasks                               |
-| 6  | `meta: end_role` outside a role, or in a handler                            | error    | `helpers.py:280-285`         | Cannot execute 'end_role' from a handler / from outside of a role              |
+| 6  | `meta: end_role` outside a role, or in a play's `handlers:`                 | error    | `helpers.py:280-285`         | Cannot execute 'end_role' from a handler / from outside of a role              |
+| 25 | `meta: flush_handlers` used as a handler                                    | error    | `strategy/__init__.py:883`   | flush_handlers cannot be used as a handler                                     |
 | 7  | `rescue:`/`always:` without `block:`                                        | error    | `block.py:138-142`           | '%s' keyword cannot be used without 'block'                                    |
 | 8  | playbook not a list, empty, or an entry that is not a dict                  | error    | `playbook/__init__.py:74-91` | four distinct messages — empty / not a list / no plays / not a play-or-import  |
 | 9  | both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry | error    | `playbook_include.py:41-48`  | Found conflicting import_playbook actions: %s                                  |
@@ -68,7 +69,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | ----- | --------------- | ----------------------------------- | ---------------------------------------- |
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
-| 3     | 1, 2, 6         | "am I inside `handlers:`" as a flag | open                                     |
+| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | open — scoped by measurement, see below  |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
 
@@ -99,6 +100,35 @@ out **stricter** than the loop guard it sits beside: a valueless `loop_control:`
 where a valueless `loop:` is not, and a templated scalar is fatal too, which is what the
 message's "cannot be a variable itself" is about. T-155 shipped on the same read of the key.
 
+### Batch 3, scoped before writing any of it
+
+Measured in `scratchpad/t110_batch3_handlers.sh` and
+`scratchpad/t110_row1_block_handler.sh`. Two rows in the original table were wrong, and one
+rule was missing:
+
+- **Row 1 was three-quarters wrong.** A top-level `block:` in `handlers:` does **not** error:
+  `Play._load_handlers` calls `load_list_of_blocks` (`play.py:205`), which loads a block
+  itself and never consults `use_handlers`. The raise is in `load_list_of_tasks`, so it is
+  reachable only for a block **nested** inside a handler's `block:`/`rescue:`/`always:`. A
+  block pulled in by `include_tasks:` from a handler is fine too.
+- **Row 2's `%s` is the action as written**, FQCN included — measured
+  `Using 'ansible.builtin.include_role' as a handler is not supported.` This is unlike rows
+  3-4, whose messages are literals, so the two cannot share a formatter.
+- **Row 25 is new:** `meta: flush_handlers` as a handler has its own error, raised at
+  strategy level rather than at load.
+- **Row 6b** is decidable without the handler flag: `meta: end_role` errors in a play's
+  `tasks:`, passes inside a role, and passes in a role's `handlers/` file. Only the play-level
+  handler list triggers 6a. It still needs role membership, which is a path fact.
+
+What a handler list accepts, measured end to end: `include_tasks:` yes; `import_tasks:` and a
+top-level `block:` load but destroy the handler's name, so `notify:` can never find it;
+`include_role`/`import_role` refused; `meta: end_role` and `meta: flush_handlers` refused.
+
+That middle pair is a **T-099 candidate**: the handler silently becomes unreachable, and
+Ansible only complains at run time, and only if the notifying task changed — which is exactly
+the gap `upstream/ansible-missing-handler.md` already documents. File it as a child of T-099
+rather than a row here, since Ansible gives no load-time error to replicate.
+
 The `with_` prefix is matched wholesale rather than from a list. All fourteen documented
 lookup loops were measured and every one fires (`scratchpad/t110_with_variants.sh`), but the
 prefix over-reaches by exactly one case: Ansible folds `with_x` into `loop` only when `x`
@@ -113,8 +143,9 @@ lookup index is what would tighten it, and this is the same leniency
 One box per row of the table, each carrying the cite it was measured from. Rows 1-22 are
 ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not be errors.
 
-- [ ] 1 — `block:` used as a handler (`helpers.py:104-106`)
-- [ ] 2 — `include_role`/`import_role` inside `handlers:` (`helpers.py:245-247`)
+- [ ] 1 — a block **nested inside** a handler's `block:`/`rescue:`/`always:` (`helpers.py:104-106`)
+- [ ] 2 — `include_role`/`import_role` inside `handlers:`, message naming the action as written (`helpers.py:245-247`)
+- [ ] 25 — `meta: flush_handlers` used as a handler (`strategy/__init__.py:883`)
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
 - [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`)
