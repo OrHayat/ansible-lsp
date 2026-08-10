@@ -63,6 +63,62 @@ not a placement rule.
 One pass over the semantic AST from T-044. No resolution, no index; each rule is a shape test
 on a node and its parent.
 
+### Coverage matrix
+
+Every row, once, against the two axes that decide how it is written: the **context** it applies
+to, and the **shape** of the question it asks. Kept here because classifying rules ad-hoc while
+implementing them produced three separate miscounts — this is the completeness check.
+
+Shapes: `pos` = where the node sits · `co-occur` = two keys of one node · `value` = one key's
+value · `required` = a key that must be present · `keyset` = closed vocabulary · `doc` = the
+shape of a whole file.
+
+| #  | Context           | Shape    | Tier | Status                                                     |
+| -- | ----------------- | -------- | ---- | ---------------------------------------------------------- |
+| 1  | handler body      | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-150)      |
+| 2  | handler           | pos      | err  | **done** — `REFUSED`; miss: `action:` form, standalone      |
+| 3  | task              | co-occur | err  | **done** — `loop_on_import`; miss: `action:` form           |
+| 4  | task              | co-occur | err  | **done** — `loop_on_import`                                 |
+| 5  | include target    | doc      | err  | open — needs the included file's contents                   |
+| 6a | handler           | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-150)      |
+| 6b | play task list    | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-068 r3)   |
+| 7  | block             | co-occur | err  | **done** — `rescue_without_block`                           |
+| 8  | playbook document | doc      | err  | **partly** — 1 of 4; the rest need file-kind (T-150)        |
+| 9  | playbook entry    | co-occur | err  | open                                                        |
+| 10 | task              | co-occur | err  | **done** — `duplicate_loop`; the only order-sensitive rule  |
+| 11 | task              | co-occur | err  | open                                                        |
+| 12 | task              | co-occur | err  | open — needs module resolution (T-046)                      |
+| 13 | play              | co-occur | err  | **done** — `user_and_remote_user`                           |
+| 14 | play              | value    | err  | **done** — `hosts`                                          |
+| 15 | play              | value    | err  | **done** — `hosts`                                          |
+| 16 | play              | value    | err  | **done** — `hosts`                                          |
+| 17 | play              | value    | err  | **done** — `hosts`; miss: `hosts: 42`, no scalar style       |
+| 18 | vars_prompt entry | required | err  | **done** — `vars_prompt`                                    |
+| 19 | vars_prompt entry | keyset   | err  | **done** — `vars_prompt`                                    |
+| 20 | task              | value    | err  | **done** — `duplicate_loop`                                 |
+| 21 | task              | value    | err  | **done** — `loop_control_checks`                            |
+| 22 | task              | required | err  | open — needs module resolution (T-046)                      |
+| 23 | include target    | doc      | warn | open — needs the included file's contents                   |
+| 24 | task              | co-occur | warn | open — ours; upstream is silent                             |
+| 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
+| ip | play task list    | pos      | err  | open — **no load error**; see below                          |
+
+Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
+same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
+other shape has that property: the seven `co-occur` rows ask about different key pairs with
+different messages, and the `value` rows each test a different thing about a different key. A
+"table" over those is a list of closures, which is the same functions with ceremony in front.
+Rows 14-17 already collapse into one `hosts` function, 18-19 into one `vars_prompt`, 3-4 into
+one `loop_on_import` — that is the grouping those shapes support.
+
+Row `ip` (`import_playbook:` in a `tasks:` list) needs a decision before it is written.
+Measured on 2.21.2: `--syntax-check` exits 0 and it dies at **run** time with `Action
+'ansible.builtin.import_playbook' does not support raw params.` — a message about raw params,
+not about position. There is no load-time error to replicate, which is the same test that sent
+`loop_control`-with-no-loop to T-099 as T-155. It fits `REFUSED` as one more row, but the
+message would be ours and it needs a rule id of its own, like `shadowed-loop`. Decide whether
+it stays here or moves to T-099 before implementing.
+
 Landing in batches grouped by the context each rule needs, not by severity:
 
 | Batch | Rows            | Shared machinery                    | State                                    |
