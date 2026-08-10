@@ -58,10 +58,35 @@ This applies to every inheritable `FieldAttribute` on a task, block or role — 
 apply to `NonInheritableFieldAttribute` (`vars_prompt:` is one), which is why the two rules
 split where they do.
 
-**The fix here is not a delete.** Deleting the line restores inheritance, which is a behaviour
-change — possibly the one the author wanted, possibly not. If they meant to switch the setting
-off for this task, the correct edit is `ignore_errors: false`. We cannot know which, so the
-diagnostic offers both and picks neither.
+**The fix here is to write `false`, not to delete.** Measured: `ignore_errors:` and
+`ignore_errors: false` produce byte-identical PLAY RECAPs. The null *is* the false — `None` is
+falsy, and `if not ignore_errors` (`strategy/__init__.py:560`) cannot tell them apart. So
+writing it out changes nothing and makes the file say what it does, which is what a quick fix is
+for. Deleting the line is the one edit that *does* change behaviour, by restoring the inherited
+`true`. There is no choice to offer the author: only one of the two is behaviour-preserving.
+
+### Rule 3 — the null that is simply invalid, and fails at run time
+
+Not every attribute has a falsy twin. `connection:` is a plugin *name*, and `None` is not one:
+
+```yaml
+- hosts: localhost
+  connection: local
+  tasks:
+    - command: /usr/bin/true      # ok
+    - command: /usr/bin/true
+      connection:                 # fatal: A non-empty plugin name is required.
+```
+
+Measured, and worse than rule 2 in two ways. The message names neither `connection:` nor a line,
+so nothing in it points at the empty key. And it fails **with or without** a parent value — a
+control run with the play-level `connection: local` deleted fails identically, and even an
+explicit `-c local` on the command line does not rescue it, because the task's `None` beats the
+CLI default too.
+
+So this one is not an inheritance story at all: an empty `connection:` is a guaranteed run-time
+failure, detectable at edit time, that ansible reports with a message giving the author nothing
+to go on. Of the three rules this is the most valuable and the only one that earns ERROR.
 
 ### What the neighbours do
 
@@ -81,17 +106,27 @@ exists to state it.
 
 ## Approach
 
-One walk, two rule ids, split by what the key is upstream:
+One walk, three rule ids. What decides which is **what `None` means for that attribute**, not
+where the key sits:
 
-| upstream | rule id | severity | quick fix |
-| -------- | ------- | -------- | --------- |
-| `NonInheritableFieldAttribute`, or normalized to a default at load | `empty-keyword` | hint | delete the line |
-| inheritable `FieldAttribute` **and** an ancestor sets it | `inherited-value-discarded` | warning | delete, or write the explicit value |
-| inheritable `FieldAttribute`, no ancestor sets it | `empty-keyword` | hint | delete the line |
+| when | rule id | severity | quick fix |
+| ---- | ------- | -------- | --------- |
+| `None` is invalid for the attribute (`connection:`) | `empty-value-invalid` | error | delete the line, restoring the inherited or default value |
+| `isa='bool'`, and an ancestor sets it | `inherited-value-discarded` | warning | write `false` — the value it already has |
+| `None` reaches the same result as absence | `empty-keyword` | hint | delete the line |
 
-The third row matters: with no ancestor setting the key, `None` and `Sentinel` reach the same
-default, so it is rule 1 again. That check needs the *enclosing* play and block, which is a
-parent walk we already do — not the reverse index, so this does not depend on T-020.
+The quick fix follows from that column and never needs to guess intent. Where the null has an
+explicit equivalent, write it: the file gains nothing but honesty. Where it does not, the
+current behaviour is a failure, so there is nothing to preserve and deleting is safe.
+
+Row three absorbs the case where an inheritable key is empty but **no** ancestor sets it —
+`None` and `Sentinel` then reach the same default, so it is dead weight again, not an override.
+That check needs the enclosing play and block, which is a parent walk we already do, not the
+reverse index — so this does not depend on T-020.
+
+The three-way split has to be derived, not guessed: rule 3's `connection:` was found by testing
+one non-bool, and the boundary between "invalid" and "has a falsy twin" is exactly `isa`. Walk
+the attribute declarations rather than assuming bools are the only safe class.
 
 Derive the inheritable/non-inheritable split from upstream rather than hand-listing it. The
 class is right there in the source (`NonInheritableFieldAttribute` vs `FieldAttribute`), and a
@@ -118,8 +153,15 @@ the fixes to it. The diagnostics are worth having on their own; do not block rul
       deletes the line
 - [ ] a null-valued **inheritable** key whose play or block sets it gets a warning on
       `inherited-value-discarded`, naming the value being discarded and where it came from
+- [ ] that warning's quick fix writes the explicit equivalent (`ignore_errors: false`) rather
+      than deleting the line, and a test asserts the two spellings still behave identically —
+      the delete is the behaviour-changing edit, so it is not offered
+- [ ] an empty `connection:` is an ERROR on `empty-value-invalid`, fired whether or not an
+      ancestor sets it, since it fails either way
+- [ ] the three-way split is derived from each attribute's `isa`, so a keyword whose `None` is
+      invalid cannot silently land in the hint bucket
 - [ ] the `ignore_errors:` repro above is a test, pinned against both the inheriting and the
-      non-inheriting spelling, so the two rules cannot take each other's case
+      non-inheriting spelling, so the rules cannot take each other's case
 - [ ] the inheritable/non-inheritable split is derived from upstream's attribute classes, not a
       hand-written list, and the derivation is checked by the same drift test as `keywords.rs`
 - [ ] `extend` attributes measured — a null `vars:` under a play with `vars:` either merges or
