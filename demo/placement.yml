@@ -54,8 +54,8 @@
 
 - name: a lone mapping is wrapped into a one-element list, and checked the same
   hosts: localhost
-  vars_prompt: # BAD: missing 'name' key — the unwrapped spelling is not a loophole
-    prompt: Password?
+  vars_prompt: # the unwrapped spelling is not a loophole
+    prompt: Password? # BAD: missing 'name' key
   tasks:
     - debug: { msg: ok }
 
@@ -77,6 +77,10 @@
       # BAD: reserved for --tags selection. Ansible lists the names in a randomised order;
       # ours sorts them, which is the one place this rule is not verbatim.
       tags: [all, deploy]
+    - debug: { msg: ok }
+      # BAD: a list member is unhashable, so the reserved-name check below it dies —
+      # "Unexpected Exception, this is probably a bug" — before `listof` ever runs.
+      tags: [[a]]
 
 # `preprocess_vars` (`vars/manager.py:102-107`) refuses a non-mapping entry before
 # `_load_vars_prompt` reads a single key, and it borrows the vars-file wording to say so.
@@ -205,8 +209,8 @@
     - always: # BAD: 'always' keyword cannot be used without 'block'
         - debug: { msg: a }
 
-    - block: [] # BAD: an EMPTY block is falsy, so it counts as no block at all
-      rescue:
+    - block: [] # an EMPTY block is falsy, so it counts as no block at all
+      rescue: # BAD: 'rescue' keyword cannot be used without 'block'
         - debug: { msg: r }
 
     - rescue: [] # GOOD: an empty rescue is falsy on the other side — nothing to complain of

@@ -370,4 +370,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       Wants a WARNING rather than an error, since the play itself works. **Blocked on T-162**:
       `tags: [7]` and `tags: ["7"]` are one node until the parser keeps scalar style, and only
       the first misbehaves — firing on both would be a false error on legal code.
-- [ ] a fixture file exercises every row above, good and bad
+- [x] a fixture file exercises every row above, good and bad — `demo/placement.yml` and
+      `demo/include_targets.yml` are the fixture, and their `# GOOD`/`# BAD` annotations are now
+      a *contract*: `every_annotated_demo_line_matches_its_diagnostics` asserts every BAD line
+      produces one of this ticket's diagnostics and every GOOD line produces none. The GOOD half
+      is what was missing — every other test asserts a rule fires, so a rule that over-fired on
+      the legal spelling beside it would have passed the whole suite. A third assertion requires
+      each of the ten rule ids to appear somewhere in the fixture; it failed on first run,
+      because row 30a had shipped with no demo case at all.

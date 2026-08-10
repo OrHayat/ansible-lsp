@@ -2780,6 +2780,90 @@ mod tests {
         assert!(got.iter().all(|d| d.range.start.line < 40));
     }
 
+    /// Every rule id this ticket owns. A fixture that stops exercising one of these has lost
+    /// coverage silently, which is what the last assertion below is for.
+    const T110_RULES: &[&str] = &[
+        "invalid-placement",
+        "shadowed-loop",
+        "dead-loop-control",
+        "discarded-delegate-to",
+        "misplaced-import-playbook",
+        "malformed-task-entry",
+        "reserved-tag-name",
+        "invalid-tag-member",
+        "empty-task-file",
+        "invalid-task-file",
+    ];
+
+    /// T-110's fixture box: the demo files are the fixture, and their `# GOOD` / `# BAD`
+    /// annotations are the expected result. This turns those comments into a contract.
+    ///
+    /// The GOOD half is the point. Every other test here asserts that a rule *fires*; nothing
+    /// asserted that the legal spelling beside it stays quiet, so a rule that over-fired on
+    /// correct input would have passed the whole suite. Each `# GOOD` line is a case measured
+    /// clean against real `ansible-playbook`, so a diagnostic on one is a false positive by
+    /// construction.
+    ///
+    /// Only this ticket's rule ids count. A `# GOOD here:` line may legitimately carry another
+    /// rule's diagnostic — `loop_control:` on a block is T-107's `invalid-attribute`, and the
+    /// comment says so — and that is coverage, not a conflict.
+    #[test]
+    fn every_annotated_demo_line_matches_its_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let mut seen_rules: std::collections::BTreeSet<String> = Default::default();
+        for name in ["placement.yml", "include_targets.yml"] {
+            let path = std::path::Path::new("../../demo").join(name).canonicalize().unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+            let ours: Vec<u32> = super::Backend::diagnostics_of(&a)
+                .iter()
+                .filter_map(|d| match &d.code {
+                    Some(NumberOrString::String(s)) if T110_RULES.contains(&s.as_str()) => {
+                        seen_rules.insert(s.clone());
+                        Some(d.range.start.line)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let flagged = |line: usize| ours.contains(&(line as u32));
+
+            let src: Vec<&str> = text.lines().collect();
+            for (i, line) in src.iter().enumerate() {
+                let bad = line.contains("# BAD") || line.contains("# WARN");
+                let good = line.contains("# GOOD");
+                // An annotation written on its own comment line heads the statement below it —
+                // used where the explanation is too long to sit at the end of the code line.
+                let target = if line.trim_start().starts_with('#') {
+                    src.iter().skip(i + 1).position(|l| !l.trim_start().starts_with('#')).map(
+                        |off| i + 1 + off,
+                    )
+                } else {
+                    Some(i)
+                };
+                let Some(target) = target else { continue };
+                if bad {
+                    assert!(
+                        flagged(target),
+                        "{name}:{} is marked BAD and produced no diagnostic: {}",
+                        target + 1,
+                        src[target].trim()
+                    );
+                }
+                if good && !bad {
+                    assert!(
+                        !flagged(target),
+                        "{name}:{} is marked GOOD and was flagged anyway: {}",
+                        target + 1,
+                        src[target].trim()
+                    );
+                }
+            }
+        }
+        let missing: Vec<&&str> =
+            T110_RULES.iter().filter(|r| !seen_rules.contains(**r)).collect();
+        assert!(missing.is_empty(), "no fixture line exercises {missing:?}");
+    }
+
     /// No false positives: every demo file except the one built to demonstrate the rule
     /// stays free of placement diagnostics.
     #[test]
