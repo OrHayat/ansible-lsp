@@ -786,8 +786,10 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
             }
         }
         Node::Mapping { .. } => out.push(error(value.span(), HOSTS_SHAPE.into())),
-        // An alias (`hosts: *webservers`), which resolves to whatever the anchor holds —
-        // unknowable without resolving anchors, so it is not ours to judge.
+        // An alias (`hosts: *webservers`). A **miss**, not a pass: ansible resolves the anchor
+        // and validates what it holds — measured, `hosts: *bad` pointing at a mapping gives
+        // this rule's own `must be a sequence or string`. Our parser turns every alias into
+        // `Other` with no anchor table, so the value is invisible here. T-160.
         Node::Other { .. } => {}
     }
 }
