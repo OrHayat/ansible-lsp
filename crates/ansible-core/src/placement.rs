@@ -369,7 +369,12 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if duplicate_loop(node, out) {
         return;
     }
-    loop_control_checks(node, out);
+    // `_load_loop_control` is a field loader inside `Task.load`; the import rule is back up in
+    // `load_list_of_tasks`, which only runs once `Task.load` has returned. So a fatal
+    // `loop_control:` hides the import fault — measured, one message, not two.
+    if loop_control_checks(node, out) {
+        return;
+    }
     loop_on_import(node, out);
 }
 
@@ -424,19 +429,23 @@ fn key_span(node: &Node, name: &str) -> Option<Span> {
 /// runs it clean, exit 0, no warning. Blocks are excluded — `loop_control` is not a Block
 /// keyword at all, so `'loop_control' is not a valid attribute for a Block` is T-107's to
 /// give, and `stmt` never reaches here for one.
-fn loop_control_checks(node: &Node, out: &mut Vec<Problem>) {
-    let Some(lc) = node.get("loop_control") else { return };
-    let Some(anchor) = key_span(node, "loop_control") else { return };
+///
+/// Returns whether row 21 fired, which suppresses the rules below it. T-155's warning does not:
+/// Ansible loads that task without complaint, so anything it would go on to refuse is still a
+/// fault the author has.
+fn loop_control_checks(node: &Node, out: &mut Vec<Problem>) -> bool {
+    let Some(lc) = node.get("loop_control") else { return false };
+    let Some(anchor) = key_span(node, "loop_control") else { return false };
     if !matches!(lc, Node::Mapping { .. }) {
         out.push(error(anchor, LOOP_CONTROL_SHAPE.into()));
-        return;
+        return true;
     }
     if live_loop(node).is_some() {
-        return;
+        return false;
     }
     let keys: Vec<&str> = lc.entries().iter().filter_map(|(k, _)| k.as_str()).collect();
     if keys.is_empty() {
-        return;
+        return false;
     }
     let (list, verb) = match keys.len() {
         1 => (format!("`{}`", keys[0]), "has"),
@@ -455,6 +464,8 @@ fn loop_control_checks(node: &Node, out: &mut Vec<Problem>) {
         ),
         rule: DEAD_LOOP_CONTROL_RULE_ID,
     });
+    // Ours, and a warning: Ansible loads the task fine, so the rules after this one still apply.
+    false
 }
 
 /// Row 10. `_preprocess_with_loop` refuses a `with_*` when `loop`/`loop_with` is **already**
@@ -1532,6 +1543,19 @@ mod tests {
         assert_eq!(
             check("- hosts: web\n  vars_prompt:\n    prompt: Password?\n  tasks: []\n"),
             ["Invalid vars_prompt data structure, missing 'name' key"]
+        );
+    }
+
+    /// A fatal `loop_control:` is raised inside `Task.load`, so `load_list_of_tasks` never gets
+    /// to ask whether the action was an import — measured, one message, not two.
+    #[test]
+    fn a_fatal_loop_control_suppresses_the_import_loop_rule() {
+        let src = "- hosts: web\n  tasks:\n    - import_tasks: t.yml\n      loop: [1, 2]\n      \
+                   loop_control: 5\n";
+        assert_eq!(
+            check(src),
+            ["the `loop_control` value must be specified as a dictionary and cannot be a \
+              variable itself (though it can contain variables)"]
         );
     }
 
