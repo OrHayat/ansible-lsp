@@ -5,9 +5,9 @@
 //! Each rule is a shape test on a node and its parent: no resolution, no index, no variables.
 //! Measured against ansible-core 2.21.2.
 //!
-//! Shipped so far: the play/playbook batch, the loop and `loop_control` rules, and row 7.
-//! Handler placement, the file-level shapes and the `mod_args` pair are later batches of the
-//! same ticket.
+//! Shipped so far: the play/playbook batch, the loop and `loop_control` rules, row 7, and
+//! row 1. The rest of handler placement, the file-level shapes and the `mod_args` pair are
+//! later batches of the same ticket.
 
 use crate::keywords;
 use crate::parse::{Node, Span};
@@ -50,6 +50,7 @@ const NOT_A_PLAY: &str =
 const LOOP_CONTROL_SHAPE: &str = "the `loop_control` value must be specified as a dictionary \
                                   and cannot be a variable itself (though it can contain \
                                   variables)";
+const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
 
 /// Every placement problem in the file. `src` is the document text, needed only to quote a
 /// bad `hosts:` entry back at the author.
@@ -68,8 +69,13 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
         .any(|it| keywords::is_play(it.entries().iter().filter_map(|(k, _)| k.as_str())));
     if !looks_like_plays {
         // A standalone task file: `tasks/main.yml`, a handler file, an include target.
+        //
+        // Row 1 is a documented miss here. A role's `handlers/main.yml` does fire it upstream
+        // — measured — but content alone cannot tell that file from `tasks/main.yml`, where the
+        // same nesting is legal and common. `Pos::Ordinary` makes it a miss rather than a false
+        // error on every role. Liftable once T-150's file-kind matrix lands.
         for item in items {
-            stmt(item, &mut out);
+            stmt(item, Pos::Ordinary, &mut out);
         }
         return out;
     }
@@ -87,19 +93,52 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
     out
 }
 
+/// Where a statement sits relative to a play's `handlers:` list, which is all row 1 needs.
+///
+/// `use_handlers` is threaded through both loaders, but `Play._load_handlers` reaches
+/// `load_list_of_blocks` (`play.py:205`), which loads a top-level entry as a Block without ever
+/// consulting the flag. Only `load_list_of_tasks` checks it (`helpers.py:104-106`), and that is
+/// one level down — so the same `block:` is legal as a handler and fatal inside one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pos {
+    /// Anywhere outside a play's `handlers:` — `tasks:`, `pre_tasks:`, `post_tasks:`, or a
+    /// standalone file, where a nested block is perfectly legal.
+    Ordinary,
+    /// A top-level entry of `handlers:`. A block here loads; row 1 starts below it.
+    HandlerEntry,
+    /// Inside a handler's `block:`/`rescue:`/`always:`, where a block is refused.
+    HandlerBody,
+}
+
+impl Pos {
+    /// What the children of a node at this position are.
+    fn inside(self) -> Self {
+        match self {
+            Pos::Ordinary => Pos::Ordinary,
+            Pos::HandlerEntry | Pos::HandlerBody => Pos::HandlerBody,
+        }
+    }
+}
+
 /// One entry of a task list: a block, whose three task-holding keys recurse, or a task.
-fn stmt(node: &Node, out: &mut Vec<Problem>) {
+fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if !matches!(node, Node::Mapping { .. }) {
         return;
     }
     // The same `Block.is_block` test `ast::build_stmt` makes, so the two agree on what a block
     // is. A `rescue:` with no `block:` is one — a malformed one, which is row 7.
     if keywords::BLOCK_TASK_CONTAINERS.iter().any(|k| node.get(k).is_some()) {
+        // Row 1. Ansible raises on the outermost one and stops loading, so a stack of nested
+        // blocks is one fault, not one per level — hence no recursion past this point.
+        if pos == Pos::HandlerBody {
+            out.push(error(node.span(), BLOCK_AS_HANDLER.into()));
+            return;
+        }
         rescue_without_block(node, out);
         for key in keywords::BLOCK_TASK_CONTAINERS {
             if let Some(list) = node.get(key) {
                 for child in list.items() {
-                    stmt(child, out);
+                    stmt(child, pos.inside(), out);
                 }
             }
         }
@@ -343,11 +382,13 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
         vars_prompt(prompts, out);
     }
     // `pre_tasks`, `tasks`, `post_tasks` and `handlers` all reach the same
-    // `load_list_of_tasks`, so the task-shaped rules apply identically in each.
+    // `load_list_of_tasks`, so the task-shaped rules apply identically in each. Only row 1
+    // cares which list it is, and only below the top level.
     for key in keywords::PLAY_TASK_CONTAINERS {
+        let pos = if *key == "handlers" { Pos::HandlerEntry } else { Pos::Ordinary };
         if let Some(list) = node.get(key) {
             for item in list.items() {
-                stmt(item, out);
+                stmt(item, pos, out);
             }
         }
     }
@@ -526,6 +567,66 @@ mod tests {
             check("- hosts: web\n  tasks:\n    - rescue:\n        - import_tasks: f.yml\n          loop: [1]\n"),
             ["'rescue' keyword cannot be used without 'block'", NO_LOOP_TASKS]
         );
+    }
+
+    /// Row 1. `use_handlers` is only consulted by `load_list_of_tasks`, which a handler's own
+    /// body reaches but the `handlers:` list itself does not — so the boundary is one level in,
+    /// not the list. All three containers of a handler block reach it.
+    #[test]
+    fn a_block_nested_inside_a_handler_is_refused() {
+        let handler = |body: &str| {
+            format!("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n{body}")
+        };
+        assert_eq!(
+            check(&handler("      block:\n        - block:\n            - debug: {msg: x}\n")),
+            [BLOCK_AS_HANDLER]
+        );
+        assert_eq!(
+            check(&handler("      block:\n        - debug: {msg: x}\n      rescue:\n        - block:\n            - debug: {msg: r}\n")),
+            [BLOCK_AS_HANDLER]
+        );
+        assert_eq!(
+            check(&handler("      block:\n        - debug: {msg: x}\n      always:\n        - block:\n            - debug: {msg: a}\n")),
+            [BLOCK_AS_HANDLER]
+        );
+    }
+
+    /// The boundary itself, in both directions: a block written *as* a handler loads clean —
+    /// `load_list_of_blocks` never consults the flag — and the same nesting outside `handlers:`
+    /// is ordinary, legal Ansible.
+    #[test]
+    fn row_1_stops_at_the_handler_list_and_at_the_other_containers() {
+        assert!(check(
+            "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - debug: {msg: x}\n"
+        )
+        .is_empty());
+        for key in ["tasks", "pre_tasks", "post_tasks"] {
+            assert!(
+                check(&format!(
+                    "- hosts: web\n  {key}:\n    - block:\n        - block:\n            - debug: {{msg: x}}\n"
+                ))
+                .is_empty(),
+                "nested blocks are legal in {key}"
+            );
+        }
+    }
+
+    /// Ansible raises on the outermost nested block and stops loading, so a stack of them is one
+    /// fault. Reporting one per level would turn a single mistake into a pile of squiggles.
+    #[test]
+    fn row_1_reports_a_stack_of_nested_blocks_once() {
+        assert_eq!(
+            check("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - block:\n            - block:\n                - debug: {msg: x}\n"),
+            [BLOCK_AS_HANDLER]
+        );
+    }
+
+    /// Documented miss: a role's `handlers/main.yml` fires this upstream, but content alone
+    /// cannot tell it from `tasks/main.yml`, where the same nesting is legal and common. A miss,
+    /// never a false error — the same trade `hosts: 42` takes in batch 1.
+    #[test]
+    fn row_1_is_a_miss_in_a_standalone_file() {
+        assert!(check("- name: h\n  block:\n    - block:\n        - debug: {msg: x}\n").is_empty());
     }
 
     /// Row 13. The one genuine mutual exclusion at play level.

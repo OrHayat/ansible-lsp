@@ -70,7 +70,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
 | —     | 7               | the block classifier itself         | **done** — see below; belonged to no batch |
-| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | open — scoped by measurement, see below  |
+| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | row 1 done (`Pos`); 2, 25, 6 open        |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
 
@@ -176,7 +176,11 @@ lookup index is what would tighten it, and this is the same leniency
 One box per row of the table, each carrying the cite it was measured from. Rows 1-22 are
 ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not be errors.
 
-- [ ] 1 — a block **nested inside** a handler's `block:`/`rescue:`/`always:` (`helpers.py:104-106`)
+- [x] 1 — a block **nested inside** a handler's `block:`/`rescue:`/`always:` (`helpers.py:104-106`)
+      — one diagnostic per handler however deep the stack, since Ansible stops at the
+      outermost. Missed in a standalone file: a role's `handlers/main.yml` fires it upstream,
+      but content cannot tell that file from `tasks/main.yml`, where the nesting is legal.
+      Liftable with T-150's file-kind matrix.
 - [ ] 2 — `include_role`/`import_role` inside `handlers:`, message naming the action as written (`helpers.py:245-247`)
 - [ ] 25 — `meta: flush_handlers` used as a handler (`strategy/__init__.py:883`)
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)

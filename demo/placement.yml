@@ -192,6 +192,52 @@
         - block:
             - debug: { msg: r }
 
+# Row 1. `use_handlers` is threaded through both loaders, but `Play._load_handlers` reaches
+# `load_list_of_blocks` (`play.py:205`), which loads a top-level entry as a Block without ever
+# consulting the flag. Only `load_list_of_tasks` checks it (`helpers.py:104-106`), one level in.
+# So the boundary is not the `handlers:` list — it is the inside of a handler.
+- name: a block is fine as a handler, and refused inside one
+  hosts: localhost
+  tasks:
+    - debug: { msg: t }
+      changed_when: true
+      notify: [h1, h2, h3, h4]
+  handlers:
+    - name: h1 # GOOD: a top-level block under handlers: loads clean, measured exit 0.
+      block: # (It is not *harmless* — the handler's name is destroyed, so notify: can
+        - debug: { msg: x } # never match it. Ansible only says so at run time; a T-099 candidate, not ours.)
+
+    - name: h2
+      block:
+        - block: # BAD: one level in, load_list_of_tasks refuses it
+            - debug: { msg: x }
+
+    - name: h3
+      block:
+        - debug: { msg: x }
+      rescue:
+        - block: # BAD: all three containers of a handler reach the same loader
+            - debug: { msg: r }
+
+    - name: h4
+      block:
+        - debug: { msg: x }
+      always:
+        - block: # BAD: same
+            - debug: { msg: a }
+
+- name: outside handlers the same nesting is ordinary Ansible
+  hosts: localhost
+  pre_tasks:
+    - block: # GOOD: nested blocks are legal in every non-handler list, at any depth
+        - block:
+            - debug: { msg: x }
+  tasks:
+    - block: # GOOD
+        - block:
+            - block:
+                - debug: { msg: x }
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive
