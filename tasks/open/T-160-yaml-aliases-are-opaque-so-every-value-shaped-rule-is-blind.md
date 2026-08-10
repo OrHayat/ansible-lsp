@@ -72,9 +72,26 @@ Option<String>`.
 
 - Build `anchor name -> Node` while walking, and substitute on alias. Anchors are defined
   before use in a valid document, so one pass suffices.
-- The substituted node keeps the **alias site's** span, not the anchor's, or every diagnostic
-  jumps to the wrong line. That is the main thing to get right, and it is what makes this more
-  than a lookup.
+- The substituted node keeps the **alias site's** span, not the anchor's. This is a deliberate
+  divergence from upstream and the main thing to get right; it is what makes this more than a
+  lookup. Measured on 2.21.2, ansible does the opposite:
+
+  ```yaml
+  vars:
+    junk: &junk just a string
+  vars_prompt:
+    - *junk        # Invalid variable file contents. — Origin: repro.yml:2:11
+  ```
+
+  The origin is `2:11`, the anchor **definition**, not `4:7` where it was used. That is not a
+  considered choice upstream: its loader tags each object with where it was parsed, and an alias
+  yields the same tagged object, so the definition's position is the only one it has.
+
+  We should point at the use site anyway, because a value can be perfectly legal where it is
+  defined and illegal only where it is used — `empty: &empty []` is a fine variable, and
+  `hosts: *empty` is the error. Blaming the definition would put the squiggle on a line with
+  nothing wrong with it. Carry the definition as `DiagnosticRelatedInformation` instead, so both
+  positions are reachable and the primary one is the line the author has to change.
 - **Cycle guard.** `&a [*a]` is legal for libyaml to emit and would recurse forever. A seen-set
   or depth cap is the one genuine correctness risk in the change; without it a crafted file
   hangs the server.
@@ -100,8 +117,10 @@ it has to be decided and asserted rather than left to fall out.
 - [ ] a recursive anchor (`&a [*a]`) terminates instead of hanging, pinned by a test — the one
       way this change can be worse than the silence it replaces
 - [ ] the alias side table maps each alias site to its anchor definition, and no rule reads it
-- [ ] a diagnostic through an alias points at the alias site, not the anchor definition — the
-      case that makes this worth doing properly, pinned by a span assertion
+- [ ] a diagnostic through an alias points at the alias site, not the anchor definition, with
+      the definition attached as related information — pinned by a span assertion, and recorded
+      as a **measured divergence**: upstream points at the definition (`2:11` in the repro
+      above), which is wrong for any rule whose fault depends on where the value is used
 - [ ] merge keys (`<<:`) measured on 2.21.2 and either supported or documented as a miss
 - [ ] an alias to an undefined anchor is confirmed to be a load error upstream, so it stays a
       parse failure rather than a silent `Other`
