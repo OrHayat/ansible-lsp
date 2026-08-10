@@ -311,6 +311,42 @@
     - name: h4
       meta: clear_facts # GOOD: only end_role and flush_handlers are refused here
 
+# Rows 11 and 24, both about `local_action:`. Row 11 is raised by `ModuleArgsParser`, which
+# `load_list_of_tasks` calls BEFORE `Task.load` — so it beats the loop rules, measured. Row 24
+# is ours: `local_action` sets `delegate_to = 'localhost'` (`mod_args.py:325`) over whatever the
+# author wrote at 303, and ansible says nothing. Proven with a control — `delegate_to: other`
+# alone runs `ok: [localhost -> other]`, and the arrow disappears once `local_action` is there.
+- name: local_action collides with two other keys
+  hosts: localhost
+  tasks:
+    - action: debug msg=x
+      local_action: debug msg=y # BAD: action and local_action are mutually exclusive
+
+    - action: debug msg=x
+      local_action: debug msg=y # BAD: the same, and it beats the duplicate loop below it
+      loop: [1]
+      with_items: [2]
+
+    - local_action: debug msg=y
+      delegate_to: other # WARN (discarded-delegate-to): local_action already delegated to
+      # localhost, so this host is never used — the task runs locally and says nothing
+
+    - local_action: # GOOD here: a valueless local_action is `unexpected parameter type in
+      delegate_to: other # action: <class 'NoneType'>` upstream — a different rule's message
+
+    - debug: { msg: y }
+      delegate_to: other # GOOD: the ordinary spelling, and it really does delegate
+
+    - action: debug msg=x # GOOD: either key alone is fine
+    - local_action: debug msg=y # GOOD
+
+# Row 9. `PlaybookInclude.preprocess_data` gathers the spellings as a SET and demands exactly
+# one, so any two of the three collide — and the names are printed SORTED, not in the order
+# they were written. Both measured.
+- import_playbook: tasks/sibling.yml
+  ansible.builtin.import_playbook: tasks/sibling.yml # BAD: Found conflicting import_playbook
+  # actions: ansible.builtin.import_playbook, import_playbook
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

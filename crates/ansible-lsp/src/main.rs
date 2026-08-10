@@ -2507,6 +2507,10 @@ mod tests {
                 "Cannot execute 'end_role' from a handler",
                 "flush_handlers cannot be used as a handler",
                 "flush_handlers cannot be used as a handler",
+                "action and local_action are mutually exclusive",
+                "action and local_action are mutually exclusive",
+                "Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
+                 import_playbook",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
@@ -2567,6 +2571,58 @@ mod tests {
             .map(|d| d.message)
             .collect();
         assert_eq!(blocks, ["'loop_control' is not a valid attribute for a Block"]);
+    }
+
+    /// T-110 row 24, the third rule here that speaks where ansible-core is silent: a
+    /// `delegate_to:` next to a `local_action:` never applies, because `local_action` already
+    /// set it to localhost. WARNING, since the play runs — it just runs somewhere else.
+    #[test]
+    fn the_discarded_delegate_to_warning_is_its_own_rule() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "discarded-delegate-to"),
+            )
+            .collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::WARNING));
+        // The message has to name the mechanism, or it reads as a style nit.
+        for want in ["localhost", "discarded", "runs locally"] {
+            assert!(got[0].message.contains(want), "missing {want:?}: {}", got[0].message);
+        }
+    }
+
+    /// Suppressible on its own id, and not by the replication rules' id — otherwise the two
+    /// would be one rule wearing two names.
+    #[test]
+    fn the_discarded_delegate_to_warning_suppresses_on_its_own_id() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let count = |text: &str| {
+            let path = std::path::Path::new("../../demo/placement.yml")
+                .canonicalize()
+                .unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "discarded-delegate-to")
+                })
+                .count()
+        };
+        let base = "- hosts: web\n  tasks:\n    - local_action: debug msg=y\n      delegate_to: other";
+        assert_eq!(count(&format!("{base}\n")), 1);
+        assert_eq!(count(&format!("{base} # noqa: discarded-delegate-to\n")), 0);
+        assert_eq!(
+            count(&format!("{base} # noqa: invalid-placement\n")),
+            1,
+            "invalid-placement must not silence discarded-delegate-to"
+        );
     }
 
     /// No false positives: every demo file except the one built to demonstrate the rule

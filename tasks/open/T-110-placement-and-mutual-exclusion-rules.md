@@ -84,11 +84,11 @@ shape of a whole file.
 | 6b | play task list    | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-068 r3)   |
 | 7  | block             | co-occur | err  | **done** — `rescue_without_block`                           |
 | 8  | playbook document | doc      | err  | **partly** — 1 of 4; the rest need file-kind (T-150)        |
-| 9  | playbook entry    | co-occur | err  | open                                                        |
+| 9  | playbook entry    | co-occur | err  | **done** — `conflicting_import_playbook`; set, not a pair    |
 | 10 | task              | co-occur | err  | **done** — `duplicate_loop`; the only order-sensitive rule  |
-| 11 | task              | co-occur | err  | open                                                        |
+| 11 | task              | co-occur | err  | **done** — `EXCLUSIONS`; beats the loop rules                |
 | 12 | task              | co-occur | err  | open — needs module resolution (T-046)                      |
-| 13 | play              | co-occur | err  | **done** — `user_and_remote_user`                           |
+| 13 | play              | co-occur | err  | **done** — `EXCLUSIONS`                                      |
 | 14 | play              | value    | err  | **done** — `hosts`                                          |
 | 15 | play              | value    | err  | **done** — `hosts`                                          |
 | 16 | play              | value    | err  | **done** — `hosts`                                          |
@@ -99,7 +99,7 @@ shape of a whole file.
 | 21 | task              | value    | err  | **done** — `loop_control_checks`                            |
 | 22 | task              | required | err  | open — needs module resolution (T-046)                      |
 | 23 | include target    | doc      | warn | open — needs the included file's contents                   |
-| 24 | task              | co-occur | warn | open — ours; upstream is silent                             |
+| 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
 | ip | play task list    | pos      | err  | open — **no load error**; see below                          |
 
@@ -262,13 +262,17 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       — the not-a-dict entry ships; the other three need to know the file IS a playbook,
       which only the command line says, so they stay unchecked rather than false-positive on
       every vars file. Reopen if T-150's file-kind matrix gives us that knowledge.
-- [ ] 9 — both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry (`playbook_include.py:41-48`)
+- [x] 9 — both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry (`playbook_include.py:41-48`)
+      — a **set** of the three spellings, so any two collide and duplicates of one do not;
+      the names print sorted, not in document order. Both measured.
 - [x] 10 — `loop` and a `with_*` together, or two `with_*` (`task.py:252-261`)
       — the rule is **asymmetric upstream**: `loop:` then `with_*` is fatal, `with_*` then
       `loop:` runs clean and runs wrong. Filed as `upstream/ansible-duplicate-loop.md`. We
       give Ansible's error for the fatal order, and a warning of our own
       (`shadowed-loop`, the module's one deliberate divergence) for the accepted one.
-- [ ] 11 — `action:` and `local_action:` together (`mod_args.py:322`)
+- [x] 11 — `action:` and `local_action:` together (`mod_args.py:322`) — raised by
+      `ModuleArgsParser`, which runs before `Task.load`, so it beats the `preprocess_data`
+      rules; measured on a task carrying both. A null trigger is a different message.
 - [ ] 12 — two resolvable module keys in one task (`mod_args.py:353-354`)
 - [x] 13 — both `user:` and `remote_user:` in one play (`play.py:170`)
 - [x] 14 — `hosts:` empty (`play.py:123`)
@@ -283,6 +287,9 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       `loop:` guard: a valueless `loop_control:` is fatal too, and so is a templated scalar
 - [ ] 22 — a task with no module/action at all (`mod_args.py:368`)
 - [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays silent (`helpers.py:210-212`)
-- [ ] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,324`)
+- [x] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,325`)
+      — ours, on rule id `discarded-delegate-to`. Proven with a control: `delegate_to: other`
+      alone runs `ok: [localhost -> other]`, and the arrow disappears with `local_action`
+      beside it.
 - [ ] `import_playbook:` inside a `tasks:` list (`modules/import_playbook.py:57-64`)
 - [ ] a fixture file exercises every row above, good and bad

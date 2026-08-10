@@ -26,6 +26,10 @@ pub const SHADOWED_LOOP_RULE_ID: &str = "shadowed-loop";
 /// key in it is inert, and Ansible runs the task without a murmur.
 pub const DEAD_LOOP_CONTROL_RULE_ID: &str = "dead-loop-control";
 
+/// Row 24, and ours for the same reason: `local_action` overwrites an explicit `delegate_to`
+/// (`mod_args.py:303,325`) and the task quietly runs somewhere else than the author wrote.
+pub const DISCARDED_DELEGATE_TO_RULE_ID: &str = "discarded-delegate-to";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -52,6 +56,13 @@ const LOOP_CONTROL_SHAPE: &str = "the `loop_control` value must be specified as 
                                   and cannot be a variable itself (though it can contain \
                                   variables)";
 const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
+const USER_AND_REMOTE_USER: &str = "both 'user' and 'remote_user' are set for this play. The \
+                                    use of 'user' is deprecated, and should be removed";
+const ACTION_AND_LOCAL_ACTION: &str = "action and local_action are mutually exclusive";
+const DISCARDED_DELEGATE_TO: &str = "`local_action` already delegates to localhost, so this \
+                                     `delegate_to` is discarded — the task runs locally, not \
+                                     on the host named here. Use `delegate_to` with a plain \
+                                     module instead, or drop this key.";
 const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
 const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
@@ -268,6 +279,12 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
                 }
             }
         }
+        return;
+    }
+    // `ModuleArgsParser.parse()` runs in `load_list_of_tasks` before `Task.load`, so a mutual
+    // exclusion it raises beats everything below — measured, on a task carrying both row 11's
+    // fault and a duplicate loop. Row 24 is a warning of ours and suppresses nothing.
+    if exclusions(node, On::Task, out) {
         return;
     }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
@@ -492,15 +509,16 @@ fn error(span: Span, message: String) -> Problem {
 
 fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     // An `import_playbook:` entry is not a Play — it loads as a PlaybookInclude and never
-    // reaches any of these checks.
+    // reaches any of these checks. It has one rule of its own on the way past.
     if node
         .entries()
         .iter()
         .any(|(k, _)| k.as_str().map(keywords::core_action) == Some("import_playbook"))
     {
+        conflicting_import_playbook(node, out);
         return;
     }
-    user_and_remote_user(node, out);
+    exclusions(node, On::Play, out);
     if let Some(hosts) = node.get("hosts") {
         self::hosts(hosts, src, out);
     }
@@ -520,22 +538,148 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     }
 }
 
-/// `preprocess_data` renames `user:` to `remote_user:`, and refuses when the target is
-/// already taken (`play.py:166-171`). Anchored on `user:`, the key the message says to drop.
-fn user_and_remote_user(node: &Node, out: &mut Vec<Problem>) {
-    let key_span = |name: &str| {
-        node.entries()
-            .iter()
-            .rev()
-            .find(|(k, _)| k.as_str() == Some(name))
-            .map(|(k, _)| k.span())
-    };
-    if let (Some(user), Some(_)) = (key_span("user"), key_span("remote_user")) {
+/// Which node kind an [`Exclusion`] applies to. The two are checked at different call sites,
+/// so the table is filtered rather than the nodes being re-classified.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum On {
+    Play,
+    Task,
+}
+
+/// Rows 11, 13 and 24: two keys that cannot both sit on one node.
+///
+/// One shape, so they are data — but the `trigger_needs_value` flag is load-bearing and was
+/// measured per row, not assumed. Row 13 is pure presence: `if 'user' in ds: if 'remote_user'
+/// in ds` (`play.py:166-171`), so it fires even with both values null. Rows 11 and 24 are not:
+/// their trigger key is read *before* the check, so a null value dies earlier in
+/// `_normalize_parameters` with `unexpected parameter type in action: <class 'NoneType'>` — a
+/// different message that is not ours to give.
+struct Exclusion {
+    on: On,
+    /// The key that triggers the check, then the key it collides with.
+    keys: (&'static str, &'static str),
+    /// Whether the trigger key must carry a real value, per the note above.
+    trigger_needs_value: bool,
+    /// Which key the diagnostic underlines.
+    anchor: &'static str,
+    tier: Tier,
+    rule: &'static str,
+    msg: &'static str,
+}
+
+const EXCLUSIONS: &[Exclusion] = &[
+    // Row 13 (`play.py:166-171`). Anchored on `user:`, the key the message says to drop.
+    Exclusion {
+        on: On::Play,
+        keys: ("user", "remote_user"),
+        trigger_needs_value: false,
+        anchor: "user",
+        tier: Tier::Error,
+        rule: RULE_ID,
+        msg: USER_AND_REMOTE_USER,
+    },
+    // Row 11 (`mod_args.py:322`). The raise lives in the `local_action` branch and fires when
+    // the `action` branch above it already produced one, so `local_action` is the trigger the
+    // author sees blamed — anchor there.
+    Exclusion {
+        on: On::Task,
+        keys: ("local_action", "action"),
+        trigger_needs_value: true,
+        anchor: "local_action",
+        tier: Tier::Error,
+        rule: RULE_ID,
+        msg: ACTION_AND_LOCAL_ACTION,
+    },
+    // Row 24 is **ours**: `local_action` sets `delegate_to = 'localhost'` (`mod_args.py:325`),
+    // overwriting the value read at 303, and ansible-core says nothing at all. Proven with a
+    // control: `delegate_to: other` alone runs `ok: [localhost -> other]`, and with a
+    // `local_action` beside it the arrow disappears. WARNING, since the play does run — it
+    // just runs somewhere the author did not ask for. Anchored on the key whose value is lost.
+    Exclusion {
+        on: On::Task,
+        keys: ("local_action", "delegate_to"),
+        trigger_needs_value: true,
+        anchor: "delegate_to",
+        tier: Tier::Warning,
+        rule: DISCARDED_DELEGATE_TO_RULE_ID,
+        msg: DISCARDED_DELEGATE_TO,
+    },
+];
+
+/// Walk the exclusion table for one node. Unlike [`REFUSED`] every row is evaluated: a task can
+/// carry row 11's fault and row 24's at once, and they are independent.
+///
+/// Returns whether a **fatal** one fired, which suppresses the rules downstream of it — row 24
+/// is ours and a warning, so it never does.
+fn exclusions(node: &Node, on: On, out: &mut Vec<Problem>) -> bool {
+    let mut fatal = false;
+    for ex in EXCLUSIONS {
+        if ex.on != on {
+            continue;
+        }
+        let Some(trigger) = node.get(ex.keys.0) else {
+            continue;
+        };
+        if ex.trigger_needs_value && matches!(trigger, Node::Null { .. }) {
+            continue;
+        }
+        if node.get(ex.keys.1).is_none() {
+            continue;
+        }
+        if let Some(span) = key_span(node, ex.anchor) {
+            out.push(Problem {
+                span,
+                tier: ex.tier,
+                message: ex.msg.to_string(),
+                rule: ex.rule,
+            });
+            fatal |= ex.tier == Tier::Error;
+        }
+    }
+    fatal
+}
+
+/// Row 9. `PlaybookInclude.preprocess_data` collects the `import_playbook` spellings present as
+/// a **set** and refuses unless exactly one survives (`playbook_include.py:41-48`):
+///
+/// ```python
+/// keys = {action for action in C._ACTION_IMPORT_PLAYBOOK if action in ds}
+/// if len(keys) != 1:
+///     raise AnsibleError(f'Found conflicting import_playbook actions: {", ".join(sorted(keys))}')
+/// ```
+///
+/// Two things fall out of that, both measured. The names are **sorted**, not written in
+/// document order — `import_playbook:` written first still reports
+/// `ansible.builtin.import_playbook, import_playbook`. And because it is a set, duplicates of
+/// one spelling collapse: only *distinct* spellings count, which is why this is not an
+/// [`EXCLUSIONS`] row — there is no fixed pair, any two of the three collide.
+fn conflicting_import_playbook(node: &Node, out: &mut Vec<Problem>) {
+    let mut spellings: Vec<&str> = node
+        .entries()
+        .iter()
+        .filter_map(|(k, _)| k.as_str())
+        .filter(|k| keywords::core_action(k) == "import_playbook")
+        .collect();
+    spellings.sort_unstable();
+    spellings.dedup();
+    if spellings.len() < 2 {
+        return;
+    }
+    // Anchored on the last of them: the first is the one a reader takes as intended, so the
+    // later spelling is the surprise.
+    let anchor = node
+        .entries()
+        .iter()
+        .rev()
+        .find(|(k, _)| k.as_str().map(keywords::core_action) == Some("import_playbook"))
+        .map(|(k, _)| k.span());
+    if let Some(span) = anchor {
         out.push(error(
-            user,
-            "both 'user' and 'remote_user' are set for this play. The use of 'user' is \
-             deprecated, and should be removed"
-                .into(),
+            span,
+            format!(
+                "Found conflicting import_playbook actions: {}",
+                spellings.join(", ")
+            ),
         ));
     }
 }
@@ -922,6 +1066,87 @@ mod tests {
         // Either one alone is fine — `user:` is renamed, not rejected.
         assert!(check("- hosts: web\n  user: alice\n  tasks: []\n").is_empty());
         assert!(check("- hosts: web\n  remote_user: bob\n  tasks: []\n").is_empty());
+    }
+
+    /// Row 11. The raise sits in `ModuleArgsParser`, which `load_list_of_tasks` calls *before*
+    /// `Task.load` — so it beats the `preprocess_data` rules, measured on a task carrying both.
+    #[test]
+    fn action_and_local_action_are_mutually_exclusive() {
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - action: debug msg=x\n      local_action: debug msg=y\n"),
+            [ACTION_AND_LOCAL_ACTION]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - action: debug msg=x\n      local_action: debug msg=y\n      loop: [1]\n      with_items: [2]\n"),
+            [ACTION_AND_LOCAL_ACTION],
+            "the exclusion beats the duplicate loop"
+        );
+        // Either alone is ordinary Ansible.
+        assert!(check("- hosts: web\n  tasks:\n    - action: debug msg=x\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - local_action: debug msg=y\n").is_empty());
+    }
+
+    /// The `trigger_needs_value` flag, and why it is not cosmetic: a null `action:` dies in
+    /// `_normalize_parameters` with `unexpected parameter type in action: <class 'NoneType'>`
+    /// before the exclusion is reached, so claiming row 11 there would be the wrong message.
+    /// Row 13 has no such guard — it is pure key presence and fires with both values null.
+    #[test]
+    fn a_null_trigger_belongs_to_a_different_rule() {
+        assert!(
+            check("- hosts: web\n  tasks:\n    - local_action:\n      action: debug msg=x\n").is_empty(),
+            "null local_action is the parameter-type error, not row 11"
+        );
+        assert!(
+            check("- hosts: web\n  tasks:\n    - local_action:\n      delegate_to: other\n").is_empty(),
+            "and likewise for row 24"
+        );
+        // Row 13 is presence-only, measured fatal even with both values absent.
+        assert_eq!(
+            check("- hosts: web\n  user:\n  remote_user:\n  tasks: []\n"),
+            [USER_AND_REMOTE_USER]
+        );
+    }
+
+    /// Row 24, ours: `local_action` sets `delegate_to = 'localhost'` and overwrites what the
+    /// author wrote. Proven with a control — `delegate_to: other` alone runs
+    /// `ok: [localhost -> other]`, and the arrow disappears once `local_action` is beside it.
+    /// A WARNING on its own id, since ansible-core accepts this and the play does run.
+    #[test]
+    fn a_discarded_delegate_to_is_our_own_warning() {
+        let src = "- hosts: web\n  tasks:\n    - local_action: debug msg=y\n      delegate_to: other\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].tier, Tier::Warning);
+        assert_eq!(got[0].rule, DISCARDED_DELEGATE_TO_RULE_ID);
+        // The message has to carry the mechanism, or it reads as a style nit.
+        for want in ["localhost", "discarded", "runs locally"] {
+            assert!(got[0].message.contains(want), "missing {want:?}: {}", got[0].message);
+        }
+        // `delegate_to` with a plain module is the ordinary, correct spelling.
+        assert!(check("- hosts: web\n  tasks:\n    - debug: {msg: y}\n      delegate_to: other\n").is_empty());
+    }
+
+    /// Row 9. A **set** of spellings, so any two of the three collide and the names come out
+    /// sorted rather than in document order — both measured.
+    #[test]
+    fn conflicting_import_playbook_spellings() {
+        assert_eq!(
+            check("- import_playbook: a.yml\n  ansible.builtin.import_playbook: b.yml\n"),
+            ["Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
+              import_playbook"],
+            "sorted, not written order"
+        );
+        assert_eq!(
+            check("- import_playbook: a.yml\n  ansible.builtin.import_playbook: b.yml\n  ansible.legacy.import_playbook: c.yml\n"),
+            ["Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
+              ansible.legacy.import_playbook, import_playbook"]
+        );
+        // One spelling is the whole point of the keyword.
+        assert!(check("- import_playbook: a.yml\n").is_empty());
+        assert!(check("- ansible.builtin.import_playbook: a.yml\n").is_empty());
+        // A collection's own module is not an import_playbook at all.
+        assert!(check("- import_playbook: a.yml\n  community.general.import_playbook: b.yml\n").is_empty());
     }
 
     /// Row 13 is anchored on `user:`, since that is the key the message says to remove.
