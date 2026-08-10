@@ -30,6 +30,10 @@ pub const DEAD_LOOP_CONTROL_RULE_ID: &str = "dead-loop-control";
 /// (`mod_args.py:303,325`) and the task quietly runs somewhere else than the author wrote.
 pub const DISCARDED_DELEGATE_TO_RULE_ID: &str = "discarded-delegate-to";
 
+/// `import_playbook:` written inside a task list. Ansible does fail, but only at run time and
+/// with a message about *parameters* — so the message here is ours, and needs its own id.
+pub const MISPLACED_IMPORT_PLAYBOOK_RULE_ID: &str = "misplaced-import-playbook";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -67,6 +71,10 @@ const DISCARDED_DELEGATE_TO: &str = "`local_action` already delegates to localho
 const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
 const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
+const IMPORT_PLAYBOOK_IN_TASKS: &str = "`import_playbook` is only valid as a top-level playbook \
+                                        entry. Here it is parsed as a module and fails at run \
+                                        time. Use `import_tasks:` to pull in a task file, or \
+                                        move this out of the task list.";
 
 /// Every placement problem in the file. `src` is the document text, needed only to quote a
 /// bad `hosts:` entry back at the author.
@@ -168,6 +176,9 @@ struct Refusal {
     what: What,
     at: &'static [Pos],
     msg: Msg,
+    /// [`RULE_ID`] for the rows that replicate an ansible-core message verbatim; its own id
+    /// for the one row whose message is ours.
+    rule: &'static str,
 }
 
 const IN_HANDLERS: &[Pos] = &[Pos::HandlerEntry, Pos::HandlerBody];
@@ -183,6 +194,7 @@ const REFUSED: &[Refusal] = &[
         what: What::Block,
         at: &[Pos::HandlerBody],
         msg: Msg::Lit(BLOCK_AS_HANDLER),
+        rule: RULE_ID,
     },
     // Row 2 (`helpers.py:245-247`), whose `%s` is the action as written — unlike rows 3-4,
     // whose messages are literal strings upstream, so the two cannot share a formatter.
@@ -190,11 +202,13 @@ const REFUSED: &[Refusal] = &[
         what: What::Action("include_role"),
         at: IN_HANDLERS,
         msg: Msg::Quoted("Using '{}' as a handler is not supported."),
+        rule: RULE_ID,
     },
     Refusal {
         what: What::Action("import_role"),
         at: IN_HANDLERS,
         msg: Msg::Quoted("Using '{}' as a handler is not supported."),
+        rule: RULE_ID,
     },
     // Row 6a (`helpers.py:278-281`). `use_handlers` short-circuits before the role check, so
     // this fires in a role's own `handlers/` file too — which the ticket had backwards.
@@ -202,6 +216,7 @@ const REFUSED: &[Refusal] = &[
         what: What::Meta("end_role"),
         at: IN_HANDLERS,
         msg: Msg::Lit(END_ROLE_HANDLER),
+        rule: RULE_ID,
     },
     // Row 25 (`strategy/__init__.py:883`), the one raised at run time rather than at load.
     // Measured in both handler positions.
@@ -209,6 +224,7 @@ const REFUSED: &[Refusal] = &[
         what: What::Meta("flush_handlers"),
         at: IN_HANDLERS,
         msg: Msg::Lit(FLUSH_AS_HANDLER),
+        rule: RULE_ID,
     },
     // Row 6b (`helpers.py:283-285`), the `role is None` half. We never have to prove a
     // statement IS in a role — only to name the position where it provably is not.
@@ -216,6 +232,30 @@ const REFUSED: &[Refusal] = &[
         what: What::Meta("end_role"),
         at: &[Pos::PlayTasks],
         msg: Msg::Lit(END_ROLE_OUTSIDE),
+        rule: RULE_ID,
+    },
+    // `import_playbook:` in a task list — the one row here whose message is **ours**. Ansible
+    // does fail, but only at run time (exit 2) and with a message about *parameters* that never
+    // mentions position: a raw path gives `Action 'ansible.builtin.import_playbook' does not
+    // support raw params.`, and a `{file: ...}` mapping gives `module (import_playbook) is
+    // missing...`. Neither tells the author what is actually wrong, and there is no single one
+    // to borrow — so this states the fault instead, on its own id.
+    //
+    // Every position, unlike its neighbours: the standalone-file miss the others take is about
+    // role and handler ambiguity, and neither applies here. `Standalone` only ever sees this
+    // nested inside a block, since an `import_playbook:` at the top level of a file makes
+    // `keywords::is_play` call that file a playbook — so it routes to `play`, which peels the
+    // entry off as the legitimate playbook-level statement it looks like.
+    Refusal {
+        what: What::Action("import_playbook"),
+        at: &[
+            Pos::PlayTasks,
+            Pos::Standalone,
+            Pos::HandlerEntry,
+            Pos::HandlerBody,
+        ],
+        msg: Msg::Lit(IMPORT_PLAYBOOK_IN_TASKS),
+        rule: MISPLACED_IMPORT_PLAYBOOK_RULE_ID,
     },
 ];
 
@@ -243,13 +283,15 @@ fn refused_here(node: &Node, pos: Pos, is_block: bool, out: &mut Vec<Problem>) -
                 .map(|(span, key, _)| (span, key)),
         };
         let Some((span, written)) = hit else { continue };
-        out.push(error(
+        out.push(Problem {
             span,
-            match rule.msg {
+            tier: Tier::Error,
+            message: match rule.msg {
                 Msg::Lit(m) => m.to_string(),
                 Msg::Quoted(t) => t.replace("{}", written),
             },
-        ));
+            rule: rule.rule,
+        });
         return true;
     }
     false
@@ -1285,6 +1327,44 @@ mod tests {
         assert!(check("- hosts: web\n  tasks:\n    - local_action: debug msg=x\n").is_empty());
         // A block is not a task and never reaches this rule.
         assert!(check("- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: x}\n").is_empty());
+    }
+
+    /// `import_playbook:` in a task list. Ours, not a replication: ansible fails at run time
+    /// with a message about parameters that never mentions position, and which one you get
+    /// depends on whether the value is a raw path or a mapping. Fires in every task position,
+    /// since neither the role nor the handler ambiguity that limits its neighbours applies.
+    #[test]
+    fn import_playbook_in_a_task_list_is_our_own_rule() {
+        let src = "- hosts: web\n  tasks:\n    - import_playbook: other.yml\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].rule, MISPLACED_IMPORT_PLAYBOOK_RULE_ID);
+        assert_eq!(got[0].tier, Tier::Error);
+        for want in ["top-level", "import_tasks"] {
+            assert!(got[0].message.contains(want), "missing {want:?}: {}", got[0].message);
+        }
+        // Every task position, and a standalone task file too.
+        for src in [
+            "- hosts: web\n  pre_tasks:\n    - import_playbook: other.yml\n",
+            "- hosts: web\n  tasks:\n    - block:\n        - import_playbook: other.yml\n",
+            "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      import_playbook: other.yml\n",
+            // A standalone task file only ever reaches this nested: an `import_playbook:` at
+            // the top level of one makes `is_play` call the whole file a playbook, so it goes
+            // to `play` instead and is treated as the legitimate entry it looks like.
+            "- block:\n    - import_playbook: other.yml\n",
+        ] {
+            assert_eq!(check(src).len(), 1, "for {src:?}");
+        }
+    }
+
+    /// The whole point of the keyword, and it must stay silent: a playbook-level entry never
+    /// reaches `stmt`, because `play` peels `import_playbook` entries off first.
+    #[test]
+    fn a_top_level_import_playbook_is_untouched() {
+        assert!(check("- import_playbook: other.yml\n").is_empty());
+        assert!(check("- import_playbook: a.yml\n- hosts: web\n  tasks: []\n").is_empty());
+        assert!(check("- ansible.builtin.import_playbook: other.yml\n").is_empty());
     }
 
     /// Row 9. A **set** of spellings, so any two of the three collide and the names come out

@@ -388,6 +388,22 @@
   ansible.builtin.import_playbook: tasks/sibling.yml # BAD: Found conflicting import_playbook
   # actions: ansible.builtin.import_playbook, import_playbook
 
+# `import_playbook:` inside a task list. The message here is OURS, on its own rule id: ansible
+# does fail, but only at run time (exit 2) and with a message about parameters that never
+# mentions position — a raw path gives `Action 'ansible.builtin.import_playbook' does not
+# support raw params.`, a `{file: ...}` mapping gives `module (import_playbook) is missing...`.
+# There is no single upstream message to borrow, and neither would tell the author anything.
+- name: import_playbook belongs at playbook level
+  hosts: localhost
+  tasks:
+    - import_playbook: tasks/sibling.yml # WARN-tier ERROR (misplaced-import-playbook)
+    - block:
+        - ansible.builtin.import_playbook: tasks/sibling.yml # BAD: nested too, any spelling
+
+# GOOD: the same keyword one level out, where it belongs — a playbook-level entry. `play`
+# peels these off before any task rule sees them, which is why this stays silent.
+- import_playbook: tasks/sibling.yml
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

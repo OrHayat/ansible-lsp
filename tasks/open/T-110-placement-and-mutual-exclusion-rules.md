@@ -101,7 +101,7 @@ shape of a whole file.
 | 23 | include target    | doc      | warn | open — needs the included file's contents                   |
 | 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
-| ip | play task list    | pos      | err  | open — **no load error**; see below                          |
+| ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
 
 Reading it by shape explains why only one group is table-driven. The six `pos` rows all ask the
 same question — *what is this node, and where does it sit* — so they are data in `REFUSED`. No
@@ -299,5 +299,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       — ours, on rule id `discarded-delegate-to`. Proven with a control: `delegate_to: other`
       alone runs `ok: [localhost -> other]`, and the arrow disappears with `local_action`
       beside it.
-- [ ] `import_playbook:` inside a `tasks:` list (`modules/import_playbook.py:57-64`)
+- [x] `import_playbook:` inside a `tasks:` list (`modules/import_playbook.py:57-64`) — the
+      message is **ours**, on rule id `misplaced-import-playbook`. Ansible fails, but at run
+      time (exit 2) and with a message about *parameters* that never mentions position, and
+      which one you get depends on the value's shape — a raw path gives `does not support raw
+      params`, a `{file: ...}` mapping gives `module (import_playbook) is missing`. Nothing to
+      borrow, so it names the fault and the fix instead.
 - [ ] a fixture file exercises every row above, good and bad

@@ -2629,6 +2629,29 @@ mod tests {
         );
     }
 
+    /// The fourth rule here whose message is ours: `import_playbook:` in a task list. Ansible
+    /// fails at run time with a message about parameters that never mentions position, and
+    /// which one you get depends on the value's shape — so there is nothing to borrow.
+    #[test]
+    fn the_misplaced_import_playbook_rule_is_its_own() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/placement.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "misplaced-import-playbook")
+            })
+            .collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+        // It has to name the fix, since ansible's own message never mentions position.
+        assert!(got[0].message.contains("import_tasks"), "{}", got[0].message);
+    }
+
     /// No false positives: every demo file except the one built to demonstrate the rule
     /// stays free of placement diagnostics.
     #[test]
