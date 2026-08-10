@@ -111,15 +111,31 @@ where the key sits:
 
 | when | rule id | severity | quick fix |
 | ---- | ------- | -------- | --------- |
-| `None` is invalid for the attribute (`connection:`) | `empty-value-invalid` | error | delete the line, restoring the inherited or default value |
+| `None` is invalid for the attribute (`connection:`) | `empty-value-invalid` | error | **none** |
 | `isa='bool'`, and an ancestor sets it | `inherited-value-discarded` | warning | write `false` — the value it already has |
 | `None` reaches the same result as absence | `empty-keyword` | hint | delete the line |
 
-The quick fix follows from that column and never needs to guess intent. Where the null has an
-explicit equivalent, write it: the file gains nothing but honesty. Where it does not, the
-current behaviour is a failure, so there is nothing to preserve and deleting is safe.
+A quick fix is offered only where the edit is mechanical — where the null already *has* a
+meaning and writing it out changes nothing. Row two is that case and only that case.
 
-Row three absorbs the case where an inheritable key is empty but **no** ancestor sets it —
+**Row one deliberately ships no fix.** An empty `connection:` is an incomplete edit, not a
+mistake with a known repair: the author is part-way through typing a value, and the value is the
+fix. We cannot know it, and the two edits we *could* make are both wrong — deleting the line
+throws away what they were doing, and guessing a plugin name is worse. This is how every other
+language server treats a half-written assignment: `x =` in Python and `x :=` in Go are reported
+as errors and neither tool offers to delete the statement. Diagnose it, point at it, leave it
+alone.
+
+That is also why the severity is ERROR rather than a warning with a fix attached. It is not a
+style smell to tidy — the file does not work, and the author already knows they are not finished.
+
+Row three keeps its delete fix, but the same mid-edit argument applies in miniature: a hint
+firing on `vars_prompt:` while the author is still typing the entries under it is noise. The
+difference is that there the file works and the key genuinely does nothing, so the fix is a
+legitimate cleanup rather than a guess. If it proves annoying in practice the answer is
+debouncing, not dropping the fix.
+
+Row three also absorbs the case where an inheritable key is empty but **no** ancestor sets it —
 `None` and `Sentinel` then reach the same default, so it is dead weight again, not an override.
 That check needs the enclosing play and block, which is a parent walk we already do, not the
 reverse index — so this does not depend on T-020.
@@ -158,6 +174,9 @@ the fixes to it. The diagnostics are worth having on their own; do not block rul
       the delete is the behaviour-changing edit, so it is not offered
 - [ ] an empty `connection:` is an ERROR on `empty-value-invalid`, fired whether or not an
       ancestor sets it, since it fails either way
+- [ ] that ERROR offers **no** quick fix, and a test asserts the code-action list is empty for
+      it — an incomplete edit has no mechanical repair, and deleting the line would discard a
+      value the author is still typing
 - [ ] the three-way split is derived from each attribute's `isa`, so a keyword whose `None` is
       invalid cannot silently land in the hint bucket
 - [ ] the `ignore_errors:` repro above is a test, pinned against both the inheriting and the
