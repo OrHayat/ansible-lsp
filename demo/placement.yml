@@ -238,6 +238,44 @@
             - block:
                 - debug: { msg: x }
 
+# Row 2. Refused before the task is loaded at all (`helpers.py:245-247`), which is why it beats
+# the loop rules below it. Unlike row 1 it applies at a handler's top level too: a plain entry
+# there is wrapped into an implicit block and re-loaded through `load_list_of_tasks`, while a
+# block entry is loaded directly and skips the check. The message quotes the key AS WRITTEN.
+- name: role includes cannot be handlers, in any core spelling
+  hosts: localhost
+  tasks:
+    - debug: { msg: t }
+  handlers:
+    - name: h1
+      include_role: { name: notifier } # BAD: Using 'include_role' as a handler is not supported.
+
+    - name: h2
+      ansible.builtin.import_role: { name: notifier } # BAD: quoted with the FQCN, as written
+
+    - name: h3
+      block:
+        - include_role: { name: notifier } # BAD: inside a handler as well as at its top level
+
+    - name: h4
+      include_role: { name: notifier } # BAD: row 2 wins — it is raised before the task loads
+      loop: [1]
+      with_items: [2]
+
+    - name: h5
+      include_tasks: tasks/sibling.yml # GOOD: task includes are fine as handlers, role ones are not
+
+    - name: h6
+      community.general.include_role: { name: notifier } # GOOD here: a collection's own module,
+      # not in _ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES — upstream fails it as an unresolvable
+      # action instead, which is a different rule's to give.
+
+- name: and outside handlers a role include is an ordinary task
+  hosts: localhost
+  tasks:
+    - include_role: { name: notifier } # GOOD
+    - import_role: { name: notifier } # GOOD
+
 # BAD: a playbook entry must be a mapping. The other three faults at this site — an empty
 # file, a top-level mapping, a list with no plays — need to know the file IS a playbook,
 # which only the command line says, so we stay quiet on those rather than false-positive

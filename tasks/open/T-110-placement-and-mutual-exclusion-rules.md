@@ -70,7 +70,7 @@ Landing in batches grouped by the context each rule needs, not by severity:
 | 1     | 8, 13-19        | the Play / playbook-entry node      | **done** — `placement.rs`                |
 | 2     | 3, 4, 10, 20-21 | one task's loop / `loop_control`    | **done** — T-155 landed with row 21      |
 | —     | 7               | the block classifier itself         | **done** — see below; belonged to no batch |
-| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | row 1 done (`Pos`); 2, 25, 6 open        |
+| 3     | 1, 2, 6, 25     | "am I inside `handlers:`" as a flag | rows 1-2 done (`Pos`); 25, 6 open         |
 | 4     | 5, 9, 23-24     | file-level / include-entry shapes   | open                                     |
 | 5     | 11, 12, 22      | the module/args split               | open — really T-046's problem            |
 
@@ -181,7 +181,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       outermost. Missed in a standalone file: a role's `handlers/main.yml` fires it upstream,
       but content cannot tell that file from `tasks/main.yml`, where the nesting is legal.
       Liftable with T-150's file-kind matrix.
-- [ ] 2 — `include_role`/`import_role` inside `handlers:`, message naming the action as written (`helpers.py:245-247`)
+- [x] 2 — `include_role`/`import_role` inside `handlers:`, message naming the action as written (`helpers.py:245-247`)
+      — all six spellings of `_ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES` and no others; applies
+      at a handler's top level too, unlike row 1, since a plain entry there is wrapped into an
+      implicit block and re-loaded. Beats both loop rules on the same task. Known miss:
+      `action: include_role`, the same trade rows 3-4 take.
 - [ ] 25 — `meta: flush_handlers` used as a handler (`strategy/__init__.py:883`)
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)

@@ -144,6 +144,13 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
         }
         return;
     }
+    // Row 2, which unlike row 1 applies to a handler's top level too: a plain entry there is
+    // wrapped into an implicit block and re-loaded through `load_list_of_tasks`, while a block
+    // entry is not. The raise sits before the task is loaded at all (`helpers.py:245-247`), so
+    // it beats both loop rules — measured, on a handler include_role carrying a duplicate loop.
+    if pos != Pos::Ordinary && role_include_as_handler(node, out) {
+        return;
+    }
     // `preprocess_data` runs inside `Task.load`, so a duplicate loop — or a `with_*` with no
     // value — is raised before the field loaders run and long before `helpers.py` asks what
     // the action was. One fault, one message, in Ansible's own order.
@@ -152,6 +159,30 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     }
     loop_control_checks(node, out);
     loop_on_import(node, out);
+}
+
+/// Row 2. `_ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES` is `include_role` and `import_role` plus
+/// their `ansible.builtin.`/`ansible.legacy.` spellings and nothing else (`constants.py:31-43`,
+/// `fqcn.py:20-31`) — a collection's own `include_role` is an ordinary module and never reaches
+/// here. All six spellings measured.
+///
+/// The message quotes the key **as written**, FQCN and all, which is why this cannot share a
+/// formatter with rows 3-4, whose messages are literal strings upstream.
+///
+/// Known miss, the same one rows 3-4 take: `action: include_role` fires upstream, since the
+/// action comes from `ModuleArgsParser` rather than the written key.
+fn role_include_as_handler(node: &Node, out: &mut Vec<Problem>) -> bool {
+    for (k, _) in node.entries() {
+        let Some(key) = k.as_str() else { continue };
+        if matches!(keywords::core_action(key), "include_role" | "import_role") {
+            out.push(error(
+                k.span(),
+                format!("Using '{key}' as a handler is not supported."),
+            ));
+            return true;
+        }
+    }
+    false
 }
 
 /// Row 7. `_validate_rescue` and `_validate_always` are the same function
@@ -627,6 +658,71 @@ mod tests {
     #[test]
     fn row_1_is_a_miss_in_a_standalone_file() {
         assert!(check("- name: h\n  block:\n    - block:\n        - debug: {msg: x}\n").is_empty());
+    }
+
+    /// Row 2. All six spellings `add_internal_fqcns` produces, each quoted back as written —
+    /// measured one at a time on 2.21.2.
+    #[test]
+    fn a_role_include_in_a_handler_is_refused_in_every_core_spelling() {
+        for action in [
+            "include_role",
+            "import_role",
+            "ansible.builtin.include_role",
+            "ansible.legacy.include_role",
+            "ansible.builtin.import_role",
+            "ansible.legacy.import_role",
+        ] {
+            assert_eq!(
+                check(&format!(
+                    "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      {action}: {{name: r}}\n"
+                )),
+                [format!("Using '{action}' as a handler is not supported.")],
+                "for {action}"
+            );
+        }
+    }
+
+    /// Unlike row 1, row 2 applies at a handler's top level as well as inside one: a plain entry
+    /// there is wrapped into an implicit block and re-loaded through `load_list_of_tasks`, while
+    /// a block entry is loaded directly and skips that check.
+    #[test]
+    fn row_2_applies_at_both_handler_depths() {
+        assert_eq!(
+            check("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - include_role: {name: r}\n"),
+            ["Using 'include_role' as a handler is not supported."]
+        );
+    }
+
+    /// The boundaries: role includes are ordinary tasks outside `handlers:`, `include_tasks:` is
+    /// fine as a handler, and a collection's own `include_role` is just a module — it is not in
+    /// `_ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES`, and upstream fails it as an unresolvable
+    /// action instead.
+    #[test]
+    fn row_2_leaves_everything_else_alone() {
+        assert!(check("- hosts: web\n  tasks:\n    - include_role: {name: r}\n").is_empty());
+        assert!(check("- hosts: web\n  tasks:\n    - import_role: {name: r}\n").is_empty());
+        assert!(check(
+            "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      include_tasks: f.yml\n"
+        )
+        .is_empty());
+        assert!(check(
+            "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      community.general.include_role: {name: r}\n"
+        )
+        .is_empty());
+    }
+
+    /// Row 2's raise sits before the task is loaded at all, so it wins over the loop rules that
+    /// live in `preprocess_data` and in the import branch below it — measured both ways.
+    #[test]
+    fn row_2_beats_the_loop_rules_on_the_same_task() {
+        assert_eq!(
+            check("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      include_role: {name: r}\n      loop: [1]\n      with_items: [2]\n"),
+            ["Using 'include_role' as a handler is not supported."]
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      import_role: {name: r}\n      loop: [1]\n"),
+            ["Using 'import_role' as a handler is not supported."]
+        );
     }
 
     /// Row 13. The one genuine mutual exclusion at play level.

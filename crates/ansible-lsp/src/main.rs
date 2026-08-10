@@ -2498,6 +2498,10 @@ mod tests {
                 "Using a block as a handler is not supported.",
                 "Using a block as a handler is not supported.",
                 "Using a block as a handler is not supported.",
+                "Using 'include_role' as a handler is not supported.",
+                "Using 'ansible.builtin.import_role' as a handler is not supported.",
+                "Using 'include_role' as a handler is not supported.",
+                "Using 'include_role' as a handler is not supported.",
                 "playbook entries must be either valid plays or 'import_playbook' statements",
             ],
             "one diagnostic per BAD line, none for the GOOD ones — and none for `hosts: 42`, \
