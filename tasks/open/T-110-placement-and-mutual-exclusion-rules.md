@@ -83,7 +83,7 @@ shape of a whole file.
 | 2  | handler           | pos      | err  | **done** — `REFUSED`; miss: `action:` form, standalone      |
 | 3  | task              | co-occur | err  | **done** — `loop_on_import`; miss: `action:` form           |
 | 4  | task              | co-occur | err  | **done** — `loop_on_import`                                 |
-| 5  | include target    | doc      | err  | open — needs the included file's contents                   |
+| 5  | include target    | doc      | err  | open — resolve layer; `refs` + `ScanCache::source`          |
 | 6a | handler           | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-150)      |
 | 6b | play task list    | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-068 r3)   |
 | 7  | block             | co-occur | err  | **done** — `rescue_without_block`                           |
@@ -102,7 +102,7 @@ shape of a whole file.
 | 20 | task              | value    | err  | **done** — `duplicate_loop`                                 |
 | 21 | task              | value    | err  | **done** — `loop_control_checks`                            |
 | 22 | task              | required | err  | **done** — `no_module_at_all`; no resolution either          |
-| 23 | include target    | doc      | warn | open — needs the included file's contents                   |
+| 23 | include target    | doc      | warn | open — resolve layer; ours for the `include_tasks` half     |
 | 24 | task              | co-occur | warn | **done** — `EXCLUSIONS`; ours, `discarded-delegate-to`       |
 | 25 | handler           | pos      | err  | **done** — `REFUSED`; raised at run time, not load           |
 | ip | play task list    | pos      | err  | **done** — `REFUSED`; ours, `misplaced-import-playbook`      |
@@ -254,7 +254,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       run time, not load, so `--syntax-check` alone never sees it. Both handler depths.
 - [x] 3 — `loop:`/`with_*` on `import_tasks` (`helpers.py:152-154`)
 - [x] 4 — `loop:` on `import_role` (`helpers.py:258-260`)
-- [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`)
+- [ ] 5 — an imported file that is not a list of tasks (`helpers.py:213-214`) — and the
+      `include_tasks` spelling with it: measured, it gives the *same* message, just as a run-time
+      `fatal:` instead of at load. Same fault, later feedback, so it is the more valuable of the
+      two to catch in an editor. Fires only where the target is a literal path we resolve.
 - [x] 6 — `meta: end_role` outside a role, or in a handler (`helpers.py:278-285`) — two
       independent raises. 6a needs no role knowledge at all: `use_handlers` short-circuits
       first, so it fires in a role's own `handlers/` file too, which the earlier scoping note
@@ -302,7 +305,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       never appear as candidates, but each supplies the action from its own branch. The
       neighbouring `couldn't resolve module/action` stays T-046's: it needs the second,
       resolving parse inside `Task.load`.
-- [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays silent (`helpers.py:210-212`)
+- [ ] 23 — an empty imported file WARNS and continues; an empty role `tasks/main.yml` stays
+      silent (`helpers.py:210-212`). Extend to `include_tasks`, which is silent at load **and**
+      at run time — measured, the play runs straight past it with no output at all. Ours rather
+      than a replication there, since there is no upstream message for that spelling; the
+      `import_tasks` half stays a verbatim replication.
 - [x] 24 — `local_action:` overwriting an explicit `delegate_to:` WARNS (`mod_args.py:303,325`)
       — ours, on rule id `discarded-delegate-to`. Proven with a control: `delegate_to: other`
       alone runs `ok: [localhost -> other]`, and the arrow disappears with `local_action`
