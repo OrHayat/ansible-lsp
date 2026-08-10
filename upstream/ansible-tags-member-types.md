@@ -120,10 +120,15 @@ string, nothing else) and the reserved-name warning. Row 29 is **not** verbatim 
 there is no single upstream string to copy, so ours sorts the names and carries its own rule id,
 `reserved-tag-name`.
 
-Issues 1, 2 and 4 are candidates for a row of our own: each is a guaranteed failure visible
-without running anything, and each is reported upstream as "this is probably a bug", which tells
-the author nothing. Not implemented yet — see T-110 row 30.
+Issue 4 shipped as T-110 row 30a, on our own id `invalid-tag-member` — upstream's "Unexpected
+Exception, this is probably a bug" gives the author nothing to act on, and the shape needs no
+type inference to spot: a list or a mapping is a different kind of node, not a differently
+spelled scalar.
 
-A known miss on our side, unrelated to any of the above: `tags: 42` is fatal upstream and
-`tags: "42"` is fine, and our parser keeps no scalar style, so the two are one node to us. We
-stay silent rather than flag the legal spelling — the same trade row 17 takes on `hosts: 42`.
+Issues 1 and 2 are row 30b, and they are **blocked**. Both want a warning rather than an error,
+since the play itself runs — but `tags: [7]` and `tags: ["7"]` are one node to our parser, which
+keeps no scalar style, and only the first misbehaves. Firing on both would be a false error on
+legal code. T-162 carries the scalar-style work, and row 30b lands with it.
+
+That same gap is a known miss one level up: `tags: 42` is fatal upstream and `tags: "42"` is
+fine, and we stay silent on both — the trade row 17 already takes on `hosts: 42`.

@@ -43,6 +43,10 @@ pub const MALFORMED_TASK_ENTRY_RULE_ID: &str = "malformed-task-entry";
 /// names and takes its own id rather than claiming to be a verbatim replication.
 pub const RESERVED_TAG_RULE_ID: &str = "reserved-tag-name";
 
+/// Row 30. Ours: every shape it covers crashes ansible with "this is probably a bug", which
+/// tells the author nothing. See `upstream/ansible-tags-member-types.md`.
+pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -81,6 +85,8 @@ const END_ROLE_HANDLER: &str = "Cannot execute 'end_role' from a handler";
 const END_ROLE_OUTSIDE: &str = "Cannot execute 'end_role' from outside of a role";
 const FLUSH_AS_HANDLER: &str = "flush_handlers cannot be used as a handler";
 const TAGS_SHAPE: &str = "tags must be specified as a list";
+const TAG_MEMBER: &str = "a tag must be a name, not a list or a mapping. Ansible crashes while \
+                          loading this file — `unhashable type` — rather than reporting it.";
 const NOT_A_MAPPING: &str = "every entry in a task list must be a mapping — a task, or a \
                              `block:`. Ansible refuses to load this file.";
 /// Verbatim, wording included. `preprocess_vars` is shared with vars-file loading
@@ -505,7 +511,25 @@ fn tags_checks(node: &Node, out: &mut Vec<Problem>) -> bool {
     let Some(anchor) = key_span(node, "tags") else { return false };
     // `isinstance(ds, list)` then `isinstance(ds, str)`, in that order.
     let names: Vec<&str> = match value {
-        Node::Sequence { items, .. } => items.iter().filter_map(Node::as_str).collect(),
+        Node::Sequence { items, .. } => {
+            // Row 30, the half that needs no scalar style. An unhashable member kills the
+            // reserved-name intersection one line below in `taggable.py` — and `listof`, the
+            // check written to reject exactly this, runs in `post_validate`, which is later.
+            // So the guard never gets the chance and the author gets a traceback.
+            if let Some(bad) = items
+                .iter()
+                .find(|i| matches!(i, Node::Sequence { .. } | Node::Mapping { .. }))
+            {
+                out.push(Problem {
+                    span: bad.span(),
+                    tier: Tier::Error,
+                    message: TAG_MEMBER.into(),
+                    rule: INVALID_TAG_MEMBER_RULE_ID,
+                });
+                return true;
+            }
+            items.iter().filter_map(Node::as_str).collect()
+        }
         // An alias may hold either shape. T-160.
         Node::Other { .. } => return false,
         other => match other.as_str() {
@@ -1675,6 +1699,30 @@ mod tests {
         assert!(
             check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [install]\n")
                 .is_empty()
+        );
+    }
+
+    /// Row 30's shape half. An `int` member belongs here too and cannot land until the parser
+    /// keeps scalar style: `tags: [7]` crashes `--list-tasks` and `tags: ["7"]` is fine, and
+    /// the two are one node here.
+    #[test]
+    fn an_unhashable_tag_member_is_ours() {
+        let src = "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [[a]]\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].rule, INVALID_TAG_MEMBER_RULE_ID);
+        assert_eq!(got[0].tier, Tier::Error);
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [{a: b}]\n").len(),
+            1
+        );
+        // It anchors on the offending member, not on the `tags:` key, which is fine.
+        assert_eq!(&src[got[0].span.start..got[0].span.end], "[a]");
+        // And it is fatal, so the reserved-name check below never runs on the same value.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [all, [a]]\n").len(),
+            1
         );
     }
 
