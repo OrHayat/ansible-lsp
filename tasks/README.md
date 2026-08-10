@@ -152,6 +152,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 | T-147 | [Validate role meta/main.yml against the RoleMetadata set](open/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | S    | —    |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
+| T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](open/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
