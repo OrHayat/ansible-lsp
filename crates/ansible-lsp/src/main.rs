@@ -2847,6 +2847,7 @@ mod tests {
         "invalid-placement",
         "shadowed-loop",
         "dead-loop-control",
+        "dead-loop-on-meta",
         "discarded-delegate-to",
         "misplaced-import-playbook",
         "malformed-task-entry",
