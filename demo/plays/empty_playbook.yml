@@ -1,0 +1,1 @@
+# A playbook with nothing in it. `ds is None`, so ansible stops before the shape check.

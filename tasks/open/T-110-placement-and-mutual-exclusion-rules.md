@@ -89,7 +89,8 @@ shape of a whole file.
 | 6a | handler           | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-150)      |
 | 6b | play task list    | pos      | err  | **done** — `REFUSED`; miss in standalone files (T-068 r3)   |
 | 7  | block             | co-occur | err  | **done** — `rescue_without_block`                           |
-| 8  | playbook document | doc      | err  | **partly** — 1 of 4; the rest need file-kind (T-150)        |
+| 8  | playbook document | doc      | err  | **partly** — 1 of 4 from content alone; the rest T-163      |
+| 8i | import target     | doc      | err  | **done** — `include_target.rs`; the reference proves it     |
 | 9  | playbook entry    | co-occur | err  | **done** — `conflicting_import_playbook`; set, not a pair    |
 | 10 | task              | co-occur | err  | **done** — `duplicate_loop`; the only order-sensitive rule  |
 | 11 | task              | co-occur | err  | **done** — `EXCLUSIONS`; beats the loop rules                |
@@ -368,10 +369,16 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       reserved-name intersection at load, *before* `listof` — the check written to reject it —
       runs in `post_validate`. Ours, on `invalid-tag-member`: upstream says "Unexpected
       Exception, this is probably a bug". Filed as `upstream/ansible-tags-member-types.md`.
-- [ ] 8-import — the same three faults on a file reached by `import_playbook:`. Measured, all
-      three fire there, and the reference proves the kind exactly as `import_tasks:` does for
-      rows 5 and 23 — so this needs neither T-150 nor T-020, and belongs in `include_target.rs`
-      beside them. All three messages are verbatim-replicable, unlike most of this ticket's.
+- [x] 8-import — the same three faults on a file reached by `import_playbook:`, where the
+      reference proves the kind exactly as `import_tasks:` does for rows 5 and 23. Needed
+      neither T-150 nor T-020. The branch order is **not** the task-file one and deliberately
+      does not share `falsy`: a playbook is tested for `None` first and falsiness last, so `{}`
+      is "not a list of plays" while `[]` is "no plays" — where a task file calls both empty.
+      Four shapes measured. Two ids, `empty-playbook` and `invalid-playbook`; both keep
+      upstream's opening sentence and drop its path and `<class ...>` interpolation, the first
+      being already on the line we anchor to and the second meaningless in YAML.
+      A task-level `import_playbook:` is excluded by a new `Reference::playbook_entry` flag —
+      ansible reads it as a module name and never opens the file, so row `ip` owns it alone.
 - [ ] 30b — a `tags:` member that is an `int`. Declared legal by `listof=(str, int)`, runs
       clean, cannot be selected by `--tags`, and crashes `--list-tasks` and `--list-tags`.
       Wants a WARNING rather than an error, since the play itself works. **Blocked on T-162**:

@@ -1,0 +1,5 @@
+- name: a real play, so this target is fine
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - debug: { msg: ok }

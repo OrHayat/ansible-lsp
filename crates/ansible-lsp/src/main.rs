@@ -453,7 +453,7 @@ impl Backend {
                 let target = res.targets.first()?;
                 let src = scan.source(target)?;
                 let nodes = src.nodes.as_ref()?;
-                include_target::problem(r.kind, nodes, r.span)
+                include_target::problem(r, nodes)
             })
             .collect();
 
@@ -2793,6 +2793,8 @@ mod tests {
         "invalid-tag-member",
         "empty-task-file",
         "invalid-task-file",
+        "empty-playbook",
+        "invalid-playbook",
     ];
 
     /// T-110's fixture box: the demo files are the fixture, and their `# GOOD` / `# BAD`

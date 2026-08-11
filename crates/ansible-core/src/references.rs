@@ -73,10 +73,15 @@ pub struct Reference {
     /// exactly; elsewhere it is the invoking playbook's, which the file cannot know
     /// (T-137).
     pub in_playbook: bool,
+    /// A genuine playbook-level `import_playbook:` entry, not the same key written inside a
+    /// task list. Ansible loads only the first as a playbook; the second is read as a module
+    /// name and fails on its parameters (T-110 row `ip`), so its target is never opened and
+    /// has nothing to judge.
+    pub playbook_entry: bool,
 }
 
 impl Reference {
-    fn new(kind: ReferenceKind, value: &str, span: Span) -> Self {
+    pub(crate) fn new(kind: ReferenceKind, value: &str, span: Span) -> Self {
         Self {
             kind,
             value: value.to_string(),
@@ -95,6 +100,7 @@ impl Reference {
             vars_files_group: None,
             entry_vars: Vec::new(),
             in_playbook: false,
+            playbook_entry: false,
         }
     }
 }
@@ -195,6 +201,8 @@ fn when_key_span(directives: &[ast::Directive]) -> Option<Span> {
 fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
     if let Some(file) = &i.file {
         let mut r = Reference::new(ReferenceKind::ImportPlaybook, file, i.span);
+        // Reached from `PlayItem::Import`, which only a playbook-level entry produces.
+        r.playbook_entry = true;
         // A `when:` on a static import isn't a gate — it's copied onto every imported task.
         r.conditional = i.when_span.is_some();
         r.conditions = i.when.clone();

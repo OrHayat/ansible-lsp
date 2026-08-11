@@ -1,0 +1,3 @@
+# A mapping at the top level: falsy in Python, yet the SHAPE complaint wins here,
+# because a playbook is tested for `None` before it is tested for emptiness.
+{}

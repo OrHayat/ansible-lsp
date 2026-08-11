@@ -34,3 +34,14 @@
     # A miss, on purpose: the target is a runtime value, so there is no file to judge. Silent
     # rather than guessing — the standing trade everywhere in this codebase.
     - include_tasks: "tasks/{{ which }}.yml"
+
+    # GOOD: row `ip` already owns this mistake, and ansible never opens the file — it reads
+    # `import_playbook` as a module name here. Judging the target would invent a second fault.
+    - import_playbook: plays/empty_playbook.yml # noqa: misplaced-import-playbook
+
+# The same three faults on a file reached by `import_playbook:`. Row 8's other cases stay
+# unchecked, because only a reference proves a file is a playbook — T-163.
+- import_playbook: plays/empty_playbook.yml # BAD: Empty playbook, nothing to do
+- import_playbook: plays/no_plays.yml # BAD: A playbook must contain at least one play
+- import_playbook: plays/not_a_playbook.yml # BAD: A playbook must be a list of plays
+- import_playbook: plays/real_playbook.yml # GOOD: a list with a play in it
