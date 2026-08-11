@@ -50,6 +50,17 @@ pub struct Reference {
     /// it; the keyword is the one token that means "this guard" and nothing else, so it
     /// is what an explanation of the guard anchors on (T-078).
     pub condition_key_span: Option<Span>,
+    /// This reference's `when:` is copied onto every task it brings in and re-evaluated
+    /// per task, rather than gating the reference once. True for the static forms —
+    /// `import_playbook`, `import_tasks`, `import_role`, and a `roles:` entry. False for a
+    /// dynamic `include_*`, whose `when:` decides once whether to include at all.
+    ///
+    /// The difference is what makes `when-import-var-mutated` possible: when the condition
+    /// is re-evaluated per task, a variable the target itself assigns can flip it partway
+    /// through and the file half-executes. Measured on 2.21.2 for all five forms (T-166).
+    /// `include_role`/`import_role` share one [`ReferenceKind`], so the kind cannot answer
+    /// this — it is recorded where the action name is still in hand.
+    pub when_propagates: bool,
     /// The containing task has a `loop:`/`with_*`, so it may happen many times.
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
@@ -99,6 +110,7 @@ impl Reference {
             grouped: false,
             vars_files_group: None,
             entry_vars: Vec::new(),
+            when_propagates: false,
             in_playbook: false,
             playbook_entry: false,
         }
@@ -162,6 +174,10 @@ fn play(p: &Play, out: &mut Vec<Reference>) {
         let mut r = Reference::new(ReferenceKind::Role, &role.name, role.span);
         // A `roles:` entry inherits the play's identity, not a task's.
         r.task_name = p.name.clone();
+        r.conditional = role.when_span.is_some();
+        r.conditions = role.when.clone();
+        r.condition_span = role.when_span;
+        r.when_propagates = true;
         out.push(r);
     }
     for entry in &p.vars_files {
@@ -208,6 +224,7 @@ fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
         r.conditions = i.when.clone();
         r.condition_span = i.when_span;
         r.condition_key_span = when_key_span(&i.directives);
+        r.when_propagates = true;
         r.entry_vars = i.vars.clone();
         out.push(r);
     }
@@ -232,12 +249,20 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
     let before = out.len();
     module_refs(action, out);
     let key_span = when_key_span(&t.directives);
+    // Only the *static* forms copy the task's `when:` onto what they bring in. A dynamic
+    // `include_*` evaluates it once, deciding whether to include at all — measured: an
+    // `include_tasks` gated on a variable its target assigns skips nothing (T-166).
+    let propagates = matches!(
+        crate::keywords::core_action(&action.name),
+        "import_tasks" | "import_role"
+    );
     // The task's `when:`/`loop:`/`name:` belong to every reference it produced.
     for r in &mut out[before..] {
         r.conditional = t.when_span.is_some();
         r.conditions = t.when.clone();
         r.condition_span = t.when_span;
         r.condition_key_span = key_span;
+        r.when_propagates = propagates;
         r.repeated = t.looped;
         r.task_name = t.name.clone();
     }
@@ -354,6 +379,48 @@ mod tests {
 
     fn of(src: &str, kind: ReferenceKind) -> Vec<Reference> {
         refs(src).into_iter().filter(|r| r.kind == kind).collect()
+    }
+
+    /// T-166: which constructs copy their `when:` onto what they bring in. This is the
+    /// whole eligibility rule for `when-import-var-mutated`, which used to be a hard-coded
+    /// `kind == ImportPlaybook` in two places. Every row measured on 2.21.2 against a
+    /// target that `set_fact`s the variable its own condition reads: the `true` rows
+    /// half-execute, the `false` row skips nothing.
+    ///
+    /// `include_role` and `import_role` share one `ReferenceKind`, so the kind alone can
+    /// never decide this — which is why the flag is set where the action name is known.
+    #[test]
+    fn only_the_static_forms_propagate_their_when() {
+        let propagates = |src: &str| {
+            let r = refs(src);
+            let hit = r
+                .iter()
+                .find(|r| matches!(r.kind, ReferenceKind::Role | ReferenceKind::ImportTasks
+                    | ReferenceKind::IncludeTasks | ReferenceKind::ImportPlaybook))
+                .unwrap_or_else(|| panic!("no reference in {src:?}"));
+            (hit.when_propagates, hit.conditions.clone())
+        };
+        let w = "when: not (done | default(false))";
+        // Static: the condition lands on every task the target contributes.
+        for src in [
+            format!("- import_playbook: p.yml\n  {w}\n"),
+            format!("- hosts: all\n  tasks:\n    - import_tasks: t.yml\n      {w}\n"),
+            format!("- hosts: all\n  tasks:\n    - import_role: {{name: r}}\n      {w}\n"),
+            format!("- hosts: all\n  roles:\n    - role: r\n      {w}\n"),
+        ] {
+            let (p, c) = propagates(&src);
+            assert!(p, "should propagate: {src}");
+            assert_eq!(c.len(), 1, "condition must reach the reference: {src}");
+        }
+        // Dynamic: evaluated once, so nothing inside can flip it.
+        for src in [
+            format!("- hosts: all\n  tasks:\n    - include_tasks: t.yml\n      {w}\n"),
+            format!("- hosts: all\n  tasks:\n    - include_role: {{name: r}}\n      {w}\n"),
+        ] {
+            let (p, c) = propagates(&src);
+            assert!(!p, "must not propagate: {src}");
+            assert_eq!(c.len(), 1, "the condition is still recorded, just not propagated");
+        }
     }
 
     #[test]

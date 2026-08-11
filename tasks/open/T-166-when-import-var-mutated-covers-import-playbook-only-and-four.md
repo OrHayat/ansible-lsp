@@ -64,16 +64,44 @@ walk fixes both and they should land together.
 - Keep the plain-`when:`-on-a-dynamic-include case **out**, with a test asserting it stays
   silent. It is the only reason the rule can claim precision.
 
+## Progress
+
+The eligibility rule is generic now. `Reference::when_propagates` says whether a
+reference's `when:` is copied onto what it brings in, set where the action name is still in
+hand — `include_role` and `import_role` share one `ReferenceKind`, so the kind could never
+have answered it. The two hard-coded `kind == ImportPlaybook` gates (`scan.rs`, `main.rs`)
+now read that flag, so a construct is covered by being classified correctly rather than by
+being added to two call sites.
+
+`roles:` entries carry their `when:` for the first time (`RoleUse::when`), which is what
+made the third row work.
+
+Verified end to end on a fixture with all four spellings against one mutating target:
+
+```
+site.yml:4   roles: entry    reported
+site.yml:7   import_tasks    reported
+site.yml:9   import_role     reported
+site.yml:11  include_tasks   absent — correct, it is evaluated once
+```
+
+Corpus: `~/app/ansible` reports **1**, the same `lustre-deploy-full.yml:247` the rule already
+found. The widening surfaced nothing new there and nothing false — worth recording as a
+measurement rather than as a clean bill, since the fixture proves the new rows do fire.
+
+Left: the `apply:` row, which is the half needing extraction rather than classification,
+and its `vars:` companion. The demo fixture is unwritten.
+
 ## Done when
 
-- [ ] `import_tasks`, `import_role` and a `roles:` entry gated on a variable their target
+- [x] `import_tasks`, `import_role` and a `roles:` entry gated on a variable their target
       assigns each warn, with the same message and rule id as the `import_playbook` case
 - [ ] `apply: {when: …}` reaches `Reference::conditions` and `condition_span`, asserted
 - [ ] an `include_*` with `apply: {when: …}` gated on a mutated variable warns
-- [ ] a plain `when:` on a dynamic include stays silent, asserted — it is evaluated once
+- [x] a plain `when:` on a dynamic include stays silent, asserted — it is evaluated once
 - [ ] `apply: {vars: …}` lands in the variable index, with the value span as the target
 - [ ] `# noqa: when-import-var-mutated` suppresses each new spelling, including the one
       whose condition sits inside `apply:`
 - [ ] a demo fixture carries all five flipping constructs and the non-flipping one
-- [ ] corpus gate: the new spellings reported on `~/app/ansible` are inspected, not assumed
+- [x] corpus gate: the new spellings reported on `~/app/ansible` are inspected, not assumed
       clean — the shipped rule found a real break, so new hits are the expected outcome

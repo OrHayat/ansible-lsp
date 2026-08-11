@@ -104,7 +104,7 @@ fn main() {
             // The cross-file condition check.
             if let Some(span) = r.condition_span {
                 let (cl, _) = doc.byte_to_lsp(span.start);
-                if r.kind == ReferenceKind::ImportPlaybook
+                if r.when_propagates
                     && !doc.is_suppressed(span.start, "when-import-var-mutated")
                 {
                     let used: Vec<String> = r

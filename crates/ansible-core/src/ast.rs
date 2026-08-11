@@ -160,6 +160,10 @@ pub struct RoleUse {
     /// by a wide margin. Combined after the params (`role/__init__.py:552-558`), so on a
     /// name written both ways this one wins.
     pub vars: Vec<VarBinding>,
+    /// `when:` on the entry. Copied onto every task the role contributes and re-evaluated
+    /// per task, exactly like a static import's — measured (T-166).
+    pub when: Vec<String>,
+    pub when_span: Option<Span>,
 }
 
 /// A role param: one `key: value` of a `roles:` entry that named no keyword. Carries both
@@ -418,6 +422,8 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
                 entry_span: *span,
                 params: Vec::new(),
                 vars: Vec::new(),
+                when: Vec::new(),
+                when_span: None,
             }),
             // - role: myrole  /  - name: myrole
             //
@@ -444,6 +450,8 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
                     entry_span: item.span(),
                     params: role_params_of(item),
                     vars: vars_of(item),
+                    when: item.get("when").map(clauses).unwrap_or_default(),
+                    when_span: item.get("when").map(Node::span),
                 })
             }
             _ => None,

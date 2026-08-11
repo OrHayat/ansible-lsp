@@ -327,7 +327,7 @@ impl State {
     fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for (r, res) in &a.refs {
-            if r.kind != ReferenceKind::ImportPlaybook || r.conditions.is_empty() {
+            if !r.when_propagates || r.conditions.is_empty() {
                 continue;
             }
             let Some(span) = r.condition_span else { continue };
