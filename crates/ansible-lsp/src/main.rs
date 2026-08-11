@@ -318,13 +318,26 @@ impl State {
         }]
     }
 
-    /// A `when:` on `import_playbook` whose variable the imported playbook itself sets.
+    /// A propagating `when:` whose variable the target itself sets — see
+    /// [`Reference::propagated_condition`] for which constructs those are (T-166: not just
+    /// `import_playbook`).
     ///
-    /// The condition is copied onto every imported task and re-evaluated per task, so a
-    /// `set_fact` inside flips it mid-run: everything before runs, everything after
-    /// silently skips. `set_fact` is host-scoped, so a cluster can split. This is the
+    /// The condition is copied onto every task the target contributes and re-evaluated per
+    /// task, so a `set_fact` inside flips it mid-run: everything before runs, everything
+    /// after silently skips. `set_fact` is host-scoped, so a cluster can split. This is the
     /// only `when:` rule that needs to read other files.
     fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
+        Self::mutated_condition_diagnostics_with(a, |t| self.mutated_vars(t))
+    }
+
+    /// [`mutated_condition_diagnostics`](Self::mutated_condition_diagnostics) with the
+    /// cross-file lookup supplied, so the rule is reachable without a live `Backend` — the
+    /// cache is the only thing that needed `&self`, and an untestable diagnostic is how a
+    /// rule ends up verified by hand instead of pinned.
+    fn mutated_condition_diagnostics_with(
+        a: &Analysis,
+        mutated_vars: impl Fn(&Path) -> std::sync::Arc<HashSet<String>>,
+    ) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for (r, res) in &a.refs {
             let Some((conds, span)) = r.propagated_condition() else { continue };
@@ -337,7 +350,7 @@ impl State {
                 continue;
             }
             for target in &res.targets {
-                let mutated = self.mutated_vars(target);
+                let mutated = mutated_vars(target);
                 let mut hit: Vec<&String> =
                     used.iter().filter(|v| mutated.contains(*v)).collect();
                 if hit.is_empty() {
@@ -3391,6 +3404,41 @@ mod tests {
     /// provisioner's meta dependency on network-base, so its hover line carries the
     /// breadcrumb; `provisioner_user` comes from a role the playbook names directly, so
     /// its hover stays bare.
+    /// T-166 end to end: the diagnostic itself, on the demo fixture, for every construct.
+    /// The rule's logic was reachable only through a live `Backend` until this test forced
+    /// it apart, which meant it had been checked by running `scan` by hand rather than
+    /// pinned — the same "verified, not asserted" gap that let a stale binary and a wrong
+    /// hover both survive earlier.
+    #[test]
+    fn the_mutated_condition_rule_reports_every_propagating_construct() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo/mutated_conditions.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let ds = super::State::mutated_condition_diagnostics_with(&a, |t| {
+            std::sync::Arc::new(ansible_core::mutation::mutated_vars(t))
+        });
+        assert!(
+            ds.iter().all(|d| matches!(&d.code,
+                Some(NumberOrString::String(s)) if s == "when-import-var-mutated")),
+            "{ds:?}"
+        );
+        // One per BAD row and no more: the SILENCED row is suppressed, the two GOOD rows
+        // either do not propagate or name a variable the target never assigns.
+        let lines: Vec<u32> = ds.iter().map(|d| d.range.start.line + 1).collect();
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        for (line, label) in lines.iter().zip(["roles: entry", "import_tasks", "import_role", "apply: when:"]) {
+            let src_line = text.lines().nth(*line as usize - 1).unwrap_or("");
+            assert!(src_line.contains("demo_done"), "{label} anchored wrong: {src_line}");
+        }
+        // The message has to carry the mechanism, not just name the variable.
+        let m = &ds[0].message;
+        assert!(m.contains("re-evaluated per task"), "{m}");
+        assert!(m.contains("hosts can diverge"), "{m}");
+    }
+
     /// T-100 regression: hover and the `var-undefined` diagnostic must agree about scope.
     /// They did not — the warning said `port_count` was "never defined" while the hover on
     /// the same token pointed at the definition, because the scope check lived in one
