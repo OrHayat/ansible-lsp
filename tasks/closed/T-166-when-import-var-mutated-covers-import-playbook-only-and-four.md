@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | M    | T-121 | —          |
+| done   | task | P1       | M    | T-121 | —          |
 
 ## Problem
 
@@ -105,10 +105,12 @@ site.yml:12  include_tasks + apply: when:  reported
 site.yml:14  include_tasks + plain when:   absent — correct
 ```
 
-Left: `apply: {vars: …}`. Deliberately **not** done here — those vars apply to the *included
-file*, not to the playbook that writes them, so indexing them at play level would repeat the
-scope error T-100 just fixed. They need a correct home, which is T-020's invocation chain.
-The demo fixture is still unwritten.
+`apply: {vars: …}` is split off as **T-167** (P3, blocked by T-020) rather than carried
+here: those vars belong to the *included file*, so a play-level index would repeat the scope
+error T-100 fixed. Nothing we say today is wrong because of it — only hover is poorer.
+
+`demo/mutated_conditions.yml` carries all five, plus the suppressed row and two GOOD rows
+that look identical and must stay silent.
 
 ## Done when
 
@@ -117,10 +119,8 @@ The demo fixture is still unwritten.
 - [x] `apply: {when: …}` reaches `Reference::conditions` and `condition_span`, asserted
 - [x] an `include_*` with `apply: {when: …}` gated on a mutated variable warns
 - [x] a plain `when:` on a dynamic include stays silent, asserted — it is evaluated once
-- [ ] `apply: {vars: …}` lands in the variable index — **deferred to T-020**: they
-      belong to the included file, so a play-level index would be the wrong scope
-- [ ] `# noqa: when-import-var-mutated` suppresses each new spelling, including the one
+- [x] `# noqa: when-import-var-mutated` suppresses each new spelling, including the one
       whose condition sits inside `apply:`
-- [ ] a demo fixture carries all five flipping constructs and the non-flipping one
+- [x] a demo fixture carries all five flipping constructs and the non-flipping one
 - [x] corpus gate: the new spellings reported on `~/app/ansible` are inspected, not assumed
       clean — the shipped rule found a real break, so new hits are the expected outcome

@@ -503,6 +503,81 @@ mod tests {
         assert_eq!(imp[0].propagated_condition().unwrap().0, ["x"]);
     }
 
+    /// T-166 per T-010: `# noqa` is looked up by the *line* of the span the rule reports
+    /// on, so every new spelling has to put that span on the line the author would write
+    /// the comment. The `apply:` one is the reason this is a test — its condition sits
+    /// inside module args, which no other reported condition does, so nothing guaranteed
+    /// the lookup still landed on the right line.
+    #[test]
+    fn noqa_reaches_the_propagated_condition_of_every_spelling() {
+        let suppressed = |src: &str| {
+            let doc = crate::parse::Document::new(src.to_string());
+            let nodes = doc.parse().expect("valid yaml");
+            let r = extract(&nodes);
+            let hit = r
+                .iter()
+                .find_map(|r| r.propagated_condition())
+                .unwrap_or_else(|| panic!("nothing propagates in {src:?}"));
+            doc.is_suppressed(hit.1.start, "when-import-var-mutated")
+        };
+        let cases = [
+            "- import_playbook: p.yml\n  when: not done{}\n",
+            "- hosts: all\n  tasks:\n    - import_tasks: t.yml\n      when: not done{}\n",
+            "- hosts: all\n  tasks:\n    - import_role: {name: r}\n      when: not done{}\n",
+            "- hosts: all\n  roles:\n    - role: r\n      when: not done{}\n",
+            "- hosts: all\n  tasks:\n    - include_tasks:\n        file: t.yml\n        \
+             apply: {when: not done}{}\n",
+        ];
+        for c in cases {
+            assert!(!suppressed(&c.replace("{}", "")), "unsuppressed: {c}");
+            assert!(
+                suppressed(&c.replace("{}", " # noqa: when-import-var-mutated")),
+                "noqa did not reach it: {c}"
+            );
+        }
+    }
+
+    /// T-166: the demo fixture keeps its promise. Four constructs whose `when:` reaches
+    /// what they bring in, and three that look similar and must not — the two GOOD rows
+    /// and the suppressed one. A hand-written GOOD/BAD label is a claim, and this is the
+    /// assertion behind it.
+    #[test]
+    fn demo_mutated_conditions_propagates_exactly_the_bad_rows() {
+        let path = std::path::Path::new("../../demo/mutated_conditions.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let doc = crate::parse::Document::new(text.clone());
+        let nodes = doc.parse().expect("fixture must parse");
+        let propagating: Vec<String> = extract(&nodes)
+            .iter()
+            .filter_map(|r| r.propagated_condition().map(|(_, s)| s))
+            .map(|s| text[..s.start].lines().count().to_string())
+            .collect();
+        // Propagation is structural — it is a property of the construct, not of whether
+        // anything is wrong. Six rows propagate: the four BAD ones, the suppressed one
+        // (suppression is the reporting layer's job, not the model's), and the GOOD row
+        // gated on a variable the target never sets. Only four are *reported*, because
+        // the rule additionally needs the target to assign the name — which is why this
+        // asserts the structural half and the scan output covers the other.
+        assert_eq!(propagating.len(), 6, "{propagating:?}");
+
+        // The two GOOD rows are dynamic includes carrying the same condition against the
+        // same target. If either ever starts propagating, the rule has lost its boundary.
+        let good = extract(&nodes)
+            .into_iter()
+            .filter(|r| r.kind == ReferenceKind::IncludeTasks && r.apply_when.is_empty())
+            .count();
+        assert_eq!(good, 1, "the plain include_tasks GOOD row");
+        assert!(
+            extract(&nodes)
+                .iter()
+                .filter(|r| r.kind == ReferenceKind::IncludeTasks && r.apply_when.is_empty())
+                .all(|r| r.propagated_condition().is_none()),
+            "a dynamic include's own when: must not propagate"
+        );
+    }
+
     #[test]
     fn vars_files_singles_and_bare_string_extract() {
         let src = "- name: web\n  hosts: all\n  vars_files:\n    - vars/a.yml\n    - b.yml\n";

@@ -1,0 +1,11 @@
+# Sets the variable its callers gate on — the role half of the T-166 fixture. Everything
+# after the set_fact is skipped when the caller's condition reads `demo_done`.
+- name: This one runs — demo_done is still unset
+  ansible.builtin.debug: { msg: before }
+
+- name: The moment that breaks the caller's condition
+  ansible.builtin.set_fact:
+    demo_done: true
+
+- name: NEVER RUNS when the caller gated on demo_done
+  ansible.builtin.debug: { msg: after }

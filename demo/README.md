@@ -11,6 +11,7 @@ mic key on this Mac).
 | `tasks/conditions.yml` | condition analysis — every verdict and every rule, across all five bare-expression keywords (`when:`, `failed_when:`, `changed_when:`, `until:`, `assert: that:`), with severities that follow the detected ansible-core version |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
 | `role_params.yml` | a key on a `roles:` entry that ansible turns into a variable instead of a setting — including the `name:`-as-role-name spelling (T-100) |
+| `mutated_conditions.yml` | every construct whose `when:` is copied onto the tasks it brings in, so a `set_fact` inside can flip it mid-run (T-166) — plus the two that look identical and must stay silent |
 | `tasks/role_include_params.yml` | the closed `include_role` arg set (T-063) — what resolves, what is a documented miss, and what `apply:` is for |
 | `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |

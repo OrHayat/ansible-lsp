@@ -102,7 +102,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
-| T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](open/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -203,6 +202,7 @@ T-021 is now unblocked on that side.
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
+| T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
 
 ### Downstream — not this repo's code
 
@@ -274,6 +274,7 @@ T-021 is now unblocked on that side.
 | T-101 | [Dynamic includes reject keywords imports accept](closed/T-101-dynamic-includes-reject-keywords-imports-accept.md) | done     |
 | T-155 | [loop_control with no loop is dead config, and ansible never says so](closed/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | done     |
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](closed/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | done     |
+| T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](closed/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | done     |
 
 ## Settled — don't re-derive these
 

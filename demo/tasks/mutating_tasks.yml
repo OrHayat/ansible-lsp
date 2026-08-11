@@ -1,0 +1,10 @@
+# The task-file half of the T-166 fixture — same shape as roles/mutator/tasks/main.yml.
+- name: This one runs — demo_done is still unset
+  ansible.builtin.debug: { msg: before }
+
+- name: The moment that breaks the caller's condition
+  ansible.builtin.set_fact:
+    demo_done: true
+
+- name: NEVER RUNS when the caller gated on demo_done
+  ansible.builtin.debug: { msg: after }

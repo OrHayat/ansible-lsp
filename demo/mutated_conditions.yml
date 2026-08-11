@@ -1,0 +1,62 @@
+# T-166: every construct whose `when:` is copied onto the tasks it brings in and
+# re-evaluated *per task*. When the target sets the variable that condition reads, the
+# condition flips partway through: tasks before the `set_fact` run, tasks after are
+# silently skipped, and ansible exits 0.
+#
+# Worse than it looks — `set_fact` is host-scoped, so if the assignment is itself
+# conditional the hosts diverge. Measured on two hosts: one ran 1 of 4 tasks, the other 3
+# of 4, same play, exit 0, nothing in the output naming the cause.
+#
+# The boundary is the last entry: a *dynamic* include's own `when:` is evaluated once,
+# deciding whether to include at all, so nothing inside it can flip anything. That is what
+# keeps this rule precise rather than "any condition near an include".
+#
+# `demo/playbook.yml` carries the `import_playbook` spelling, which was the only one
+# covered before T-166.
+
+- name: mutated condition demos
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    # BAD: a roles: entry's `when:` lands on every task the role contributes.
+    - role: mutator
+      when: not (demo_done | default(false) | bool)
+
+  tasks:
+    # BAD: a static import copies the condition onto every imported task.
+    - name: BAD import_tasks gated on a variable the target sets
+      ansible.builtin.import_tasks: tasks/mutating_tasks.yml
+      when: not (demo_done | default(false) | bool)
+
+    # BAD: import_role is the same machinery.
+    - name: BAD import_role gated on a variable the role sets
+      ansible.builtin.import_role:
+        name: mutator
+      when: not (demo_done | default(false) | bool)
+
+    # BAD: `apply:` wraps the included tasks in a Block, so a `when:` inside it is
+    # inherited by each of them — the include is dynamic, but this condition still
+    # propagates. Note the diagnostic lands on the `apply:` line, not the task's.
+    - name: BAD apply's when propagates even though the include is dynamic
+      ansible.builtin.include_tasks:
+        file: tasks/mutating_tasks.yml
+        apply: { when: not (demo_done | default(false) | bool) }
+
+    # SILENCED: the author knows, and says so on the reported line.
+    - name: SILENCED the same import, accepted
+      ansible.builtin.import_tasks: tasks/mutating_tasks.yml
+      when: not (demo_done | default(false) | bool) # noqa: when-import-var-mutated
+
+    # GOOD: a dynamic include's own `when:` is evaluated once, before anything is
+    # included, so the target cannot flip it. Identical condition, identical target — the
+    # only difference is include vs import, and that is the whole rule.
+    - name: GOOD include_tasks with the same condition — evaluated once
+      ansible.builtin.include_tasks: tasks/mutating_tasks.yml
+      when: not (demo_done | default(false) | bool)
+
+    # GOOD: gated on something the target never assigns, which is the fix the message
+    # suggests — the condition means the same thing for every task under it.
+    - name: GOOD gated on a variable the target does not set
+      ansible.builtin.import_tasks: tasks/mutating_tasks.yml
+      when: not (skip_everything | default(false) | bool)
