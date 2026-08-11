@@ -283,9 +283,12 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       `if value and not self.block`, so an empty `block: []` still fires and an empty
       `rescue: []` does not; a null value is `_load`'s own message, not this rule's
 - [ ] 8 — playbook not a list, empty, or an entry that is not a dict (`playbook/__init__.py:74-91`)
-      — the not-a-dict entry ships; the other three need to know the file IS a playbook,
-      which only the command line says, so they stay unchecked rather than false-positive on
-      every vars file. Reopen if T-150's file-kind matrix gives us that knowledge.
+      — the not-a-dict entry ships, because a sibling entry is a real play and so proves the
+      file's kind. The other three are exactly the cases with no such proof inside the file.
+      Split out as **T-163** (blocked on T-020's reverse index) rather than kept here: path and
+      reserved-name exclusions get most of the way, and what is left is one shape — an
+      unreferenced, unknown-named file that is empty, a bare mapping, or `[]`. The
+      `import_playbook:` half needs none of that and is tracked separately below.
 - [x] 9 — both `import_playbook:` and `ansible.builtin.import_playbook:` in one entry (`playbook_include.py:41-48`)
       — a **set** of the three spellings, so any two collide and duplicates of one do not;
       the names print sorted, not in document order. Both measured.
@@ -365,6 +368,10 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       reserved-name intersection at load, *before* `listof` — the check written to reject it —
       runs in `post_validate`. Ours, on `invalid-tag-member`: upstream says "Unexpected
       Exception, this is probably a bug". Filed as `upstream/ansible-tags-member-types.md`.
+- [ ] 8-import — the same three faults on a file reached by `import_playbook:`. Measured, all
+      three fire there, and the reference proves the kind exactly as `import_tasks:` does for
+      rows 5 and 23 — so this needs neither T-150 nor T-020, and belongs in `include_target.rs`
+      beside them. All three messages are verbatim-replicable, unlike most of this ticket's.
 - [ ] 30b — a `tags:` member that is an `int`. Declared legal by `listof=(str, int)`, runs
       clean, cannot be selected by `--tags`, and crashes `--list-tasks` and `--list-tags`.
       Wants a WARNING rather than an error, since the play itself works. **Blocked on T-162**:

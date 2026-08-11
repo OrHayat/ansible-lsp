@@ -200,6 +200,7 @@ T-021 is now unblocked on that side.
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
+| T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
 
 ### Downstream — not this repo's code
 
