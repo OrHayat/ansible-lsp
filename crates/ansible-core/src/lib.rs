@@ -18,6 +18,7 @@ pub mod placement;
 pub mod references;
 pub mod resolve;
 pub mod splitter;
+pub mod static_fields;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod testing;
 pub mod vars;

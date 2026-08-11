@@ -218,6 +218,15 @@ pub const VARS_PROMPT_KEYS: &[&str] = &[
     "unsafe",
 ];
 
+/// Keywords declared `static=True` upstream — the flag that means "never templated":
+/// `vars` (`base.py:696`), `collections` (`collectionsearch.py:34`), `listen`
+/// (`handler.py:27`), `register` (`task.py:89`). Grepping the installed 2.21.2 package for
+/// the flag finds exactly these four. [`crate::static_fields`] reads this set, so a fifth
+/// static attribute in a newer core belongs here, not in the rule. `module_defaults` is
+/// *not* here on purpose: its keys are equally literal, but through a no-op post-validator
+/// (`task.py:178`) rather than this flag, so the rule carries that one name explicitly.
+pub const STATIC_KEYWORDS: &[&str] = &["collections", "listen", "register", "vars"];
+
 /// Play-level keys whose value is an ordered list of tasks/blocks.
 pub const PLAY_TASK_CONTAINERS: &[&str] = &["pre_tasks", "tasks", "post_tasks", "handlers"];
 
@@ -490,6 +499,16 @@ mod tests {
         // loop_control skips Base entirely (`loop_control.py:27`).
         assert!(!legal_key(KeyContext::LoopControl, "name"));
         assert!(legal_key(KeyContext::LoopControl, "loop_var"));
+    }
+
+    /// Every static keyword is a real keyword somewhere — the Handler context is the
+    /// superset that holds all four. A name here that no context accepts would mean the
+    /// static set drifted from the legal sets it annotates.
+    #[test]
+    fn static_keywords_are_all_handler_keywords() {
+        for k in STATIC_KEYWORDS {
+            assert!(legal_key(KeyContext::Handler, k), "{k} is not a keyword anywhere");
+        }
     }
 
     #[test]

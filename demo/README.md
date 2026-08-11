@@ -17,6 +17,7 @@ mic key on this Mac).
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |
 | `tasks/unparseable_silenced.yml` | the same break, quieted with `# noqa: unparseable` |
+| `static_templates.yml` | a template in a field ansible never templates — `register`, `listen`, `collections`, `vars:`/`module_defaults:` keys — fatal or silently dead per field (T-103) |
 | `duplicate_keys.yml` | duplicate mapping keys at play level, in `vars:` and in a task — valid YAML, first value silently discarded (T-102, not yet flagged) |
 | `plays/duplicate_keys_json.yml` | the same mistake in JSON, where Ansible's own check never runs |
 

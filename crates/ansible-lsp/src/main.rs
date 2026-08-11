@@ -22,6 +22,7 @@ use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
+use ansible_core::static_fields;
 use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
 
@@ -669,10 +670,30 @@ impl Backend {
             })
             .collect();
 
+        // A template written in a field ansible-core never templates — `register`,
+        // `listen`, `collections`, `vars:`/`module_defaults:` keys. The braces are used
+        // literally, fatally or silently per field (T-103).
+        let literal: Vec<Diagnostic> = static_fields::problems(&a.nodes)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(match p.tier {
+                    static_fields::Tier::Error => DiagnosticSeverity::ERROR,
+                    static_fields::Tier::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
         missing
             .chain(broken)
             .chain(invalid)
             .chain(misplaced)
+            .chain(literal)
             .chain(bad_targets)
             .collect()
     }
@@ -3078,6 +3099,108 @@ mod tests {
         let silenced =
             "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
         assert_eq!(flagged(silenced), 0);
+    }
+
+    /// T-103's fixture box, both directions: every line annotated BAD/WARN carries exactly
+    /// one `static-template` diagnostic of the annotated severity, every GOOD line carries
+    /// none, and no unannotated line fires. The SILENCED row is covered by the noqa test
+    /// below and by not being annotated here.
+    #[test]
+    fn the_static_templates_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path =
+            std::path::Path::new("../../demo/static_templates.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let ours: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "static-template")
+            })
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+
+        let src: Vec<&str> = text.lines().collect();
+        let mut expected: Vec<(u32, DiagnosticSeverity)> = Vec::new();
+        for (i, line) in src.iter().enumerate() {
+            let severity = if line.contains("# BAD") {
+                DiagnosticSeverity::ERROR
+            } else if line.contains("# WARN") {
+                DiagnosticSeverity::WARNING
+            } else {
+                continue;
+            };
+            // An annotation on its own comment line heads the next non-comment line.
+            let target = if line.trim_start().starts_with('#') {
+                i + 1
+                    + src[i + 1..]
+                        .iter()
+                        .position(|l| !l.trim_start().starts_with('#'))
+                        .unwrap()
+            } else {
+                i
+            };
+            expected.push((target as u32, severity));
+        }
+        let mut got = ours.clone();
+        got.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+        // The fixture exercises both tiers, so a severity regression cannot pass.
+        assert!(expected.iter().any(|(_, s)| *s == DiagnosticSeverity::ERROR));
+        assert!(expected.iter().any(|(_, s)| *s == DiagnosticSeverity::WARNING));
+    }
+
+    /// T-103's false-positive gate: templates in fields that DO template — `notify:`,
+    /// `loop:`, `vars:` values and friends all over the demo tree — must never fire this
+    /// rule, and neither may data files with keyword-shaped keys (`requirements.yml`'s
+    /// top-level `collections:`).
+    #[test]
+    fn every_other_demo_file_is_free_of_static_template_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "static_templates.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "static-template")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-103: `# noqa: static-template` on the offending line silences the rule, and a
+    /// different rule's id does not.
+    #[test]
+    fn noqa_suppresses_static_template() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let flagged = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "static-template")
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  tasks:\n    - command: whoami\n      register: \"{{ v }}\"\n";
+        assert_eq!(flagged(noisy), 1);
+        let silenced = "- hosts: web\n  tasks:\n    - command: whoami\n      \
+                        register: \"{{ v }}\" # noqa: static-template\n";
+        assert_eq!(flagged(silenced), 0);
+        let wrong_id = "- hosts: web\n  tasks:\n    - command: whoami\n      \
+                        register: \"{{ v }}\" # noqa: invalid-attribute\n";
+        assert_eq!(flagged(wrong_id), 1);
     }
 
     /// A misplaced `import_playbook:` gets exactly one diagnostic. Its target is never opened

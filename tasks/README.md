@@ -92,7 +92,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
-| T-103 | [A static field carrying a template is used literally](open/T-103-a-static-field-carrying-a-template-is-used-literally.md) | S    | —          |
 | T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
@@ -102,6 +101,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
+| T-168 | **bug** · [A YAML complex key parses clean but is fatal to Ansible's loader](open/T-168-a-yaml-complex-key-parses-clean-but-is-fatal-to-ansible-s-lo.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -157,6 +157,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
+| T-169 | [A template inside a mapping key is invisible to the var walk](open/T-169-a-template-inside-a-mapping-key-is-invisible-to-the-var-walk.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -275,6 +276,7 @@ T-021 is now unblocked on that side.
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](closed/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | done     |
 | T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](closed/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | done     |
 | T-165 | [A loop on meta: is silently discarded](closed/T-165-a-loop-on-meta-is-silently-discarded.md) | done     |
+| T-103 | [A static field carrying a template is used literally](closed/T-103-a-static-field-carrying-a-template-is-used-literally.md) | done     |
 
 ## Settled — don't re-derive these
 

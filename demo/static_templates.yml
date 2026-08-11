@@ -1,0 +1,61 @@
+# T-103 — static fields carrying a template are used literally.
+#
+# Four keywords are `static=True` in ansible-core (`vars`, `collections`, `listen`,
+# `register`) and are never passed through the templar; the keys of `module_defaults:`
+# are equally literal through a no-op post-validator. Everything below is live-verified
+# on core 2.21.2: the BAD rows are measured fatal at parse, the WARN rows run and
+# silently misbehave, and each GOOD row is the same shape measured working.
+
+- name: Static fields used literally
+  hosts: localhost
+  gather_facts: false
+  vars:
+    result_name: my_result # GOOD: a vars VALUE is templated fine — only the keys are static
+    topic: restart
+    coll: community.general
+    mod: debug
+  module_defaults:
+    # BAD: a module_defaults KEY is never templated — Ansible cannot resolve the braces
+    # as an action and fails before any task runs.
+    "{{ mod }}":
+      msg: x
+    debug:
+      msg: "{{ result_name }}" # GOOD: module_defaults VALUES merge into args and template there
+  collections:
+    - "{{ coll }}" # WARN: never templated — a dead entry; plugin lookup silently falls through it
+    - community.general # GOOD
+  tasks:
+    - name: register must be a literal name
+      command: whoami
+      register: "{{ result_name }}" # BAD: never templated — `Invalid variable name`, fatal at parse
+      changed_when: false
+
+    - name: the same intent, written the only way it works
+      command: whoami
+      register: my_result # GOOD
+      changed_when: false
+      vars:
+        "{{ result_name }}": 5 # BAD: a vars KEY is never templated — fatal at parse
+      notify: "{{ topic }}" # GOOD: notify IS templated — measured matching a literal handler name
+
+    # SILENCED: a generator that emits braces on purpose and post-processes the file.
+    - name: silenced on request
+      command: whoami
+      register: "{{ result_name }}" # noqa: static-template
+      changed_when: false
+
+    - name: set_fact 
+      ansible.builtin.set_fact:
+        {{ result_name }}: true
+
+
+  handlers:
+    # `listen` is never templated, so the `notify: "{{ topic }}"` above resolves to
+    # `restart` and can never reach this handler; it fails at run time blaming the
+    # topic, and Ansible never mentions this line.
+    - name: braces stay in the topic
+      debug: { msg: restarting }
+      listen: "{{ topic }}" # WARN: the braces stay in the topic name
+
+    - name: restart
+      debug: { msg: restarting } # GOOD: reached by the templated notify above
