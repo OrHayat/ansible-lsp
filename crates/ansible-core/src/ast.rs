@@ -145,6 +145,11 @@ pub struct Action {
 pub struct RoleUse {
     pub name: String,
     pub span: Span,
+    /// The whole entry, not just the name. Role params and the entry's `vars:` are in
+    /// scope *within* it — one param can be built from another (`app_config_dir:
+    /// /etc/x/{{ app_env }}`) — and out of scope in the play's own tasks, so a reader
+    /// deciding whether a name is defined needs to know which side of this it is on.
+    pub entry_span: Span,
     /// Keys of the entry outside `RoleInclude.fattributes`, which ansible-core turns into
     /// variables scoped to this role rather than rejecting (`definition.py:200-224`).
     /// Every one of them is a real variable definition; whether any is *worth reporting*
@@ -410,6 +415,7 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
             Node::Scalar { value, span } => Some(RoleUse {
                 name: value.clone(),
                 span: *span,
+                entry_span: *span,
                 params: Vec::new(),
                 vars: Vec::new(),
             }),
@@ -432,7 +438,13 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
                         _ => None,
                     });
                 let (name, span) = named?;
-                Some(RoleUse { name, span, params: role_params_of(item), vars: vars_of(item) })
+                Some(RoleUse {
+                    name,
+                    span,
+                    entry_span: item.span(),
+                    params: role_params_of(item),
+                    vars: vars_of(item),
+                })
             }
             _ => None,
         })

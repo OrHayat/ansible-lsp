@@ -32,8 +32,17 @@
     # values into a role — nothing here names a keyword, so nothing is reported.
     - role: provisioner
       port_count: 4
-      lustre_mount: /mnt/lustre_{{port_count}}
+      lustre_mount: /mnt/lustre
       state: present
+
+    # GOOD: one param can be built from another on the same entry. Templating is lazy —
+    # the value is stored as written and resolved when the role reads it, by which point
+    # every param is in scope — so write order does not matter (live-verified both ways).
+    # This is also why the params have to be indexed: `{{ app_env }}` here is a real use,
+    # and with no definition for it this line would draw a false `var-undefined`.
+    - role: provisioner
+      app_env: staging
+      app_config_dir: /etc/provisioner/{{ app_env }}
 
     # GOOD: the other way to pass a value — `vars:` is a keyword, so it is a setting whose
     # contents are variables. Both spellings reach the role, and on a collision the **param
@@ -69,10 +78,17 @@
       public: true # noqa: role-param-not-keyword
 
   tasks:
-    # NO HINT: role params do not leak past the role — live-verified, `port_count` is not
-    # visible here. The index over-approximates rather than risk a false "undefined".
     - name: after the roles
       debug: { msg: done }
-    - name: vars are not leaking to tasks scope
-      debug: #THIS FAILS 
-        - msg: "count= {{port_count}},port={{myport}}" 
+
+    # BAD: neither name is in scope here. A role param and an entry's `vars:` reach the
+    # role and the rest of their own entry — never the play's tasks. Live-verified: this
+    # is a run-time `'port_count' is undefined`, and ansible reports it only when the task
+    # is reached, so a guarded or late task can hide it for a long time.
+    #
+    # Both names ARE defined a few lines up, which is exactly why this needs a scope check
+    # rather than a "is it defined anywhere in this file" test — that would stay silent
+    # here and call this working code.
+    - name: BAD role params do not reach the play's tasks
+      debug:
+        msg: "count={{ port_count }}, port={{ myport }}" 

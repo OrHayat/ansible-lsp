@@ -727,11 +727,22 @@ impl Backend {
                 severity: Some(DiagnosticSeverity::WARNING),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String("var-undefined".into())),
-                message: format!(
-                    "`{}` is never defined in any file reachable from this playbook — it may \
-                     still come from inventory, facts, or extra-vars (-e).",
-                    u.name
-                ),
+                message: if u.defined_out_of_scope {
+                    // It IS defined in this file — pointing at "never defined" sends the
+                    // reader off to add a definition that already exists a few lines up.
+                    format!(
+                        "`{}` is defined on a `roles:` entry in this play, which reaches that \
+                         role and the rest of its own entry — not the play's tasks. Move the \
+                         value to the play's `vars:` to use it here.",
+                        u.name
+                    )
+                } else {
+                    format!(
+                        "`{}` is never defined in any file reachable from this playbook — it may \
+                         still come from inventory, facts, or extra-vars (-e).",
+                        u.name
+                    )
+                },
                 ..Default::default()
             });
         }
@@ -3386,6 +3397,45 @@ mod tests {
     /// provisioner's meta dependency on network-base, so its hover line carries the
     /// breadcrumb; `provisioner_user` comes from a role the playbook names directly, so
     /// its hover stays bare.
+    /// T-100 regression: hover and the `var-undefined` diagnostic must agree about scope.
+    /// They did not — the warning said `port_count` was "never defined" while the hover on
+    /// the same token pointed at the definition, because the scope check lived in one
+    /// caller instead of on the definition. Both halves are asserted here so a future
+    /// consumer that forgets the rule fails rather than contradicting the other one.
+    #[test]
+    fn hover_and_the_undefined_warning_agree_about_entry_scope() {
+        let path = std::path::Path::new("../../demo/role_params.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let hover_at_last = |name: &str| {
+            let byte = text.rfind(&format!("{{{{ {name} }}}}")).unwrap() + 3;
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path).map(|h| h.0)
+        };
+
+        // Used inside its own entry: in scope, so the definition is offered.
+        let in_scope = hover_at_last("app_env").expect("in-scope hover");
+        assert!(in_scope.contains("role param"), "{in_scope}");
+        assert!(in_scope.contains("staging"), "{in_scope}");
+
+        // Used in the play's tasks: out of scope, so hover must decline — anything else
+        // contradicts the warning on the same token.
+        assert_eq!(hover_at_last("port_count"), None);
+
+        // ...and that warning names the real problem instead of "never defined".
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes)
+            .into_iter()
+            .map(|d| d.message)
+            .collect();
+        let hit = msgs
+            .iter()
+            .find(|m| m.contains("`port_count`"))
+            .unwrap_or_else(|| panic!("no port_count warning in {msgs:?}"));
+        assert!(hit.contains("not the play's tasks"), "{hit}");
+        assert!(!hit.contains("never defined"), "{hit}");
+    }
+
     #[test]
     fn hover_breadcrumbs_meta_dependency_routes_only() {
         let path = std::path::Path::new("../../demo/cross_file_vars.yml")
@@ -3915,6 +3965,8 @@ mod tests {
         }
     }
 }
+
+
 
 
 

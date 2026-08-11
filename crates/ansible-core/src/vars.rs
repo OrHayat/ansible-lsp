@@ -110,6 +110,12 @@ pub struct VarDef {
     /// variable reads as "defined only when …" (e.g. per-host via `inventory_hostname`),
     /// straight from the playbook, no inventory needed.
     pub condition: Option<String>,
+    /// Byte range in the defining file outside which this definition does not apply.
+    /// `None` for everything file-wide, which is nearly all of them. Set for a `roles:`
+    /// entry's params and `vars:`, which reach the rest of that entry and the role's own
+    /// files but *not* the play's tasks (measured) — so a use after the roles must not be
+    /// satisfied by one, in the diagnostic or in a hover.
+    pub scope: Option<Span>,
 }
 
 /// Every in-file variable definition, in document order.
@@ -139,11 +145,16 @@ impl VarIndex {
         span: Span,
         condition: Option<String>,
     ) {
+        self.defs.push(VarDef { name: name.into(), source, span, condition, scope: None });
+    }
+
+    fn push_scoped(&mut self, name: impl Into<String>, source: VarSource, span: Span, scope: Span) {
         self.defs.push(VarDef {
             name: name.into(),
             source,
             span,
-            condition,
+            condition: None,
+            scope: Some(scope),
         });
     }
 }
@@ -156,6 +167,11 @@ pub struct VarUse {
     /// The `when:` clauses guarding the task this use sits in (accumulated through nesting),
     /// so a conditional use can be checked against its definitions' conditions.
     pub guard: Vec<String>,
+    /// Set by [`undefined_uses`] when a definition of this name *does* exist in the file
+    /// but does not reach here — today only a `roles:` entry's params and `vars:`, read
+    /// from the play's tasks. The distinction is the whole message: "never defined" sends
+    /// the reader to add a definition that is already eleven lines up.
+    pub defined_out_of_scope: bool,
 }
 
 /// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
@@ -181,6 +197,7 @@ fn template_uses_with(
         let expr = &text[expr_start..expr_start + close_rel];
         for (name, s, e) in extract(expr) {
             out.push(VarUse {
+            defined_out_of_scope: false,
                 name,
                 span: Span {
                     start: base + expr_start + s,
@@ -207,6 +224,7 @@ fn expression_uses_with(
 ) {
     for (name, s, e) in extract(expr) {
         out.push(VarUse {
+            defined_out_of_scope: false,
             name,
             span: Span {
                 start: base + s,
@@ -327,10 +345,15 @@ fn play(p: &Play, idx: &mut VarIndex) {
     // name written both ways lands with the winner last.
     for r in &p.roles {
         for param in &r.params {
-            idx.push(param.name.clone(), VarSource::RoleParams, param.value_span);
+            idx.push_scoped(
+                param.name.clone(),
+                VarSource::RoleParams,
+                param.value_span,
+                r.entry_span,
+            );
         }
         for v in &r.vars {
-            idx.push(v.name.clone(), VarSource::RoleEntryVars, v.span);
+            idx.push_scoped(v.name.clone(), VarSource::RoleEntryVars, v.span, r.entry_span);
         }
     }
     for s in p
@@ -402,6 +425,8 @@ pub struct Located {
     /// file outward — the order you'd follow the links. Empty when the route is visible
     /// (in-file, direct role, include). Mirrors Ansible's own `dep_chain`.
     pub via: Vec<(PathBuf, Span)>,
+    /// See [`VarDef::scope`].
+    pub scope: Option<Span>,
 }
 
 impl Located {
@@ -412,10 +437,27 @@ impl Located {
     /// *same* file, one after the use hasn't executed yet, so it can't define that use. Across
     /// files we can't order it against the use, so we keep it rather than guess.
     pub fn in_effect_at(&self, use_file: &Path, use_pos: usize) -> bool {
+        if !self.in_scope_at(use_file, use_pos) {
+            return false;
+        }
         match self.source {
             VarSource::SetFact | VarSource::Register => {
                 self.file != use_file || self.span.start < use_pos
             }
+            _ => true,
+        }
+    }
+
+    /// Whether this definition's [`scope`](Located::scope) covers a use at `use_pos` in
+    /// `use_file`. Separate from [`in_effect_at`](Located::in_effect_at) because the two
+    /// callers want different halves: `undefined_uses` lets *any* reachable definition
+    /// exempt a use, even a `set_fact` written later — ordering is the uncovered-`when`
+    /// check's business — but a definition that does not reach the use *at all* must still
+    /// not exempt it. A use in another file is the role-invocation direction, which
+    /// nothing reaches today and T-020 will answer; not something to rule out here.
+    pub fn in_scope_at(&self, use_file: &Path, use_pos: usize) -> bool {
+        match self.scope {
+            Some(s) if self.file == use_file => s.start <= use_pos && use_pos < s.end,
             _ => true,
         }
     }
@@ -538,21 +580,25 @@ pub fn undefined_uses_in(
     if !matches!(tree, Ast::Playbook(_)) {
         return Vec::new();
     }
-    let defined: HashSet<String> = definitions_with_deps_in(path, nodes, cache)
-        .0
-        .into_iter()
-        .map(|d| d.name)
-        .collect();
+    // Scope is the definition's own business now (`Located::scope`), so a use is checked
+    // against the definitions actually in effect *at that byte*, not against a flat set of
+    // every name the file mentions. That is what keeps `app_config_dir: {{ app_env }}`
+    // inside an entry silent while the same name in the play's tasks is reported.
+    let all = definitions_with_deps_in(path, nodes, cache).0;
     let declared = declared_names(nodes, text);
     uses(nodes)
         .into_iter()
         .filter(|u| {
-            !defined.contains(&u.name)
+            !all.iter().any(|d| d.name == u.name && d.in_scope_at(path, u.span.start))
                 && !condition::is_magic(&u.name)
                 && !u.name.starts_with("ansible_")
                 && !declared.contains(&u.name)
                 && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
                 && !softened(text, u.span.start)
+        })
+        .map(|mut u| {
+            u.defined_out_of_scope = all.iter().any(|d| d.name == u.name);
+            u
         })
         .collect()
 }
@@ -720,6 +766,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             file: path.to_path_buf(),
             condition: d.condition.clone(),
             via: Vec::new(),
+            scope: d.scope,
         });
     }
 
@@ -983,6 +1030,8 @@ fn read_var_file(
                         file: file.to_path_buf(),
                         condition: condition.clone(),
                         via: Vec::new(),
+                        // A whole vars file is in scope wherever it is loaded.
+                        scope: None,
                     });
                 }
             }
@@ -1358,6 +1407,103 @@ mod tests {
         assert_eq!(i.get("port")[0].span.slice(src), "80");
     }
 
+    /// A role param is in scope for the rest of its own entry and out of scope in the
+    /// play's tasks — both measured on 2.21.2. The index is per-file and flat, so without
+    /// the entry check one of the two has to be wrong: either a false `var-undefined` on a
+    /// param built from another param, or silence on a use that really does fail at run
+    /// time. Both are asserted here so neither can be traded for the other.
+    #[test]
+    fn entry_scoped_names_are_visible_in_the_entry_and_not_in_the_plays_tasks() {
+        let d = std::env::temp_dir().join("ansible-lsp-entry-scope");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let flagged = |src: &str| {
+            let p = d.join("site.yml");
+            std::fs::write(&p, src).unwrap();
+            let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
+            let mut n: Vec<String> =
+                undefined_uses(&p, &nodes, src).into_iter().map(|u| u.name).collect();
+            n.sort();
+            n
+        };
+        // Inside the entry: one param built from another. Silent — it works.
+        assert!(
+            flagged(concat!(
+                "- hosts: all\n",
+                "  roles:\n",
+                "    - role: provisioner\n",
+                "      app_env: staging\n",
+                "      app_config_dir: /etc/provisioner/{{ app_env }}\n",
+            ))
+            .is_empty()
+        );
+        // The entry's `vars:` reach the rest of the entry too.
+        assert!(
+            flagged(concat!(
+                "- hosts: all\n",
+                "  roles:\n",
+                "    - role: provisioner\n",
+                "      vars: {app_env: staging}\n",
+                "      app_config_dir: /etc/provisioner/{{ app_env }}\n",
+            ))
+            .is_empty()
+        );
+        // In the play's tasks: not in scope, and this really does fail at run time.
+        assert_eq!(
+            flagged(concat!(
+                "- hosts: all\n",
+                "  roles:\n",
+                "    - role: provisioner\n",
+                "      app_env: staging\n",
+                "  tasks:\n",
+                "    - debug: {msg: \"{{ app_env }}\"}\n",
+            )),
+            ["app_env"]
+        );
+        // A play `vars:` is not entry-scoped, so the same use is fine.
+        assert!(
+            flagged(concat!(
+                "- hosts: all\n",
+                "  vars: {app_env: staging}\n",
+                "  roles:\n",
+                "    - role: provisioner\n",
+                "  tasks:\n",
+                "    - debug: {msg: \"{{ app_env }}\"}\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    /// The two reasons a use is flagged are different advice, so they must not be mixed
+    /// up: one says "add a definition", the other says "the definition you already wrote
+    /// does not reach here".
+    #[test]
+    fn out_of_scope_is_distinguished_from_never_defined() {
+        let d = std::env::temp_dir().join("ansible-lsp-oos");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let flags = |src: &str| {
+            let p = d.join("site.yml");
+            std::fs::write(&p, src).unwrap();
+            let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
+            undefined_uses(&p, &nodes, src)
+                .into_iter()
+                .map(|u| (u.name, u.defined_out_of_scope))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            flags(concat!(
+                "- hosts: all\n  roles:\n    - role: r\n      app_env: staging\n",
+                "  tasks:\n    - debug: {msg: \"{{ app_env }}\"}\n",
+            )),
+            [("app_env".to_string(), true)]
+        );
+        assert_eq!(
+            flags("- hosts: all\n  tasks:\n    - debug: {msg: \"{{ nowhere_at_all }}\"}\n"),
+            [("nowhere_at_all".to_string(), false)]
+        );
+    }
+
     #[test]
     fn block_vars_and_nested_tasks() {
         let i = idx(concat!(
@@ -1474,6 +1620,7 @@ mod tests {
             file: PathBuf::from("f.yml"),
             condition: None,
             via: Vec::new(),
+            scope: None,
         };
         // set_fact (19) beats a play var (12) regardless of position.
         let defs = vec![mk(VarSource::PlayVars, 10), mk(VarSource::SetFact, 5)];
@@ -1494,6 +1641,7 @@ mod tests {
             file: file.to_path_buf(),
             condition: None,
             via: Vec::new(),
+            scope: None,
         };
         // A use before the set_fact: not yet defined by it.
         assert!(!sf.in_effect_at(file, 50));
