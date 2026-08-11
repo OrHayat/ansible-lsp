@@ -35,9 +35,12 @@
     # rather than guessing — the standing trade everywhere in this codebase.
     - include_tasks: "tasks/{{ which }}.yml"
 
-    # GOOD: row `ip` already owns this mistake, and ansible never opens the file — it reads
-    # `import_playbook` as a module name here. Judging the target would invent a second fault.
-    - import_playbook: plays/empty_playbook.yml # noqa: misplaced-import-playbook
+    # BAD, and row `ip`'s alone: ansible reads `import_playbook` as a module name here and
+    # never opens the file, so neither its absence nor its contents is a fact about this
+    # mistake. That it gets exactly ONE diagnostic is asserted in
+    # `a_misplaced_import_playbook_is_reported_once` — a count is not something the annotations
+    # below can express, since they only say whether a line is flagged.
+    - import_playbook: plays/empty_playbook.yml
 
 # The same three faults on a file reached by `import_playbook:`. Row 8's other cases stay
 # unchecked, because only a reference proves a file is a playbook — T-163.
