@@ -340,6 +340,11 @@ ERROR with the message Ansible itself gives; rows 23-24 are WARNING and must not
       which one you get depends on the value's shape — a raw path gives `does not support raw
       params`, a `{file: ...}` mapping gives `module (import_playbook) is missing`. Nothing to
       borrow, so it names the fault and the fix instead.
+      It is also the **only** diagnostic on that line, which it was not before row 8's import
+      half landed: the target of a misplaced import was still being resolved, so a missing one
+      produced a `missing-file` warning about a lookup ansible never performs. Both that and
+      row 8 now key off `Reference::playbook_entry` — one question, "does ansible actually load
+      this target", asked in both places.
 - [x] 26 — a task-list entry that is not a mapping (`helpers.py:100-102`) — not in the original
       sweep, which caught `raise Ansible*Error` but not this `AnsibleAssertionError` re-raised
       through `Block._load`. Ours, on `malformed-task-entry`: upstream interpolates the whole

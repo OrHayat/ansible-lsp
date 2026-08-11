@@ -550,6 +550,13 @@ impl Backend {
             .refs
             .iter()
             .filter(|(_, res)| res.status == Status::Missing)
+            // An `import_playbook:` inside a task list is never resolved by ansible — it is read
+            // as a module name and dies on its parameters — so whether the file exists is not a
+            // fact about this mistake. T-110 row `ip` says the one true thing about the line;
+            // `missing-file` would be a second diagnostic describing a lookup that never runs.
+            .filter(|(r, _)| {
+                r.kind != ReferenceKind::ImportPlaybook || r.playbook_entry
+            })
             .filter(|(r, _)| !a.doc.is_suppressed(r.span.start, rule_id(r)))
             .map(|(r, res)| Diagnostic {
                 range: range_of(r.span),
@@ -2866,6 +2873,7 @@ mod tests {
         assert!(missing.is_empty(), "no fixture line exercises {missing:?}");
     }
 
+
     /// No false positives: every demo file except the one built to demonstrate the rule
     /// stays free of placement diagnostics.
     #[test]
@@ -2938,6 +2946,42 @@ mod tests {
         let silenced =
             "- hosts: web\n  user: alice # noqa: invalid-placement\n  remote_user: bob\n  tasks: []\n";
         assert_eq!(flagged(silenced), 0);
+    }
+
+    /// A misplaced `import_playbook:` gets exactly one diagnostic. Its target is never opened
+    /// by ansible, so neither the file's absence nor its contents is a fact about this mistake
+    /// — both would be a second complaint about a line that has one thing wrong with it.
+    #[test]
+    fn a_misplaced_import_playbook_is_reported_once() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let ids = |src: &str| {
+            let a = super::Backend::analyze_text(src.to_string(), &path).unwrap();
+            let mut v: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter_map(|d| match d.code {
+                    Some(NumberOrString::String(s)) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        // The target does not exist: `missing-file` would be describing a lookup ansible never
+        // performs.
+        assert_eq!(
+            ids("- hosts: localhost\n  tasks:\n    - import_playbook: nope.yml\n"),
+            ["misplaced-import-playbook"]
+        );
+        // The target exists and is an empty playbook: row 8's import rule must stay out of it
+        // too, for the same reason.
+        assert_eq!(
+            ids("- hosts: localhost\n  tasks:\n    - import_playbook: plays/empty_playbook.yml\n"),
+            ["misplaced-import-playbook"]
+        );
+        // The control: at playbook level, both rules are exactly right to fire.
+        assert_eq!(ids("- import_playbook: nope.yml\n"), ["missing-file"]);
+        assert_eq!(ids("- import_playbook: plays/empty_playbook.yml\n"), ["empty-playbook"]);
     }
 
     /// Row 29. Its own id, because someone using a reserved name on purpose wants to silence
