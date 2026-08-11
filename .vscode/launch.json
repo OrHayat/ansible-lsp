@@ -5,6 +5,9 @@
       "name": "Run extension against demo folder",
       "type": "extensionHost",
       "request": "launch",
+      // The server is a build artefact the launch does not otherwise rebuild — see
+      // tasks.json for what happens without this.
+      "preLaunchTask": "build ansible-lsp (release)",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}/client",
         "${workspaceFolder}/demo",

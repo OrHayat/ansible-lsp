@@ -1,0 +1,24 @@
+{
+  // The extension launches `target/release/ansible-lsp` (client/package.json,
+  // `ansibleLsp.serverPath` defaults to it). That binary is a build artefact, so editing
+  // Rust and pressing F5 runs whatever was built last — silently, with no version in the
+  // UI to notice. It has already cost a debugging session: a binary 286 commits stale
+  // reproduced a bug that had been fixed the day after it was built.
+  //
+  // This makes the debug launch rebuild first, so the server can never lag the source.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build ansible-lsp (release)",
+      "type": "shell",
+      "command": "cargo build --release -p ansible-lsp",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ]
+}
