@@ -102,16 +102,11 @@ fn main() {
             let res = resolve_in(&r, &ctx, &cache);
 
             // The cross-file condition check.
-            if let Some(span) = r.condition_span {
+            if let Some((conds, span)) = r.propagated_condition() {
                 let (cl, _) = doc.byte_to_lsp(span.start);
-                if r.when_propagates
-                    && !doc.is_suppressed(span.start, "when-import-var-mutated")
-                {
-                    let used: Vec<String> = r
-                        .conditions
-                        .iter()
-                        .flat_map(|c| condition::variables(c))
-                        .collect();
+                if !doc.is_suppressed(span.start, "when-import-var-mutated") {
+                    let used: Vec<String> =
+                        conds.iter().flat_map(|c| condition::variables(c)).collect();
                     for target in &res.targets {
                         let m = mut_cache
                             .entry(target.clone())

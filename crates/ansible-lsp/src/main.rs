@@ -327,18 +327,12 @@ impl State {
     fn mutated_condition_diagnostics(&self, a: &Analysis) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for (r, res) in &a.refs {
-            if !r.when_propagates || r.conditions.is_empty() {
-                continue;
-            }
-            let Some(span) = r.condition_span else { continue };
+            let Some((conds, span)) = r.propagated_condition() else { continue };
             if a.doc.is_suppressed(span.start, "when-import-var-mutated") {
                 continue;
             }
-            let used: Vec<String> = r
-                .conditions
-                .iter()
-                .flat_map(|c| condition::variables(c))
-                .collect();
+            let used: Vec<String> =
+                conds.iter().flat_map(|c| condition::variables(c)).collect();
             if used.is_empty() {
                 continue;
             }

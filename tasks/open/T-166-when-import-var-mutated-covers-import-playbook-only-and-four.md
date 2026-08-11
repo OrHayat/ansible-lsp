@@ -89,17 +89,36 @@ Corpus: `~/app/ansible` reports **1**, the same `lustre-deploy-full.yml:247` the
 found. The widening surfaced nothing new there and nothing false — worth recording as a
 measurement rather than as a clean bill, since the fixture proves the new rows do fire.
 
-Left: the `apply:` row, which is the half needing extraction rather than classification,
-and its `vars:` companion. The demo fixture is unwritten.
+The `apply:` row landed too. Its `when:` is now `Reference::apply_when`, kept *beside* the
+task's own rather than replacing it — measured, the two are independent gates and both must
+pass (own `when: true` with `apply: {when: false}` skips the included task, and so does the
+reverse). `Reference::propagated_condition()` picks whichever one reaches the brought-in
+tasks, and both call sites read only that.
+
+All five, on one fixture against one mutating target:
+
+```
+site.yml:4   roles: entry                  reported
+site.yml:7   import_tasks                  reported
+site.yml:9   import_role                   reported
+site.yml:12  include_tasks + apply: when:  reported
+site.yml:14  include_tasks + plain when:   absent — correct
+```
+
+Left: `apply: {vars: …}`. Deliberately **not** done here — those vars apply to the *included
+file*, not to the playbook that writes them, so indexing them at play level would repeat the
+scope error T-100 just fixed. They need a correct home, which is T-020's invocation chain.
+The demo fixture is still unwritten.
 
 ## Done when
 
 - [x] `import_tasks`, `import_role` and a `roles:` entry gated on a variable their target
       assigns each warn, with the same message and rule id as the `import_playbook` case
-- [ ] `apply: {when: …}` reaches `Reference::conditions` and `condition_span`, asserted
-- [ ] an `include_*` with `apply: {when: …}` gated on a mutated variable warns
+- [x] `apply: {when: …}` reaches `Reference::conditions` and `condition_span`, asserted
+- [x] an `include_*` with `apply: {when: …}` gated on a mutated variable warns
 - [x] a plain `when:` on a dynamic include stays silent, asserted — it is evaluated once
-- [ ] `apply: {vars: …}` lands in the variable index, with the value span as the target
+- [ ] `apply: {vars: …}` lands in the variable index — **deferred to T-020**: they
+      belong to the included file, so a play-level index would be the wrong scope
 - [ ] `# noqa: when-import-var-mutated` suppresses each new spelling, including the one
       whose condition sits inside `apply:`
 - [ ] a demo fixture carries all five flipping constructs and the non-flipping one

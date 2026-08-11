@@ -61,6 +61,14 @@ pub struct Reference {
     /// `include_role`/`import_role` share one [`ReferenceKind`], so the kind cannot answer
     /// this — it is recorded where the action name is still in hand.
     pub when_propagates: bool,
+    /// A `when:` written inside a dynamic include's `apply:`. Separate from
+    /// [`conditions`](Reference::conditions) because the two are independent gates that
+    /// both have to pass — measured: own `when: true` with `apply: {when: false}` skips the
+    /// included task, and so does the reverse. The task's own `when:` decides whether the
+    /// include happens at all; this one is copied onto each task it brings in, which is
+    /// what makes it the second half of `when_propagates` (T-166).
+    pub apply_when: Vec<String>,
+    pub apply_when_span: Option<Span>,
     /// The containing task has a `loop:`/`with_*`, so it may happen many times.
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
@@ -92,6 +100,22 @@ pub struct Reference {
 }
 
 impl Reference {
+    /// The condition that lands on **every task this reference brings in**, and is
+    /// therefore re-evaluated per task — the thing a variable the target itself assigns can
+    /// flip partway through. `None` when the reference gates once, or not at all.
+    ///
+    /// The one question `when-import-var-mutated` asks. Keeping it here rather than at the
+    /// two call sites is what let the rule stop hard-coding `kind == ImportPlaybook`.
+    pub fn propagated_condition(&self) -> Option<(&[String], Span)> {
+        if !self.apply_when.is_empty() {
+            return Some((&self.apply_when, self.apply_when_span?));
+        }
+        if self.when_propagates && !self.conditions.is_empty() {
+            return Some((&self.conditions, self.condition_span?));
+        }
+        None
+    }
+
     pub(crate) fn new(kind: ReferenceKind, value: &str, span: Span) -> Self {
         Self {
             kind,
@@ -111,6 +135,8 @@ impl Reference {
             vars_files_group: None,
             entry_vars: Vec::new(),
             when_propagates: false,
+            apply_when: Vec::new(),
+            apply_when_span: None,
             in_playbook: false,
             playbook_entry: false,
         }
@@ -244,6 +270,17 @@ fn stmt(s: &Stmt, out: &mut Vec<Reference>) {
     }
 }
 
+/// A `when:` value is one expression or a list of them (ANDed) — the same shape
+/// [`crate::ast`] reads, needed here because `apply:` is raw args, not a built `Task`.
+fn clauses_of(when: &Node) -> Vec<String> {
+    match when {
+        Node::Sequence { items, .. } => {
+            items.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect()
+        }
+        other => other.as_str().map(str::to_owned).into_iter().collect(),
+    }
+}
+
 fn task(t: &Task, out: &mut Vec<Reference>) {
     let Some(action) = &t.action else { return };
     let before = out.len();
@@ -256,6 +293,14 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
         crate::keywords::core_action(&action.name),
         "import_tasks" | "import_role"
     );
+    // A dynamic include's `apply:` is a Block wrapping what it brings in, so a `when:`
+    // inside it is inherited by every one of those tasks. Only the mapping spelling has
+    // one; `apply` on an import is an error and never reaches here (T-101).
+    let apply_when = action
+        .args
+        .get("apply")
+        .and_then(|a| a.get("when"))
+        .map(|w| (clauses_of(w), w.span()));
     // The task's `when:`/`loop:`/`name:` belong to every reference it produced.
     for r in &mut out[before..] {
         r.conditional = t.when_span.is_some();
@@ -263,6 +308,10 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
         r.condition_span = t.when_span;
         r.condition_key_span = key_span;
         r.when_propagates = propagates;
+        if let Some((cl, sp)) = &apply_when {
+            r.apply_when = cl.clone();
+            r.apply_when_span = Some(*sp);
+        }
         r.repeated = t.looped;
         r.task_name = t.name.clone();
     }
@@ -421,6 +470,37 @@ mod tests {
             assert!(!p, "must not propagate: {src}");
             assert_eq!(c.len(), 1, "the condition is still recorded, just not propagated");
         }
+    }
+
+    /// T-166: a dynamic include's `apply:` is a Block around what it brings in, so a
+    /// `when:` inside it *is* re-evaluated per task even though the include's own is not.
+    /// The two are independent gates — measured, own `when: true` with
+    /// `apply: {when: false}` skips the included task and so does the reverse — so the
+    /// apply condition is kept beside the task's rather than replacing it.
+    #[test]
+    fn an_apply_when_propagates_while_the_includes_own_when_does_not() {
+        let src = "- hosts: all\n  tasks:\n    - include_tasks:\n        file: t.yml\n        \
+                   apply: {when: not done}\n      when: run_it\n";
+        let r = of(src, ReferenceKind::IncludeTasks);
+        let r = &r[0];
+        // The task's own `when:` is still recorded, and still does not propagate.
+        assert_eq!(r.conditions, ["run_it"]);
+        assert!(!r.when_propagates);
+        // The apply one does, and is what the mutation rule must read.
+        assert_eq!(r.apply_when, ["not done"]);
+        let (conds, span) = r.propagated_condition().expect("apply when propagates");
+        assert_eq!(conds, ["not done"]);
+        assert_eq!(span.slice(src), "not done");
+
+        // Without an `apply:`, a dynamic include propagates nothing.
+        let plain = of("- hosts: all\n  tasks:\n    - include_tasks: t.yml\n      when: x\n",
+                       ReferenceKind::IncludeTasks);
+        assert!(plain[0].propagated_condition().is_none());
+
+        // A static import propagates its own — the pre-existing path, unchanged.
+        let imp = of("- hosts: all\n  tasks:\n    - import_tasks: t.yml\n      when: x\n",
+                     ReferenceKind::ImportTasks);
+        assert_eq!(imp[0].propagated_condition().unwrap().0, ["x"]);
     }
 
     #[test]
