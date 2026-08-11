@@ -398,7 +398,12 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if loop_control_checks(node, out) {
         return;
     }
-    loop_on_import(node, out);
+    // A task has one action, so an import and a `meta:` are mutually exclusive in practice
+    // — but the chain reads as one sequence, and a future third rule inheriting the pattern
+    // gets the short-circuit for free rather than double-reporting on a task with one fault.
+    if loop_on_import(node, out) {
+        return;
+    }
     meta_loop(node, out);
 }
 
@@ -418,11 +423,11 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
 /// Warning, not an error: the play loads and runs. The message says the task runs *once*
 /// rather than that the key is "unused" — the author's model is one run per item, and the
 /// truth is one run total.
-fn meta_loop(node: &Node, out: &mut Vec<Problem>) {
+fn meta_loop(node: &Node, out: &mut Vec<Problem>) -> bool {
     if node.get("meta").is_none() {
-        return;
+        return false;
     }
-    let Some(span) = live_loop(node) else { return };
+    let Some(span) = live_loop(node) else { return false };
     out.push(Problem {
         span,
         tier: Tier::Warning,
@@ -432,6 +437,7 @@ fn meta_loop(node: &Node, out: &mut Vec<Problem>) {
             .into(),
         rule: DEAD_META_LOOP_RULE_ID,
     });
+    true
 }
 
 /// Row 7. `_validate_rescue` and `_validate_always` are the same function
@@ -682,7 +688,10 @@ fn shadowed_loop(lookup: &str, span: Span) -> Problem {
 /// Both messages are literal strings upstream, so an FQCN spelling still reports the bare
 /// name — live-verified. `action: import_tasks` is a miss: the module is read from the
 /// written key only, and that spelling is vanishingly rare for an import.
-fn loop_on_import(node: &Node, out: &mut Vec<Problem>) {
+///
+/// Returns whether it fired, like every other check in the task chain, so the caller reads
+/// as one ordered sequence rather than two conventions.
+fn loop_on_import(node: &Node, out: &mut Vec<Problem>) -> bool {
     let import = node.entries().iter().find_map(|(k, _)| {
         match keywords::core_action(k.as_str()?) {
             "import_tasks" => Some(("import_tasks", "include_tasks")),
@@ -690,8 +699,8 @@ fn loop_on_import(node: &Node, out: &mut Vec<Problem>) {
             _ => None,
         }
     });
-    let Some((action, replacement)) = import else { return };
-    let Some(key) = live_loop(node) else { return };
+    let Some((action, replacement)) = import else { return false };
+    let Some(key) = live_loop(node) else { return false };
     out.push(error(
         key,
         format!(
@@ -699,6 +708,7 @@ fn loop_on_import(node: &Node, out: &mut Vec<Problem>) {
              instead."
         ),
     ));
+    true
 }
 
 /// The span of a loop key that would leave `task.loop` set. A `loop:` written with no value
