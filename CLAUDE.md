@@ -40,6 +40,18 @@ Before believing a result, ask: what would falsify me, and can this setup produc
 the control that must come out different. A measurement that cannot fail feels like
 evidence and is not.
 
+**This applies to the commands you verify with, not only the ones you measure with.**
+
+> `cargo test --workspace | grep "test result" | head -3`, on a workspace with **seven**
+> test targets, where the failing one was fifth. That command cannot print a failure. It
+> reported green twice over a red `ansible-lsp` suite, and two commits went to origin
+> broken on the strength of it.
+
+Grep `^test result|FAILED`, never truncate a multi-crate summary, and read all of it before
+committing. The rule above was already written down when this happened — a rule applied
+only to the domain it was learned in is not yet a habit, which is the actual lesson and the
+reason this sits here rather than in a rule of its own.
+
 ## 3. A rule about shared data belongs on the data, not in one caller
 
 Enumerate the consumers before deciding where a check lives.
