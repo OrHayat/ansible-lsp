@@ -1,0 +1,2 @@
+# Reached only by `defaults_from: prod`.
+entrypoints_pool: 99

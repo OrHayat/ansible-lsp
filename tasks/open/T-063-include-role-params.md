@@ -48,6 +48,44 @@ One function decides for all four, and it is not "append .yml":
 - Escape guard: the resolved file must stay inside the role (`is_subpath`) —
   `tasks_from: ../../x` fails the task.
 
+## Measured (2.21.2), and pinned in `demo/tasks/role_include_params.yml`
+
+Verification pass done while landing T-100; the arg table above holds, with three
+corrections and one addition.
+
+- **`name:` wins over `role:` here**, not the other way round —
+  `ir.args.get('name', ir.args.get('role'))` (`role_include.py:133`). A play-level `roles:`
+  entry is the mirror image: `ds.get('role', ds.get('name'))` (`definition.py:118`). Both
+  spellings work in both places; only the precedence differs. Worth stating because the
+  natural assumption is that one rule covers both.
+- **Only `apply` and `rescuable` are include-only.** `public`, `allow_duplicates` and
+  `rolespec_validate` on an `import_role` are accepted silently — the raise sites name just
+  the two (`role_include.py:150-159`). Flagging a third would be a false error, now pinned
+  by `only_apply_and_rescuable_are_include_only`.
+- **`apply:` is the tag-propagation mechanism**, which is what makes it worth modelling
+  beyond its arg validation. Live-verified: `tags: [outer]` on an `include_role` plus
+  `--tags outer` runs **one** task — the include itself — and nothing inside the role. Add
+  `apply: {tags: [outer]}` and all three run. This is the module doc's "tags ... are not
+  automatically inherited by the include tasks, see apply", and it is a lint candidate:
+  a `tags:` on a dynamic include with no `apply:` is very often not what the author meant.
+- **`vars_from`/`defaults_from` confirmed costly.** `vars_from: prod` loads
+  `roles/db/vars/prod.yml` and the value is usable inside the role — measured. We index
+  none of it, so every key in that file is a false-positive path for `var-undefined`.
+
+Current state is pinned from both sides:
+`demo_role_include_params_resolve_or_are_documented_misses` asserts `role:`, `vars_from:`,
+`defaults_from:` and `handlers_from:` produce **no reference at all** — deliberately, so
+those assertions fail when this ticket lands rather than passing silently.
+
+## Not this ticket
+
+The module documentation's `attributes:` block (`async`, `become`, `until`, `delegation`,
+`bypass_task_loop`, …) is doc metadata describing the *action's* capabilities, not keys a
+playbook writes. Its consequential half — which keywords are legal on a dynamic include —
+is already modelled exactly, as `VALID_INCLUDE_KEYWORDS` in `KeyContext::DynamicInclude`,
+and the two agree: `become`, `until`, `connection` and `delegate_to` are absent from both.
+Validating the doc block itself is T-057's.
+
 ## Approach
 
 - A pure `role_from_file(role, subdir, name, allow_dir, fs)` mirroring `_load_role_yaml`'s

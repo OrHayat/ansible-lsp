@@ -1,0 +1,4 @@
+# Reached only by `handlers_from: extra`. The handler name below is what `notify:` must
+# use, and it is invisible to us today — no reference is emitted for handlers_from.
+- name: entrypoints extra restart
+  ansible.builtin.debug: { msg: extra restarting }

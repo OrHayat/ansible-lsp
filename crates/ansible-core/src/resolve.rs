@@ -961,6 +961,70 @@ mod tests {
         assert_eq!(res.targets, vec![PathBuf::from("/p/roles/r/tasks/restart.yml")]);
     }
 
+    /// T-063: what the `include_role` argument surface resolves to today, against the
+    /// real demo tree. Half of this test pins **misses** on purpose — the files exist and
+    /// ansible loads them (live-verified), and we emit no reference at all. Written down
+    /// so the gap is a failing expectation when T-063 lands, not a discovery.
+    #[test]
+    fn demo_role_include_params_resolve_or_are_documented_misses() {
+        let file = Path::new("../../demo/tasks/role_include_params.yml").canonicalize().unwrap();
+        let kinds = |src: &str| {
+            let out = resolve_src(&file, src);
+            out.into_iter().map(|(r, res)| (r.kind, res.status)).collect::<Vec<_>>()
+        };
+        // `name:` is a Role reference and resolves.
+        assert_eq!(
+            kinds("- include_role: { name: entrypoints }\n"),
+            [(ReferenceKind::Role, Status::Resolved)]
+        );
+        // `role:` is an accepted alias upstream (`role_include.py:133`) and we read only
+        // `name:`, so this produces nothing — no go-to-definition, and a bad name here
+        // cannot warn. The live gap T-063 opens with.
+        assert_eq!(kinds("- include_role: { role: entrypoints }\n"), []);
+        // `tasks_from:` is the one `*_from` we follow.
+        assert_eq!(
+            kinds("- include_role: { name: entrypoints, tasks_from: setup }\n"),
+            [(ReferenceKind::Role, Status::Resolved), (ReferenceKind::TasksFrom, Status::Resolved)]
+        );
+        // The other three load real files and we emit no reference for any of them —
+        // only the Role itself shows up. `vars_from`/`defaults_from` are the costly pair:
+        // every key in the file they name is missing from the var index, which is a
+        // false-positive path for `var-undefined`.
+        for arg in ["vars_from", "defaults_from", "handlers_from"] {
+            let src = format!("- include_role: {{ name: entrypoints, {arg}: prod }}\n");
+            assert_eq!(
+                kinds(&src),
+                [(ReferenceKind::Role, Status::Resolved)],
+                "{arg} should still be unmodelled — update this when T-063 lands"
+            );
+        }
+    }
+
+    /// T-091 against the **real** filesystem. The MemFs test above pins the candidate
+    /// list; this pins that `Fs::is_file` agrees about the two forms only a real tree
+    /// has — a file with no extension at all, and one whose extension is not in the list.
+    /// Both were checked in for exactly this and neither had ever been resolved by a test.
+    #[test]
+    fn demo_role_entrypoints_resolve_against_the_real_tree() {
+        let file = Path::new("../../demo/tasks/role_entrypoints.yml").canonicalize().unwrap();
+        let hit = |from: &str| {
+            let src = format!("- include_role: {{ name: entrypoints, tasks_from: {from} }}\n");
+            let out = resolve_src(&file, &src);
+            let res = first(&out, ReferenceKind::TasksFrom);
+            (res.status, res.targets.first().and_then(|t| t.file_name()).map(|n| n.to_string_lossy().into_owned()), res.candidates.len())
+        };
+        // The extensionless slot is probed first, so a bare name beats `<name>.yml`.
+        assert_eq!(hit("setup"), (Status::Resolved, Some("setup".into()), 4));
+        // ...and the shadowed file is reachable only by asking for it in full.
+        assert_eq!(hit("setup.yml"), (Status::Resolved, Some("setup.yml".into()), 4));
+        // An extension outside the list rides the extensionless slot, so it resolves.
+        assert_eq!(hit("legacy.jamil"), (Status::Resolved, Some("legacy.jamil".into()), 4));
+        // The same stem without it reaches nothing — .jamil is not a role extension.
+        assert_eq!(hit("legacy"), (Status::Missing, None, 4));
+        // `.json` is in the list, and only the real tree proves the probe reaches it.
+        assert_eq!(hit("report"), (Status::Resolved, Some("report.json".into()), 4));
+    }
+
     /// The demo fixture for T-092 keeps its promise: the files its comments point at
     /// exist and win. Same scenario as `handler_includes_anchor_at_handlers_not_tasks`,
     /// but against the checked-in demo tree — a hand-made fixture can silently lack the
@@ -2392,3 +2456,5 @@ mod perf {
         );
     }
 }
+
+

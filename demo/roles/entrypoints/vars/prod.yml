@@ -1,0 +1,3 @@
+# Reached only by `vars_from: prod`. Live-verified: the value loads and is usable.
+# We index neither this file nor the reference to it — see T-063.
+entrypoints_tuning: aggressive

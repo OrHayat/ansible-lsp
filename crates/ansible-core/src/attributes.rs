@@ -534,6 +534,47 @@ mod tests {
         assert!(got.iter().all(|p| p.rule == ROLE_PARAM_RULE_ID), "{got:?}");
     }
 
+    /// T-063: the closed set of 11 (`role_include.py:40-43`) in full. Every one of these
+    /// is legal and most do nothing statically — but the set being closed means a
+    /// *stricter* list here turns each into a false `Invalid options` on a working play,
+    /// which is why the boring ones are worth a test at all.
+    #[test]
+    fn every_valid_include_role_arg_stays_silent() {
+        for arg in [
+            "name: r", "role: r", "tasks_from: t", "vars_from: v", "defaults_from: d",
+            "handlers_from: h", "public: true", "allow_duplicates: false",
+            "rolespec_validate: false", "rescuable: false", "apply: {tags: [x]}",
+        ] {
+            let src = format!("- hosts: web\n  tasks:\n    - include_role: {{name: r, {arg}}}\n");
+            assert!(check(&src, true).is_empty(), "{arg} should be a valid include_role arg");
+        }
+    }
+
+    /// The import twins take the same set minus two. `public`, `allow_duplicates` and
+    /// `rolespec_validate` are **not** among the rejected — measured, only `apply` and
+    /// `rescuable` raise (`role_include.py:150-159`), so flagging a third would be a
+    /// false error.
+    #[test]
+    fn only_apply_and_rescuable_are_include_only() {
+        for arg in ["public: true", "allow_duplicates: false", "rolespec_validate: false",
+                    "vars_from: v", "defaults_from: d", "handlers_from: h"] {
+            let src = format!("- hosts: web\n  tasks:\n    - import_role: {{name: r, {arg}}}\n");
+            assert!(check(&src, true).is_empty(), "{arg} is legal on import_role");
+        }
+        let got = check(
+            "- hosts: web\n  tasks:\n    - import_role: {name: r, apply: {tags: [x]}}\n    \
+             - import_role: {name: r, rescuable: true}\n",
+            true,
+        );
+        assert_eq!(
+            got,
+            [
+                (Tier::Error, "Invalid options for import_role: apply".into()),
+                (Tier::Error, "Invalid options for import_role: rescuable".into()),
+            ]
+        );
+    }
+
     #[test]
     fn a_clean_playbook_has_no_problems() {
         let got = check(

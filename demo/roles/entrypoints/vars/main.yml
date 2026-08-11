@@ -1,0 +1,2 @@
+# The default vars entry point. `vars_from: prod` replaces this file, it does not merge.
+entrypoints_tuning: default

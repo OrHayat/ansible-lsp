@@ -2470,6 +2470,36 @@ mod tests {
         assert_eq!(got[0].range.start.line, got[0].range.end.line);
     }
 
+    /// T-063: the BAD rows of the arg-surface demo, and only those. The GOOD rows are the
+    /// other half — eleven legal args, most of which do nothing statically, all of which a
+    /// stricter arg list would turn into false errors on a working play.
+    #[test]
+    fn the_role_include_params_demo_reports_exactly_its_bad_rows() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo")
+            .canonicalize()
+            .unwrap()
+            .join("tasks/role_include_params.yml");
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let msgs: Vec<String> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-attribute")
+            })
+            .map(|d| d.message)
+            .collect();
+        assert_eq!(
+            msgs,
+            [
+                "'retries' is not a valid attribute for a Block",
+                "Invalid options for ansible.builtin.import_role: apply",
+                "Invalid options for ansible.builtin.import_role: rescuable",
+                "Invalid options for ansible.builtin.include_role: frobnicate",
+            ]
+        );
+    }
+
     /// T-088: no false positives — every demo file except the one built to demonstrate
     /// the rule stays free of invalid-attribute diagnostics.
     #[test]

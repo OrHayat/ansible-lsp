@@ -1,0 +1,106 @@
+# The full `include_role` / `import_role` argument surface (T-063). `IncludeRole.VALID_ARGS`
+# is a closed set of 11 (`role_include.py:40-43`), so an unknown one is a hard
+# `Invalid options` error — that part we already replicate. What is *modelled* beyond the
+# name and `tasks_from:` is much less, and every MISS below is measured, not assumed.
+#
+# All behaviour here live-verified on ansible-core 2.21.2.
+
+# --------------------------------------------------------------- naming the role
+# `ir._role_name = ir.args.get('name', ir.args.get('role'))` (`role_include.py:133`) —
+# so `role:` is an accepted alias, and here `name:` is the one that wins. (A play-level
+# `roles:` entry has the same pair the other way round: there `role:` wins. See
+# `demo/role_params.yml`.)
+
+- name: GOOD the ordinary name spelling — clickable
+  ansible.builtin.include_role:
+    name: entrypoints
+
+- name: MISS the role alias, for which we emit no reference at all
+  ansible.builtin.include_role:
+    role: entrypoints # no go-to-definition, and a bad name here would not warn
+
+# --------------------------------------------------------------- the four *_from args
+# One function resolves all four (`Role._load_role_yaml`), and only `tasks_from` is
+# modelled. The others load real files that we never open.
+
+- name: GOOD tasks_from resolves — the one *_from we follow
+  ansible.builtin.include_role:
+    name: entrypoints
+    tasks_from: setup
+
+- name: MISS vars_from loads roles/entrypoints/vars/prod.yml — invisible to the var index
+  ansible.builtin.include_role:
+    name: entrypoints
+    vars_from: prod # entrypoints_tuning becomes `aggressive`, and we never see it
+
+- name: MISS defaults_from loads roles/entrypoints/defaults/prod.yml — same
+  ansible.builtin.include_role:
+    name: entrypoints
+    defaults_from: prod # entrypoints_pool becomes 99
+
+- name: MISS handlers_from loads roles/entrypoints/handlers/extra.yml — same
+  ansible.builtin.include_role:
+    name: entrypoints
+    handlers_from: extra # `notify: entrypoints extra restart` is what this enables
+
+# --------------------------------------------------------------- apply:
+# `apply:` is the only way to push task keywords *down* onto the tasks the role brings in.
+# Live-verified: with `tags: [outer]` alone and `--tags outer`, exactly one task runs —
+# the include itself — and nothing inside the role does. Adding `apply: {tags: [outer]}`
+# runs all three. This is what the module docs mean by "tags ... are not automatically
+# inherited by the include tasks, see apply".
+
+- name: GOOD apply pushes tags onto every task the role contributes
+  ansible.builtin.include_role:
+    name: entrypoints
+    apply:
+      tags: [outer]
+      become: true
+  tags: [outer]
+
+- name: BAD apply contents load as a Block, so a task-only keyword is invalid there
+  ansible.builtin.include_role:
+    name: entrypoints
+    apply:
+      retries: 3 # blocks do not retry — an error --syntax-check never reaches
+
+- name: BAD apply is include-only; imports inherit directly
+  ansible.builtin.import_role:
+    name: entrypoints
+    apply:
+      tags: [outer]
+
+# --------------------------------------------------------------- the runtime-only args
+# Nothing static to resolve in these, but they are in the closed set, so writing one must
+# not be reported. The pinning matters: a stricter set would make each of these a false
+# `Invalid options` error on a working play.
+
+- name: GOOD public controls whether the role's vars leak to later tasks
+  ansible.builtin.include_role:
+    name: entrypoints
+    public: true
+
+- name: GOOD allow_duplicates lets the same role run twice in one play
+  ansible.builtin.include_role:
+    name: entrypoints
+    allow_duplicates: false
+
+- name: GOOD rolespec_validate toggles the meta/argument_specs check
+  ansible.builtin.include_role:
+    name: entrypoints
+    rolespec_validate: false
+
+- name: GOOD rescuable lets an enclosing rescue catch a role load error (2.21)
+  ansible.builtin.include_role:
+    name: entrypoints
+    rescuable: false
+
+- name: BAD rescuable is include-only, like apply
+  ansible.builtin.import_role:
+    name: entrypoints
+    rescuable: true
+
+- name: BAD an arg outside the closed set of 11
+  ansible.builtin.include_role:
+    name: entrypoints
+    frobnicate: yes
