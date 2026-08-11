@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| partly done | task | P1  | M    | T-106 | T-107      |
+| partly done | task | P1  | M    | T-106 | T-107, T-162, T-163 |
 
 ## Problem
 
