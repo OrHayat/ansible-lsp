@@ -43,6 +43,10 @@ pub const MALFORMED_TASK_ENTRY_RULE_ID: &str = "malformed-task-entry";
 /// names and takes its own id rather than claiming to be a verbatim replication.
 pub const RESERVED_TAG_RULE_ID: &str = "reserved-tag-name";
 
+/// T-165, and ours: `meta:` is short-circuited in the strategy before any loop is expanded,
+/// so a `loop:`/`with_*` beside it runs zero times and Ansible says nothing.
+pub const DEAD_META_LOOP_RULE_ID: &str = "dead-loop-on-meta";
+
 /// Row 30. Ours: every shape it covers crashes ansible with "this is probably a bug", which
 /// tells the author nothing. See `upstream/ansible-tags-member-types.md`.
 pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
@@ -395,6 +399,39 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
         return;
     }
     loop_on_import(node, out);
+    meta_loop(node, out);
+}
+
+/// T-165, ours: a `loop:` on `meta:` is discarded, silently.
+///
+/// Every meta action is handled in the strategy (`strategy/__init__.py:848`) ahead of any
+/// loop expansion, so the discard is not per-subaction. Measured on 2.21.2 — `noop`,
+/// `clear_host_errors` and `flush_handlers` all produce zero iterations where the same loop
+/// on a `debug:` produces three, and the `with_*` spelling behaves identically.
+///
+/// The docs hedge (`bypass_task_loop: partial`, "Most of the subactions ignore the task
+/// loop"), but the source has no exception: `_get_meta` reads `_raw_params` directly with
+/// the comment "meta currently does not support being templated, so we can cheat"
+/// (`task.py:237-243`), so the subaction name cannot be `{{ item }}`, and `meta` takes no
+/// other args. There is nothing on such a task a loop could vary.
+///
+/// Warning, not an error: the play loads and runs. The message says the task runs *once*
+/// rather than that the key is "unused" — the author's model is one run per item, and the
+/// truth is one run total.
+fn meta_loop(node: &Node, out: &mut Vec<Problem>) {
+    if node.get("meta").is_none() {
+        return;
+    }
+    let Some(span) = live_loop(node) else { return };
+    out.push(Problem {
+        span,
+        tier: Tier::Warning,
+        message: "`meta:` is handled before any loop is expanded, so this loop runs zero \
+                  times — the task still runs exactly once. Ansible reports nothing. Delete \
+                  the loop, or move what you meant to repeat into a task of its own."
+            .into(),
+        rule: DEAD_META_LOOP_RULE_ID,
+    });
 }
 
 /// Row 7. `_validate_rescue` and `_validate_always` are the same function
@@ -2076,6 +2113,35 @@ mod tests {
             check("- hosts: web\n  tasks:\n    - debug:\n      loop_control: nonsense\n"),
             [LOOP_CONTROL_SHAPE]
         );
+    }
+
+    /// T-165: a loop on `meta:` runs zero times and Ansible says nothing. Measured on
+    /// 2.21.2 across three subactions and both loop spellings — the same loop on a `debug:`
+    /// produces three iterations, `meta:` produces none.
+    #[test]
+    fn a_loop_on_meta_warns_that_it_runs_zero_times() {
+        let each = |src: &str| {
+            let nodes = Document::new(src.to_string()).parse().unwrap();
+            problems(&nodes, src)
+        };
+        for action in ["noop", "clear_host_errors", "flush_handlers", "end_batch"] {
+            for loop_key in ["loop: [a, b]", "with_items: [a, b]"] {
+                let src =
+                    format!("- hosts: web\n  tasks:\n    - meta: {action}\n      {loop_key}\n");
+                let got = each(&src);
+                assert_eq!(got.len(), 1, "{src}");
+                assert_eq!(got[0].tier, Tier::Warning);
+                assert_eq!(got[0].rule, DEAD_META_LOOP_RULE_ID);
+                assert!(got[0].message.contains("runs zero times"), "{}", got[0].message);
+                // Anchored on the loop key, which is the line to delete.
+                assert!(src[got[0].span.start..].starts_with(loop_key.split(':').next().unwrap()));
+            }
+        }
+        // A meta with no loop, and a loop on anything else, stay silent.
+        assert!(each("- hosts: web\n  tasks:\n    - meta: noop\n").is_empty());
+        assert!(each("- hosts: web\n  tasks:\n    - debug:\n      loop: [a]\n").is_empty());
+        // A null loop is not a live one — same rule the other loop checks use.
+        assert!(each("- hosts: web\n  tasks:\n    - meta: noop\n      loop:\n").is_empty());
     }
 
     /// T-155: a well-formed `loop_control:` with no loop to control. Ansible runs it clean,

@@ -42,7 +42,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [x] T-155 — loop_control with no loop is dead config, and ansible never says so
 - [ ] T-157 — A block or import_tasks in handlers: makes the handler's name unnotifiable
 - [ ] T-164 — Role params in meta/main.yml dependencies get no diagnostic
-- [ ] T-165 — A loop on meta: is silently discarded
+- [x] T-165 — A loop on meta: is silently discarded
 
 ## Done when
 

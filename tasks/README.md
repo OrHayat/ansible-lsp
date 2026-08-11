@@ -157,7 +157,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
-| T-165 | [A loop on meta: is silently discarded](open/T-165-a-loop-on-meta-is-silently-discarded.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -275,6 +274,7 @@ T-021 is now unblocked on that side.
 | T-155 | [loop_control with no loop is dead config, and ansible never says so](closed/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | done     |
 | T-100 | [Unknown key in a roles: entry silently becomes a variable](closed/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | done     |
 | T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](closed/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | done     |
+| T-165 | [A loop on meta: is silently discarded](closed/T-165-a-loop-on-meta-is-silently-discarded.md) | done     |
 
 ## Settled — don't re-derive these
 

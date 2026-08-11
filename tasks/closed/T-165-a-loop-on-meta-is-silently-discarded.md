@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-099 | —          |
+| done   | task | P2       | S    | T-099 | —          |
 
 ## Problem
 
@@ -60,9 +60,12 @@ mental model is that the task runs once per item, and the truth is that it runs 
 
 ## Done when
 
-- [ ] `meta: noop` with a `loop:` warns, naming that the task runs once regardless
-- [ ] the `with_*` spellings warn identically
-- [ ] a `meta:` with no loop, and a loop on any non-`meta` action, stay silent
-- [ ] behaviour confirmed against a second subaction, so the rule is not pinned on `noop`
-- [ ] its own rule id, `# noqa`-suppressible per T-010, WARNING severity
-- [ ] a demo fixture carries the flagged and unflagged forms
+- [x] `meta: noop` with a `loop:` warns, naming that the task runs once regardless
+- [x] the `with_*` spellings warn identically
+- [x] a `meta:` with no loop, and a loop on any non-`meta` action, stay silent
+- [x] behaviour confirmed against a second subaction, so the rule is not pinned on `noop`
+      — `clear_host_errors` and `flush_handlers` both give zero iterations where the same
+      loop on a `debug:` gives three
+- [x] its own rule id (`dead-loop-on-meta`), `# noqa`-suppressible per T-010, WARNING
+- [x] a demo fixture carries the flagged and unflagged forms — `demo/placement.yml`,
+      beside `dead-loop-control`, which is the same family of discarded-value warning

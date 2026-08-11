@@ -196,6 +196,29 @@
         - debug: { msg: x } # not ours — one fault, one rule.
       loop_control: { loop_var: it }
 
+# T-165, the same family: a loop whose value is discarded while the play runs clean. Every
+# `meta:` action is handled in the strategy before any loop is expanded, so the task runs
+# once no matter how many items you give it. Measured across `noop`, `clear_host_errors` and
+# `flush_handlers` — three subactions, zero iterations each, where the same loop on a
+# `debug:` produces three.
+- name: a loop on meta is discarded
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - meta: noop
+      loop: [a, b, c] # WARN (dead-loop-on-meta): runs zero times, the task still runs once
+
+    - meta: clear_host_errors
+      with_items: [a, b] # WARN: the with_* spelling is no different
+
+    - meta: flush_handlers
+      loop: [a, b] # noqa: dead-loop-on-meta   SILENCED
+
+    - meta: noop # GOOD: no loop, nothing to discard
+
+    - debug: { msg: "{{ item }}" } # GOOD: a real module, so the loop does what it says
+      loop: [a, b, c]
+
 # Row 7. `Block.is_block` is any of `block`/`rescue`/`always` (`block.py:91-98`), so a mapping
 # with a `rescue:` and no `block:` is a malformed BLOCK, not a task calling a module named
 # `rescue`. The guard that rejects it is `if value and not self.block` (`block.py:138-142`) —
