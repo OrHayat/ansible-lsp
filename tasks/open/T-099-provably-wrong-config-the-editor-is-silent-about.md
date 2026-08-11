@@ -32,7 +32,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-028 — `notify:` -> handler resolution
 - [ ] T-087 — Invalid vars_files entry: provably fatal at runtime, silent in the editor
 - [ ] T-089 — Indexed access into static list vars: no element support, out-of-bounds unflagged
-- [ ] T-100 — Unknown key in a roles: entry silently becomes a variable
+- [x] T-100 — Unknown key in a roles: entry silently becomes a variable
 - [x] T-101 — Dynamic includes reject keywords imports accept
 - [x] T-102 — Duplicate YAML mapping key
 - [ ] T-103 — A static field carrying a template is used literally
@@ -41,6 +41,8 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-136 — A var an import_playbook needs is defined by a source that cannot reach it
 - [x] T-155 — loop_control with no loop is dead config, and ansible never says so
 - [ ] T-157 — A block or import_tasks in handlers: makes the handler's name unnotifiable
+- [ ] T-164 — Role params in meta/main.yml dependencies get no diagnostic
+- [ ] T-165 — A loop on meta: is silently discarded
 
 ## Done when
 

@@ -629,7 +629,7 @@ impl Backend {
             a.ctx.config.invalid_task_attribute_failed,
         )
         .into_iter()
-        .filter(|p| !a.doc.is_suppressed(p.span.start, attributes::RULE_ID))
+        .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
         .map(|p| Diagnostic {
             range: range_of(p.span),
             severity: Some(match p.tier {
@@ -637,7 +637,7 @@ impl Backend {
                 attributes::Tier::Warning => DiagnosticSeverity::WARNING,
             }),
             source: Some("ansible-lsp".into()),
-            code: Some(NumberOrString::String(attributes::RULE_ID.into())),
+            code: Some(NumberOrString::String(p.rule.into())),
             message: p.message,
             ..Default::default()
         })
@@ -1251,6 +1251,8 @@ fn source_label(s: vars::VarSource) -> &'static str {
         GroupVars => "group_vars",
         HostVars => "host_vars",
         IncludeVars => "include_vars",
+        RoleParams => "role param",
+        RoleEntryVars => "roles: entry vars",
     }
 }
 
@@ -1261,7 +1263,8 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
-        | GroupVarsAll | GroupVars | HostVars | IncludeVars => {
+        | GroupVarsAll | GroupVars | HostVars | IncludeVars | RoleParams
+        | RoleEntryVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
                 return None;
@@ -2480,7 +2483,10 @@ mod tests {
             // deliberate case — `loop_control:` on a Block — to show the boundary between
             // this rule and T-155's; its exact expected set is asserted by
             // `the_dead_loop_control_warning_is_its_own_rule`, so it is covered, not exempt.
-            const DEMOS: [&str; 2] = ["invalid_attributes.yml", "placement.yml"];
+            // `role_include_params.yml` is the same arrangement for the closed arg set:
+            // `the_role_include_params_demo_reports_exactly_its_bad_rows` pins its four.
+            const DEMOS: [&str; 3] =
+                ["invalid_attributes.yml", "placement.yml", "role_include_params.yml"];
             if path.file_name().is_some_and(|n| DEMOS.iter().any(|d| n == *d)) {
                 continue;
             }
@@ -2925,6 +2931,83 @@ mod tests {
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
+    }
+
+    /// T-100's false-positive gate, and the one that matters most for this rule: role
+    /// params are the documented way to pass values into a role, so every `roles:` entry
+    /// in the demo that is doing something legitimate must stay silent.
+    #[test]
+    fn every_other_demo_file_is_free_of_role_param_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "role_params.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == ansible_core::attributes::ROLE_PARAM_RULE_ID)
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-100: the demo fixture's BAD rows, and only those. Pins which keys the rule owns
+    /// — the GOOD and SILENCED rows in the same file are the other half of the assertion.
+    #[test]
+    fn the_role_params_demo_reports_exactly_its_bad_rows() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo")
+            .canonicalize()
+            .unwrap()
+            .join("role_params.yml");
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let msgs: Vec<String> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s))
+                    if s == ansible_core::attributes::ROLE_PARAM_RULE_ID)
+            })
+            .map(|d| d.message)
+            .collect();
+        let keys: Vec<&str> = msgs.iter().map(|m| m.split('\'').nth(1).unwrap()).collect();
+        assert_eq!(keys, ["tasks_from", "becom_user", "register", "gather_facts"], "{msgs:?}");
+    }
+
+    /// T-100 per T-010: the rule fires on code ansible-core accepts, so a role that really
+    /// does take a keyword-named param must be able to say so.
+    #[test]
+    fn noqa_suppresses_role_param_not_keyword() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let flagged = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == ansible_core::attributes::ROLE_PARAM_RULE_ID)
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  roles:\n    - role: r\n      tasks_from: x.yml\n";
+        assert_eq!(flagged(noisy), 1);
+        let silenced = "- hosts: web\n  roles:\n    - role: r\n      \
+                        tasks_from: x.yml # noqa: role-param-not-keyword\n";
+        assert_eq!(flagged(silenced), 0);
+        // The replication rules keep their own id — silencing one must not silence both.
+        let wrong_id = "- hosts: web\n  roles:\n    - role: r\n      \
+                        tasks_from: x.yml # noqa: invalid-attribute\n";
+        assert_eq!(flagged(wrong_id), 1);
     }
 
     /// T-110: `# noqa: invalid-placement` on the offending line silences the rule.
@@ -3802,3 +3885,8 @@ mod tests {
         }
     }
 }
+
+
+
+
+

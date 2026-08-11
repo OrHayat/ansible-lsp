@@ -554,6 +554,16 @@ mod tests {
         assert_eq!(r[1].value, "podman");
     }
 
+    /// T-100: the third spelling. `meta_dependencies` already read `name:` as a role name;
+    /// a play's `roles:` did not, so this reference did not exist and the name was not
+    /// clickable. Live-verified that ansible looks it up.
+    #[test]
+    fn a_roles_entry_named_with_name_is_a_role_reference() {
+        let r = of("- hosts: all\n  roles:\n    - name: podman\n", ReferenceKind::Role);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].value, "podman");
+    }
+
     /// The prototype scans ±6 lines for a sibling `name:`, so the flow form — where
     /// everything is on one line — silently fails.
     #[test]

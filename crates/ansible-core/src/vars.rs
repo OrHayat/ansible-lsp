@@ -54,6 +54,13 @@ pub enum VarSource {
     HostVars,
     /// A key loaded by an `include_vars:` task (file or dir form).
     IncludeVars,
+    /// A param on a play's `roles:` entry — any key the entry wrote that
+    /// `RoleInclude.fattributes` does not claim (T-100).
+    RoleParams,
+    /// A key under a `vars:` written on a play's `roles:` entry. Distinct from
+    /// [`VarSource::RoleParams`] because it is the documented spelling and because it is
+    /// combined *after* the params (`role/__init__.py:552-558`), so it wins a collision.
+    RoleEntryVars,
 }
 
 impl VarSource {
@@ -73,6 +80,15 @@ impl VarSource {
             VarSource::TaskVars => 17,
             VarSource::IncludeVars => 18,
             VarSource::SetFact | VarSource::Register => 19,
+            VarSource::RoleParams => 20,
+            // Level 15 — the same bucket as `vars/main.yml`, which it wins by being
+            // combined after it inside one `get_vars()` (`role/__init__.py:549-558`).
+            // Measured, and the reading order in that function is misleading: `self.vars`
+            // is combined *last* there, but role params still beat it, because params are
+            // a separate published level (20) applied outside the bucket. So entry vars
+            // beat `vars/main.yml` and lose to a param of the same name — verified both
+            // ways round, in both write orders.
+            VarSource::RoleEntryVars => 15,
         }
     }
 
@@ -300,6 +316,22 @@ pub fn index(tree: &Ast) -> VarIndex {
 fn play(p: &Play, idx: &mut VarIndex) {
     for v in &p.vars {
         idx.push(v.name.clone(), VarSource::PlayVars, v.span);
+    }
+    // Role params. Their real scope is the role, not the play — measured: a param is not
+    // visible to the play's own `tasks:` after the role runs. Indexing them play-wide is
+    // therefore an over-approximation, in the direction this index is allowed to err:
+    // it can only make `undefined_uses` quieter, never produce a false "undefined". The
+    // reverse direction — a role file seeing the params its callers pass — is the useful
+    // one and needs the invocation chain (T-020).
+    // Params first, then the entry's `vars:` — the order ansible combines them in, so a
+    // name written both ways lands with the winner last.
+    for r in &p.roles {
+        for param in &r.params {
+            idx.push(param.name.clone(), VarSource::RoleParams, param.value_span);
+        }
+        for v in &r.vars {
+            idx.push(v.name.clone(), VarSource::RoleEntryVars, v.span);
+        }
     }
     for s in p
         .pre_tasks
@@ -1255,6 +1287,77 @@ mod tests {
         assert!(i.get("cacheable").is_empty());
     }
 
+    /// T-100: a role param is a variable definition, at precedence 20. Live-verified —
+    /// the role read `{{ tasks_from }}` and got `alternate.yml`.
+    #[test]
+    fn role_params_are_indexed_as_variables() {
+        let src = concat!(
+            "- hosts: all\n",
+            "  roles:\n",
+            "    - role: web\n",
+            "      tasks_from: alternate.yml\n",
+            "      port_count: 4\n",
+        );
+        let i = index(&ast::build(&Document::new(src.to_string()).parse().unwrap()));
+        assert_eq!(i.get("port_count").first().map(|d| d.source), Some(VarSource::RoleParams));
+        // The span is the value, so go-to-definition lands where the other sources land.
+        assert_eq!(i.get("tasks_from")[0].span.slice(src), "alternate.yml");
+        assert_eq!(VarSource::RoleParams.precedence(), 20);
+        // A keyword on the entry is a setting, not a variable.
+        assert!(i.get("role").is_empty());
+    }
+
+    /// Both ways of passing a value on one entry, and which wins. Live-verified on
+    /// 2.21.2: with `vars: {myport: 90}` and `myport: 80` on the same entry the role sees
+    /// **80** — the param — in either write order. Reading `get_vars()` alone suggests the
+    /// opposite (`self.vars` is combined last), which is why this is measured.
+    #[test]
+    fn a_role_param_outranks_the_entrys_vars_for_the_same_name() {
+        let winner = |src: &str| {
+            let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
+            let i = index(&ast::build(&nodes));
+            i.get("myport").iter().map(|d| d.source).max_by_key(|s| s.precedence())
+        };
+        for src in [
+            "- hosts: all\n  roles:\n    - role: web\n      vars: {myport: 90}\n      myport: 80\n",
+            "- hosts: all\n  roles:\n    - role: web\n      myport: 80\n      vars: {myport: 90}\n",
+        ] {
+            assert_eq!(winner(src), Some(VarSource::RoleParams), "write order must not decide");
+        }
+    }
+
+    /// The trap in the obvious example: `port` is one of the 28 keys
+    /// `RoleInclude.fattributes` claims, so `port: 80` on an entry is the *connection
+    /// port* and never a variable at all. Live-verified — the role sees `port` undefined
+    /// unless a `vars:` supplies it. Only a name outside the legal set is a param.
+    #[test]
+    fn a_keyword_named_entry_key_is_not_a_variable() {
+        let src = "- hosts: all\n  roles:\n    - role: web\n      vars: {port: 90}\n      port: 80\n";
+        let i = index(&ast::build(&crate::parse::Document::new(src.to_string()).parse().unwrap()));
+        let sources: Vec<_> = i.get("port").iter().map(|d| d.source).collect();
+        assert_eq!(sources, [VarSource::RoleEntryVars], "port: 80 is a keyword, not a param");
+    }
+
+    /// Entry `vars:` beat the role's own `vars/main.yml` — same bucket, combined after it.
+    #[test]
+    fn entry_vars_outrank_the_roles_vars_main() {
+        assert!(
+            VarSource::RoleEntryVars.precedence() > VarSource::RoleDefaults.precedence()
+                && VarSource::RoleEntryVars.precedence() >= VarSource::RoleVars.precedence()
+                && VarSource::RoleEntryVars.precedence() < VarSource::RoleParams.precedence()
+        );
+    }
+
+    /// The ordinary spelling, which is the one that was missing: `vars:` on a `roles:`
+    /// entry is a legal keyword, so it never lands in `params` and needs its own read.
+    #[test]
+    fn entry_vars_are_indexed() {
+        let src = "- hosts: all\n  roles:\n    - role: web\n      vars: {port: 80}\n";
+        let i = index(&ast::build(&crate::parse::Document::new(src.to_string()).parse().unwrap()));
+        assert_eq!(i.get("port").first().map(|d| d.source), Some(VarSource::RoleEntryVars));
+        assert_eq!(i.get("port")[0].span.slice(src), "80");
+    }
+
     #[test]
     fn block_vars_and_nested_tasks() {
         let i = idx(concat!(
@@ -1317,7 +1420,7 @@ mod tests {
             "        msg: \"{{ greeting }} world\"\n",
             "      when: enabled | default(false)\n",
         );
-        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
         let u = uses(&nodes);
         let names: Vec<&str> = u.iter().map(|x| x.name.as_str()).collect();
         assert!(names.contains(&"greeting"), "template var: {names:?}");
@@ -1347,7 +1450,7 @@ mod tests {
             "      when: inventory_hostname == 'web01'\n",
             "    - debug: { msg: \"{{ y }}\" }\n",
         );
-        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
         let u = uses(&nodes);
         let x = u.iter().find(|u| u.name == "x").unwrap();
         assert_eq!(x.guard, vec!["inventory_hostname == 'web01'".to_string()]);
@@ -1775,3 +1878,7 @@ mod parallel_spike {
         }
     }
 }
+
+
+
+

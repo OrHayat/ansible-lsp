@@ -42,6 +42,7 @@ Sequencing:
 - [ ] T-035 — Evaluate `when:` under a supplied run profile
 - [x] T-078 — `when:` explanation and module provenance fight over the module-name token
 - [ ] T-122 — changed_when, failed_when and until are the same expression language
+- [ ] T-166 — when-import-var-mutated covers import_playbook only, and four more constructs flip the same way
 
 ## Done when
 

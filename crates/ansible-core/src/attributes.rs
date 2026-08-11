@@ -2,12 +2,20 @@
 //! `'%s' is not a valid attribute for a %s` (`base.py:211-220`) from the
 //! [`crate::ast::UnknownKey`]s that [`crate::ast::build`] classified.
 
-use crate::ast::{Ast, PlayItem, Stmt, Task, UnknownKey};
+use crate::ast::{Ast, PlayItem, RoleUse, Stmt, Task, UnknownKey};
 use crate::keywords::{self, KeyContext};
 use crate::parse::{Node, Span};
 
 /// Rule id, for `# noqa: invalid-attribute` and for display.
 pub const RULE_ID: &str = "invalid-attribute";
+
+/// T-100, and ours alone: on a `roles:` entry an unrecognised key is not an error but a
+/// role param — a variable — and ansible-core is silent by design, at load *and* at run
+/// time (`definition.py:207-222`, `role/__init__.py:552-555` calls them "inline variables
+/// in role invocation"). The identical typo on a task is fatal. Separate id because this
+/// replicates no upstream message and, unlike everything else in this module, fires on
+/// code that ansible-core accepts.
+pub const ROLE_PARAM_RULE_ID: &str = "role-param-not-keyword";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -21,6 +29,9 @@ pub struct Problem {
     pub span: Span,
     pub tier: Tier,
     pub message: String,
+    /// Which rule fired — [`RULE_ID`] for everything that replicates ansible-core,
+    /// [`ROLE_PARAM_RULE_ID`] for the one that speaks where ansible-core is silent.
+    pub rule: &'static str,
 }
 
 /// Every unknown-key problem in the file. `invalid_task_attribute_failed` is the config
@@ -36,6 +47,9 @@ pub fn problems(ast: &Ast, invalid_task_attribute_failed: bool) -> Vec<Problem> 
             for item in items {
                 if let PlayItem::Play(p) = item {
                     out.extend(p.unknown_keys.iter().map(|u| fatal(u, "Play")));
+                    for r in &p.roles {
+                        role_param_problems(r, &mut out);
+                    }
                     for s in p.pre_tasks.iter().chain(&p.tasks).chain(&p.post_tasks) {
                         stmt(s, false, invalid_task_attribute_failed, &mut out);
                     }
@@ -80,11 +94,56 @@ fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
                         span: u.key_span,
                         tier: Tier::Warning,
                         message: format!("Ignoring invalid attribute: {}", u.key),
+                        rule: RULE_ID,
                     });
                 }
             }
         }
     }
+}
+
+/// T-100: role params that name a keyword. Every param here is a legal, silent variable
+/// definition, so most must stay quiet — passing parameters this way is the documented
+/// idiom and a bare `port_count: 4` is not a mistake. Only two shapes are reported, both
+/// on the same evidence: the author wrote something that *is* a keyword somewhere in a
+/// playbook, and here it is a variable instead.
+fn role_param_problems(r: &RoleUse, out: &mut Vec<Problem>) {
+    for p in &r.params {
+        let Some(why) = param_suspicion(&p.name) else { continue };
+        out.push(Problem {
+            span: p.key_span,
+            tier: Tier::Warning,
+            message: format!(
+                "'{}' is not a keyword on a roles: entry — it defines a variable for role \
+                 '{}' instead ({why})",
+                p.name, r.name
+            ),
+            rule: ROLE_PARAM_RULE_ID,
+        });
+    }
+}
+
+/// Why a role param is worth a word, or `None` to stay silent. Both arms are derived from
+/// the keyword tables rather than a hand-written list, so a keyword upstream adds is
+/// covered without an edit here.
+fn param_suspicion(key: &str) -> Option<String> {
+    // A one-edit neighbour is the stronger signal, and it names the repair, so it wins
+    // when a key is both (`becom_user` is only a near-miss; `tasks_from` is only a
+    // keyword elsewhere).
+    if let Some(s) = suggestion(key, KeyContext::RoleDefinition) {
+        return Some(format!("did you mean '{s}'?"));
+    }
+    // The `roles:` legal set is already excluded upstream of this call, so anything left
+    // that a play, a task or an `include_role` would accept was written in the wrong
+    // place — most often `tasks_from:`, which does select an entry point on
+    // `include_role:` and does nothing at all here.
+    if keywords::ROLE_INCLUDE_KEYS.contains(&key) {
+        return Some(format!("'{key}' selects this only on include_role:"));
+    }
+    if keywords::legal_key(KeyContext::Task, key) || keywords::legal_key(KeyContext::Play, key) {
+        return Some(format!("'{key}' is a keyword on a task or play, not here"));
+    }
+    None
 }
 
 /// The include/import actions carry closed *args* sets on top of the keyword rules
@@ -115,6 +174,7 @@ fn include_args_problems(t: &Task, out: &mut Vec<Problem>) {
                 span: k.span(),
                 tier: Tier::Error,
                 message: format!("Invalid options for {}: {}", action.name, key),
+                rule: RULE_ID,
             });
         };
         if !valid.contains(&key) {
@@ -195,6 +255,7 @@ fn fatal(u: &UnknownKey, class: &str) -> Problem {
         span: u.key_span,
         tier: Tier::Error,
         message: format!("'{}' is not a valid attribute for a {}{}", u.key, class, hint),
+        rule: RULE_ID,
     }
 }
 
@@ -396,6 +457,81 @@ mod tests {
         );
         // The free-form spelling has no written arg keys — nothing to check.
         assert!(check("- hosts: web\n  tasks:\n    - include_tasks: f.yml\n", true).is_empty());
+    }
+
+    /// T-100, the ticket's own repro. Both lines read as settings and are variables;
+    /// ansible-core reports neither, at load or at run time.
+    #[test]
+    fn keyword_shaped_role_params_warn() {
+        let got = check(
+            "- hosts: web\n  roles:\n    - role: web\n      tasks_from: alternate.yml\n      \
+             becom_user: root\n",
+            true,
+        );
+        assert_eq!(
+            got,
+            [
+                (
+                    Tier::Warning,
+                    "'tasks_from' is not a keyword on a roles: entry — it defines a variable \
+                     for role 'web' instead ('tasks_from' selects this only on include_role:)"
+                        .into()
+                ),
+                (
+                    Tier::Warning,
+                    "'becom_user' is not a keyword on a roles: entry — it defines a variable \
+                     for role 'web' instead (did you mean 'become_user'?)"
+                        .into()
+                ),
+            ]
+        );
+    }
+
+    /// The other half of the trade: passing parameters this way is the documented idiom
+    /// (`role/__init__.py:552-555`), so a param that names no keyword must stay silent —
+    /// this rule is worthless the moment it fires on `port_count: 4`.
+    #[test]
+    fn ordinary_role_params_stay_silent() {
+        let got = check(
+            "- hosts: web\n  roles:\n    - role: web\n      port_count: 4\n      \
+             lustre_mount: /mnt\n      state: present\n",
+            true,
+        );
+        assert!(got.is_empty(), "found: {got:?}");
+    }
+
+    /// Every key of `RoleInclude.fattributes` is a real setting here, not a param — a
+    /// warning on any of them would be a false positive on code that works.
+    #[test]
+    fn role_definition_keywords_are_not_params() {
+        let got = check(
+            "- hosts: web\n  roles:\n    - role: web\n      when: x\n      tags: [t]\n      \
+             become: true\n      become_user: root\n      vars: {a: 1}\n      \
+             delegate_to: h\n      collections: [c.d]\n      name: label\n",
+            true,
+        );
+        assert!(got.is_empty(), "found: {got:?}");
+    }
+
+    /// The bare-string form has no mapping to split, so it can carry no params.
+    #[test]
+    fn a_bare_string_role_has_no_params() {
+        assert!(check("- hosts: web\n  roles:\n    - web\n", true).is_empty());
+    }
+
+    /// The rule takes its own id: it fires on code ansible-core accepts, so it must be
+    /// suppressible and toggleable without silencing the replication rules.
+    #[test]
+    fn role_params_carry_their_own_rule_id() {
+        let nodes = Document::new(
+            "- hosts: web\n  roles:\n    - role: web\n      tasks_from: x\n      nmae: y\n"
+                .to_string(),
+        )
+        .parse()
+        .expect("valid yaml");
+        let got = problems(&ast::build(&nodes), true);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got.iter().all(|p| p.rule == ROLE_PARAM_RULE_ID), "{got:?}");
     }
 
     #[test]

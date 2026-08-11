@@ -92,7 +92,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
-| T-100 | [Unknown key in a roles: entry silently becomes a variable](open/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | S    | —          |
 | T-103 | [A static field carrying a template is used literally](open/T-103-a-static-field-carrying-a-template-is-used-literally.md) | S    | —          |
 | T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
@@ -103,6 +102,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
+| T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](open/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -123,7 +123,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-046 | [Harden the module/args split](open/T-046-module-args-split.md) | M | T-044 |
 | T-057 | [Module `DOCUMENTATION`/`RETURN` schema](open/T-057-module-doc-schema.md) | L | T-046 |
 | T-061 | [`undeclared-var`: the playbook's required `-e` inputs](open/T-061-undeclared-var-contract.md) | S | T-062 |
-| T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M | — |
 | T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | ~~T-076~~ |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
@@ -157,6 +156,9 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
+| T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
+| T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
+| T-165 | [A loop on meta: is silently discarded](open/T-165-a-loop-on-meta-is-silently-discarded.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -271,6 +273,7 @@ T-021 is now unblocked on that side.
 | T-154 | **bug** · [Vaulted vars files are invisible to the index, so var-undefined lies](closed/T-154-vaulted-vars-files-are-invisible-to-the-index-so-var-undefin.md) | **rejected** |
 | T-101 | [Dynamic includes reject keywords imports accept](closed/T-101-dynamic-includes-reject-keywords-imports-accept.md) | done     |
 | T-155 | [loop_control with no loop is dead config, and ansible never says so](closed/T-155-loop-control-with-no-loop-is-dead-config-and-ansible-never-s.md) | done     |
+| T-100 | [Unknown key in a roles: entry silently becomes a variable](closed/T-100-unknown-key-in-a-roles-entry-silently-becomes-a-variable.md) | done     |
 
 ## Settled — don't re-derive these
 

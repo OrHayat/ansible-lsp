@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | S    | T-099 | —          |
+| done   | task | P1       | S    | T-099 | —          |
 
 ## Problem
 
@@ -41,9 +41,26 @@ Deliberately *not* every unknown key: passing real parameters this way is the do
 idiom, so a bare unknown name is a false positive. The signal is a key that names something
 Ansible has a keyword for.
 
+## What the source read turned up
+
+`RoleInclude.fattributes` is 28 keys, identical on 2.21.2 and 2.22.0.dev0, and our existing
+mixin sets already reproduce it exactly — `KeyContext::RoleDefinition` needed only `role` of
+its own. Three things measured on 2.21.2 that the approach above did not anticipate:
+
+- **`name:` is an accepted alias for `role:`** — `_load_role_name` is
+  `ds.get('role', ds.get('name'))` (`definition.py:118`), and `- name: definitely_not_a_role`
+  fails with `The role 'definitely_not_a_role' was not found in: …`, so it is looked up, not
+  a label. `build_roles` read only `role:`, so that spelling produced **no reference at all**
+  — no go-to-definition, no `missing-role`. Fixed here; `role:` wins when both are written.
+- **Role params really are variables** — the role read `{{ tasks_from }}` and got
+  `alternate.yml`. They are now indexed as `VarSource::RoleParams` at precedence 20.
+- **They do not leak past the role** — a param is invisible to the play's own `tasks:`
+  afterwards. Indexing them play-wide is therefore an over-approximation, in the safe
+  direction. The useful direction, a role file seeing what its callers pass, needs T-020.
+
 ## Done when
 
-- [ ] `tasks_from:` on a `roles:` entry warns, and says it defines a variable instead
-- [ ] a genuine role parameter does not warn
-- [ ] the near-miss list is derived from the keyword tables, not hand-typed
-- [ ] `# noqa` suppression works, per T-010
+- [x] `tasks_from:` on a `roles:` entry warns, and says it defines a variable instead
+- [x] a genuine role parameter does not warn
+- [x] the near-miss list is derived from the keyword tables, not hand-typed
+- [x] `# noqa` suppression works, per T-010

@@ -10,6 +10,7 @@ mic key on this Mac).
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
 | `tasks/conditions.yml` | condition analysis — every verdict and every rule, across all five bare-expression keywords (`when:`, `failed_when:`, `changed_when:`, `until:`, `assert: that:`), with severities that follow the detected ansible-core version |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
+| `role_params.yml` | a key on a `roles:` entry that ansible turns into a variable instead of a setting — including the `name:`-as-role-name spelling (T-100) |
 | `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |

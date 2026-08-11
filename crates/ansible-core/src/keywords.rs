@@ -121,6 +121,14 @@ const TASK_OWN: &[&str] = &[
 /// `Handler` = Task + `listen` (`handler.py:27`).
 const HANDLER_OWN: &[&str] = &["listen"];
 
+/// `RoleInclude` (`role/include.py:29`) = `RoleDefinition` (`role/definition.py:40`) +
+/// `Delegatable`, and `role` is its only own attribute. This is the set
+/// `_split_role_params` tests (`definition.py:207`): a key outside it is not rejected but
+/// silently becomes a role param — a *variable* — which is why T-100's rule is ours and
+/// not a replication. `name` is in here via `Base`, and doubles as the role name:
+/// `_load_role_name` reads `ds.get('role', ds.get('name'))` (`definition.py:118`).
+const ROLE_DEFINITION_OWN: &[&str] = &["role"];
+
 /// `RoleMetadata` (`metadata.py:38-41`); mixes in only `CollectionSearch`
 /// (`metadata.py:32`) — `when:` in `meta/main.yml` is fatal, `become:` parses fine.
 const ROLE_METADATA_OWN: &[&str] = &[
@@ -239,6 +247,9 @@ pub enum KeyContext {
     DynamicHandlerInclude,
     /// `meta/main.yml`.
     RoleMetadata,
+    /// One entry of a play's `roles:` list. Unlike every other context here, a key outside
+    /// this set is *not* an error — it becomes a role param (T-100).
+    RoleDefinition,
     /// The mapping under `loop_control:`.
     LoopControl,
 }
@@ -270,6 +281,10 @@ fn sets_of(ctx: KeyContext) -> (&'static [&'static [&'static str]], &'static [&'
         KeyContext::DynamicInclude => (&[DYNAMIC_INCLUDE], &[]),
         KeyContext::DynamicHandlerInclude => (&[DYNAMIC_INCLUDE, HANDLER_OWN], &[]),
         KeyContext::RoleMetadata => (&[BASE, COLLECTION_SEARCH, ROLE_METADATA_OWN], &[]),
+        KeyContext::RoleDefinition => (
+            &[BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, ROLE_DEFINITION_OWN],
+            &[],
+        ),
         KeyContext::LoopControl => (&[LOOP_CONTROL_KEYS], &[]),
     }
 }
@@ -365,6 +380,35 @@ mod tests {
         assert!(is_task_directive("local_action"));
     }
 
+    /// T-100. The oracle snapshot, verbatim from
+    /// `sorted(RoleInclude.fattributes)` on 2.21.2 (identical on 2.22.0.dev0). The whole
+    /// rule is "outside this set", so an extra or missing name here is a wrong diagnostic
+    /// on code that runs.
+    #[test]
+    fn role_definition_is_role_include_fattributes() {
+        const UPSTREAM: &[&str] = &[
+            "any_errors_fatal", "become", "become_exe", "become_flags", "become_method",
+            "become_user", "check_mode", "collections", "connection", "debugger",
+            "delegate_facts", "delegate_to", "diff", "environment", "ignore_errors",
+            "ignore_unreachable", "module_defaults", "name", "no_log", "port", "remote_user",
+            "role", "run_once", "tags", "throttle", "timeout", "vars", "when",
+        ];
+        let mut ours: Vec<_> = legal_keys(KeyContext::RoleDefinition).collect();
+        ours.sort_unstable();
+        ours.dedup();
+        assert_eq!(ours, UPSTREAM);
+    }
+
+    /// The keys that make T-100 worth having: legal on a task or an `include_role`, and
+    /// silently a variable here.
+    #[test]
+    fn task_and_include_role_keys_are_not_role_definition_keys() {
+        for k in ["tasks_from", "vars_from", "defaults_from", "apply", "public", "loop",
+                  "register", "notify", "gather_facts"] {
+            assert!(!legal_key(KeyContext::RoleDefinition, k), "{k} should be a role param");
+        }
+    }
+
     #[test]
     fn play_vs_task_scope() {
         assert!(is_play_directive("hosts"));
@@ -389,7 +433,7 @@ mod tests {
             let mut all: Vec<&str> = [
                 BASE, CONDITIONAL, TAGGABLE, COLLECTION_SEARCH, DELEGATABLE, NOTIFIABLE,
                 PLAY_OWN, BLOCK_OWN, TASK_OWN, HANDLER_OWN, ROLE_METADATA_OWN,
-                DYNAMIC_INCLUDE, LOOP_CONTROL_KEYS,
+                ROLE_DEFINITION_OWN, DYNAMIC_INCLUDE, LOOP_CONTROL_KEYS,
             ]
             .concat();
             all.extend(extra);
@@ -402,6 +446,7 @@ mod tests {
         assert_eq!(count(KeyContext::Task, &[]), 42);
         assert_eq!(count(KeyContext::Handler, &[]), 43);
         assert_eq!(count(KeyContext::RoleMetadata, &[]), 27);
+        assert_eq!(count(KeyContext::RoleDefinition, &[]), 28);
         assert_eq!(count(KeyContext::DynamicInclude, &[]), 16);
         assert_eq!(count(KeyContext::DynamicHandlerInclude, &[]), 17);
         assert_eq!(count(KeyContext::LoopControl, &[]), 7);

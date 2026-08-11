@@ -145,6 +145,26 @@ pub struct Action {
 pub struct RoleUse {
     pub name: String,
     pub span: Span,
+    /// Keys of the entry outside `RoleInclude.fattributes`, which ansible-core turns into
+    /// variables scoped to this role rather than rejecting (`definition.py:200-224`).
+    /// Every one of them is a real variable definition; whether any is *worth reporting*
+    /// is [`crate::attributes`]'s call, not this one's. Empty for the bare-string form.
+    pub params: Vec<RoleParam>,
+    /// The entry's own `vars:` mapping. A legal keyword, unlike [`RoleUse::params`], and
+    /// the *documented* way to pass values to a role — so it is the commoner of the two
+    /// by a wide margin. Combined after the params (`role/__init__.py:552-558`), so on a
+    /// name written both ways this one wins.
+    pub vars: Vec<VarBinding>,
+}
+
+/// A role param: one `key: value` of a `roles:` entry that named no keyword. Carries both
+/// spans because the two readers want different ones — the diagnostic underlines the key,
+/// the variable index jumps to the value.
+#[derive(Debug, Clone)]
+pub struct RoleParam {
+    pub name: String,
+    pub key_span: Span,
+    pub value_span: Span,
 }
 
 /// An Ansible-owned key on a play/block/task, with the spans of its key and value.
@@ -390,16 +410,50 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
             Node::Scalar { value, span } => Some(RoleUse {
                 name: value.clone(),
                 span: *span,
+                params: Vec::new(),
+                vars: Vec::new(),
             }),
-            // - role: myrole
-            Node::Mapping { .. } => match item.get("role") {
-                Some(Node::Scalar { value, span }) => Some(RoleUse {
-                    name: value.clone(),
-                    span: *span,
-                }),
-                _ => None,
-            },
+            // - role: myrole  /  - name: myrole
+            //
+            // `name:` is not a label here: `_load_role_name` is
+            // `ds.get('role', ds.get('name'))` (`definition.py:118`), so the entry loads
+            // the role either way and `role:` only wins when both are written. Reading
+            // just `role:` produced no reference at all for the `name:` spelling.
+            Node::Mapping { .. } => {
+                let named = item
+                    .get("role")
+                    .or_else(|| item.get("name"))
+                    .and_then(|n| match n {
+                        Node::Scalar { value, span } if !value.is_empty() => {
+                            Some((value.clone(), *span))
+                        }
+                        // No usable name is fatal upstream ("role definitions must contain
+                        // a role name") — no reference to make, and no rule owns it yet.
+                        _ => None,
+                    });
+                let (name, span) = named?;
+                Some(RoleUse { name, span, params: role_params_of(item), vars: vars_of(item) })
+            }
             _ => None,
+        })
+        .collect()
+}
+
+/// The keys of a `roles:` entry that `_split_role_params` would hand to the role as
+/// variables — everything `RoleInclude.fattributes` does not claim (`definition.py:207`).
+fn role_params_of(item: &Node) -> Vec<RoleParam> {
+    item.entries()
+        .iter()
+        .filter_map(|(k, v)| {
+            let key = k.as_str()?;
+            if keywords::legal_key(KeyContext::RoleDefinition, key) {
+                return None;
+            }
+            Some(RoleParam {
+                name: key.to_string(),
+                key_span: k.span(),
+                value_span: v.span(),
+            })
         })
         .collect()
 }
@@ -539,6 +593,75 @@ mod tests {
             panic!("expected a play");
         };
         p.vars_files.clone()
+    }
+
+    fn roles(src: &str) -> Vec<RoleUse> {
+        let Ast::Playbook(items) = ast(src) else {
+            panic!("expected a playbook");
+        };
+        let PlayItem::Play(p) = &items[0] else {
+            panic!("expected a play");
+        };
+        p.roles.clone()
+    }
+
+    /// T-100. Live-verified on 2.21.2: `- name: definitely_not_a_role` fails with
+    /// `The role 'definitely_not_a_role' was not found in: …`, so `name:` is looked up as
+    /// a role, not kept as a label. Reading only `role:` produced no reference at all.
+    #[test]
+    fn name_is_an_alias_for_role_on_a_roles_entry() {
+        let got = roles("- hosts: all\n  roles:\n    - name: web\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "web");
+    }
+
+    /// `ds.get('role', ds.get('name'))` — live-verified: with both written, `role: web`
+    /// runs and the bogus `name:` is ignored rather than erroring.
+    #[test]
+    fn role_wins_over_name_when_both_are_written() {
+        let got = roles("- hosts: all\n  roles:\n    - role: web\n      name: just_a_label\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "web");
+        // `name` is a `Base` attribute, so it is a setting here and never a param.
+        assert!(got[0].params.is_empty(), "{:?}", got[0].params);
+    }
+
+    /// An empty `role:` shadows a good `name:` rather than falling back to it — upstream's
+    /// `ds.get('role', ds.get('name'))` takes the default only when the *key* is absent,
+    /// and a written-but-empty `role:` is a present `None`. Live-verified: this is
+    /// `role definitions must contain a role name`, not a run of role `web`. The fallback
+    /// must stay keyed on absence, not on emptiness.
+    #[test]
+    fn an_empty_role_key_does_not_fall_back_to_name() {
+        assert!(roles("- hosts: all\n  roles:\n    - role:\n      name: web\n").is_empty());
+    }
+
+    #[test]
+    fn role_params_are_the_keys_outside_the_legal_set() {
+        let got = roles(
+            "- hosts: all\n  roles:\n    - role: web\n      when: x\n      tasks_from: a.yml\n      \
+             port_count: 4\n",
+        );
+        let names: Vec<_> = got[0].params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["tasks_from", "port_count"]);
+    }
+
+    /// A param's two spans anchor two different readers — the key for the diagnostic,
+    /// the value for go-to-definition.
+    #[test]
+    fn a_role_param_spans_its_key_and_its_value() {
+        let src = "- hosts: all\n  roles:\n    - role: web\n      tasks_from: alternate.yml\n";
+        let got = roles(src);
+        let p = &got[0].params[0];
+        assert_eq!(p.key_span.slice(src), "tasks_from");
+        assert_eq!(p.value_span.slice(src), "alternate.yml");
+    }
+
+    /// Upstream raises `role definitions must contain a role name`; there is no reference
+    /// to make, so the entry is dropped rather than guessed at.
+    #[test]
+    fn a_roles_entry_with_no_name_yields_nothing() {
+        assert!(roles("- hosts: all\n  roles:\n    - myparam: orphan\n").is_empty());
     }
 
     #[test]

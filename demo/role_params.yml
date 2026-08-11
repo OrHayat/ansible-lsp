@@ -1,0 +1,78 @@
+# T-100: on a `roles:` entry, a key ansible-core does not recognise is not an error — it
+# becomes a *role param*, which is a variable scoped to that role at precedence 20
+# (`definition.py:207-222`). The identical typo on a task is fatal; only `roles:` swallows
+# it, deliberately, so ansible-core can never report any line below and neither can
+# `--syntax-check`. Live-verified on 2.21.2.
+#
+# The rule only speaks when the key names a keyword *somewhere* — passing parameters this
+# way is the documented idiom, so a plain unknown name has to stay silent.
+- name: role param demos
+  hosts: localhost
+  roles:
+    # GOOD: the three spellings that name a role. `name:` is not a label — `_load_role_name`
+    # reads `ds.get('role', ds.get('name'))`, so this loads the role like the other two.
+    - provisioner
+    - role: provisioner
+    - name: provisioner
+
+    # GOOD: `role:` wins when both are written, so `name:` here really is just a label.
+    - role: provisioner
+      name: the label ansible ignores
+
+    # GOOD: every key below is in `RoleInclude.fattributes`, so each is a real setting.
+    - role: provisioner
+      when: ansible_check_mode
+      tags: [setup]
+      become: true
+      become_user: root
+      vars: { greeting: hello }
+      delegate_to: localhost
+
+    # GOOD: ordinary params. These ARE variables, which is the documented way to pass
+    # values into a role — nothing here names a keyword, so nothing is reported.
+    - role: provisioner
+      port_count: 4
+      lustre_mount: /mnt/lustre_{{port_count}}
+      state: present
+
+    # GOOD: the other way to pass a value — `vars:` is a keyword, so it is a setting whose
+    # contents are variables. Both spellings reach the role, and on a collision the **param
+    # wins**: live-verified, `myport` is 80 here, not 90, in either write order. Reading
+    # `get_vars()` suggests the opposite (`self.vars` is combined last) — but params are a
+    # separate precedence level applied outside that bucket.
+    - role: provisioner
+      vars: { myport: 90 }
+      myport: 80
+    # NO HINT: the same shape with a *keyword* name is not a collision at all. `port` is one
+    # of the 28 keys a roles: entry claims, so `port: 80` sets the connection port and never
+    # becomes a variable — the role sees only the 90 from `vars:`.
+    - role: provisioner
+      vars: { port: 90 }
+      port: 80
+
+    # BAD: reads as "load tasks/alternate.yml" and does not. `tasks_from:` selects an
+    # entry point on `include_role:` only; here it defines a variable named `tasks_from`.
+    - role: provisioner
+      tasks_from: alternate.yml
+
+    # BAD: a one-character typo. Nobody becomes root — this defines `becom_user`.
+    - role: provisioner
+      becom_user: root
+
+    # BAD: keywords borrowed from a task and from a play. Both are variables here.
+    - role: provisioner
+      register: result
+      gather_facts: false
+
+    # SILENCED: a role that genuinely takes a param named after a keyword.
+    - role: provisioner
+      public: true # noqa: role-param-not-keyword
+
+  tasks:
+    # NO HINT: role params do not leak past the role — live-verified, `port_count` is not
+    # visible here. The index over-approximates rather than risk a false "undefined".
+    - name: after the roles
+      debug: { msg: done }
+    - name: vars are not leaking to tasks scope
+      debug: #THIS FAILS 
+        - msg: "count= {{port_count}},port={{myport}}" 
