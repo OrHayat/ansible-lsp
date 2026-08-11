@@ -520,7 +520,7 @@ pub fn is_guarded(conditions: &[String]) -> bool {
 /// Combine the conditions on one task. A list `when:` is clauses ANDed together.
 pub fn classify_all(conditions: &[String]) -> Verdict {
     let verdicts: Vec<_> = conditions.iter().map(|c| classify(c)).collect();
-    if verdicts.iter().any(|v| *v == Verdict::Never) {
+    if verdicts.contains(&Verdict::Never) {
         return Verdict::Never;
     }
     // Clauses are ANDed, so an `Always` clause constrains nothing and must not mask a

@@ -404,6 +404,9 @@ fn stmt(node: &Node, pos: Pos, out: &mut Vec<Problem>) {
     if loop_on_import(node, out) {
         return;
     }
+    // Last in the chain, so it needs no guard of its own — it still reports whether it
+    // fired, so appending a rule below is `if meta_loop(node, out) { return; }` and this
+    // line becomes like every other.
     meta_loop(node, out);
 }
 

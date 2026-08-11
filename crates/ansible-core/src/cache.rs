@@ -185,6 +185,10 @@ impl<V: Clone> Flight<V> {
     }
 }
 
+/// One directory the walk visited: its path, and the names of the YAML files directly in it
+/// — the shape [`crate::fs::Fs::walk`] returns, named so the memo's type reads.
+type Walk = (PathBuf, Vec<String>);
+
 /// Shared across the files of one scan. Every method takes `&self` and locks only around the
 /// map access, never across the filesystem work — so a miss on one thread doesn't hold the
 /// others. Two threads racing the same miss both compute it and agree on the answer.
@@ -202,7 +206,7 @@ pub struct ScanCache {
     kinds: Map<Option<Kind>>,
     /// Raw directory entries, from which the YAML-filtered `listings` are derived.
     dirs: Map<Arc<Vec<(PathBuf, Kind)>>>,
-    walks: Map<Arc<Vec<(PathBuf, Vec<String>)>>>,
+    walks: Map<Arc<Vec<Walk>>>,
     sources: Flight<Option<Arc<Source>>>,
     contexts: Flight<Arc<FileContext>>,
     configs: Flight<AnsibleConfig>,
@@ -452,7 +456,7 @@ impl Fs for ScanCache {
         (*entries).clone()
     }
 
-    fn walk(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
+    fn walk(&self, root: &Path) -> Vec<Walk> {
         if let Some(hit) = self.walks.get(root) {
             return (*hit).clone();
         }

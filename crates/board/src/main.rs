@@ -222,9 +222,8 @@ impl Board {
             format!("# {id} — {title}\n\n{}\n", header_table(&headers, &values));
         for (n, section) in sections_for(&kind).iter().enumerate() {
             body.push_str(&format!("\n## {section}\n"));
-            match problem.as_deref().filter(|_| n == 0) {
-                Some(p) => body.push_str(&format!("\n{p}\n")),
-                None => {}
+            if let Some(p) = problem.as_deref().filter(|_| n == 0) {
+                body.push_str(&format!("\n{p}\n"));
             }
         }
         body.push_str("\n## Done when\n\n- [ ]\n");
