@@ -9,6 +9,7 @@ mic key on this Mac).
 | `ansible.cfg` | marks the project root, so `playbook_dir` and the role path have values |
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
 | `tasks/conditions.yml` | condition analysis — every verdict and every rule, across all five bare-expression keywords (`when:`, `failed_when:`, `changed_when:`, `until:`, `assert: that:`), with severities that follow the detected ansible-core version |
+| `tasks/variables.yml` | where a variable comes from — play/block/task `vars:`, `set_fact`, `register`, precedence and run order, and the two mapping **keys** ansible renders rather than takes literally (T-169) |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
 | `role_params.yml` | a key on a `roles:` entry that ansible turns into a variable instead of a setting — including the `name:`-as-role-name spelling (T-100) |
 | `mutated_conditions.yml` | every construct whose `when:` is copied onto the tasks it brings in, so a `set_fact` inside can flip it mid-run (T-166) — plus the two that look identical and must stay silent |

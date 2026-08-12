@@ -258,7 +258,7 @@ fn uses_with(
 ) -> Vec<VarUse> {
     let mut out = Vec::new();
     for n in nodes {
-        walk_uses(n, false, &[], &mut out, extract);
+        walk_uses(n, false, &[], &mut out, extract, Keys::Literal);
     }
     out
 }
@@ -275,12 +275,42 @@ fn when_of(node: &Node) -> Vec<String> {
     }
 }
 
+/// Which of a mapping's keys Ansible renders as templates (T-169). Exactly two action
+/// plugins do — `set_fact`'s own args and `set_stats`'s `data:` — and upstream calls it
+/// "a rare case where key templating is allowed" (`action/set_fact.py:44`). Everywhere
+/// else the braces in a key are not a variable use, measured on 2.21.2: an unknown module
+/// parameter is fatal (`Unsupported parameters … {{ argname }}`, so nothing was rendered)
+/// and a key nested in ordinary data keeps its braces verbatim. Scanning keys wholesale
+/// would invent uses Ansible never resolves.
+#[derive(Clone, Copy, PartialEq)]
+enum Keys {
+    /// Literal — every mapping but the two below.
+    Literal,
+    /// This mapping's own scalar keys are rendered.
+    Templated,
+    /// The `data:` child's keys are rendered (`set_stats`).
+    UnderData,
+}
+
+/// What the value under key `k` inherits. The two openers fire only from [`Keys::Literal`]:
+/// the values inside a templated mapping are fact data, never tasks, so a fact *named*
+/// `set_fact` cannot open a second templated level.
+fn keys_under(current: Keys, k: &Node) -> Keys {
+    match (current, k.as_str().map(crate::keywords::core_action)) {
+        (Keys::Literal, Some("set_fact")) => Keys::Templated,
+        (Keys::Literal, Some("set_stats")) => Keys::UnderData,
+        (Keys::UnderData, Some("data")) => Keys::Templated,
+        _ => Keys::Literal,
+    }
+}
+
 fn walk_uses(
     node: &Node,
     in_when: bool,
     guard: &[String],
     out: &mut Vec<VarUse>,
     ex: impl Fn(&str) -> Vec<(String, usize, usize)> + Copy,
+    keys: Keys,
 ) {
     match node {
         Node::Scalar { value, span } => {
@@ -294,8 +324,9 @@ fn walk_uses(
                 u.guard = guard.to_vec();
             }
         }
+        // Neither key-templating site is list-shaped, so items start over as literal.
         Node::Sequence { items, .. } => {
-            items.iter().for_each(|i| walk_uses(i, in_when, guard, out, ex))
+            items.iter().for_each(|i| walk_uses(i, in_when, guard, out, ex, Keys::Literal))
         }
         Node::Mapping { entries, .. } => {
             // This task/block's own `when:` guards the values inside it (its module args),
@@ -306,7 +337,16 @@ fn walk_uses(
                 let is_when = k.as_str().map(crate::keywords::core_action) == Some("when");
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
                 let g: &[String] = if is_when { guard } else { &inner };
-                walk_uses(v, is_when, g, out, ex);
+                if keys == Keys::Templated {
+                    if let Node::Scalar { value, span } = k {
+                        let before = out.len();
+                        template_uses_with(value, span.start, out, ex);
+                        for u in &mut out[before..] {
+                            u.guard = inner.clone();
+                        }
+                    }
+                }
+                walk_uses(v, is_when, g, out, ex, keys_under(keys, k));
             }
         }
         // Null holds no text, so there is nothing to scan for variable uses.
@@ -394,8 +434,13 @@ fn task(t: &Task, idx: &mut VarIndex) {
         if crate::keywords::core_action(&a.name) == "set_fact" {
             for (fact, _) in a.args.entries() {
                 if let Some(name) = fact.as_str() {
-                    // `cacheable` is a set_fact option, not a fact.
-                    if name != "cacheable" {
+                    // `cacheable` is a set_fact option, not a fact. A templated key names
+                    // the fact only once rendered (T-169) — filing the literal would put a
+                    // definition in the index under a name no expression can reference,
+                    // since braces are not variable-name characters. Which name it really
+                    // creates needs the template evaluated, which is T-034's; a miss beats
+                    // a definition nothing can reach.
+                    if name != "cacheable" && !name.contains("{{") {
                         idx.push_cond(name, VarSource::SetFact, fact.span(), cond.clone());
                     }
                 }
@@ -1334,6 +1379,172 @@ mod tests {
         assert_eq!(src("made"), Some(VarSource::SetFact));
         // `cacheable` is an option of set_fact, not a fact it defines.
         assert!(i.get("cacheable").is_empty());
+    }
+
+    /// T-169, the walk consumer: a template in a mapping key is a variable use at the two
+    /// places Ansible renders one. Both measured on 2.21.2 — `set_fact` with
+    /// `result_name: my_result` created the fact `my_result`, and `set_stats` reported the
+    /// custom stat as `dynamic_stat`.
+    #[test]
+    fn a_template_in_a_rendered_key_is_a_use() {
+        let names = |src: &str| -> Vec<String> {
+            let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+            uses(&nodes).into_iter().map(|u| u.name).collect()
+        };
+        assert_eq!(
+            names("- hosts: all\n  tasks:\n    - set_fact:\n        \"{{ result_name }}\": true\n"),
+            ["result_name"]
+        );
+        // The FQCN spelling is the same action.
+        assert_eq!(
+            names("- hosts: all\n  tasks:\n    - ansible.builtin.set_fact:\n        \"pre_{{ n }}\": 1\n"),
+            ["n"]
+        );
+        // set_stats renders the keys of `data:` only — one level in, not its own args.
+        assert_eq!(
+            names("- hosts: all\n  tasks:\n    - set_stats:\n        data:\n          \"{{ k }}_stat\": 1\n"),
+            ["k"]
+        );
+        // The span is the name inside the braces, so hover highlights the name.
+        let src = "- hosts: all\n  tasks:\n    - set_fact:\n        \"{{ result_name }}\": true\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        assert_eq!(uses(&nodes)[0].span.slice(src), "result_name");
+    }
+
+    /// The other half, and the reason this rule is two sites rather than "every key":
+    /// everywhere else the braces are not a use. Measured — an unknown module parameter
+    /// is fatal (`Unsupported parameters for … debug module: {{ argname }}`, so nothing
+    /// was rendered) and a key nested in ordinary data keeps its braces (`set_fact` of a
+    /// dict whose key was `{{ k }}` printed `keys=['{{ k }}']`). A use invented here would
+    /// hover a name Ansible never resolves.
+    #[test]
+    fn a_template_in_a_literal_key_is_not_a_use() {
+        let names = |src: &str| -> Vec<String> {
+            let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+            uses(&nodes).into_iter().map(|u| u.name).collect()
+        };
+        // An arbitrary module's arg key.
+        assert!(names("- hosts: all\n  tasks:\n    - debug:\n        \"{{ argname }}\": x\n").is_empty());
+        // A key nested inside a fact's value — data, not an arg name.
+        assert!(names(
+            "- hosts: all\n  tasks:\n    - set_fact:\n        outer:\n          \"{{ k }}\": 1\n"
+        )
+        .is_empty());
+        // set_stats' own arg names are literal; only `data:`'s children render.
+        assert!(names(
+            "- hosts: all\n  tasks:\n    - set_stats:\n        \"{{ opt }}\": true\n"
+        )
+        .is_empty());
+        // A fact *named* `set_fact` must not open a second templated level.
+        assert!(names(
+            "- hosts: all\n  tasks:\n    - set_fact:\n        set_fact:\n          \"{{ k }}\": 1\n"
+        )
+        .is_empty());
+        // `add_host` is the trap: it takes arbitrary keys as host vars, so it *looks* like
+        // a third rendering site. It is not — measured, the host var is really named
+        // `{{ k }}` and the intended name is never set. Claiming a use here would point
+        // at a definition for a variable that does not exist (its own ticket, T-170).
+        assert!(names(
+            "- hosts: all\n  tasks:\n    - add_host:\n        name: h\n        \"{{ k }}\": v\n"
+        )
+        .is_empty());
+        // Values are untouched by all of this — the control that keeps the walk honest.
+        assert_eq!(
+            names("- hosts: all\n  tasks:\n    - debug:\n        msg: \"{{ shown }}\"\n"),
+            ["shown"]
+        );
+    }
+
+    /// T-169, the `undefined_uses` consumer: a name used in a rendered key is checked like
+    /// any other, with the defined spelling as the control.
+    #[test]
+    fn undefined_uses_sees_a_name_inside_a_rendered_key() {
+        assert_eq!(
+            undef("- hosts: all\n  tasks:\n    - set_fact:\n        \"{{ result_name }}\": true\n"),
+            ["result_name"]
+        );
+        // Defined in the play: silent. Same line, opposite verdict.
+        assert!(undef(concat!(
+            "- hosts: all\n  vars:\n    result_name: my_result\n  tasks:\n",
+            "    - set_fact:\n        \"{{ result_name }}\": true\n",
+        ))
+        .is_empty());
+        // And a literal key never was a use, so it cannot become an undefined one.
+        assert!(undef("- hosts: all\n  tasks:\n    - debug:\n        \"{{ argname }}\": x\n").is_empty());
+    }
+
+    /// `set_stats` renders its keys exactly like `set_fact` (T-169) and is otherwise
+    /// nothing like it: the names it creates are run statistics handed to callback
+    /// plugins, and no expression can read one back — measured, `{{ from_stat }}` is
+    /// undefined in the very play that set it, while the same name is reported under
+    /// CUSTOM STATS. So its keys are variable *uses* and never definitions. The symmetry
+    /// is the trap: indexing both plugins would file a definition nothing can reference,
+    /// and would silence a correct `var-undefined` on anyone who expected otherwise.
+    #[test]
+    fn set_stats_renders_keys_but_defines_no_variables() {
+        let i = idx(concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - set_stats:\n        data:\n          from_stat: 222\n",
+            "    - set_fact:\n        from_fact: 111\n",
+        ));
+        assert!(i.get("from_stat").is_empty());
+        assert!(i.get("data").is_empty());
+        // The control: the plugin beside it, one line down, does define one.
+        assert_eq!(i.get("from_fact").first().map(|d| d.source), Some(VarSource::SetFact));
+        // And so a later read of the stat is correctly undefined, as Ansible has it.
+        assert_eq!(
+            undef(concat!(
+                "- hosts: all\n  tasks:\n",
+                "    - set_stats:\n        data:\n          from_stat: 222\n",
+                "    - debug: { msg: \"{{ from_stat }}\" }\n",
+            )),
+            ["from_stat"]
+        );
+    }
+
+    /// The two spellings the corpus actually writes — both of the two templated `set_fact`
+    /// keys in 753 files. Scanning keys put these names in front of `undefined_uses` for
+    /// the first time, so this is the shape a new false "undefined" would have taken: a
+    /// `loop:` variable in the key, and a `default(...)` fallback. The bare name is the
+    /// control that proves the silence is the exemptions working, not the walk missing.
+    #[test]
+    fn the_templated_key_spellings_the_corpus_uses_stay_silent() {
+        assert!(undef(concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - set_fact:\n        \"{{ item.key }}\": \"{{ item.value }}\"\n",
+            "      loop: [1]\n",
+        ))
+        .is_empty());
+        assert!(undef(concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - set_fact:\n        \"{{ picked | default('fallback') }}\": x\n",
+        ))
+        .is_empty());
+        assert_eq!(
+            undef("- hosts: all\n  tasks:\n    - set_fact:\n        \"{{ picked }}\": x\n"),
+            ["picked"]
+        );
+    }
+
+    /// T-169 fault 2: the fact a templated key creates is named only after rendering, so
+    /// filing the literal put `{{ result_name }}` in the index — a name no expression can
+    /// reference. A literal key is the control and still indexes.
+    #[test]
+    fn a_templated_set_fact_key_defines_nothing_while_a_literal_one_still_does() {
+        let i = idx(concat!(
+            "- hosts: all\n  vars:\n    result_name: my_result\n  tasks:\n",
+            "    - set_fact:\n        \"{{ result_name }}\": true\n        plain_fact: 1\n",
+        ));
+        let names: Vec<&str> = i
+            .defs()
+            .iter()
+            .filter(|d| d.source == VarSource::SetFact)
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, ["plain_fact"]);
+        // The rendered name (`my_result`) is knowingly not indexed either — that needs the
+        // template evaluated, which is T-034's.
+        assert!(i.get("my_result").is_empty());
     }
 
     /// T-100: a role param is a variable definition, at precedence 20. Live-verified —

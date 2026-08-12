@@ -156,7 +156,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
-| T-169 | [A template inside a mapping key is invisible to the var walk](open/T-169-a-template-inside-a-mapping-key-is-invisible-to-the-var-walk.md) | S    | —    |
+| T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -277,6 +277,7 @@ T-021 is now unblocked on that side.
 | T-165 | [A loop on meta: is silently discarded](closed/T-165-a-loop-on-meta-is-silently-discarded.md) | done     |
 | T-103 | [A static field carrying a template is used literally](closed/T-103-a-static-field-carrying-a-template-is-used-literally.md) | done     |
 | T-168 | **bug** · [A YAML complex key parses clean but is fatal to Ansible's loader](closed/T-168-a-yaml-complex-key-parses-clean-but-is-fatal-to-ansible-s-lo.md) | done     |
+| T-169 | [A template inside a mapping key is invisible to the var walk](closed/T-169-a-template-inside-a-mapping-key-is-invisible-to-the-var-walk.md) | done     |
 
 ## Settled — don't re-derive these
 

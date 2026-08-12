@@ -66,6 +66,28 @@ Rules that keep it honest:
   `template`/`copy` `src:` and wrong for anything that runs on the managed host — so it
   needs T-015's local-vs-remote table, not just the string.
 
+## Also here: the name a templated `set_fact` key creates (from T-169)
+
+```yaml
+vars:
+  result_name: my_result
+tasks:
+  - set_fact:
+      "{{ result_name }}": true      # creates a fact called `my_result`
+```
+
+`set_fact` and `set_stats`' `data:` are the only two places Ansible renders a mapping key
+(upstream: "a rare case where key templating is allowed"). T-169 made the `result_name`
+*use* navigable and stopped the index filing a definition called `{{ result_name }}`, but
+the fact this really defines — `my_result` — is indexed under no name at all. Working it
+out is expanding a template to a literal, which is this ticket.
+
+Note it cuts against the exclusion above, and deliberately: that rule refuses to trust a
+`vars:`/`set_fact` *value* as a path, because inventory or `-e` can override it. Here the
+expansion produces a **name**, and a wrong name mis-files a definition rather than
+inventing a missing file — so it wants the same expander with a different verdict on
+partial knowledge, not the same answer. Decide that before implementing, not after.
+
 ## Done when
 
 - [ ] a literal `loop:` expands `{{ item }}` to one candidate per entry
@@ -75,3 +97,5 @@ Rules that keep it honest:
 - [ ] corpus gate: zero new warnings across 731 files
 - [ ] `scan`'s templated-variable survey re-run; anything still unresolved is genuinely
       runtime, and this ticket records the list
+- [ ] a templated `set_fact`/`set_stats` key whose name is knowable indexes the fact under
+      the **rendered** name, and one that isn't stays the deliberate miss T-169 left

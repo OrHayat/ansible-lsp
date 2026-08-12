@@ -10,6 +10,7 @@
   vars:
     service_port: 8080
     base_url: "http://localhost"
+    result_name: my_result
   tasks:
     - name: Play vars — Cmd+click base_url or service_port jumps up to the play
       ansible.builtin.debug:
@@ -62,6 +63,39 @@
       # to it, not a picker. The early use above saw only the play var. Ordering + precedence.
       ansible.builtin.debug:
         msg: "{{ base_url }}"
+
+    # Templated mapping KEYS (T-169). Ansible renders a key in exactly two places —
+    # `set_fact`'s own args and `set_stats`' `data:` — and its own source calls that "a
+    # rare case where key templating is allowed". So the name inside these braces is a
+    # real variable use: Cmd+click and hover both work on it, like any other.
+    #
+    # What we still miss, deliberately: the fact this creates is called `my_result`, and
+    # nothing indexes it under that name — working it out means evaluating the template
+    # (T-034). A miss beats filing it under `{{ result_name }}`, which no expression could
+    # ever reference.
+    - name: GOOD Cmd+click result_name inside the key jumps to the play var
+      ansible.builtin.set_fact:
+        "{{ result_name }}": true
+
+    - name: GOOD the same rendering under set_stats, one level down in data
+      ansible.builtin.set_stats:
+        data:
+          "{{ result_name }}_count": 1
+
+    # NO HINT: the same braces, in a slot that is not a name. Each of the two plugins above
+    # renders exactly one mapping — the one whose keys ARE the names it creates. For
+    # `set_fact` that is its own args; for `set_stats` it is `data:`, one hop further in,
+    # because that plugin has arguments of its own. So it is never about depth: it is about
+    # whether this slot names something.
+    #
+    # Below, the name is `nested_map`. What is inside it is that fact's value — ordinary
+    # data — so its key really is spelled `{{ result_name }}`, and measuring it is what
+    # comes back out. A hint here would offer a jump to `my_result` on a template Ansible
+    # never looks at.
+    - name: NO HINT a template nested in a fact's value is data, not a name
+      ansible.builtin.set_fact:
+        nested_map:
+          "{{ result_name }}": stays literal
 
     # UNDEFINED (var-undefined): this file is a playbook, so no caller can inject vars —
     # a name with zero reachable definitions warns, with the message conceding what we

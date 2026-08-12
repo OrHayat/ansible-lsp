@@ -3698,6 +3698,56 @@ mod tests {
         assert!(!hit.contains("never defined"), "{hit}");
     }
 
+    /// T-169's two editor consumers, against the demo rows that claim them. A name inside
+    /// a key Ansible renders (`set_fact`, `set_stats`' `data:`) hovers and Cmd+clicks like
+    /// any other; the same name in a key Ansible leaves literal must do neither, or we
+    /// point at a definition the run never reaches. The demo labels those rows GOOD and
+    /// NO HINT, and this is what makes those labels true.
+    #[test]
+    fn a_name_in_a_rendered_key_hovers_and_jumps_and_a_literal_one_does_not() {
+        let path = std::path::Path::new("../../demo/tasks/variables.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let at = |byte: usize| {
+            let (line, character) = doc.byte_to_lsp(byte);
+            tower_lsp::lsp_types::Position { line, character }
+        };
+
+        // Each row's `"{{ result_name }}"` key, found by the line that precedes it.
+        let key_on = |anchor: &str| {
+            let at = text.find(anchor).expect("demo row present");
+            text[at..].find("result_name").expect("templated key") + at + 1
+        };
+        let set_fact_key = key_on("ansible.builtin.set_fact:\n        \"{{ result_name }}\"");
+        let set_stats_key = key_on("data:\n          \"{{ result_name }}_count\"");
+        let nested_key = key_on("nested_map:");
+
+        for (byte, what) in [(set_fact_key, "set_fact"), (set_stats_key, "set_stats data")] {
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+                .unwrap_or_else(|| panic!("no hover on the {what} key"))
+                .0;
+            assert!(md.contains("my_result"), "{what} hover shows the play var: {md}");
+
+            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri)
+                .unwrap_or_else(|| panic!("no jump target on the {what} key"));
+            // Jumps to the play var it reads, not to the key it sits in.
+            assert_eq!(locs.len(), 1, "{what}: {locs:?}");
+            let line = locs[0].range.start.line as usize;
+            assert!(
+                text.lines().nth(line).unwrap().contains("result_name: my_result"),
+                "{what} landed on: {}",
+                text.lines().nth(line).unwrap()
+            );
+        }
+
+        // The boundary row: nested in a fact's value the braces are data, so both views
+        // stay silent rather than claiming a name Ansible keeps literal.
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri).is_none());
+    }
+
     #[test]
     fn hover_breadcrumbs_meta_dependency_routes_only() {
         let path = std::path::Path::new("../../demo/cross_file_vars.yml")
