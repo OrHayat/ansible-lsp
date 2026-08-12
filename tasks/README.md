@@ -92,7 +92,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
-| T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | S    | —          |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
@@ -101,6 +100,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
+| T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | M    | —          |
 
 ### P2 — coverage and usability
 
