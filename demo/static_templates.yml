@@ -44,15 +44,11 @@
       register: "{{ result_name }}" # noqa: static-template
       changed_when: false
 
-    - name: set_fact 
-      ansible.builtin.set_fact:
-        {{ result_name }}: true
-
-
   handlers:
-    # `listen` is never templated, so the `notify: "{{ topic }}"` above resolves to
-    # `restart` and can never reach this handler; it fails at run time blaming the
-    # topic, and Ansible never mentions this line.
+    # `listen` is never templated, so this handler's topic is the literal braces —
+    # unreachable unless a notify writes the same braces. The templated notify above
+    # resolves to `restart` and is delivered to the handler below, never to this one.
+    # Ansible says nothing about any of it.
     - name: braces stay in the topic
       debug: { msg: restarting }
       listen: "{{ topic }}" # WARN: the braces stay in the topic name

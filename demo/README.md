@@ -18,6 +18,7 @@ mic key on this Mac).
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |
 | `tasks/unparseable_silenced.yml` | the same break, quieted with `# noqa: unparseable` |
 | `static_templates.yml` | a template in a field ansible never templates — `register`, `listen`, `collections`, `vars:`/`module_defaults:` keys — fatal or silently dead per field (T-103) |
+| `complex_keys.yml` | a mapping/sequence as a mapping key — parses clean, never loads in Ansible; usually an unquoted template that needed quotes (T-168) |
 | `duplicate_keys.yml` | duplicate mapping keys at play level, in `vars:` and in a task — valid YAML, first value silently discarded (T-102, not yet flagged) |
 | `plays/duplicate_keys_json.yml` | the same mistake in JSON, where Ansible's own check never runs |
 

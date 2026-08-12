@@ -16,6 +16,7 @@ use ansible_core::fs::{Counting, StdFs};
 use ansible_core::include_target;
 use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::attributes;
+use ansible_core::complex_key;
 use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::parse::{Document, Loader, Node, Span};
@@ -689,11 +690,27 @@ impl Backend {
             })
             .collect();
 
+        // A non-scalar mapping key: valid YAML our libyaml parses, fatal to Ansible's
+        // loader in every spelling and every document kind (T-168). Always an error.
+        let unloadable: Vec<Diagnostic> = complex_key::problems(&a.nodes, &a.doc.text)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
         missing
             .chain(broken)
             .chain(invalid)
             .chain(misplaced)
             .chain(literal)
+            .chain(unloadable)
             .chain(bad_targets)
             .collect()
     }
@@ -3176,6 +3193,85 @@ mod tests {
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
+    }
+
+    /// T-168's fixture box, both directions: every BAD line carries exactly one
+    /// `complex-key` error, every GOOD line carries none, and no unannotated line fires
+    /// — the SILENCED row is pinned by staying out of both sets.
+    #[test]
+    fn the_complex_keys_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/complex_keys.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let mut got: Vec<u32> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "complex-key")
+                    && d.severity == Some(DiagnosticSeverity::ERROR)
+            })
+            .map(|d| d.range.start.line)
+            .collect();
+        let mut expected: Vec<u32> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("# BAD"))
+            .map(|(i, _)| i as u32)
+            .collect();
+        got.sort_unstable();
+        expected.sort_unstable();
+        assert!(expected.len() >= 3, "the fixture lost its BAD rows");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-168's false-positive gate: quoted template keys and ordinary mappings all over
+    /// the demo tree must never fire the rule.
+    #[test]
+    fn every_other_demo_file_is_free_of_complex_key_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "complex_keys.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "complex-key")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-168: `# noqa: complex-key` on the offending line silences the rule, and a
+    /// different rule's id does not.
+    #[test]
+    fn noqa_suppresses_complex_key() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let flagged = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "complex-key")
+                })
+                .count()
+        };
+        let noisy = "- hosts: web\n  tasks:\n    - set_fact:\n        {{ v }}: true\n";
+        assert_eq!(flagged(noisy), 1);
+        let silenced =
+            "- hosts: web\n  tasks:\n    - set_fact:\n        {{ v }}: true # noqa: complex-key\n";
+        assert_eq!(flagged(silenced), 0);
+        let wrong_id =
+            "- hosts: web\n  tasks:\n    - set_fact:\n        {{ v }}: true # noqa: static-template\n";
+        assert_eq!(flagged(wrong_id), 1);
     }
 
     /// T-103: `# noqa: static-template` on the offending line silences the rule, and a

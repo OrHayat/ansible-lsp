@@ -1,0 +1,37 @@
+# T-168 — YAML complex keys: valid to the parser, fatal to Ansible's loader.
+#
+# YAML permits a mapping or sequence as a mapping key; Python dicts do not. Every BAD
+# row below parses clean (which is why the tool must speak — `unparseable` never fires)
+# and was live-measured fatal on core 2.21.2: the inline flow-collection keys die in
+# Ansible's scanner, the explicit `?` form dies constructing the dict, and the unquoted
+# template — the spelling people actually write — gets upstream's "missing quotes
+# around a template block" hint. The same fault in a vars file is equally fatal.
+
+- name: Complex keys in every spelling
+  hosts: localhost
+  gather_facts: false
+  vars:
+    result_name: my_result
+  tasks:
+    - name: an unquoted template is two flow mappings, not a template
+      ansible.builtin.set_fact:
+        {{ result_name }}: true # BAD: quote it — "{{ result_name }}": value
+
+    - name: quoted, the same key is a plain string and templates in module args
+      ansible.builtin.set_fact:
+        "{{ result_name }}": true # GOOD: creates a fact named my_result (T-103 non-case)
+
+    - name: a flow sequence as a key
+      ansible.builtin.debug:
+        [a, b]: x # BAD: refused by Ansible's scanner — the file never loads
+
+    - name: the explicit ? key form
+      ansible.builtin.debug:
+        ? [a, b] # BAD: same fault, the spelling that reaches Ansible's own constructor error
+        : x
+
+    # SILENCED: a template-preprocessed file where the braces are substituted away
+    # before Ansible ever reads it.
+    - name: silenced on request
+      ansible.builtin.set_fact:
+        {{ result_name }}: true # noqa: complex-key

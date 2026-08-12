@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | S    | —          |
+| done   | bug  | P1       | S    | —          |
 
 ## Symptom
 
@@ -39,19 +39,26 @@ and we stop at the grammar.
 
 ## Fix
 
-Flag any non-scalar mapping key at parse/walk level — a mapping or sequence used as a
-key is fatal to Ansible everywhere, since every consumer constructs Python dicts.
-Message should follow upstream's hint (braces around a template block need quotes),
-since that is what the spelling almost always means.
+`complex_key.rs`: flag any non-scalar mapping key, at any depth, in every document kind
+— error, rule id `complex-key`. Message is template-flavoured with the quoting fix when
+the offending **line** carries `{{` (the key's own text misses `msg: {{ x }}`, where the
+complex key is the brace-less inner `{ x }` — upstream's hint uses the same line-level
+split), the plain complex-key truth otherwise.
 
-Check whether sequence-valued keys (`? [a, b]` explicit-key form too) reach the same
-constructor error before claiming they do — only the flow-mapping-as-key form is
-measured so far.
+All the remaining forms were measured, and the gap was wider than filed: our libyaml
+parses **all five** spellings clean (`{{ x }}: v` in a playbook, the same in a vars
+file via `vars_files:`, inline `[a, b]: v`, inline `{a: 1}: v`, explicit `? [a, b]`)
+while Ansible refuses every one — the inline flow-collection forms in its *scanner*
+(`Colons in unquoted values must be followed by a non-space character`), the explicit
+`?` form in the constructor (`While constructing a mapping found unhashable key`), and
+the braces forms get the `missing quotes around a template block` hint, which upstream
+attaches to any YAML error on a line carrying `{{`. Alias keys stay a documented miss
+(T-160): the anchor may hold a scalar, and judging it needs the substitution.
 
 ## Done when
 
-- [ ] the symptom file gets an error diagnostic anchored on the complex key
-- [ ] the message mentions quoting the template block, like upstream's hint
-- [ ] a quoted `"{{ x }}":` key stays clean (it is valid and templates in module args)
-- [ ] the sequence-as-key and explicit `?` forms are measured and covered or documented
+- [x] the symptom file gets an error diagnostic anchored on the complex key
+- [x] the message mentions quoting the template block, like upstream's hint
+- [x] a quoted `"{{ x }}":` key stays clean (it is valid and templates in module args)
+- [x] the sequence-as-key and explicit `?` forms are measured and covered or documented
       as out of scope

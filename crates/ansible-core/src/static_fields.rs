@@ -86,11 +86,32 @@ pub fn problems(nodes: &[Node]) -> Vec<Problem> {
         return out;
     }
     for item in items {
-        if matches!(item, Node::Mapping { .. }) {
+        if !matches!(item, Node::Mapping { .. }) {
+            continue;
+        }
+        let is_import = item
+            .entries()
+            .iter()
+            .any(|(k, _)| k.as_str().map(keywords::core_action) == Some("import_playbook"));
+        if is_import {
+            import_entry(item, &mut out);
+        } else {
             play(item, &mut out);
         }
     }
     out
+}
+
+/// An `import_playbook:` entry loads as a PlaybookInclude — Base + Conditional +
+/// Taggable, **no** CollectionSearch — so `collections` on one is an invalid attribute
+/// (measured fatal) and any templating claim about it would be the wrong story. The two
+/// key-mapping fields are Base's and were both measured here with the usual fatals.
+fn import_entry(node: &Node, out: &mut Vec<Problem>) {
+    for (key, msg) in [("vars", VARS_KEY), ("module_defaults", MODULE_DEFAULTS_KEY)] {
+        if let Some(v) = last_value(node, key) {
+            keys_of(key, v, msg, out);
+        }
+    }
 }
 
 fn play(node: &Node, out: &mut Vec<Problem>) {
@@ -137,6 +158,18 @@ fn stmt(node: &Node, ctx: KeyContext, out: &mut Vec<Problem>) {
         }
         return;
     }
+    // A dynamic include keeps only `VALID_INCLUDE_KEYWORDS` — `module_defaults` is not
+    // among them, so that line is T-107's invalid-attribute and never the resolution
+    // failure our message claims (measured: only the attribute error occurs). Imports
+    // keep the full Task set and stay on the surrounding context.
+    let dynamic = node.entries().iter().any(|(k, _)| {
+        matches!(k.as_str().map(keywords::core_action), Some("include_tasks" | "include_role"))
+    });
+    let ctx = match (dynamic, ctx) {
+        (true, KeyContext::Handler) => KeyContext::DynamicHandlerInclude,
+        (true, _) => KeyContext::DynamicInclude,
+        (false, c) => c,
+    };
     statics_on(node, ctx, out);
 }
 
@@ -154,26 +187,43 @@ fn statics_on(node: &Node, ctx: KeyContext, out: &mut Vec<Problem>) {
         // discarded first `register: "{{ v }}"` runs clean while the same template
         // written last is fatal. So only the last occurrence is judged, the same read
         // `Node::get` takes.
-        let Some((_, v)) = node.entries().iter().rev().find(|(k, _)| k.as_str() == Some(key))
-        else {
-            continue;
-        };
+        let Some(v) = last_value(node, key) else { continue };
         match key {
             // For these two it is the *keys* that are static while values template.
-            "vars" => keys_of(v, VARS_KEY, out),
-            "module_defaults" => keys_of(v, MODULE_DEFAULTS_KEY, out),
+            "vars" => keys_of(key, v, VARS_KEY, out),
+            "module_defaults" => keys_of(key, v, MODULE_DEFAULTS_KEY, out),
             _ => values_of(key, v, out),
         }
     }
 }
 
+/// The value of the last occurrence of `key` — the one Ansible loads on a duplicate.
+fn last_value<'a>(node: &'a Node, key: &str) -> Option<&'a Node> {
+    node.entries().iter().rev().find(|(k, _)| k.as_str() == Some(key)).map(|(_, v)| v)
+}
+
 /// Flag templated keys of a mapping-valued field. Only the top level: a nested mapping
 /// under a `vars:` key is that variable's value, and `module_defaults` submaps are the
-/// args, which template.
-fn keys_of(value: &Node, message: &str, out: &mut Vec<Problem>) {
-    if !matches!(value, Node::Mapping { .. }) {
-        return;
+/// args, which template. `module_defaults` also takes a *list* of mappings — measured
+/// legal with a literal key and fatal with a templated one, same error as the dict form
+/// — while list-form `vars` is fatal for its shape alone (`Vars in a Task must be
+/// specified as a dictionary`, template or none — measured), so its keys carry no story
+/// of ours.
+fn keys_of(key: &str, value: &Node, message: &str, out: &mut Vec<Problem>) {
+    match value {
+        Node::Mapping { .. } => map_keys(value, message, out),
+        Node::Sequence { items, .. } if key == "module_defaults" => {
+            for item in items {
+                if matches!(item, Node::Mapping { .. }) {
+                    map_keys(item, message, out);
+                }
+            }
+        }
+        _ => {}
     }
+}
+
+fn map_keys(value: &Node, message: &str, out: &mut Vec<Problem>) {
     for (k, _) in value.entries() {
         if k.as_str().is_some_and(|s| s.contains("{{")) {
             out.push(Problem {
@@ -198,6 +248,10 @@ fn values_of(key: &str, value: &Node, out: &mut Vec<Problem>) {
         }
     };
     match value {
+        // A list `register` is fatal with or without a template — `Invalid variable
+        // name of type 'list'`, measured with a template-free control — so the braces
+        // are not the fault and the shape story is T-108's, not this rule's.
+        Node::Sequence { .. } if key == "register" => {}
         Node::Sequence { items, .. } => items.iter().for_each(&mut flag),
         scalar => flag(scalar),
     }
@@ -372,6 +426,85 @@ mod tests {
                 (Tier::Error, REGISTER.to_string()),
             ]
         );
+    }
+
+    /// An `import_playbook:` entry loads as a PlaybookInclude — Base + Conditional +
+    /// Taggable, no CollectionSearch — so `collections` there is an invalid attribute
+    /// (measured fatal upstream) and a templating story about it would be the wrong
+    /// story, while `vars`/`module_defaults` keys carry the usual measured fatals.
+    #[test]
+    fn import_playbook_entries_use_the_playbook_include_vocabulary() {
+        assert!(check(
+            "- import_playbook: other.yml\n  collections:\n    - \"{{ c }}\"\n"
+        )
+        .is_empty());
+        assert_eq!(
+            check("- import_playbook: other.yml\n  vars:\n    \"{{ n }}\": 5\n"),
+            [(Tier::Error, VARS_KEY.to_string())]
+        );
+        assert_eq!(
+            check("- import_playbook: other.yml\n  module_defaults:\n    \"{{ m }}\":\n      msg: x\n"),
+            [(Tier::Error, MODULE_DEFAULTS_KEY.to_string())]
+        );
+    }
+
+    /// A dynamic include keeps only `VALID_INCLUDE_KEYWORDS`: `module_defaults` is not
+    /// among them, T-107's invalid-attribute owns that line — measured, the action-
+    /// resolution failure never happens there — while `register`/`vars`/`collections`
+    /// survive the restriction and `listen` joins only in handlers.
+    #[test]
+    fn dynamic_includes_use_the_restricted_vocabulary() {
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      module_defaults:\n        \"{{ m }}\":\n          msg: x\n"
+        )
+        .is_empty());
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      register: \"{{ v }}\"\n").len(),
+            1
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - include_role:\n        name: r\n      vars:\n        \"{{ n }}\": 5\n").len(),
+            1
+        );
+        assert_eq!(
+            check("- hosts: web\n  tasks: []\n  handlers:\n    - include_tasks: f.yml\n      listen: \"{{ t }}\"\n").len(),
+            1
+        );
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      listen: \"{{ t }}\"\n"
+        )
+        .is_empty());
+    }
+
+    /// `module_defaults` also takes a list of mappings — measured legal with a literal
+    /// key, fatal with a templated one, same error as the dict form. List-form `vars`
+    /// is fatal for its *shape* alone (`Vars in a Task must be specified as a
+    /// dictionary`, template or none — measured), so its keys carry no story of ours.
+    #[test]
+    fn list_form_module_defaults_keys_are_checked_and_list_form_vars_is_not() {
+        assert_eq!(
+            check("- hosts: web\n  module_defaults:\n    - \"{{ m }}\":\n        msg: x\n  tasks: []\n"),
+            [(Tier::Error, MODULE_DEFAULTS_KEY.to_string())]
+        );
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - debug:\n      vars:\n        - \"{{ n }}\": 1\n"
+        )
+        .is_empty());
+    }
+
+    /// A list `register` is fatal with or without a template — `Invalid variable name
+    /// of type 'list'`, measured with a template-free control — so the braces are not
+    /// the fault and the shape story is T-108's to give, not this rule's.
+    #[test]
+    fn a_register_list_is_not_this_rules_story() {
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - command: whoami\n      register: [\"{{ v }}\"]\n"
+        )
+        .is_empty());
+        assert!(check(
+            "- hosts: web\n  tasks:\n    - command: whoami\n      register: [v]\n"
+        )
+        .is_empty());
     }
 
     /// On a duplicate key Ansible warns `Using last defined value only` and loads just the

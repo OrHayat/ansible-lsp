@@ -98,6 +98,21 @@ Duplicate keys follow keep-last: a discarded first `register: "{{ v }}"` (or fir
 value only` warning, while the same template written last is fatal — so the rule judges
 only the last occurrence of each static key, the same read `Node::get` takes.
 
+Post-close review corrections, all measured on 2.21.2:
+
+- `import_playbook` entries are PlaybookInclude — no CollectionSearch, so `collections`
+  there is a fatal invalid attribute and gets no templating claim; `vars` and
+  `module_defaults` keys keep the usual fatals.
+- Dynamic includes keep only `VALID_INCLUDE_KEYWORDS`: `module_defaults` on one is
+  T-107's invalid-attribute and the resolution failure never happens, so the rule uses
+  the DynamicInclude contexts there.
+- `module_defaults` also takes a **list** of mappings; a templated key in list form is
+  the same fatal. List-form `vars` is fatal for its shape alone (`Vars in a Task must be
+  specified as a dictionary`, template or none), so its keys are not flagged.
+- `register:` with a **list** value is fatal with or without a template (`Invalid
+  variable name of type 'list'`), so the braces are not the fault there — unflagged,
+  the shape story is T-108's.
+
 ## Done when
 
 - [x] a template in `register`, in a `vars:` mapping **key**, or in a `module_defaults`

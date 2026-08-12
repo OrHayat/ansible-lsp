@@ -101,7 +101,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
-| T-168 | **bug** · [A YAML complex key parses clean but is fatal to Ansible's loader](open/T-168-a-yaml-complex-key-parses-clean-but-is-fatal-to-ansible-s-lo.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -277,6 +276,7 @@ T-021 is now unblocked on that side.
 | T-166 | [when-import-var-mutated covers import_playbook only, and four more constructs flip the same way](closed/T-166-when-import-var-mutated-covers-import-playbook-only-and-four.md) | done     |
 | T-165 | [A loop on meta: is silently discarded](closed/T-165-a-loop-on-meta-is-silently-discarded.md) | done     |
 | T-103 | [A static field carrying a template is used literally](closed/T-103-a-static-field-carrying-a-template-is-used-literally.md) | done     |
+| T-168 | **bug** · [A YAML complex key parses clean but is fatal to Ansible's loader](closed/T-168-a-yaml-complex-key-parses-clean-but-is-fatal-to-ansible-s-lo.md) | done     |
 
 ## Settled — don't re-derive these
 
