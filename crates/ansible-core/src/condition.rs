@@ -434,6 +434,183 @@ pub fn any_uses(expr: &str) -> Vec<(String, usize, usize)> {
     })
 }
 
+/// The variable a `hostvars[...]` lookup reads, with its byte range in `expr` (T-104).
+///
+/// [`variable_uses`] cannot see these: it takes the *root* of an expression, and in
+/// `hostvars['web01'].app_port` the root is `hostvars` — an injected name it drops — while
+/// `app_port` is an attribute it skips. So the name that actually matters produces no use
+/// at all, which is why neither hover nor any rule could say a word about it.
+///
+/// Both spellings of the read are recognised, and only those: `.name` and `['name']`. A
+/// dynamic second subscript (`hostvars[h][var]`) names nothing statically and is skipped
+/// rather than guessed. The host key itself is left to [`variable_uses`], which already
+/// reports a variable used there.
+pub fn hostvars_uses(expr: &str) -> Vec<(String, usize, usize)> {
+    let bytes = expr.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            quote = Some(b);
+            i += 1;
+            continue;
+        }
+        if !(b as char).is_ascii_alphabetic() && b != b'_' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        // `x.hostvars` is somebody else's attribute, not the magic dict.
+        if &expr[start..i] != "hostvars" || expr[..start].trim_end().ends_with('.') {
+            continue;
+        }
+        let Some(after_key) = past_subscript(expr, i) else { continue };
+        match read_name(expr, after_key) {
+            Some(hit) => {
+                i = hit.2;
+                out.push(hit);
+            }
+            None => i = after_key,
+        }
+    }
+    out
+}
+
+/// The *host* named by a `hostvars['...']` subscript containing byte `at`, with its span
+/// (T-171). Only a literal key: `hostvars[some_var]` names no host we can know, and the
+/// variable in it is already reported by [`variable_uses`].
+///
+/// `text` is the whole document rather than one expression, since the caller has a cursor
+/// byte and not an expression — the scan finds the enclosing subscript itself.
+pub fn hostvars_host_key_at(text: &str, at: usize) -> Option<(String, usize, usize)> {
+    hostvars_host_keys(text)
+        .into_iter()
+        .find(|(_, s, e)| at >= *s && at <= *e)
+}
+
+/// Every literal `hostvars['...']` host key in `text`, with spans. The whole-document form
+/// is what paints the links; [`hostvars_host_key_at`] is the same scan filtered to a cursor,
+/// so what is clickable and what is painted cannot disagree.
+pub fn hostvars_host_keys(text: &str) -> Vec<(String, usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find("hostvars") {
+        let start = from + rel;
+        from = start + "hostvars".len();
+        let before_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '.');
+        if !before_ok {
+            continue;
+        }
+        let Some(end) = past_subscript(text, from) else { continue };
+        // The key is the literal between the brackets, quotes excluded.
+        let inner = &text[from..end];
+        let Some(open) = inner.find(['\'', '"']) else { continue };
+        let q = inner.as_bytes()[open];
+        let rest = &inner[open + 1..];
+        let Some(len) = rest.find(q as char) else { continue };
+        let (s, e) = (from + open + 1, from + open + 1 + len);
+        out.push((text[s..e].to_string(), s, e));
+        from = end;
+    }
+    out
+}
+
+/// One byte past the balanced `[...]` beginning at or after `at`, skipping string
+/// literals so a `]` inside the host name cannot close it early.
+fn past_subscript(expr: &str, at: usize) -> Option<usize> {
+    let bytes = expr.as_bytes();
+    let mut i = at;
+    while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        i += 1;
+    }
+    if *bytes.get(i)? != b'[' {
+        return None;
+    }
+    i += 1;
+    let mut depth = 1usize;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match quote {
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None if b == b'\'' || b == b'"' => quote = Some(b),
+            None if b == b'[' => depth += 1,
+            None if b == b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            None => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The name read off the host's vars — `.app_port` or `['app_port']` — as an identifier.
+fn read_name(expr: &str, at: usize) -> Option<(String, usize, usize)> {
+    let bytes = expr.as_bytes();
+    let mut i = at;
+    while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        i += 1;
+    }
+    let (s, e) = match *bytes.get(i)? {
+        b'.' => {
+            i += 1;
+            let s = i;
+            while i < bytes.len()
+                && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            (s, i)
+        }
+        b'[' => {
+            i += 1;
+            while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+                i += 1;
+            }
+            let q = *bytes.get(i)?;
+            if q != b'\'' && q != b'"' {
+                // `hostvars[h][var]` — the name is itself a variable, unknowable here.
+                return None;
+            }
+            i += 1;
+            let s = i;
+            while i < bytes.len() && bytes[i] != q {
+                i += 1;
+            }
+            if i >= bytes.len() {
+                return None;
+            }
+            (s, i)
+        }
+        _ => return None,
+    };
+    let name = &expr[s..e];
+    let ident = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    ident.then(|| (name.to_string(), s, e))
+}
+
 /// The shared tokenizer. `keep` decides what counts, so the two views above can never drift
 /// on what a *word* is — only on which words they want.
 fn scan_words(expr: &str, keep: impl Fn(&str) -> bool) -> Vec<(String, usize, usize)> {
@@ -868,6 +1045,75 @@ fn is_bare_literal(cond: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-104: the name a `hostvars[...]` read actually consults, in both spellings. The
+    /// root extractor sees none of it — `hostvars` is injected and dropped, `app_port` is
+    /// an attribute and skipped — so without this the name produces no use at all.
+    #[test]
+    fn hostvars_reads_are_extracted_in_both_spellings() {
+        let names = |e: &str| -> Vec<String> {
+            hostvars_uses(e).into_iter().map(|(n, _, _)| n).collect()
+        };
+        assert_eq!(names("hostvars['web01'].app_port"), ["app_port"]);
+        assert_eq!(names("hostvars[\"web01\"]['app_port']"), ["app_port"]);
+        assert_eq!(names("hostvars[inventory_hostname].app_port"), ["app_port"]);
+        // Deeper access still names the variable, not the sub-key.
+        assert_eq!(names("hostvars['w'].app_port.children[0]"), ["app_port"]);
+        // Several in one expression, each kept separately.
+        assert_eq!(
+            names("hostvars['a'].one ~ hostvars['b'].two"),
+            ["one", "two"]
+        );
+        // The span covers the name alone, so hover highlights it and nothing else.
+        let e = "hostvars['web01']['app_port']";
+        let (_, s, t) = hostvars_uses(e).remove(0);
+        assert_eq!(&e[s..t], "app_port");
+    }
+
+    /// The shapes it must refuse. Each would be a claim about a name Ansible never reads
+    /// there — the expensive kind of wrong, since it ends in a hover pointing somewhere.
+    #[test]
+    fn hostvars_extraction_refuses_what_it_cannot_know() {
+        let names = |e: &str| -> Vec<String> {
+            hostvars_uses(e).into_iter().map(|(n, _, _)| n).collect()
+        };
+        // The read name is itself a variable — unknowable without evaluating it.
+        assert!(names("hostvars[h][wanted]").is_empty());
+        // No read at all: the whole host dict, handed to a filter.
+        assert!(names("hostvars['web01'] | to_json").is_empty());
+        assert!(names("hostvars").is_empty());
+        // Somebody else's attribute that happens to be spelled the same.
+        assert!(names("result.hostvars['a'].x").is_empty());
+        // Inside a string literal it is text, not an expression.
+        assert!(names("'hostvars[\\'a\\'].x'").is_empty());
+        // A `]` inside the host name must not close the subscript early.
+        assert_eq!(names("hostvars['we]b01'].app_port"), ["app_port"]);
+        // Not an identifier, so not a name we can look up.
+        assert!(names("hostvars['w']['a-b']").is_empty());
+    }
+
+    /// T-171: the host half. Claimed only when the cursor is inside the host name itself,
+    /// so the two names on one line stay separately clickable.
+    #[test]
+    fn a_literal_hostvars_key_names_its_host_under_the_cursor() {
+        let t = "msg: {{ hostvars['web01'].web01_ib_ip }}";
+        let at = t.find("web01'").unwrap();
+        assert_eq!(hostvars_host_key_at(t, at).unwrap().0, "web01");
+        // The span is the name inside the quotes.
+        let (_, s, e) = hostvars_host_key_at(t, at).unwrap();
+        assert_eq!(&t[s..e], "web01");
+        // Outside the key — on the variable, on `hostvars`, before the read — it declines,
+        // so it can never steal a click the variable half should answer.
+        assert!(hostvars_host_key_at(t, t.find("web01_ib_ip").unwrap()).is_none());
+        assert!(hostvars_host_key_at(t, t.find("hostvars").unwrap()).is_none());
+        assert!(hostvars_host_key_at(t, 0).is_none());
+        // A non-literal key names no host that can be known here.
+        let d = "{{ hostvars[inventory_hostname].x }}";
+        assert!(hostvars_host_key_at(d, d.find("inventory_hostname").unwrap()).is_none());
+        // Somebody else's attribute spelled the same is not the magic dict.
+        let o = "{{ result.hostvars['web01'].x }}";
+        assert!(hostvars_host_key_at(o, o.find("web01").unwrap()).is_none());
+    }
 
     /// 45 of this repo's 56 import-level conditions are this shape.
     #[test]

@@ -84,7 +84,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | T-062 |
-| T-062 | [Index ini inventories and extension-less `group_vars`](open/T-062-inventory-var-sources.md) | M | — |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
@@ -100,7 +99,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
-| T-104 | [hostvars cannot see play, role or task vars](open/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | M    | —          |
+| T-062 | [Index ini inventories and extension-less `group_vars`](open/T-062-inventory-var-sources.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -157,6 +156,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
+| T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | T-062 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -202,6 +202,7 @@ T-021 is now unblocked on that side.
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
 | T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
+| T-173 | [Expand inventory_hostname when the play names a literal host](open/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -278,6 +279,8 @@ T-021 is now unblocked on that side.
 | T-103 | [A static field carrying a template is used literally](closed/T-103-a-static-field-carrying-a-template-is-used-literally.md) | done     |
 | T-168 | **bug** · [A YAML complex key parses clean but is fatal to Ansible's loader](closed/T-168-a-yaml-complex-key-parses-clean-but-is-fatal-to-ansible-s-lo.md) | done     |
 | T-169 | [A template inside a mapping key is invisible to the var walk](closed/T-169-a-template-inside-a-mapping-key-is-invisible-to-the-var-walk.md) | done     |
+| T-171 | [A hostvars host key is not a jump target](closed/T-171-a-hostvars-host-key-is-not-a-jump-target.md) | done     |
+| T-104 | [hostvars cannot see play, role or task vars](closed/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | done     |
 
 ## Settled — don't re-derive these
 

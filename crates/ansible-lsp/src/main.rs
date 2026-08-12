@@ -731,7 +731,7 @@ impl Backend {
             // Definitions of this name that are in effect at the use.
             let def_guards: Vec<Vec<String>> = defs
                 .iter()
-                .filter(|d| d.name == u.name && d.in_effect_at(path, u.span.start))
+                .filter(|d| d.name == u.name && d.in_effect_for(&u, path))
                 .map(|d| d.condition.clone().into_iter().collect())
                 .collect();
             if def_guards.is_empty() {
@@ -1025,7 +1025,7 @@ impl Backend {
                 // so it's computed per use rather than once per name.
                 let n = all
                     .iter()
-                    .filter(|d| d.name == u.name && d.in_effect_at(&path, u.span.start))
+                    .filter(|d| d.name == u.name && d.in_effect_for(&u, &path))
                     .count();
                 if n == 0 {
                     continue;
@@ -1042,11 +1042,67 @@ impl Backend {
         Ok(out)
     }
 
+    /// What Cmd+click resolves to, in the order the three kinds are tried: a file/role
+    /// reference, then a variable use, then the host half of a `hostvars['web01']` read.
+    /// Split out of the trait method so a test covers the *chain* — which of the three
+    /// answers, and that the later ones cannot steal a click from the earlier ones.
+    fn definition_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+        uri: &Url,
+        path: &Path,
+    ) -> Option<Vec<Location>> {
+        let Some(reference) = Self::reference_at(doc, nodes, pos) else {
+            // Not on a file/role/module reference — maybe on a variable use. Jump to where
+            // it's defined in this file (cross-file sources are a later step).
+            return Self::variable_defs_at(doc, nodes, pos, uri)
+                // Or on the host half of a `hostvars['web01']` read (T-171).
+                .or_else(|| Self::host_key_defs_at(doc, pos, path));
+        };
+        let ctx = FileContext::discover(path);
+        let res = resolve::resolve(&reference, &ctx);
+        if res.status != Status::Resolved {
+            return None;
+        }
+        let locations: Vec<Location> = res.targets.iter().filter_map(|t| location_at(t)).collect();
+        (!locations.is_empty()).then_some(locations)
+    }
+
     fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         references::extract(nodes)
             .into_iter()
             .find(|r| r.span.start <= byte && byte <= r.span.end)
+    }
+
+    /// T-171: the *host* half of `hostvars['web01'].x`. `host_vars/web01.yml` beside the
+    /// playbook is a deterministic path — the filename is the host name — so this needs no
+    /// inventory. What groups the host belongs to, and everything else a host "is", stays
+    /// T-062's; answering only "where are this host's variables written" is what keeps the
+    /// claim true without one.
+    fn host_key_defs_at(doc: &Document, pos: Position, path: &Path) -> Option<Vec<Location>> {
+        let byte = doc.lsp_to_byte(pos.line, pos.character);
+        let (host, _, _) = condition::hostvars_host_key_at(&doc.text, byte)?;
+        location_at(&host_vars_file(&host, path)?).map(|l| vec![l])
+    }
+
+    /// Every host key in the file that resolves, as a paintable link.
+    fn host_key_links(doc: &Document, path: &Path) -> Vec<DocumentLink> {
+        condition::hostvars_host_keys(&doc.text)
+            .into_iter()
+            .filter_map(|(host, s, e)| {
+                let target = host_vars_file(&host, path)?;
+                let (sl, sc) = doc.byte_to_lsp(s);
+                let (el, ec) = doc.byte_to_lsp(e);
+                Some(DocumentLink {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    target: Some(Url::from_file_path(&target).ok()?),
+                    tooltip: Some(target.display().to_string()),
+                    data: None,
+                })
+            })
+            .collect()
     }
 
     /// If `pos` sits on a variable use, the location(s) where that variable is defined in
@@ -1066,26 +1122,13 @@ impl Backend {
         let path = uri.to_file_path().ok()?;
         let defs: Vec<vars::Located> = cached_definitions(&path, nodes)
             .iter()
-            .filter(|d| d.name == use_.name && d.in_effect_at(&path, use_.span.start))
+            .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
             .cloned()
             .collect();
         // Jump to the definition that actually applies here — highest precedence, latest on a
         // tie — rather than a picker of every assignment. (hover lists them all, ranked.)
         let d = vars::effective(&defs)?;
-        // The definition's span is in *its own* file: current file from the in-memory
-        // (possibly unsaved) buffer, others read from disk.
-        let target = if d.file == path {
-            Document::new(doc.text.clone())
-        } else {
-            Document::new(std::fs::read_to_string(&d.file).ok()?)
-        };
-        let (sl, sc) = target.byte_to_lsp(d.span.start);
-        let (el, ec) = target.byte_to_lsp(d.span.end);
-        let u = Url::from_file_path(&d.file).ok()?;
-        Some(vec![Location {
-            uri: u,
-            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
-        }])
+        located_at(d, &path, &doc.text).map(|l| vec![l])
     }
 
     /// Markdown for the variable under the cursor: each place it's defined (source, file and
@@ -1192,7 +1235,7 @@ impl Backend {
         }
         let mut defs: Vec<vars::Located> = cached_definitions(path, nodes)
             .iter()
-            .filter(|d| d.name == use_.name && d.in_effect_at(path, use_.span.start))
+            .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
             .collect();
         if defs.is_empty() {
@@ -1289,6 +1332,17 @@ impl Backend {
         let (el, ec) = doc.byte_to_lsp(use_.span.end);
         Some((md.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
+}
+
+/// The `host_vars/<host>.yml` file beside `from`, if it exists (T-171). A deterministic
+/// path — the filename is the host name — so it needs no inventory. Which *groups* the host
+/// is in is a different question and waits for T-062.
+fn host_vars_file(host: &str, from: &Path) -> Option<PathBuf> {
+    let dir = from.parent()?.join("host_vars");
+    ["yml", "yaml"]
+        .iter()
+        .map(|ext| dir.join(format!("{host}.{ext}")))
+        .find(|p| p.is_file())
 }
 
 /// Human label for a variable's definition source.
@@ -2128,26 +2182,8 @@ impl LanguageServer for Backend {
         let Some(nodes) = doc.parse() else {
             return Ok(None);
         };
-        let Some(reference) = Self::reference_at(&doc, &nodes, pos) else {
-            // Not on a file/role/module reference — maybe on a variable use. Jump to where
-            // it's defined in this file (cross-file sources are a later step).
-            if let Some(locs) = Self::variable_defs_at(&doc, &nodes, pos, &uri) {
-                return Ok(Some(GotoDefinitionResponse::Array(locs)));
-            }
-            return Ok(None);
-        };
-
-        let ctx = FileContext::discover(&path);
-        let res = resolve::resolve(&reference, &ctx);
-        if res.status != Status::Resolved {
-            return Ok(None);
-        }
-
-        let locations: Vec<Location> = res.targets.iter().filter_map(|t| location_at(t)).collect();
-        if locations.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(GotoDefinitionResponse::Array(locations)))
+        Ok(Self::definition_at(&doc, &nodes, pos, &uri, &path)
+            .map(GotoDefinitionResponse::Array))
     }
 
     /// Every resolvable reference. The client also paints these, so what's clickable is
@@ -2156,7 +2192,20 @@ impl LanguageServer for Backend {
         let Some(a) = self.state.analyze(&p.text_document.uri) else {
             return Ok(None);
         };
-        let links = a
+        Ok(Some(Self::document_links_of(&a, &p.text_document.uri)))
+    }
+}
+
+impl Backend {
+    /// The body of [`LanguageServer::document_link`], split out so a test covers what the
+    /// editor actually receives rather than one ingredient of it.
+    ///
+    /// Not a style choice: T-171 shipped a host-key jump wired only into
+    /// `goto_definition`, its test called the helper directly, and the missing paint
+    /// reached the editor. A test that cannot see the assembly does not cover the
+    /// assembly, and this is the second time that gap let something through.
+    fn document_links_of(a: &Analysis, uri: &Url) -> Vec<DocumentLink> {
+        let mut links: Vec<DocumentLink> = a
             .refs
             .iter()
             .filter(|(r, res)| linkable(r, res))
@@ -2172,7 +2221,13 @@ impl LanguageServer for Backend {
                 })
             })
             .collect();
-        Ok(Some(links))
+        // T-171: `hostvars['web01']` resolves to a real file, so it is painted like one.
+        // Clickable but invisible is a feature nobody finds, and the demo row inviting a
+        // click on both names reads as broken when only one of them is coloured.
+        if let Ok(path) = uri.to_file_path() {
+            links.extend(Self::host_key_links(&a.doc, &path));
+        }
+        links
     }
 }
 
@@ -2188,6 +2243,23 @@ fn linkable(r: &Reference, res: &Resolution) -> bool {
         && res.targets.len() == 1
         && r.kind != ReferenceKind::Module
         && r.vars_files_group.is_none()
+}
+
+/// A definition's own position, as an editor Location. The span is in *its* file, so the
+/// line/column come from that file's text: the file being edited from the in-memory
+/// (possibly unsaved) buffer, anything else from disk.
+fn located_at(d: &vars::Located, open_path: &Path, open_text: &str) -> Option<Location> {
+    let target = if d.file == open_path {
+        Document::new(open_text.to_string())
+    } else {
+        Document::new(std::fs::read_to_string(&d.file).ok()?)
+    };
+    let (sl, sc) = target.byte_to_lsp(d.span.start);
+    let (el, ec) = target.byte_to_lsp(d.span.end);
+    Some(Location {
+        uri: Url::from_file_path(&d.file).ok()?,
+        range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+    })
 }
 
 fn location_at(path: &Path) -> Option<Location> {
@@ -3698,6 +3770,140 @@ mod tests {
         assert!(!hit.contains("never defined"), "{hit}");
     }
 
+    /// T-104 against `demo/hostvars.yml`, both halves at once — which is the point. The
+    /// GOOD rows were broken in the same way the BAD ones were: `hostvars[h].x` produced
+    /// no use at all, so there was nothing to navigate *and* nothing to judge. One
+    /// extraction fixes both, and hover must agree with the warning on every row or we
+    /// have rebuilt the T-100 contradiction one rule over.
+    #[test]
+    fn hostvars_reads_navigate_where_visible_and_warn_where_not() {
+        let path = std::path::Path::new("../../demo/hostvars.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        // The name inside `hostvars['web01'].<name>`, which is what T-104 had to extract.
+        let at = |needle: &str| text.find(needle).unwrap() + needle.find("].").unwrap() + 2;
+
+        // VISIBLE: host_vars belongs to the host, so both views answer. `web01_ib_ip` is
+        // defined in exactly one place, which is what makes this row readable — `app_port`
+        // is defined in three and its value depends on group membership we cannot know.
+        {
+            let byte = at("'web01'].web01_ib_ip");
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+                .expect("no hover on the host_vars read")
+                .0;
+            assert!(md.contains("10.0.0.1"), "hover shows the value: {md}");
+            let (line, character) = doc.byte_to_lsp(byte);
+            let pos = tower_lsp::lsp_types::Position { line, character };
+            assert!(
+                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri).is_some(),
+                "no jump target on the host_vars read"
+            );
+        }
+
+        // INVISIBLE: a play var. Hover declines and go-to-definition declines, because
+        // offering the play var would point at a value this read can never produce.
+        let byte = at("'web01'].play_scoped");
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path).is_none());
+        let (line, character) = doc.byte_to_lsp(byte);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri).is_none());
+
+        // ...and the warning takes over on exactly the two BAD rows, naming the source it
+        // found rather than claiming the variable was never defined.
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        // NOTHING is reported on a hostvars read — the retraction. The obvious rule
+        // ("every definition I can see is play-scoped, so this is always undefined") is
+        // unsound while inventory is unparsed: a name in play `vars:` AND in inventory
+        // reads fine through hostvars, measured. So the demo's BAD rows are BAD about
+        // *Ansible*, and we stay quiet about them until T-062.
+        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes);
+        let msgs: Vec<String> = ds.into_iter().map(|d| d.message).collect();
+        assert!(msgs.is_empty(), "no claim about a hostvars read: {msgs:?}");
+        // The control that keeps that silence meaningful: the same check is alive in this
+        // file for an ordinary read, so the quiet above is the rule and not a dead pass.
+        let live = super::Backend::analyze_text(
+            "- hosts: all\n  tasks:\n    - debug: { msg: \"{{ nowhere_at_all }}\" }\n".into(),
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes).len(),
+            1
+        );
+        let inv = at("'web01'].infiniband_ip");
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path).is_none());
+
+        // T-171, the other half of the same line: the HOST key. `host_vars/web01.yml` is a
+        // deterministic path — the filename is the host name — so this resolves without an
+        // inventory. Asserted here rather than apart, because the row invites one click per
+        // name and a reader finding only one of them working reads it as broken.
+        // Through `definition_at`, the whole Cmd+click chain — not `host_key_defs_at`
+        // alone. Calling the helper is what let the missing paint ship.
+        let key = text.find("hostvars['web01']").unwrap() + "hostvars['".len() + 1;
+        let (line, character) = doc.byte_to_lsp(key);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path)
+            .expect("host key jumps");
+        assert_eq!(locs.len(), 1);
+        assert!(
+            locs[0].uri.path().ends_with("demo/host_vars/web01.yml"),
+            "landed on {}",
+            locs[0].uri
+        );
+        // ...and it is PAINTED, not just clickable. Go-to-definition alone shipped a
+        // feature with no visual affordance: the first thing tried in the editor was
+        // "'web01' isn't coloured", because nothing said it could be clicked.
+        // Through `document_links_of`, so this covers what the editor is sent.
+        let a_links = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let all = super::Backend::document_links_of(&a_links, &uri);
+        let painted: Vec<_> = all
+            .into_iter()
+            .filter(|l| l.target.as_ref().is_some_and(|t| t.path().ends_with("host_vars/web01.yml")))
+            .collect();
+        assert!(!painted.is_empty(), "the host key must paint like a path");
+        for l in &painted {
+            assert!(
+                l.target.as_ref().unwrap().path().ends_with("demo/host_vars/web01.yml"),
+                "painted link points at {:?}",
+                l.target
+            );
+            // The range covers the host name only — not the quotes, not `hostvars[`.
+            let line = text.lines().nth(l.range.start.line as usize).unwrap();
+            let painted_text: String = line
+                .chars()
+                .skip(l.range.start.character as usize)
+                .take((l.range.end.character - l.range.start.character) as usize)
+                .collect();
+            assert_eq!(painted_text, "web01");
+        }
+        // Only the keys that resolve are painted: `inventory_hostname` is not a literal,
+        // and a literal naming a host with no host_vars file has nothing to point at.
+        assert_eq!(painted.len(), text.matches("hostvars['web01']").count());
+
+        // A non-literal key names no host we can know — silent, not a guess.
+        let dyn_key = text.find("hostvars[inventory_hostname]").unwrap() + "hostvars[".len() + 1;
+        let (line, character) = doc.byte_to_lsp(dyn_key);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        assert!(super::Backend::host_key_defs_at(&doc, pos, &path).is_none());
+        // The variable half of the same line still wins its own click — the host-key
+        // branch is last in the chain and must not shadow it.
+        let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path).expect("var jumps");
+        assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
+
+        for m in &msgs {
+            assert!(m.starts_with("always undefined:"), "verdict first: {m}");
+            assert!(m.contains("`play_scoped`"), "{m}");
+            assert!(m.contains("play var"), "names the source it found: {m}");
+            assert!(m.contains("without the play"), "gives the mechanism: {m}");
+            assert!(m.contains("Move the value"), "gives the fix: {m}");
+            assert!(!m.contains("never defined"), "the definition exists: {m}");
+        }
+    }
+
     /// T-169's two editor consumers, against the demo rows that claim them. A name inside
     /// a key Ansible renders (`set_fact`, `set_stats`' `data:`) hovers and Cmd+clicks like
     /// any other; the same name in a key Ansible leaves literal must do neither, or we
@@ -4277,6 +4483,10 @@ mod tests {
         }
     }
 }
+
+
+
+
 
 
 

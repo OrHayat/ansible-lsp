@@ -1,30 +1,16 @@
 ---
-# `hostvars` — reading ANOTHER host's variables.
+# `hostvars` — one host reading ANOTHER host's variables.
 #
-# Do not confuse it with the `host_vars/` folder next door. Ansible named two different
-# things almost the same:
+# Two different things share the name. Keep them apart:
 #
-#   host_vars/web01.yml   a FILE. Variables that apply to the host web01.
-#   hostvars['web01']     a runtime DICT. Lets a task running on web02 read web01's data.
+#   host_vars/web01.yml   a FILE holding web01's variables
+#   hostvars['web01']     a runtime DICT for reading them from somewhere else
 #
-# The dict is how you template a config that has to name every member of a cluster —
-# `{% for h in groups['webservers'] %}{{ hostvars[h].app_port }}{% endfor %}` — because a
-# task otherwise only ever sees the host it is running on.
+# The rule, measured on 2.21.2: `hostvars` is assembled without the play, so it sees only
+# what belongs to the HOST — inventory, `group_vars/`, `host_vars/`, and facts
+# (`set_fact`, `register`, `include_vars`). Anything belonging to the PLAY — play `vars:`,
+# role vars, block/task vars — is invisible through it. Always, on every host.
 #
-# The trap (T-104): hostvars is built with NO play and NO task. `HostVars.__getitem__`
-# calls `get_vars(host=host)` without either (`vars/hostvars.py:44-57`), so it can see
-# inventory, `group_vars/`, `host_vars/`, facts and `-e` — and can NEVER see play `vars:`,
-# `vars_files:`, role defaults/vars/params, or block/task vars.
-#
-# That is structural, not timing: no ordering makes it work, and it holds for every host
-# including the one you are already on. Measured on 2.21.2, where it fails with
-#
-#   object of type 'HostVarsVars' has no attribute 'play_scoped'
-#
-# — a message that names the internal bucket rather than the variable, and never mentions
-# that the definition exists and is simply out of reach. That is the gap T-104 fills.
-#
-# Run it against the demo inventory to see both halves:
 #   ansible-playbook -i inventory.ini hostvars.yml -c local --limit web02
 
 - name: hostvars demo
@@ -33,36 +19,54 @@
   vars:
     play_scoped: 8080
   tasks:
-    # GOOD: `host_vars/web01.yml` sets app_port = 8888, and host_vars is exactly the kind
-    # of source hostvars CAN see. This is the mechanism working as intended — web02 reading
-    # web01's value. Hover app_port for the full per-host picture (multi_host_vars.yml).
-    - name: GOOD another host's host_vars, reached through hostvars
-      ansible.builtin.debug:
-        msg: "web01's app_port is {{ hostvars['web01'].app_port }}"
-
-    # BAD: `play_scoped` is defined twelve lines up, and this is undefined anyway — play
-    # vars are not in the bucket hostvars is built from. Every host, every run.
+    # GOOD: `web01_ib_ip` is set in host_vars/web01.yml and nowhere else. It belongs to the
+    # host, so hostvars sees it. Cmd+click the name to jump there; hover shows the value.
     #
-    # NOT YET FLAGGED — T-104 is the ticket that makes this a diagnostic. Until it lands
-    # the editor says nothing here, which is the whole reason the ticket is a P1: the
-    # failure is silent in Ansible too.
-    - name: BAD a play var read through hostvars is always undefined
+    # BOTH names on this line are clickable, and they answer different questions:
+    #   'web01'       -> host_vars/web01.yml   "where are this host's variables written"
+    #   web01_ib_ip   -> the line that sets it "where does this value come from"
+    # The host jump matches the key against the filename, so it needs no inventory. Which
+    # groups web01 belongs to is a different question, and waits for T-062.
+    - name: GOOD a host_vars value, read through hostvars
+      ansible.builtin.debug:
+        msg: "{{ hostvars['web01'].web01_ib_ip }}"
+
+    # BAD (in Ansible — NOT FLAGGED here): `play_scoped` is six lines up, and this is
+    # undefined anyway, because it belongs to the play and hostvars has no play. The fix is
+    # to move the value somewhere the host owns — host_vars/, group_vars/, or a set_fact.
+    #
+    # We deliberately say nothing. The obvious rule — "every definition I can see is
+    # play-scoped, so this is always undefined" — is a false claim while inventory is
+    # unparsed (T-062): a name written in play `vars:` AND in the inventory reads fine
+    # through hostvars, returning the inventory value. Measured. Warning here would fire on
+    # working code, which costs more than staying quiet.
+    #
+    # Hover still declines on this token, and that part IS sound: whatever the inventory
+    # holds, the play var is not what this read returns, so offering it would be a lie.
+    - name: BAD a play var read through hostvars
       ansible.builtin.debug:
         msg: "{{ hostvars['web01'].play_scoped }}"
 
-    # BAD: the sharpest spelling of the same fault. Same variable, same host, same task —
-    # the direct read works and the hostvars read does not. Nothing about ordering or host
-    # selection explains it; the two spellings simply consult different buckets.
-    - name: BAD the same variable, same host, two spellings, two answers
+    # BAD: the same fault, at its sharpest. Same variable, same host, same task — the plain
+    # read works and the hostvars read does not. Nothing about ordering or host selection
+    # explains it; the two spellings consult different buckets.
+    - name: BAD the same variable, two spellings, two answers
       ansible.builtin.debug:
         msg:
           - "direct           = {{ play_scoped }}"
-          - "through hostvars = {{ hostvars[inventory_hostname].play_scoped }}"
+          - "through hostvars = {{ hostvars[inventory_hostname].play_scoped }}" 
+          - "not exists = {{ hostvars[inventory_hostname].not_exists }}"
 
-    # GOOD: the fix. Move the variable to a source hostvars can see — `group_vars/all.yml`
-    # sets deploy_region, so it is reachable both ways. This is what the T-104 message will
-    # have to suggest, so it is here as the control: the identical shape, one line up,
-    # reading a source that works.
-    - name: GOOD the same shape against a group_vars source — reachable both ways
+    # NO HINT: the same silence, arrived at the other way. This name is defined nowhere we
+    # can see, and it is the shape a real inventory uses. Warning on it cost 37 false
+    # positives across the corpus, every one an inventory host var.
+    #
+    # So both rows above and this one are quiet, for one reason: until T-062 parses
+    # inventories, we cannot tell "undefined" from "defined somewhere we cannot read".
+    - name: NO HINT a name only the inventory could define
       ansible.builtin.debug:
-        msg: "{{ hostvars['web01'].deploy_region }} == {{ deploy_region }}"
+        msg: "{{ hostvars['web01'].infiniband_ip }}"
+
+    - name: not existing host
+      ansible.builtin.debug:
+        msg: "{{ hostvars['web0143'].infiniband_ip }}"

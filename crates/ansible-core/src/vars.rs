@@ -98,6 +98,44 @@ impl VarSource {
     pub fn host_scoped(self) -> bool {
         matches!(self, VarSource::GroupVars | VarSource::HostVars)
     }
+
+    /// Whether a `hostvars[...]` read can see this source (T-104).
+    ///
+    /// `HostVars.raw_get` calls `get_vars(host=host, include_hostvars=False)` with **no
+    /// play and no task** (`vars/hostvars.py:53`), so the split is not a precedence level:
+    /// it is whether the source wrote into the *host's* storage or hung off the
+    /// play/role/task object. All thirteen measured on 2.21.2, cross-host:
+    ///
+    /// | visible                                   | invisible                            |
+    /// | ----------------------------------------- | ------------------------------------ |
+    /// | `group_vars/`, `host_vars/`               | play `vars:`, `vars_files:`          |
+    /// | `include_vars`                            | role defaults, role vars             |
+    /// | `set_fact`, `register`                    | role params, `roles:` entry `vars:`  |
+    /// |                                           | block `vars:`, task `vars:`          |
+    ///
+    /// `include_vars` visible while `vars_files` is not is the one to remember: both load a
+    /// YAML file of variables, and only the first calls `register_host_variables`
+    /// (`action/include_vars.py:149`, the same door `set_fact` uses). Reading the levels
+    /// instead of measuring would put `include_vars` on the wrong side and warn on working
+    /// code.
+    pub fn visible_to_hostvars(self) -> bool {
+        match self {
+            VarSource::GroupVarsAll
+            | VarSource::GroupVars
+            | VarSource::HostVars
+            | VarSource::IncludeVars
+            | VarSource::SetFact
+            | VarSource::Register => true,
+            VarSource::PlayVars
+            | VarSource::BlockVars
+            | VarSource::TaskVars
+            | VarSource::VarsFiles
+            | VarSource::RoleDefaults
+            | VarSource::RoleVars
+            | VarSource::RoleParams
+            | VarSource::RoleEntryVars => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -168,10 +206,14 @@ pub struct VarUse {
     /// so a conditional use can be checked against its definitions' conditions.
     pub guard: Vec<String>,
     /// Set by [`undefined_uses`] when a definition of this name *does* exist in the file
-    /// but does not reach here — today only a `roles:` entry's params and `vars:`, read
-    /// from the play's tasks. The distinction is the whole message: "never defined" sends
-    /// the reader to add a definition that is already eleven lines up.
+    /// but does not reach here — a `roles:` entry's params and `vars:` read from the play's
+    /// tasks (T-100), or a play-scoped source read through `hostvars` (T-104). The
+    /// distinction is the whole message: "never defined" sends the reader to add a
+    /// definition that is already eleven lines up.
     pub defined_out_of_scope: bool,
+    /// Read through `hostvars[...]`, which is assembled with no play and no task — so only
+    /// the sources [`VarSource::visible_to_hostvars`] admits can satisfy it (T-104).
+    pub through_hostvars: bool,
 }
 
 /// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
@@ -195,17 +237,7 @@ fn template_uses_with(
             break;
         };
         let expr = &text[expr_start..expr_start + close_rel];
-        for (name, s, e) in extract(expr) {
-            out.push(VarUse {
-            defined_out_of_scope: false,
-                name,
-                span: Span {
-                    start: base + expr_start + s,
-                    end: base + expr_start + e,
-                },
-                guard: Vec::new(),
-            });
-        }
+        push_uses(expr, base + expr_start, out, &extract);
         i = expr_start + close_rel + 2;
     }
 }
@@ -222,16 +254,37 @@ fn expression_uses_with(
     out: &mut Vec<VarUse>,
     extract: impl Fn(&str) -> Vec<(String, usize, usize)>,
 ) {
-    for (name, s, e) in extract(expr) {
+    push_uses(expr, base, out, &extract);
+}
+
+/// One Jinja expression's uses: the roots `extract` finds, plus the names read off a
+/// `hostvars[...]` lookup, which the root scan structurally cannot see (T-104). Both views
+/// (`uses` and `any_uses`) come through here, so neither can acquire the hostvars names
+/// without the other.
+fn push_uses(
+    expr: &str,
+    base: usize,
+    out: &mut Vec<VarUse>,
+    extract: &impl Fn(&str) -> Vec<(String, usize, usize)>,
+) {
+    let mut push = |name: String, s: usize, e: usize, through_hostvars: bool| {
         out.push(VarUse {
-            defined_out_of_scope: false,
             name,
-            span: Span {
-                start: base + s,
-                end: base + e,
-            },
+            span: Span { start: base + s, end: base + e },
             guard: Vec::new(),
+            defined_out_of_scope: false,
+            through_hostvars,
         });
+    };
+    for (name, s, e) in extract(expr) {
+        push(name, s, e, false);
+    }
+    // Guarded on the substring: this runs per scalar of every file in a scan, and the
+    // overwhelming majority never mention the name.
+    if expr.contains("hostvars") {
+        for (name, s, e) in condition::hostvars_uses(expr) {
+            push(name, s, e, true);
+        }
     }
 }
 
@@ -482,15 +535,36 @@ impl Located {
     /// *same* file, one after the use hasn't executed yet, so it can't define that use. Across
     /// files we can't order it against the use, so we keep it rather than guess.
     pub fn in_effect_at(&self, use_file: &Path, use_pos: usize) -> bool {
-        if !self.in_scope_at(use_file, use_pos) {
-            return false;
-        }
+        self.in_scope_at(use_file, use_pos) && self.ordered_before(use_file, use_pos)
+    }
+
+    /// The run-order half of [`in_effect_at`], split out so the use-aware pair below can
+    /// reuse it without re-deriving the scope test.
+    fn ordered_before(&self, use_file: &Path, use_pos: usize) -> bool {
         match self.source {
             VarSource::SetFact | VarSource::Register => {
                 self.file != use_file || self.span.start < use_pos
             }
             _ => true,
         }
+    }
+
+    /// Can this definition satisfy `use_` at all? Scope (T-100), plus — for a read through
+    /// `hostvars[...]` — whether the source survives into host storage (T-104).
+    ///
+    /// Both rules live here rather than in one caller, which is the T-100 lesson: the scope
+    /// check once sat in `undefined_uses` alone, and hover went on pointing at a definition
+    /// the warning called missing. A second reachability rule split the same way would
+    /// reproduce that exactly.
+    pub fn reaches(&self, use_: &VarUse, use_file: &Path) -> bool {
+        self.in_scope_at(use_file, use_.span.start)
+            && (!use_.through_hostvars || self.source.visible_to_hostvars())
+    }
+
+    /// [`reaches`] plus run order — what hover and go-to-definition want, since they answer
+    /// "what does this read *here*" rather than "is this name ever set".
+    pub fn in_effect_for(&self, use_: &VarUse, use_file: &Path) -> bool {
+        self.reaches(use_, use_file) && self.ordered_before(use_file, use_.span.start)
     }
 
     /// Whether this definition's [`scope`](Located::scope) covers a use at `use_pos` in
@@ -634,7 +708,21 @@ pub fn undefined_uses_in(
     uses(nodes)
         .into_iter()
         .filter(|u| {
-            !all.iter().any(|d| d.name == u.name && d.in_scope_at(path, u.span.start))
+            !all.iter().any(|d| d.name == u.name && d.reaches(u, path))
+                // A `hostvars[...]` read is answered mostly by inventory, which we do not
+                // parse (T-062) — so this check has nothing to say about one, in either
+                // direction. Measured, both ways round:
+                //
+                // - found nothing: 37 corpus warnings, all 37 inventory host vars.
+                // - found only play-scoped definitions: still not provably undefined. A
+                //   name set in play `vars:` *and* in inventory reads fine through
+                //   hostvars — measured, it returns the inventory value — so "always
+                //   undefined" is a false claim on working code.
+                //
+                // Hover and go-to-definition still apply `visible_to_hostvars`, which is
+                // sound for them: the play var is definitely not what this read returns,
+                // whatever inventory holds. Claiming the read is *broken* needs T-062.
+                && !u.through_hostvars
                 && !condition::is_magic(&u.name)
                 && !u.name.starts_with("ansible_")
                 && !declared.contains(&u.name)
@@ -1471,6 +1559,79 @@ mod tests {
         .is_empty());
         // And a literal key never was a use, so it cannot become an undefined one.
         assert!(undef("- hosts: all\n  tasks:\n    - debug:\n        \"{{ argname }}\": x\n").is_empty());
+    }
+
+    /// T-104: which sources a `hostvars[...]` read can see. This is the measured table on
+    /// `VarSource`, asserted here so a source added later has to declare a side. Every row
+    /// was run cross-host on 2.21.2 (web02 reading web01), not read off the precedence
+    /// list — reading it would have put `include_vars` on the wrong side.
+    #[test]
+    fn hostvars_visibility_matches_what_was_measured() {
+        use VarSource::*;
+        for s in [GroupVarsAll, GroupVars, HostVars, IncludeVars, SetFact, Register] {
+            assert!(s.visible_to_hostvars(), "{s:?} was measured VISIBLE");
+        }
+        for s in [
+            PlayVars, BlockVars, TaskVars, VarsFiles, RoleDefaults, RoleVars, RoleParams,
+            RoleEntryVars,
+        ] {
+            assert!(!s.visible_to_hostvars(), "{s:?} was measured invisible");
+        }
+        // The pair that makes this a measurement and not a precedence rule: both load a
+        // YAML file of variables, and only one survives into the host's own storage.
+        assert!(IncludeVars.visible_to_hostvars());
+        assert!(!VarsFiles.visible_to_hostvars());
+    }
+
+    /// T-104: `undefined_uses` says **nothing** about a `hostvars[...]` read, in either
+    /// direction. Not a gap — a retraction, because the claim was not sound.
+    ///
+    /// The obvious rule is "every definition I can see is play-scoped, so this is always
+    /// undefined". It is wrong: `hostvars` is answered mostly by inventory, which we do
+    /// not parse (T-062). Measured both ways round —
+    ///
+    /// - found nothing: 37 corpus warnings, all 37 inventory host vars.
+    /// - found only play-scoped: a name in play `vars:` *and* in inventory reads fine
+    ///   through hostvars (measured: returns the inventory value), so the warning fires
+    ///   on working code.
+    ///
+    /// The navigation half is unaffected and still applies `visible_to_hostvars`, which
+    /// is sound for it: whatever inventory holds, the play var is not what this read
+    /// returns, so hover must not offer it.
+    #[test]
+    fn a_hostvars_read_is_never_reported_undefined() {
+        // Defined only in play vars — the case that looks provable and is not.
+        assert!(undef(concat!(
+            "- hosts: all\n  vars:\n    play_scoped: 8080\n  tasks:\n",
+            "    - debug: { msg: \"{{ hostvars['web01'].play_scoped }}\" }\n",
+        ))
+        .is_empty());
+        // Defined nowhere we can see — the 37-false-positive shape.
+        assert!(undef(concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ hostvars[item].infiniband_ip }}\" }\n",
+        ))
+        .is_empty());
+        // A fact is host storage, so hostvars genuinely sees it.
+        assert!(undef(concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - set_fact: { gathered: 1 }\n",
+            "    - debug: { msg: \"{{ hostvars['web01'].gathered }}\" }\n",
+        ))
+        .is_empty());
+        // THE CONTROL, and the reason this test is not vacuous: the ordinary read of the
+        // very same undefined name still warns. Silence above is the hostvars rule, not
+        // the check being asleep.
+        assert_eq!(
+            undef("- hosts: all\n  tasks:\n    - debug: { msg: \"{{ nowhere_at_all }}\" }\n"),
+            ["nowhere_at_all"]
+        );
+        // The use is still extracted and still marked — hover and go-to-definition need
+        // both, and T-062 will need them to make the diagnostic sound.
+        let src = "- hosts: all\n  vars:\n    play_scoped: 8080\n  tasks:\n    - debug: { msg: \"{{ hostvars['w'].play_scoped }}\" }\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let u = uses(&nodes).into_iter().find(|u| u.through_hostvars).expect("still a use");
+        assert_eq!(u.name, "play_scoped");
     }
 
     /// `set_stats` renders its keys exactly like `set_fact` (T-169) and is otherwise

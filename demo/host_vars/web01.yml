@@ -2,3 +2,6 @@
 # host_vars for the single host `web01` (precedence level 10) — outranks its group's
 # group_vars, but only for web01. web02 (also a webserver) still gets 8080; db01 gets 5432.
 app_port: 8888
+# Defined here and nowhere else, so `hostvars.yml` has one unambiguous thing to read —
+# unlike app_port above, whose value depends on which group the host is in.
+web01_ib_ip: 10.0.0.1
