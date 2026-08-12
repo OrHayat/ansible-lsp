@@ -78,6 +78,41 @@ impl Default for Settings {
     }
 }
 
+impl State {
+    /// Remember `ansibleLsp.inventory` — the user stating the `-i` they run with, which an
+    /// editor can never observe (T-062). Stored raw and resolved against the workspace root
+    /// only when read, because settings arrive during `initialize` and the roots may not be
+    /// known yet at that moment.
+    fn set_inventory(&self, v: &serde_json::Value) {
+        let paths: Vec<PathBuf> = v
+            .get("inventory")
+            .and_then(|i| i.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|p| p.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Ok(mut slot) = self.inventory.lock() {
+            *slot = paths.clone();
+        }
+        if let Ok(mut slot) = INVENTORY_SETTING.lock() {
+            *slot = paths;
+        }
+        // A changed inventory changes what every file can see, so nothing computed under
+        // the old one may survive. Wholesale, not per-file: the setting is not a file edit
+        // and has no dependency edge to walk back from.
+        if let Ok(mut c) = var_cache().lock() {
+            c.epoch = c.epoch.wrapping_add(1);
+            c.entries.clear();
+            c.deps.clear();
+            c.reverse.clear();
+        }
+    }
+}
+
 impl Settings {
     /// Reads `{ inlayHints: { enabled }, hover: { candidatesOnResolved } }`.
     /// The client normalises both `initializationOptions` and `didChangeConfiguration` to this
@@ -119,6 +154,16 @@ impl tower_lsp::lsp_types::notification::Notification for AnsibleStatus {
     const METHOD: &'static str = "ansible/status";
 }
 
+/// What inventory the server settled on, pushed to the client so the status bar can show
+/// it (T-062). The whole point of the ticket is that "which inventory?" is ambiguous, so a
+/// tool that picks one silently reproduces the problem it is solving — the answer has to be
+/// on screen.
+enum InventoryStatus {}
+impl tower_lsp::lsp_types::notification::Notification for InventoryStatus {
+    type Params = serde_json::Value;
+    const METHOD: &'static str = "ansible/inventory";
+}
+
 // ---------------------------------------------------------- variable cache (T-055)
 // `vars::definitions` walks the filesystem (reads and parses every included file, role
 // vars, group_vars…) and is called from several per-keystroke paths. Cache each file's
@@ -147,8 +192,32 @@ fn canon(p: &Path) -> PathBuf {
 /// Cached `vars::definitions`. On a miss, compute it and record its dependency files in the
 /// reverse map so later invalidation is precise.
 fn cached_definitions(path: &Path, nodes: &[Node]) -> Arc<Vec<vars::Located>> {
-    cached_definitions_in(path, nodes, &ScanCache::default())
+    cached_definitions_in(path, nodes, &ScanCache::default().with_inventory(inventory_setting()))
 }
+
+/// The `ansibleLsp.inventory` paths, workspace-resolved. A free function because the walk is
+/// reached from several places that hold no `Backend`; the value lives in one `OnceLock`-style
+/// slot the server writes whenever settings arrive.
+fn inventory_setting() -> Vec<PathBuf> {
+    let raw = INVENTORY_SETTING.lock().map(|v| v.clone()).unwrap_or_default();
+    if raw.is_empty() {
+        return raw;
+    }
+    let root = WORKSPACE_ROOT.lock().ok().and_then(|r| r.clone());
+    raw.into_iter()
+        .map(|p| match (&root, p.is_absolute()) {
+            (Some(r), false) => r.join(p),
+            _ => p,
+        })
+        .collect()
+}
+
+/// The first workspace folder, for resolving a relative `ansibleLsp.inventory`. A separate
+/// slot from `State::roots` because [`inventory_setting`] is reached from free functions
+/// that hold no `State`.
+static WORKSPACE_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+static INVENTORY_SETTING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// [`cached_definitions`] against a caller-owned [`ScanCache`], so the files of one workspace
 /// scan share the subtrees they all reach instead of re-walking them each (T-076). The two
@@ -224,6 +293,12 @@ struct State {
     /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
     settings: Mutex<Settings>,
+    /// The inventory the user says they run with — `ansibleLsp.inventory`, standing in for
+    /// `-i`, which never reaches an editor (T-062). Empty means "model a plain
+    /// `ansible-playbook`": `ANSIBLE_INVENTORY`, then `ansible.cfg`, then
+    /// `/etc/ansible/hosts`. Workspace state rather than a `Settings` field because
+    /// `Settings` is `Copy` and passed by value into every hover.
+    inventory: Mutex<Vec<PathBuf>>,
     /// What arrived in `initializationOptions`, logged once the client can receive it.
     startup_note: Mutex<String>,
     /// True while a workspace scan runs — a second trigger during one would double-publish.
@@ -844,7 +919,54 @@ impl Backend {
                 )
                 .await;
         }
+        Self::publish_inventory(&state, &client).await;
         Self::scan_workspace(state, client).await;
+    }
+
+    /// Tell the client which inventory is in effect and how it was chosen, so the status bar
+    /// can show it. `source` is what the user needs to reason about a surprise: "setting"
+    /// means they picked it, anything else means we followed Ansible's own ladder.
+    async fn publish_inventory(state: &Arc<State>, client: &Client) {
+        let configured = inventory_setting();
+        let source = if configured.is_empty() { "ansible.cfg" } else { "setting" };
+        let root = state.roots.lock().ok().and_then(|r| r.first().cloned());
+        let resolved: Vec<String> = root
+            .as_deref()
+            .map(|r| {
+                let cache = ScanCache::default().with_inventory(configured.clone());
+                ansible_core::inventory::sources(&cache.context(&r.join("x.yml")).config, &cache)
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = client
+            .send_notification::<InventoryStatus>(serde_json::json!({
+                "source": source,
+                "resolved": resolved,
+                "candidates": Self::inventory_candidates(root.as_deref()),
+            }))
+            .await;
+    }
+
+    /// Inventory-looking files in the workspace root, for the picker to offer. Deliberately
+    /// shallow and name-based: this list is a convenience, never an authority — what is
+    /// actually read is `resolved` above.
+    fn inventory_candidates(root: Option<&Path>) -> Vec<String> {
+        let Some(root) = root else { return Vec::new() };
+        use ansible_core::fs::Fs as _;
+        let mut out: Vec<String> = ansible_core::fs::StdFs
+            .read_dir(root)
+            .into_iter()
+            .filter(|(p, _)| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("inventory") || n == "hosts")
+            })
+            .filter_map(|(p, _)| p.file_name()?.to_str().map(str::to_string))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Resolve every YAML file in the workspace and publish what's broken.
@@ -1360,6 +1482,7 @@ fn source_label(s: vars::VarSource) -> &'static str {
         GroupVarsAll => "group_vars/all",
         GroupVars => "group_vars",
         HostVars => "host_vars",
+        Inventory => "inventory",
         IncludeVars => "include_vars",
         RoleParams => "role param",
         RoleEntryVars => "roles: entry vars",
@@ -1373,7 +1496,7 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
-        | GroupVarsAll | GroupVars | HostVars | IncludeVars | RoleParams
+        | GroupVarsAll | GroupVars | HostVars | Inventory | IncludeVars | RoleParams
         | RoleEntryVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
@@ -2010,6 +2133,10 @@ impl LanguageServer for Backend {
                     roots.push(uri);
                 }
             }
+            // What a relative `ansibleLsp.inventory` is relative to (T-062).
+            if let Ok(mut r) = WORKSPACE_ROOT.lock() {
+                *r = roots.first().cloned();
+            }
         }
 
         // Logged rather than applied silently: "the setting does nothing" is otherwise
@@ -2020,6 +2147,7 @@ impl LanguageServer for Backend {
                 if let Ok(mut s) = self.state.settings.lock() {
                     *s = Settings::from_json(opts);
                 }
+                self.state.set_inventory(opts);
                 // Which Ansible to index, when several exist or none is on PATH. Read here,
                 // before the first `detect()` in `initialized`, so the setting wins.
                 if let Some(path) = opts
@@ -2077,6 +2205,10 @@ impl LanguageServer for Backend {
         if let Ok(mut s) = self.state.settings.lock() {
             *s = Settings::from_json(&p.settings);
         }
+        self.state.set_inventory(&p.settings);
+        // Re-publish: the status bar must follow the change, or picking an inventory
+        // silently leaves the old name on screen — the exact ambiguity this shows to fix.
+        Self::publish_inventory(&self.state, &self.client).await;
         let s = self.state.settings.lock().map(|s| *s).unwrap_or_default();
         self.client
             .log_message(
@@ -2281,6 +2413,7 @@ async fn main() {
             flagged: Mutex::new(HashSet::new()),
             mutations: Mutex::new(HashMap::new()),
             settings: Mutex::new(Settings::default()),
+            inventory: Mutex::new(Vec::new()),
             startup_note: Mutex::new(String::new()),
             scanning: AtomicBool::new(false),
         }),

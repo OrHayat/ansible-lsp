@@ -49,6 +49,8 @@ function hintSettings() {
     },
     scan: { concurrency: c.get("scan.concurrency", 0) },
     ansiblePath: c.get("ansiblePath", ""),
+    // T-062: stands in for `-i`. Empty means "model a plain ansible-playbook".
+    inventory: c.get("inventory", []),
   };
 }
 
@@ -145,7 +147,8 @@ function activate(context) {
       if (
         !e.affectsConfiguration("ansibleLsp.inlayHints") &&
         !e.affectsConfiguration("ansibleLsp.hover") &&
-        !e.affectsConfiguration("ansibleLsp.scan")
+        !e.affectsConfiguration("ansibleLsp.scan") &&
+        !e.affectsConfiguration("ansibleLsp.inventory")
       )
         return;
       client?.sendNotification("workspace/didChangeConfiguration", {
@@ -182,6 +185,53 @@ function activate(context) {
       ansibleStatus.hide();
     }
   });
+
+  // T-062: which inventory is in effect. The whole ticket exists because "which one?" is
+  // ambiguous — three inventories in a repo can disagree about the same variable — so a
+  // server that picks one silently reproduces the problem. Show the answer, and make
+  // switching one click rather than a JSON edit.
+  const inventoryStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    0
+  );
+  inventoryStatus.command = "ansibleLsp.pickInventory";
+  context.subscriptions.push(inventoryStatus);
+  let inventoryCandidates = [];
+  client.onNotification("ansible/inventory", (p) => {
+    inventoryCandidates = (p && p.candidates) || [];
+    const resolved = (p && p.resolved) || [];
+    const names = resolved.map((f) => f.split("/").pop());
+    inventoryStatus.text = names.length
+      ? `$(list-tree) ${names.join(", ")}`
+      : "$(list-tree) no inventory";
+    inventoryStatus.tooltip = names.length
+      ? `Inventory in effect (${p.source === "setting" ? "ansibleLsp.inventory" : "ansible.cfg / env"}):\n` +
+        resolved.join("\n") +
+        "\n\nClick to switch. This is what variable hover and go-to-definition read."
+      : "No inventory found. Variables defined only in inventory can't resolve.\n" +
+        "Click to pick one, or leave it — the tool stays quiet rather than guessing.";
+    inventoryStatus.show();
+  });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ansibleLsp.pickInventory", async () => {
+      const cfg = vscode.workspace.getConfiguration("ansibleLsp");
+      const follow = "$(settings) Follow ansible.cfg";
+      const pick = await vscode.window.showQuickPick(
+        [follow, ...inventoryCandidates],
+        {
+          title: "Inventory to analyse with",
+          placeHolder:
+            "Stands in for -i, which the editor can't see. Affects variable hover and go-to-definition.",
+        }
+      );
+      if (pick === undefined) return;
+      await cfg.update(
+        "inventory",
+        pick === follow ? [] : [pick],
+        vscode.ConfigurationTarget.Workspace
+      );
+    })
+  );
 
   // Not awaited: activate() must return promptly so the extension host isn't blocked.
   client.start().then(() => vscode.window.visibleTextEditors.forEach(repaint));

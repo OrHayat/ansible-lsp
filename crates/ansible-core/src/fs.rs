@@ -57,6 +57,17 @@ pub trait Fs: Send + Sync {
 
     fn read(&self, p: &Path) -> Option<String>;
 
+    /// Is this file executable by anyone? The one question that separates a dynamic
+    /// inventory — a script Ansible *runs* — from a static one it reads (T-062), and the
+    /// reason we never run it.
+    ///
+    /// Defaults to `false`, which is right for in-memory trees (nothing there is a real
+    /// program) and on Windows, where the bit does not exist. Only a real filesystem
+    /// overrides it, so a fake can still assert the plugin-config half of the detection.
+    fn is_executable(&self, _p: &Path) -> bool {
+        false
+    }
+
     /// One directory's entries with what each one *is*, not descending. Order is the
     /// filesystem's — callers that need determinism sort.
     ///
@@ -146,6 +157,15 @@ impl Fs for StdFs {
 
     fn read(&self, p: &Path) -> Option<String> {
         std::fs::read_to_string(p).ok()
+    }
+
+    /// Any execute bit. Unix only — on Windows the concept does not exist and the trait
+    /// default (`false`) stands, which costs nothing: an inventory that is a script is a
+    /// Unix arrangement, and misreading one as static text is a miss, never a wrong claim.
+    #[cfg(unix)]
+    fn is_executable(&self, p: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
     }
 
     fn read_dir(&self, p: &Path) -> Vec<(PathBuf, Kind)> {

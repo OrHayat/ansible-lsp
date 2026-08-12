@@ -52,6 +52,11 @@ pub enum VarSource {
     GroupVars,
     /// A key in a playbook-adjacent `host_vars/<host>` file — applies only to that host.
     HostVars,
+    /// A variable written in the inventory itself — a `[group:vars]` section, an inline
+    /// `var=value` on a host line, or `vars:`/`hosts:` in a YAML inventory (T-062).
+    /// Host-dependent like [`VarSource::GroupVars`]: which hosts it reaches depends on the
+    /// group it sits in, which needs the inventory's own group membership to answer.
+    Inventory,
     /// A key loaded by an `include_vars:` task (file or dir form).
     IncludeVars,
     /// A param on a play's `roles:` entry — any key the entry wrote that
@@ -72,6 +77,11 @@ impl VarSource {
             VarSource::RoleDefaults => 2,
             VarSource::GroupVarsAll => 5,
             VarSource::GroupVars => 7,
+            // Ansible publishes inventory group vars at 6 and inventory host vars at 10.
+            // We do not know which a given entry is without resolving group membership,
+            // so the lower of the two is used: it can only lose a precedence tie, never
+            // wrongly win one.
+            VarSource::Inventory => 6,
             VarSource::HostVars => 10,
             VarSource::PlayVars => 12,
             VarSource::VarsFiles => 14,
@@ -96,7 +106,7 @@ impl VarSource {
     /// or `host_vars` file. We can point at the definition, but not assert it's in effect for
     /// a given host without parsing inventory.
     pub fn host_scoped(self) -> bool {
-        matches!(self, VarSource::GroupVars | VarSource::HostVars)
+        matches!(self, VarSource::GroupVars | VarSource::HostVars | VarSource::Inventory)
     }
 
     /// Whether a `hostvars[...]` read can see this source (T-104).
@@ -123,6 +133,7 @@ impl VarSource {
             VarSource::GroupVarsAll
             | VarSource::GroupVars
             | VarSource::HostVars
+            | VarSource::Inventory
             | VarSource::IncludeVars
             | VarSource::SetFact
             | VarSource::Register => true,
@@ -1026,6 +1037,23 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     read_var_dir(&ctx.file_dir.join("group_vars"), true, out, walk);
     read_var_dir(&ctx.file_dir.join("host_vars"), false, out, walk);
 
+    // The inventory itself (T-062) — the single largest source of names this index used to
+    // be blind to, and the reason `var-undefined` concedes inventory in every message.
+    // `sources` resolves the same ladder Ansible does; a dynamic one is skipped, never run.
+    for src in crate::inventory::sources(&ctx.config, walk.cache) {
+        read_inventory(&src, out, walk);
+        // The `group_vars/`/`host_vars/` beside the *inventory*, which are a different pair
+        // from the playbook-adjacent ones read above — Ansible loads both. This is the gap
+        // the module docs called out as "needs the inventory's path, not guessed": now that
+        // the path is resolved rather than guessed, it closes.
+        if let Some(dir) = src.parent() {
+            if dir != ctx.file_dir {
+                read_var_dir(&dir.join("group_vars"), true, out, walk);
+                read_var_dir(&dir.join("host_vars"), false, out, walk);
+            }
+        }
+    }
+
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
     {
@@ -1130,6 +1158,37 @@ fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk
             VarSource::GroupVars
         };
         read_var_file(p, source, None, out, walk);
+    }
+}
+
+/// Index one inventory source. INI and YAML shapes both go through
+/// [`crate::inventory`]; a dynamic one contributes nothing, because learning its hosts
+/// would mean executing a file out of the workspace.
+fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
+    let Some(src) = walk.cache.source(file) else {
+        return;
+    };
+    if let Some(c) = &src.canon {
+        out.deps.insert(c.clone());
+    }
+    let nodes: &[Node] = src.nodes.as_deref().map_or(&[], |n| n.as_slice());
+    let vars = match crate::inventory::classify(file, nodes, walk.cache) {
+        crate::inventory::Kind::Dynamic => return,
+        crate::inventory::Kind::Yaml => crate::inventory::yaml_vars(nodes),
+        crate::inventory::Kind::Ini => crate::inventory::ini_vars(&src.text),
+    };
+    for v in vars {
+        out.defs.push(Located {
+            name: v.name,
+            source: VarSource::Inventory,
+            span: v.span,
+            file: file.to_path_buf(),
+            condition: None,
+            via: Vec::new(),
+            // An inventory applies wherever it is loaded; which *hosts* it reaches is the
+            // host-scoped question, which `host_scoped()` already flags for the reader.
+            scope: None,
+        });
     }
 }
 
@@ -1983,6 +2042,167 @@ mod tests {
         std::fs::write(&p, body).unwrap();
     }
 
+    /// T-062 end to end: an inventory named by `ansible.cfg` reaches the variable index of
+    /// a playbook beside it. Asserted through `definitions` rather than the parsers, because
+    /// the parsers passing proves nothing about the wiring — deleting the call site left
+    /// every other test in this file green.
+    #[test]
+    fn a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-wiring");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = hosts.ini\n");
+        write(
+            &d,
+            "hosts.ini",
+            "[web]\nnode1 ip_from_host_line=10.0.0.5\n\n[web:vars]\nfrom_group_section=yes\n",
+        );
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        for name in ["ip_from_host_line", "from_group_section"] {
+            let hit = defs
+                .iter()
+                .find(|x| x.name == name)
+                .unwrap_or_else(|| panic!("{name} not indexed: {:?}", names_of(&defs)));
+            assert_eq!(hit.source, VarSource::Inventory);
+            // Host-dependent, like a named group_vars file — the hover caveat depends on it.
+            assert!(hit.source.host_scoped());
+            // And reachable through `hostvars`, which is the whole point of T-172.
+            assert!(hit.source.visible_to_hostvars());
+        }
+
+        // A plugin config is something Ansible *runs*. We never do, so it defines nothing —
+        // and, critically, indexing its own keys (`plugin`, `regions`) as variables would
+        // invent names no play can use.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = dyn.yml\n");
+        write(&d, "dyn.yml", "plugin: amazon.aws.aws_ec2\nregions:\n  - us-east-1\n");
+        let defs = definitions(&play, &nodes);
+        assert!(
+            !defs.iter().any(|d| d.name == "plugin" || d.name == "regions"),
+            "a dynamic inventory must contribute nothing: {:?}",
+            names_of(&defs)
+        );
+
+        // An executable inventory is a script Ansible RUNS, and we never do. What that
+        // buys is mostly forward-looking — a host list we cannot know must not be claimed
+        // complete (T-062 box 8) — because a real script yields few variables anyway: a
+        // bare `PORT=8080` line is an ini *host line*, whose first token is the host name.
+        // The fixture below therefore carries a `[web:vars]` section, so the execute bit is
+        // the only difference between indexing it and not, which is the thing under test.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = dyn.sh\n");
+        write(&d, "dyn.sh", "#!/bin/sh\n[web:vars]\nPORT=8080\nREGION=us-east-1\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(d.join("dyn.sh"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            let defs = definitions(&play, &nodes);
+            assert!(
+                !defs.iter().any(|d| d.name == "PORT" || d.name == "REGION"),
+                "an executable inventory must not be harvested: {:?}",
+                names_of(&defs)
+            );
+            // The control that makes the assertion mean something: the identical file with
+            // the execute bit cleared IS read, so the silence above is the detector working
+            // rather than the reader failing to find anything.
+            std::fs::set_permissions(d.join("dyn.sh"), std::fs::Permissions::from_mode(0o644))
+                .unwrap();
+            assert!(
+                definitions(&play, &nodes).iter().any(|d| d.name == "PORT"),
+                "the same file, not executable, is an ordinary ini inventory"
+            );
+        }
+
+        // The `group_vars/` beside the INVENTORY, which is a different directory from the
+        // one beside the playbook. Both are loaded; this pair was the documented gap that
+        // "needs the inventory's path, not guessed", and resolving the path closes it.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = inv/hosts.ini\n");
+        write(&d, "inv/hosts.ini", "[web]\nnode1\n");
+        write(&d, "inv/group_vars/web.yml", "beside_the_inventory: yes\n");
+        write(&d, "group_vars/all.yml", "beside_the_playbook: yes\n");
+        let defs = definitions(&play, &nodes);
+        for name in ["beside_the_inventory", "beside_the_playbook"] {
+            assert!(
+                defs.iter().any(|d| d.name == name),
+                "{name} missing: {:?}",
+                names_of(&defs)
+            );
+        }
+
+        // A configured inventory that is not there is the normal state where inventories
+        // are generated and untracked — silence, not a panic and not a message.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = never_generated.yml\n");
+        assert!(definitions(&play, &nodes).iter().all(|d| d.source != VarSource::Inventory));
+    }
+
+    /// T-062: `ansibleLsp.inventory` stands in for `-i`, which beats the env var and the
+    /// config file both (measured). Two inventories disagreeing about one variable is not a
+    /// contrived fixture — it is this workspace, where `server1`'s `infiniband_ip` differs
+    /// between `inventory.yml` and `inventory-lab.yml`.
+    #[test]
+    fn the_inventory_override_beats_ansible_cfg() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-override");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = prod.ini\n");
+        write(&d, "prod.ini", "[web:vars]\ntarget_ip=10.0.0.1\n");
+        write(&d, "lab.ini", "[web:vars]\ntarget_ip=192.168.0.1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+
+        let value_with = |over: Vec<PathBuf>| -> String {
+            let cache = ScanCache::default().with_inventory(over);
+            let defs = definitions_with_deps_in(&play, &nodes, &cache).0;
+            let hit = defs.iter().find(|x| x.name == "target_ip").expect("indexed");
+            let text = std::fs::read_to_string(&hit.file).unwrap();
+            hit.span.slice(&text).trim().to_string()
+        };
+        // Nothing set: follow the config, as a plain `ansible-playbook` would.
+        assert_eq!(value_with(Vec::new()), "10.0.0.1");
+        // Set: the user's `-i` wins, and the value on screen changes with it. Without this
+        // the setting would be a knob that reads back but changes nothing.
+        assert_eq!(value_with(vec![d.join("lab.ini")]), "192.168.0.1");
+    }
+
+    fn names_of(defs: &[Located]) -> Vec<&str> {
+        defs.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// T-062: the two `group_vars/` shapes the old `*.yml`-only listing dropped. Both were
+    /// measured — an extension-less `group_vars/all` reached the play, and with both a
+    /// `webservers.yml` and a `webservers/` directory present the **directory's** value
+    /// arrived. That shadowing is the opposite of role `defaults/`, so it cannot be guessed
+    /// from the neighbouring rule; indexing the `.yml` here would report a value no run
+    /// ever uses.
+    #[test]
+    fn extensionless_group_vars_load_and_a_directory_shadows_the_same_named_file() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-groupvars");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "group_vars/all", "no_extension: FROM_EXTENSIONLESS\n");
+        write(&d, "group_vars/webservers.yml", "shadow_probe: FROM_YML_FILE\n");
+        write(&d, "group_vars/webservers/main.yml", "shadow_probe: FROM_DIRECTORY\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  tasks: []\n").unwrap();
+
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let value_of = |name: &str| -> Option<String> {
+            let d = defs.iter().find(|d| d.name == name)?;
+            let text = std::fs::read_to_string(&d.file).ok()?;
+            Some(d.span.slice(&text).trim().to_string())
+        };
+        assert_eq!(value_of("no_extension").as_deref(), Some("FROM_EXTENSIONLESS"));
+        // The directory wins, and the shadowed file contributes nothing at all — not even
+        // a second candidate, since a hover listing it would offer a dead value.
+        assert_eq!(value_of("shadow_probe").as_deref(), Some("FROM_DIRECTORY"));
+        assert_eq!(defs.iter().filter(|d| d.name == "shadow_probe").count(), 1);
+    }
+
     #[test]
     fn effective_picks_highest_precedence_then_latest() {
         let mk = |src, start| Located {
@@ -2398,6 +2618,7 @@ mod parallel_spike {
         }
     }
 }
+
 
 
 

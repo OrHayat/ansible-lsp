@@ -11,6 +11,7 @@ pub mod guard;
 pub mod include_target;
 pub mod include_vars;
 pub mod install;
+pub mod inventory;
 pub mod keywords;
 pub mod mutation;
 pub mod parse;

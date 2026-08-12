@@ -18,6 +18,11 @@
         "command": "ansibleLsp.restart",
         "title": "Restart Server",
         "category": "Ansible LSP"
+      },
+      {
+        "command": "ansibleLsp.pickInventory",
+        "title": "Select Inventory",
+        "category": "Ansible LSP"
       }
     ],
     "configuration": {
@@ -38,6 +43,14 @@
           "default": 0,
           "minimum": 0,
           "description": "How many files the workspace scan analyses at once. 0 picks one per CPU core, which is best on a local disk. Raise it if your workspace is on a network share, a VM mount or WSL's /mnt/c, where files wait on the filesystem instead of working. Affects speed only, never what the scan reports. Applies to the next scan."
+        },
+        "ansibleLsp.inventory": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "The inventory you run with, standing in for `-i` — which the editor cannot see. Paths are relative to the workspace folder; a directory reads every file in it, as ansible does. Leave empty to follow ANSIBLE_INVENTORY, then ansible.cfg's `inventory =`, then /etc/ansible/hosts, exactly as a plain `ansible-playbook` would. Set it when you habitually pass -i, since a different inventory can give the same variable a different value."
         },
         "ansibleLsp.serverPath": {
           "type": "string",

@@ -50,6 +50,12 @@ pub struct AnsibleConfig {
     /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
     /// controller-side plugin dirs; a plugin here overrides a same-named module.
     pub action_plugins: Option<Vec<PathBuf>>,
+    /// The `inventory` key — `DEFAULT_HOST_LIST` (`config/base.yml:797-808`), the inventory
+    /// sources to read when no `-i` is given. Alone among these lists it is `type: pathlist`
+    /// and so splits on **comma**, not `os.pathsep` (`config/manager.py:197-199`); the
+    /// others are `pathspec`. Ansible's own default is `[/etc/ansible/hosts]`, applied by
+    /// the reader rather than stored here, so `None` stays "never set" as elsewhere.
+    pub inventory: Option<Vec<PathBuf>>,
     /// The file discovery settled on — the env-selected or walk-found `ansible.cfg` that
     /// was actually read; `None` when neither existed. The scan report prints it, and it
     /// is `{{ ansible_config_file }}`'s value (`vars/manager.py:457` — the magic var is
@@ -83,6 +89,7 @@ impl Default for AnsibleConfig {
             collections_path: None,
             library: None,
             action_plugins: None,
+            inventory: None,
             config_file: None,
             ansible_home: None,
             network_group_modules: None,
@@ -191,6 +198,8 @@ impl AnsibleConfig {
                 "collections_path" | "collections_paths" => cfg.collections_path = Some(paths()),
                 "library" => cfg.library = Some(paths()),
                 "action_plugins" => cfg.action_plugins = Some(paths()),
+                // `pathlist`, not `pathspec`: comma-separated (`config/manager.py:197`).
+                "inventory" => cfg.inventory = Some(expand_comma_list(&value, base, env)),
                 "network_group_modules" => {
                     cfg.network_group_modules = Some(name_list(&value));
                 }
@@ -221,6 +230,11 @@ impl AnsibleConfig {
             if let Some(v) = env.var(var) {
                 *slot = Some(expand_list(v, project_root, env));
             }
+        }
+        // Separate from the loop above: `ANSIBLE_INVENTORY` is the one pathlist here, so it
+        // splits on comma while every entry above splits on `os.pathsep`.
+        if let Some(v) = env.var("ANSIBLE_INVENTORY") {
+            cfg.inventory = Some(expand_comma_list(v, project_root, env));
         }
         cfg.ansible_home = env
             .var("ANSIBLE_HOME")
@@ -376,6 +390,18 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 /// Colon-separated list; `~` expanded, relative entries resolved against the config's
 /// own directory (Ansible resolves them against cwd, which is where you run it from).
+/// A `type: pathlist` value — comma-separated, whitespace stripped
+/// (`config/manager.py:197-199`). Only `inventory` is one; see [`expand_list`] for the
+/// `pathspec` majority, which splits on `os.pathsep` instead.
+fn expand_comma_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| expand_path(s, base, env))
+        .collect()
+}
+
 fn expand_list(value: &str, base: &Path, env: &EnvMap) -> Vec<PathBuf> {
     value
         .split(':')
@@ -487,6 +513,43 @@ mod tests {
         let c = cfg("[defaults]\nnetwork_group_modules =\n");
         assert_eq!(c.network_group_modules, Some(Vec::new()));
         assert!(!c.is_network_platform("ios"));
+    }
+
+    /// T-062: `inventory` is `DEFAULT_HOST_LIST`, the only `type: pathlist` among these
+    /// keys, so it splits on **comma** while every neighbour splits on `os.pathsep`
+    /// (`config/manager.py:190-201`). Reusing the colon splitter would silently read
+    /// `a.yml,b.yml` as one path named `a.yml,b.yml` and index nothing.
+    #[test]
+    fn inventory_is_a_comma_list_while_its_neighbours_are_colon_lists() {
+        let c = cfg("[defaults]\ninventory = a.yml,b.yml\nroles_path = r1:r2\n");
+        let inv = c.inventory.expect("set by the cfg");
+        assert_eq!(inv.len(), 2, "comma-separated: {inv:?}");
+        assert!(inv[0].ends_with("a.yml") && inv[1].ends_with("b.yml"), "{inv:?}");
+        // The control, one line up in the same file: colons still split colons.
+        assert_eq!(c.roles_path.expect("set").len(), 2);
+        // A colon in an inventory value is a filename character, not a separator.
+        let c = cfg("[defaults]\ninventory = a.yml:b.yml\n");
+        assert_eq!(c.inventory.expect("set").len(), 1);
+        // Whitespace around entries is stripped, as `pathlist` does.
+        let c = cfg("[defaults]\ninventory = a.yml , b.yml\n");
+        assert_eq!(c.inventory.expect("set").len(), 2);
+        // Never set stays None, so the reader can apply /etc/ansible/hosts itself; an
+        // explicit empty is a deliberate "no inventory" and must not collapse into it.
+        assert!(cfg("[defaults]\nroles_path = r\n").inventory.is_none());
+        assert_eq!(cfg("[defaults]\ninventory =\n").inventory, Some(Vec::new()));
+    }
+
+    /// The env var is the same pathlist type, and beats the file — measured on 2.21.2,
+    /// where `ANSIBLE_INVENTORY` overrode `ansible.cfg` outright.
+    #[test]
+    fn ansible_inventory_env_is_a_comma_list_and_beats_the_file() {
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\ninventory = from_cfg.yml\n"))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_INVENTORY", "env_a.yml,env_b.yml")]))
+            .load();
+        let inv = c.inventory.expect("set by the env");
+        assert_eq!(inv.len(), 2, "{inv:?}");
+        assert!(inv[0].ends_with("env_a.yml"), "env replaces the file: {inv:?}");
     }
 
     /// A real-shaped config off the real filesystem, not the `CfgFs` stub: the `~` and `./`

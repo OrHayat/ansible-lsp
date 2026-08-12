@@ -218,6 +218,11 @@ pub struct ScanCache {
     /// What config loads read — the process snapshot normally; [`with_env`](Self::with_env)
     /// swaps it so a test's fixtures can't be hijacked by the developer's shell.
     env: EnvMap,
+    /// The editor's `ansibleLsp.inventory`, standing in for `-i` (T-062). Empty means
+    /// "model a plain `ansible-playbook`" and the config's own resolution stands. Held
+    /// here rather than threaded through the walk because it is the top rung of the same
+    /// ladder `config()` already resolves.
+    inventory_override: Vec<PathBuf>,
     stats: AtomicStats,
 }
 
@@ -242,8 +247,17 @@ impl ScanCache {
             trees: Map::default(),
             listings: Map::default(),
             env: EnvMap::from_process(),
+            inventory_override: Vec::new(),
             stats: AtomicStats::default(),
         }
+    }
+
+    /// Point the walk at the inventory the user says they run with — `ansibleLsp.inventory`,
+    /// standing in for `-i` (T-062). Empty restores the plain-`ansible-playbook` model.
+    /// Must be set before any config is computed, since configs are memoized per root.
+    pub fn with_inventory(mut self, paths: Vec<PathBuf>) -> Self {
+        self.inventory_override = paths;
+        self
     }
 
     /// Replace the environment config loads see. For tests: `.with_env(EnvMap::empty())`
@@ -352,9 +366,17 @@ impl ScanCache {
     }
 
     fn config(&self, root: &Path) -> AnsibleConfig {
-        let (cfg, computed) =
-            self.configs
-                .get_or_init(root, || AnsibleConfig::builder(root).fs(self).env(&self.env).load());
+        let (cfg, computed) = self.configs.get_or_init(root, || {
+            let mut cfg = AnsibleConfig::builder(root).fs(self).env(&self.env).load();
+            // The editor's `ansibleLsp.inventory` is the top rung of the same ladder the
+            // config already resolved — it stands in for `-i`, which beats the env var and
+            // the file both (measured). Applied here so the whole walk sees one settled
+            // answer and `inventory::sources` needs no override parameter.
+            if !self.inventory_override.is_empty() {
+                cfg.inventory = Some(self.inventory_override.clone());
+            }
+            cfg
+        });
         if computed {
             self.stats.configs.fetch_add(1, Ordering::Relaxed);
         }
@@ -371,22 +393,60 @@ impl ScanCache {
         files
     }
 
-    /// `dir`'s own `*.yml`/`*.yaml` files, not descending — memoized. Empty when `dir`
-    /// isn't a directory.
+    /// One `group_vars/`/`host_vars/` directory's entries, not descending — memoized, and
+    /// empty when `dir` isn't a directory.
+    ///
+    /// Ansible probes `''` before `.yml`/`.yaml`/`.json` and breaks on the first hit
+    /// (`parsing/dataloader.py:470-491`), which has two consequences this encodes (T-062):
+    ///
+    /// - an **extension-less** `group_vars/webservers` is a legal, common vars file, so the
+    ///   old `*.yml`-only filter dropped a real source;
+    /// - a `group_vars/webservers/` **directory silently shadows** `group_vars/webservers.yml`
+    ///   — measured, with both present the directory's value is the one that reaches the
+    ///   play. That is the opposite of role `defaults/`, where the file wins
+    ///   (`role/__init__.py:426-431`), so it cannot be inferred from the neighbouring rule.
+    ///
+    /// Entries are sorted, so a shadowed file is dropped deterministically rather than by
+    /// whatever order the filesystem returned.
     pub fn listing(&self, dir: &Path) -> Arc<Vec<PathBuf>> {
         if let Some(hit) = self.listings.get(dir) {
             return hit;
         }
+        let mut entries: Vec<(PathBuf, crate::fs::Kind)> = Fs::read_dir(self, dir);
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // A directory here is a vars *source*, and its bare name is what it shadows.
+        // Ordered, not a HashSet: these are chained into the returned list, and `vars::dedup`
+        // keeps the FIRST occurrence of a name — so hash order would decide which definition
+        // wins and the scan would answer differently run to run. It did: 233 then 246
+        // undefined variables across two runs of the same tree.
+        let dirs: std::collections::BTreeSet<PathBuf> = entries
+            .iter()
+            .filter(|(_, k)| *k == crate::fs::Kind::Dir)
+            .map(|(p, _)| p.clone())
+            .collect();
         let files = Arc::new(
-            Fs::read_dir(self, dir)
-                .into_iter()
-                .map(|(p, _)| p)
-                .filter(|p| {
-                    matches!(
-                        p.extension().and_then(|s| s.to_str()),
-                        Some("yml") | Some("yaml")
-                    )
+            entries
+                .iter()
+                .filter(|(p, k)| match k {
+                    // Every file in a shadowing directory is read, in name order.
+                    crate::fs::Kind::Dir => false,
+                    _ => {
+                        let ext = p.extension().and_then(|s| s.to_str());
+                        let named = matches!(ext, None | Some("yml") | Some("yaml"));
+                        // `webservers.yml` beside a `webservers/` directory never loads.
+                        named && !dirs.contains(&p.with_extension(""))
+                    }
                 })
+                .map(|(p, _)| p.clone())
+                .chain(dirs.iter().flat_map(|d| {
+                    let mut inner: Vec<PathBuf> = Fs::read_dir(self, d)
+                        .into_iter()
+                        .filter(|(_, k)| *k == crate::fs::Kind::File)
+                        .map(|(p, _)| p)
+                        .collect();
+                    inner.sort();
+                    inner
+                }))
                 .collect::<Vec<_>>(),
         );
         self.listings.insert(dir.to_path_buf(), files.clone());
@@ -434,6 +494,14 @@ impl Fs for ScanCache {
     /// map for one use.
     fn symlink_kind(&self, p: &Path) -> Option<Kind> {
         self.fs.symlink_kind(p)
+    }
+
+    /// Delegated, and load-bearing: the trait default is `false`, so without this the
+    /// dynamic-inventory check (T-062) is dead code on every real path — a walk reaches
+    /// the filesystem only through this cache. Asked once per inventory source, so there
+    /// is nothing to memoize.
+    fn is_executable(&self, p: &Path) -> bool {
+        self.fs.is_executable(p)
     }
 
     /// Shares [`ScanCache::source`]'s read, so a file that is both parsed by the walk and
