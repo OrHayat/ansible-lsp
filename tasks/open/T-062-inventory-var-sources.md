@@ -18,6 +18,24 @@ T-033's exploratory count was inflated by exactly this gap. Every definedness ru
 sharpens with it: T-051's `var-undefined` gets fewer conceded sources, and T-060/T-061
 (which this ticket blocks) need it to avoid flagging inventory-defined names.
 
+## Measured (2.21.2)
+
+One ini inventory, one play, every source present at once — all four confirmed rather than
+read off the source:
+
+| written                                            | reaches the play as        |
+| -------------------------------------------------- | -------------------------- |
+| `node1 host_line_var=...` (inline on the host line) | `FROM_HOST_LINE`           |
+| `[webservers:vars]` section                         | `FROM_GROUP_VARS_SECTION`  |
+| `group_vars/all` (no extension)                     | `FROM_EXTENSIONLESS`       |
+| `group_vars/webservers.yml` **and** `.../webservers/main.yml` | `FROM_DIRECTORY` |
+
+The last row is the one to keep in mind while writing the reader: with both spellings
+present the **directory wins** and the `.yml` file is silently dead. That is the opposite of
+role `defaults/`, where the file shadows the directory — same `DataLoader` function, opposite
+probe order (`parsing/dataloader.py:470-491` vs `role/__init__.py:426-431`). Indexing the
+`.yml` when a directory exists beside it would report a value no run ever uses.
+
 ## Approach
 
 - Which inventory: `ansible.cfg` `inventory =` (config.rs already parses the file), else
@@ -59,6 +77,24 @@ parsing; vars-plugin output bypasses it (`inventory/manager.py:248-249`). The va
 visible in `hostvars`, so it looks accepted. A WARNING on that key in a `group_vars/`/
 `host_vars/` file, naming where it *would* work.
 
+**A `hostvars['name']` for a host the inventory does not have is fatal, and Ansible does not
+say why.** Measured on 2.21.2 against a two-host ini inventory:
+
+```
+'web0143' in hostvars  ->  False          'node1' in hostvars  ->  True
+{{ hostvars['web0143'].infiniband_ip }}   ->  fatal: hostvars['web0143']
+```
+
+The error is the literal subscript — `_undef(f"hostvars[{host_name!r}]")`,
+`vars/hostvars.py:55` — with no hint that the host is the problem rather than the variable.
+Once the inventory is parsed the host list is enumerable, which makes this a cleaner claim
+than T-172's: a name either is a host or is not.
+
+Escapes that must keep it quiet, none of them optional: a dynamic inventory (we refuse to
+execute it, so we do not know the hosts), `add_host` anywhere in the play, and more `-i`
+files than we resolved. Also `hostvars` auto-creates the implicit localhost on membership
+(`:69-71`) while `list(hostvars)` omits it, so `localhost` must never be flagged.
+
 Also worth encoding while here, since it decides which file the index should read:
 `group_vars/<name>/` as a **directory silently shadows** `group_vars/<name>.yml` — `''` is
 probed first and the loop breaks on the first hit (`parsing/dataloader.py:470-491`). That is
@@ -75,4 +111,7 @@ the opposite of role `defaults/`, where the file shadows the directory
 - [ ] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
       to INI rather than report it
 - [ ] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING
+- [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
+      silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never
+      for `localhost`
 - [ ] `var-undefined` stays zero-hit on the corpus with the new sources active
