@@ -75,15 +75,11 @@ pub enum Kind {
     Yaml,
     /// A plugin config or an executable script. **Never read, never run** — see [`classify`].
     Dynamic,
-    /// A TOML inventory. Ansible reads these — `toml` is the last entry of
-    /// `INVENTORY_ENABLED` (`['host_list', 'script', 'auto', 'yaml', 'ini', 'toml']`), and a
-    /// `[webservers.vars]` table reaches the play, measured. We do not parse TOML.
+    /// `[group.vars]` / `[group.hosts.name]` tables — see [`toml_vars`].
     ///
-    /// Named rather than left to fall through to [`Kind::Ini`]. It already produced nothing
-    /// there — TOML's `key = value` has spaces, so the INI host-line reader takes the whole
-    /// line as a host name and finds no pairs — but that is silence by accident, and an
-    /// accident is not a rule. Naming it makes the gap greppable and lets a reader concede
-    /// the source instead of treating its absence as proof a name is undefined.
+    /// Its own kind rather than falling through to [`Kind::Ini`], which is where it landed
+    /// before. That produced nothing, since TOML's spaced `key = value` reads as a bare
+    /// host name to the INI reader — silence by accident, and an accident is not a rule.
     Toml,
 }
 
@@ -231,6 +227,58 @@ pub fn classify(path: &Path, nodes: &[Node], fs: &dyn Fs) -> Kind {
         Kind::Yaml
     } else {
         Kind::Ini
+    }
+}
+
+/// Every variable a TOML inventory defines.
+///
+/// The structure is the YAML one — top-level keys are groups, each holding `vars`, `hosts`
+/// and `children` (`plugins/inventory/toml.py::_parse_group`) — with one difference that
+/// matters here: `children` is a **list of group names**, not a nested mapping, so nothing
+/// in it is ever a variable. Any other key is skipped, which is what the plugin does too.
+///
+/// Parsed by `toml_edit` rather than by hand. Ansible passes the whole file to `tomllib`
+/// (`toml.py:155`), so it accepts the entire TOML grammar — multi-line strings, arrays,
+/// inline tables, dotted keys. A line reader would cover a subset and would have to detect
+/// everything outside it to stay quiet, which is most of the way to parsing anyway.
+pub fn toml_vars(text: &str) -> Vec<InventoryVar> {
+    let Ok(doc) = toml_edit::Document::parse(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (_group, item) in doc.as_table().iter() {
+        let Some(group) = item.as_table_like() else { continue };
+        if let Some(vars) = group.get("vars").and_then(|i| i.as_table_like()) {
+            collect_toml(vars, text, &mut out);
+        }
+        if let Some(hosts) = group.get("hosts").and_then(|i| i.as_table_like()) {
+            for (_host, entry) in hosts.iter() {
+                if let Some(host_vars) = entry.as_table_like() {
+                    collect_toml(host_vars, text, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// One table's `name = value` pairs, with the span covering the value.
+///
+/// The quotes are trimmed off a string so hover shows `10.0.0.1` rather than `"10.0.0.1"`,
+/// matching what the INI and YAML readers hand back for the same inventory.
+fn collect_toml(table: &dyn toml_edit::TableLike, text: &str, out: &mut Vec<InventoryVar>) {
+    for (name, item) in table.iter() {
+        let Some(range) = item.span() else { continue };
+        let (mut start, mut end) = (range.start, range.end);
+        let raw = text.get(start..end).unwrap_or("");
+        if raw.len() >= 2
+            && (raw.starts_with('"') && raw.ends_with('"')
+                || raw.starts_with('\'') && raw.ends_with('\''))
+        {
+            start += 1;
+            end -= 1;
+        }
+        out.push(InventoryVar { name: name.to_string(), span: Span { start, end } });
     }
 }
 
@@ -551,10 +599,52 @@ mod tests {
         assert!(looks_like_inventory(Path::new("inv.json"), src, &nodes));
     }
 
-    /// Ansible reads TOML inventories — measured, a `[webservers.vars]` table reached the
-    /// play — and we do not. The INI fallback already yielded nothing from one, because
-    /// TOML's spaced `key = value` reads as a bare host name, but classifying it says so on
-    /// purpose rather than relying on that.
+    /// The measured shapes, from `ansible-inventory -i inv.toml --list`: a `[group.vars]`
+    /// table and a `[group.hosts.<name>]` table both reach the play.
+    ///
+    /// The negatives carry the weight. `children` is a LIST of group names here — unlike
+    /// YAML, where it nests groups — so nothing in it is a variable; and the grammar TOML
+    /// allows but a line reader would trip on (multi-line strings, arrays, inline tables)
+    /// has to come out right, since ansible hands the whole file to `tomllib` and accepts
+    /// all of it.
+    #[test]
+    fn toml_reads_group_and_host_tables_and_nothing_else() {
+        let src = concat!(
+            "[webservers.vars]\n",
+            "ntp_server = \"10.0.0.1\"\n",
+            "motd = \"\"\"\n",
+            "a = not_a_variable\n",
+            "\"\"\"\n",
+            "ports = [\n",
+            "  80,\n",
+            "  443,\n",
+            "]\n",
+            "limits = { soft = 1, hard = 2 }\n",
+            "children = [\"leafs\", \"spines\"]\n",
+            "\n",
+            "[webservers.hosts.web01]\n",
+            "host_line_ip = \"10.0.0.11\"\n",
+        );
+        let got = toml_vars(src);
+        assert_eq!(
+            names(&got),
+            ["ntp_server", "motd", "ports", "limits", "children", "host_line_ip"],
+            "a continuation line was read as a variable, or a real one was lost"
+        );
+        // Spans point at the value, quotes trimmed, so hover matches the other two readers.
+        let v = got.iter().find(|v| v.name == "ntp_server").unwrap();
+        assert_eq!(v.span.slice(src), "10.0.0.1");
+        let h = got.iter().find(|v| v.name == "host_line_ip").unwrap();
+        assert_eq!(h.span.slice(src), "10.0.0.11");
+
+        // `children` under a GROUP is a list of group names, and contributes no variables.
+        let group_children = "[webservers]\nchildren = [\"leafs\"]\n[webservers.vars]\nx = 1\n";
+        assert_eq!(names(&toml_vars(group_children)), ["x"]);
+
+        // Invalid TOML is silence, not a guess.
+        assert!(toml_vars("[unclosed\nx = ").is_empty());
+    }
+
     #[test]
     fn a_toml_inventory_is_named_rather_than_read_as_ini() {
         let src = concat!(

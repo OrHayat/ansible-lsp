@@ -1173,10 +1173,10 @@ fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
     }
     let nodes: &[Node] = src.nodes.as_deref().map_or(&[], |n| n.as_slice());
     let vars = match crate::inventory::classify(file, nodes, walk.cache) {
-        // Both are sources we decline to read: a dynamic one we refuse to execute, a TOML
-        // one we cannot parse. Neither contributes definitions, and neither is evidence
-        // that a name is undefined.
-        crate::inventory::Kind::Dynamic | crate::inventory::Kind::Toml => return,
+        // A dynamic inventory is the one source we decline: running a plugin against a
+        // live account to learn a host list is not a trade worth making.
+        crate::inventory::Kind::Dynamic => return,
+        crate::inventory::Kind::Toml => crate::inventory::toml_vars(&src.text),
         crate::inventory::Kind::Yaml => crate::inventory::yaml_vars(nodes),
         crate::inventory::Kind::Ini => crate::inventory::ini_vars(&src.text),
     };
@@ -2134,6 +2134,27 @@ mod tests {
                 names_of(&defs)
             );
         }
+
+        // TOML and JSON reach the index too, through the same call site. Asserted HERE
+        // rather than only against `toml_vars`: the readers were correct while the wiring
+        // in `read_inventory` was not, which is the shape of defect this repo has shipped
+        // twice by testing a helper instead of the assembly.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = inv.toml\n");
+        write(&d, "inv.toml", "[web.vars]\nfrom_toml = \"yes\"\n[web.hosts.node1]\ntoml_host_var = 1\n");
+        let defs = definitions(&play, &nodes);
+        for name in ["from_toml", "toml_host_var"] {
+            assert!(
+                defs.iter().any(|x| x.name == name && x.source == VarSource::Inventory),
+                "{name} missing from a TOML inventory: {:?}",
+                names_of(&defs)
+            );
+        }
+        write(&d, "ansible.cfg", "[defaults]\ninventory = inv.json\n");
+        write(&d, "inv.json", r#"{"web": {"vars": {"from_json": "yes"}}}"#);
+        assert!(
+            definitions(&play, &nodes).iter().any(|x| x.name == "from_json"),
+            "a JSON inventory did not reach the index"
+        );
 
         // A configured inventory that is not there is the normal state where inventories
         // are generated and untracked — silence, not a panic and not a message.

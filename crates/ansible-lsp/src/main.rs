@@ -1056,9 +1056,13 @@ impl Backend {
                 if !ansible_core::inventory::ignored_entry(name) {
                     readable += 1;
                 }
+                // Every static format we can actually read, plus extension-less, which is
+                // legal and common. `.toml` and `.json` were missing while the readers for
+                // both existed — offered nothing, so the formats were supported everywhere
+                // except the one place you would pick them.
                 let ext_ok = matches!(
                     Path::new(name).extension().and_then(|e| e.to_str()),
-                    None | Some("yml") | Some("yaml") | Some("ini")
+                    None | Some("yml") | Some("yaml") | Some("ini") | Some("toml") | Some("json")
                 );
                 if !ext_ok {
                     continue;
@@ -3348,7 +3352,9 @@ mod tests {
             !files.iter().any(|f| f == "tasks/lenient_scalar.yml"),
             "a task file was offered as an inventory: {files:?}"
         );
-        for want in ["inventory-prod.ini", "inventory-lab.yml", "inventory-dynamic.yml"] {
+        for want in
+            ["inventory-prod.ini", "inventory-lab.yml", "inventory-dynamic.yml", "inventory-toml.toml"]
+        {
             assert!(files.contains(&want.to_string()), "{want} missing from {files:?}");
         }
         // A playbook is not an inventory, however many `hosts:` keys it has.

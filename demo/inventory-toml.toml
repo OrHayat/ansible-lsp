@@ -1,0 +1,30 @@
+# T-062: the THIRD static inventory format. `toml` is the last entry of INVENTORY_ENABLED
+# (host_list, script, auto, yaml, ini, toml), and ansible hands the whole file to tomllib —
+# so it accepts the entire TOML grammar, not a convenient subset.
+#
+# Structure is the YAML one: top-level keys are groups, each with `vars`, `hosts` and
+# `children`. One difference, and it is the one worth knowing: `children` here is a LIST of
+# group names, where YAML nests whole groups under it.
+#
+# Pick this in "Ansible LSP: Select Inventory" and the names below resolve, same as the .ini
+# and .yml ones. Values differ on purpose, so switching visibly changes the answer.
+
+[webservers.vars]
+ntp_server = "10.9.0.1"
+app_tier = "toml"
+# Measured with `ansible-inventory --list`: `a = not_a_variable` inside this string is NOT a
+# variable, and neither is anything on the continuation lines of the array below. A
+# line-by-line reader would have invented both, which is why this is parsed properly.
+motd = """
+a = not_a_variable
+"""
+ports = [
+  80,
+  443,
+]
+
+[webservers.hosts.web01]
+host_line_ip = "10.9.0.11"
+
+[db.hosts.db01]
+host_line_ip = "10.9.0.21"
