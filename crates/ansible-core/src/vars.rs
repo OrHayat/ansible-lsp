@@ -2093,6 +2093,61 @@ mod tests {
         std::fs::write(&p, body).unwrap();
     }
 
+    /// The demo's mock dynamic inventory does what its header says it does.
+    ///
+    /// A demo label is a claim (CLAUDE.md rule 4), and this one is checkable in a way its
+    /// neighbour `inventory-dynamic.yml` is not: that file names `amazon.aws.aws_ec2`, so
+    /// nobody without an AWS account can confirm Ansible would run it. This one needs no
+    /// credentials and no network —
+    ///
+    ///     ansible-inventory -i demo/inventory-dynamic.sh --list
+    ///
+    /// prints `mock01` with `mock_dynamic_var`, which is what makes "we decline to run it"
+    /// a measured refusal rather than an assertion about a file nobody can execute.
+    ///
+    /// Asserted against the real demo file, not a copy: a copy would keep passing after
+    /// someone cleared the execute bit or dropped the shebang, which are the two things the
+    /// classification actually turns on.
+    #[test]
+    #[cfg(unix)]
+    fn the_demo_mock_dynamic_inventory_is_declined_and_defines_nothing() {
+        let sh = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/inventory-dynamic.sh");
+        assert!(sh.is_file(), "demo fixture missing: {}", sh.display());
+        use crate::fs::Fs as _;
+        assert!(
+            crate::fs::StdFs.is_executable(&sh),
+            "the execute bit is the fixture — without it Ansible's ini plugin reads this file"
+        );
+        let text = std::fs::read_to_string(&sh).unwrap();
+        assert!(text.starts_with("#!"), "the shebang is what keeps it dynamic despite its text");
+        assert!(
+            text.contains("mock_dynamic_var"),
+            "the script must actually emit a variable, or 'we never read it' proves nothing"
+        );
+
+        let cache = ScanCache::default();
+        let nodes = Document::new(text.clone()).parse().unwrap_or_default();
+        assert_eq!(
+            crate::inventory::classify(&sh, &text, &nodes, &cache),
+            crate::inventory::Kind::Dynamic
+        );
+
+        // Named as the inventory, it contributes nothing and is *recorded* as declined —
+        // the two halves of "handled". Silence alone would be indistinguishable from an
+        // inventory we read that happened to be empty.
+        let cache = ScanCache::default().with_inventory(vec![sh.clone()]);
+        let play = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/playbook.yml");
+        let declined = declined_inventories(&play, &cache);
+        assert_eq!(declined.len(), 1, "the demo script must be recorded: {declined:?}");
+        assert!(declined[0].ends_with("inventory-dynamic.sh"));
+
+        let pnodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions_with_deps_in(&play, &pnodes, &cache).0;
+        for name in ["mock_dynamic_var", "mock_region"] {
+            assert!(!defs.iter().any(|d| d.name == name), "{name} was harvested from a script");
+        }
+    }
+
     /// A declined source is *recorded*, not merely skipped — the two states that must not
     /// look alike are "read it, there are no hosts" and "did not read it, hosts unknown".
     ///

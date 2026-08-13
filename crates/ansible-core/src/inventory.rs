@@ -198,6 +198,8 @@ fn expand_dir(dir: &Path, fs: &dyn Fs, depth: usize, out: &mut Vec<PathBuf>) {
 ///   `hosts:`/`children:` — the group shape. A playbook is a *sequence*, so it cannot
 ///   match; a `group_vars/x.yml` is a mapping of names to values, so it does not either.
 /// - an INI `[section]` header.
+/// - a TOML table holding `vars`/`hosts`/`children` — TOML is decided by its own grammar,
+///   because every `[table]` satisfies the INI test and would let any TOML file through.
 ///
 /// Extension is still consulted, but only to reject: a file ansible would refuse inside a
 /// directory ([`IGNORE_EXTS`]) is never offered, which is what keeps `ansible.cfg` — a real
@@ -206,6 +208,20 @@ pub fn looks_like_inventory(path: &Path, text: &str, nodes: &[Node]) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if ignored_entry(name) {
         return false;
+    }
+    // TOML answers from its own grammar, not from the line sniff below. Every `[table]` in a
+    // TOML file looks like an INI section header, so the generic test accepts any TOML file
+    // at all — it offered this repo's four `Cargo.toml`s as candidate inventories, `[package]`
+    // and `[dependencies]` reading as groups. We already parse TOML properly for the same
+    // files, so the honest test is the structure `toml_vars` walks: a table holding `vars`,
+    // `hosts` or `children`.
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("toml")) {
+        let Ok(doc) = toml_edit::Document::parse(text) else { return false };
+        return doc.as_table().iter().any(|(_, item)| {
+            item.as_table_like().is_some_and(|g| {
+                ["vars", "hosts", "children"].iter().any(|k| g.get(k).is_some())
+            })
+        });
     }
     let group_shaped = nodes.iter().any(|n| {
         n.entries().iter().any(|(k, v)| {
@@ -646,6 +662,40 @@ mod tests {
             "a bracketed jinja list in a mapping"
         );
         assert!(!sniff(".hidden.ini", "[webservers]\nweb01\n"), "a dotfile");
+    }
+
+    #[test]
+    /// A `Cargo.toml` is not a host list, and the generic sniff said it was.
+    ///
+    /// Every TOML `[table]` satisfies "a line starting with `[` and ending with `]`", so the
+    /// INI test accepted *any* TOML file. The picker offered this repo's own four manifests
+    /// as candidate inventories, with `[package]` and `[dependencies]` reading as groups.
+    ///
+    /// Asserted against the real `Cargo.toml` rather than a snippet: a snippet keeps passing
+    /// once someone rewrites the manifest, and the manifest is the file that was actually
+    /// being offered. The positive case is the control — narrowing the rule until nothing
+    /// matches would satisfy the negative on its own.
+    #[test]
+    fn a_cargo_manifest_is_not_an_inventory_but_a_toml_host_list_is() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).expect("the crate's own manifest");
+        let nodes = Document::new(text.clone()).parse().unwrap_or_default();
+        assert!(
+            !looks_like_inventory(&manifest, &text, &nodes),
+            "a cargo manifest was offered as an inventory"
+        );
+
+        let inv = concat!(
+            "[web.vars]\n",
+            "deploy_env = \"prod\"\n",
+            "[web.hosts.web01]\n",
+            "ip = \"10.0.0.1\"\n",
+        );
+        let nodes = Document::new(inv.to_string()).parse().unwrap_or_default();
+        assert!(
+            looks_like_inventory(Path::new("inv.toml"), inv, &nodes),
+            "a real toml host list must still be offered"
+        );
     }
 
     #[test]
