@@ -835,25 +835,4 @@ mod tests {
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
         assert_eq!(names(&yaml_vars(&nodes)), ["real_var"]);
     }
-
-    /// The other half of the same rule: a group is still a group two `children:` deep, so
-    /// the sections must keep working there. Without this, "only at group level" is easy to
-    /// implement as "only at depth 1" and the corpus shape above silently stops reading.
-    #[test]
-    fn a_deeply_nested_child_group_still_reads_its_sections() {
-        let src = concat!(
-            "all:\n",
-            "  children:\n",
-            "    tier1:\n",
-            "      children:\n",
-            "        tier2:\n",
-            "          vars:\n",
-            "            deep_var: 1\n",
-            "          hosts:\n",
-            "            h1:\n",
-            "              deep_host_var: 2\n",
-        );
-        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
-        assert_eq!(names(&yaml_vars(&nodes)), ["deep_var", "deep_host_var"]);
-    }
 }

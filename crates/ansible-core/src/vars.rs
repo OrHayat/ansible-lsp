@@ -2135,6 +2135,27 @@ mod tests {
             );
         }
 
+        // A DIRECTORY source, which every case above spells as a single file. `sources`
+        // expands it, so each contained file is read and `read_var_dir` is reached once per
+        // file — the adjacent `group_vars/` must still define its name once, not per file.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = dir\n");
+        write(&d, "dir/a.ini", "[web:vars]\nfrom_first_file=1\n");
+        write(&d, "dir/b.ini", "[db:vars]\nfrom_second_file=1\n");
+        write(&d, "dir/group_vars/web.yml", "beside_the_dir: yes\n");
+        let defs = definitions(&play, &nodes);
+        for name in ["from_first_file", "from_second_file", "beside_the_dir"] {
+            assert!(
+                defs.iter().any(|d| d.name == name),
+                "{name} missing from a directory inventory: {:?}",
+                names_of(&defs)
+            );
+        }
+        assert_eq!(
+            defs.iter().filter(|d| d.name == "beside_the_dir").count(),
+            1,
+            "one definition, though the directory's two files each reach the same group_vars"
+        );
+
         // TOML and JSON reach the index too, through the same call site. Asserted HERE
         // rather than only against `toml_vars`: the readers were correct while the wiring
         // in `read_inventory` was not, which is the shape of defect this repo has shipped
