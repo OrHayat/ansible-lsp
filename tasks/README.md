@@ -100,6 +100,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-062 | [Index ini inventories and extension-less `group_vars`](open/T-062-inventory-var-sources.md) | M    | —          |
+| T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](open/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | M    | —          |
 
 ### P2 — coverage and usability
 
