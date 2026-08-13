@@ -1192,7 +1192,7 @@ fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
         out.deps.insert(c.clone());
     }
     let nodes: &[Node] = src.nodes.as_deref().map_or(&[], |n| n.as_slice());
-    let vars = match crate::inventory::classify(file, nodes, walk.cache) {
+    let vars = match crate::inventory::classify(file, &src.text, nodes, walk.cache) {
         // A dynamic inventory is the one source we decline: running a plugin against a
         // live account to learn a host list is not a trade worth making.
         crate::inventory::Kind::Dynamic => return,
@@ -2063,6 +2063,40 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    /// A stray execute bit does not make a data file dynamic.
+    ///
+    /// `script.verify_file` accepts any executable, but the manager only `break`s on a plugin
+    /// that **succeeds** — a failing one is caught and the next plugin tries the same file.
+    /// Measured on 2.21.2: an INI inventory at mode 755 is executed, fails, and is then read
+    /// as INI, resolving identically to the same file at 644. Treating the bit alone as
+    /// "dynamic" silently dropped the whole inventory on any checkout where modes are noise —
+    /// a bind mount, exFAT, someone's `chmod -R 755` — and every name in it read as undefined.
+    ///
+    /// This is one half of a pair. The `dyn.sh` fixture in the wiring test above is the other:
+    /// it carries a `[web:vars]` section precisely so the content sniff *would* claim it, and
+    /// its `#!` is what keeps it dynamic. Neither test alone pins the rule.
+    #[test]
+    #[cfg(unix)]
+    fn a_stray_execute_bit_does_not_make_a_data_file_dynamic() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join("ansible-lsp-t062-execbit");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = hosts.ini\n");
+        write(&d, "hosts.ini", "[web:vars]\nexec_probe: 1\nfrom_data_file=1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+
+        let mode = |m: u32| {
+            std::fs::set_permissions(d.join("hosts.ini"), std::fs::Permissions::from_mode(m))
+                .unwrap();
+            definitions(&play, &nodes).iter().any(|x| x.name == "from_data_file")
+        };
+        assert!(mode(0o644), "control: the file is readable at all");
+        assert!(mode(0o755), "the same file with +x is still an ini inventory");
     }
 
     /// Every configured source contributes its own adjacent pair, and `host_vars` counts as

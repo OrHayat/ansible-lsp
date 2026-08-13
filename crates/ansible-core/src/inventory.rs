@@ -237,8 +237,20 @@ pub fn looks_like_inventory(path: &Path, text: &str, nodes: &[Node]) -> bool {
 /// A generator script is **not** this: it writes an inventory file that ansible then reads
 /// as an ordinary static source. The test is what ansible's own is — what the inventory
 /// *points at* — so a `.py` in the repo that nothing names is never classified here at all.
-pub fn classify(path: &Path, nodes: &[Node], fs: &dyn Fs) -> Kind {
-    if fs.is_executable(path) {
+pub fn classify(path: &Path, text: &str, nodes: &[Node], fs: &dyn Fs) -> Kind {
+    // The mode bit alone is not the test. `script.verify_file` accepts any executable, but the
+    // manager only `break`s on a plugin that *succeeds* — a failing one is caught and the next
+    // plugin tries the same file (`inventory/manager.py`). Measured: an INI inventory at mode
+    // 755 is executed, fails, and is then read as INI, resolving exactly as it does at 644.
+    // So "executable" alone meant we dropped whole inventories on any checkout where the mode
+    // bits are noise — a bind mount, exFAT, someone's `chmod -R 755` — and every variable in
+    // them read as undefined.
+    //
+    // A shebang is the discriminator, and it has to win over the content sniff rather than the
+    // other way round: a shell script's `[ -f /etc/x ]` line satisfies the INI test on its own,
+    // and an `export FOO=bar` beside it would have invented `FOO`.
+    if fs.is_executable(path) && (text.starts_with("#!") || !looks_like_inventory(path, text, nodes))
+    {
         return Kind::Dynamic;
     }
     // By extension, which is what ansible's own plugins do here: `ini.verify_file` accepts
@@ -699,7 +711,7 @@ mod tests {
             r#""vars": {"json_group_var": "FROM_JSON_GROUP"}}}}}"#,
         );
         let nodes = Document::new(src.to_string()).parse().expect("json parses as yaml");
-        assert_eq!(classify(Path::new("inv.json"), &nodes, &crate::testing::MemFs::new(&[])), Kind::Yaml);
+        assert_eq!(classify(Path::new("inv.json"), src, &nodes, &crate::testing::MemFs::new(&[])), Kind::Yaml);
         let got = yaml_vars(&nodes);
         assert_eq!(names(&got), ["json_host_var", "json_group_var"]);
         // Real byte offsets into the file, not a path expression: hover prints this text
@@ -770,10 +782,10 @@ mod tests {
         );
         let nodes = Document::new(src.to_string()).parse().unwrap_or_default();
         let fs = crate::testing::MemFs::new(&[]);
-        assert_eq!(classify(Path::new("inv.toml"), &nodes, &fs), Kind::Toml);
-        assert_eq!(classify(Path::new("INV.TOML"), &nodes, &fs), Kind::Toml, "case");
+        assert_eq!(classify(Path::new("inv.toml"), src, &nodes, &fs), Kind::Toml);
+        assert_eq!(classify(Path::new("INV.TOML"), src, &nodes, &fs), Kind::Toml, "case");
         // The same content under a name ansible would hand to the ini plugin still is INI.
-        assert_eq!(classify(Path::new("hosts.ini"), &nodes, &fs), Kind::Ini);
+        assert_eq!(classify(Path::new("hosts.ini"), src, &nodes, &fs), Kind::Ini);
     }
 
     /// Host lines are `shlex.split(line, comments=True)`, not whitespace-split. Every
