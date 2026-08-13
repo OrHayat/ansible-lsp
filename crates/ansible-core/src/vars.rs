@@ -602,6 +602,16 @@ pub fn effective(defs: &[Located]) -> Option<&Located> {
         a.source
             .precedence()
             .cmp(&b.source.precedence())
+            // Load order before position. `span.start` is an offset *within* a file, so it
+            // orders two definitions in the same one and means nothing across two — it let
+            // whichever file happened to carry the variable further down win. Ansible merges
+            // a vars directory's files with `combine_vars` in sorted order, so the later path
+            // wins: measured, `a.yml` padded past `b.yml`'s offset still resolves to `b.yml`.
+            //
+            // This only settles same-precedence collisions. Two group_vars *directories* —
+            // one beside the playbook, one beside the inventory — are different Ansible
+            // levels (5 vs 4), not a tie, and we label both `GroupVars`; see T-175.
+            .then(a.file.cmp(&b.file))
             .then(a.span.start.cmp(&b.span.start))
     })
 }
@@ -2053,6 +2063,28 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    /// Two files in one vars directory: Ansible merges them with `combine_vars` in sorted
+    /// order, so the LATER file wins. Measured on 2.21.2 — and `a.yml` is padded so its
+    /// variable sits at a larger byte offset than `b.yml`'s, which is what makes this a
+    /// measurement rather than a restatement of the old rule: tie-breaking on `span.start`
+    /// picked `a.yml`, and a hover then stated a value no run produces.
+    #[test]
+    fn a_later_file_in_a_vars_directory_wins_however_the_offsets_fall() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-loadorder");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "group_vars/web/a.yml", "# padding to push this past b.yml\n# more\nwho: A\n");
+        write(&d, "group_vars/web/b.yml", "who: B\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let cands: Vec<Located> = defs.iter().filter(|x| x.name == "who").cloned().collect();
+        assert_eq!(cands.len(), 2, "both files load: {cands:?}");
+        let win = effective(&cands).expect("a winner");
+        assert_eq!(win.file.file_name().unwrap(), "b.yml");
     }
 
     /// Exactly which files a `group_vars/` directory contributes, both halves asserted.

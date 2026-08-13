@@ -158,6 +158,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | T-062 |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
+| T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
