@@ -2065,6 +2065,32 @@ mod tests {
         std::fs::write(&p, body).unwrap();
     }
 
+    /// Every configured source contributes its own adjacent pair, and `host_vars` counts as
+    /// much as `group_vars`. Measured on 2.21.2 with this exact tree and a two-entry pathlist:
+    /// `a/group_vars`, `a/host_vars` and `b/group_vars` all reach their plays.
+    ///
+    /// The multi-source half is what makes this worth its own test — one source proves the
+    /// path is resolved, two prove it is resolved per source rather than once.
+    #[test]
+    fn each_inventory_source_contributes_its_own_group_vars_and_host_vars() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-s4");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = a/hosts.ini,b/hosts.ini\n");
+        write(&d, "a/hosts.ini", "[web]\nnode1\n");
+        write(&d, "b/hosts.ini", "[db]\nnode2\n");
+        write(&d, "a/group_vars/web.yml", "from_a_group: 1\n");
+        write(&d, "a/host_vars/node1.yml", "from_a_host: 1\n");
+        write(&d, "b/group_vars/db.yml", "from_b_group: 1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        for name in ["from_a_group", "from_a_host", "from_b_group"] {
+            assert!(defs.iter().any(|x| x.name == name), "{name} missing: {:?}", names_of(&defs));
+        }
+    }
+
     /// An entity *directory* may carry an extension. `find_vars_files` matches the name at
     /// each extension slot and only then asks whether it is a directory, so `group_vars/web.yml/`
     /// is web's vars directory and its contents load — measured, `FROM_DIR_NAMED_YML` reaches
