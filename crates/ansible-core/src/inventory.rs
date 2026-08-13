@@ -370,13 +370,11 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
             continue;
         }
         // A host line: the first token is the host name, the rest are `k=v` pairs.
-        let mut cursor = base;
-        for (i, tok) in trimmed.split_whitespace().enumerate() {
-            let tok_at = base + trimmed.find(tok).map_or(cursor - base, |o| o);
-            cursor = tok_at + tok.len();
+        for (i, (tok_at, tok_end)) in host_tokens(trimmed, base).into_iter().enumerate() {
             if i == 0 {
                 continue;
             }
+            let tok = &text[tok_at..tok_end];
             if let Some(v) = pair(tok, tok_at) {
                 out.push(v);
             }
@@ -385,19 +383,89 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
     out
 }
 
+/// Host-line tokens, as byte ranges into the document.
+///
+/// Ansible splits these with `shlex.split(line, comments=True)` (`ini.py:316`), so quotes
+/// group a value containing spaces and an unquoted `#` opens a comment anywhere in the line
+/// — with no space needed before it. Splitting on whitespace instead truncated
+/// `var="hello world"` at the space and showed `"hello` in a hover, and left the tail of
+/// `x=1#note` in the value.
+fn host_tokens(line: &str, base: usize) -> Vec<(usize, usize)> {
+    let cut = comment_cut(line);
+    let line = &line[..cut];
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote: Option<char> = None;
+    for (i, c) in line.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '"' || c == '\'' => {
+                start.get_or_insert(i);
+                quote = Some(c);
+            }
+            None if c.is_whitespace() => {
+                if let Some(s) = start.take() {
+                    out.push((base + s, base + i));
+                }
+            }
+            None => {
+                start.get_or_insert(i);
+            }
+        }
+    }
+    if let Some(s) = start {
+        out.push((base + s, base + line.len()));
+    }
+    out
+}
+
+/// Where an unquoted `#` opens a comment, or the end of the line.
+fn comment_cut(line: &str) -> usize {
+    let mut quote: Option<char> = None;
+    for (i, c) in line.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '#' => return i,
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None => {}
+        }
+    }
+    line.len()
+}
+
 /// One `name=value`, with the span covering the value. `None` when there is no `=`, which
 /// on a host line is a connection token rather than a variable.
+///
+/// Whitespace and one layer of matching quotes are trimmed off the value, so hover shows
+/// `hello world` and `5` rather than `"hello world"` and ` 5` — matching what ansible
+/// resolves the value to, and what the YAML and TOML readers hand back.
+///
+/// Not replicated: `ini.py::_parse_value` runs the value through `ast.literal_eval`, so a
+/// `#` tail is swallowed as a Python comment while a `;` tail survives. Showing the source
+/// text as written is the honest reading of an edge that surprising.
 fn pair(s: &str, base: usize) -> Option<InventoryVar> {
     let eq = s.find('=')?;
     let name = s[..eq].trim();
     if name.is_empty() || name.contains(char::is_whitespace) {
         return None;
     }
-    let value_start = eq + 1;
-    Some(InventoryVar {
-        name: name.to_string(),
-        span: Span { start: base + value_start, end: base + s.len() },
-    })
+    let raw = &s[eq + 1..];
+    let mut start = eq + 1 + (raw.len() - raw.trim_start().len());
+    let mut end = s.len() - (raw.len() - raw.trim_end().len());
+    let inner = s.get(start..end).unwrap_or("");
+    if inner.len() >= 2
+        && ((inner.starts_with('"') && inner.ends_with('"'))
+            || (inner.starts_with('\'') && inner.ends_with('\'')))
+    {
+        start += 1;
+        end -= 1;
+    }
+    Some(InventoryVar { name: name.to_string(), span: Span { start: base + start, end: base + end } })
 }
 
 #[cfg(test)]
@@ -659,6 +727,40 @@ mod tests {
         assert_eq!(classify(Path::new("INV.TOML"), &nodes, &fs), Kind::Toml, "case");
         // The same content under a name ansible would hand to the ini plugin still is INI.
         assert_eq!(classify(Path::new("hosts.ini"), &nodes, &fs), Kind::Ini);
+    }
+
+    /// Host lines are `shlex.split(line, comments=True)`, not whitespace-split. Every
+    /// expectation below is the value `ansible-inventory --list` reported for this exact
+    /// file — the whitespace reader got three of the six wrong, and a wrong value in a
+    /// hover is the failure this project exists to avoid.
+    #[test]
+    fn ini_values_match_what_ansible_resolves() {
+        let src = concat!(
+            "[web]\n",
+            "node1 quoted=\"hello world\" after=2\n",
+            "node2 inline=1 # a trailing comment\n",
+            "node3 hashy=1#nospace\n",
+            "[web:vars]\n",
+            "spaced = 5\n",
+            "c = \"quoted value\"\n",
+        );
+        let got = ini_vars(src);
+        let seen: Vec<(String, &str)> =
+            got.iter().map(|v| (v.name.clone(), v.span.slice(src))).collect();
+        assert_eq!(
+            seen,
+            vec![
+                // `"hello world"` is ONE token; whitespace-splitting truncated it to `"hello`.
+                ("quoted".to_string(), "hello world"),
+                ("after".to_string(), "2"),
+                ("inline".to_string(), "1"),
+                // `#` opens a comment with no space before it.
+                ("hashy".to_string(), "1"),
+                // A `:vars` line is split on the first `=` and both sides stripped.
+                ("spaced".to_string(), "5"),
+                ("c".to_string(), "quoted value"),
+            ]
+        );
     }
 
     /// The corpus shape: `all:` with `vars:`, and hosts nested under `children:`.
