@@ -109,7 +109,10 @@ the opposite of role `defaults/`, where the file shadows the directory
 - [x] inventory-adjacent `group_vars/`/`host_vars/` resolve via the inventory's path
 - [x] dynamic inventories are detected and skipped, never executed
 - [ ] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
-      to INI rather than report it
+      to INI rather than report it. The INI half of the same rule is already written and
+      `#[ignore]`d: `an_unknown_section_type_discards_the_whole_ini_file` — a `[web:var]`
+      typo makes Ansible discard the **whole file**, measured, while we keep reading it and
+      invent a name. Unignore it with this box.
 - [ ] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING
 - [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
       silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never

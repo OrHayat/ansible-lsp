@@ -804,6 +804,33 @@ mod tests {
         assert!(!names(&got).contains(&"server1"));
     }
 
+    /// A section type that is not `vars` or `children` kills the WHOLE file, not the section.
+    ///
+    /// Measured on 2.21.2 against this exact text: `Section [web:var] has unknown type: var`,
+    /// then `Unable to parse ... as an inventory source` and `No inventory was parsed`. The
+    /// control is `real_var`, which sits in a perfectly good `[web]` section *above* the typo
+    /// and is still gone — `hostvars` comes back empty. So the rule is file-wide.
+    ///
+    /// We read the typo'd header as a host section instead, which is silent for a one-token
+    /// line but invents `second` from the second `k=v` on a multi-token one. Ignored rather
+    /// than deleted because the fix is not "parse this better" — it is the diagnostic in
+    /// T-062's box 6, which owns "a broken inventory is an ERROR" for `.yml` and wants the
+    /// same answer here. Unignore it with that box.
+    #[test]
+    #[ignore = "a broken ini inventory must define nothing and say so — T-062 box 6"]
+    fn an_unknown_section_type_discards_the_whole_ini_file() {
+        let src = concat!(
+            "[web]\n",
+            "node1 real_var=CONTROL\n",
+            "\n",
+            "[web:var]\n",
+            "typo_var=2\n",
+            "alsotyped=3 second=4\n",
+        );
+        // Ansible parsed none of it, so neither may we — including the valid section.
+        assert_eq!(names(&ini_vars(src)), Vec::<&str>::new());
+    }
+
     /// A host with no variables is a null value, and must not panic or invent a name.
     #[test]
     fn a_bare_host_contributes_nothing() {
