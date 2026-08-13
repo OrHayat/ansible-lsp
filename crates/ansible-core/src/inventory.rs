@@ -9,7 +9,8 @@
 //! taking the **highest level that is set and only that** — measured: an env-named
 //! inventory plus a `-i` runs the `-i` hosts alone, and `/etc/ansible/hosts` is never
 //! consulted once anything else is. Within a level it is plural: several `-i`, a comma list
-//! in the config, or a directory whose files are all read.
+//! in the config, or a directory — which is walked recursively, minus dotfiles, a fixed
+//! list of extensions, and `group_vars`/`host_vars`. See [`expand_dir`].
 //!
 //! We can observe every level but the first. `-i` is a runtime argument that never reaches
 //! an editor, so [`sources`] takes an override for it — the `ansibleLsp.inventory` setting,
@@ -28,6 +29,42 @@ use crate::parse::{Node, Span};
 
 /// Ansible's own fallback when nothing names an inventory (`base.yml:799`).
 const DEFAULT_HOST_LIST: &str = "/etc/ansible/hosts";
+
+/// Suffixes a **directory** source refuses — `INVENTORY_IGNORE_EXTS`, measured on 2.21.2
+/// with one file per suffix in one directory and the host list read back.
+///
+/// `.ini` is deliberately absent, which is the whole reason this list is measured rather
+/// than remembered: `.ini` sits in `MODULE_IGNORE_EXTS`, a different list with a confusingly
+/// similar name, and a `.ini` inside an inventory directory is read like anything else.
+/// `.cfg` is here, so an `ansible.cfg` that wanders into an inventory directory is not a
+/// host list — dropping it is what keeps us from inventing variables out of it.
+const IGNORE_EXTS: &[&str] = &[
+    ".pyc", ".pyo", ".swp", ".bak", "~", ".rpm", ".md", ".txt", ".rst", ".orig", ".cfg", ".retry",
+];
+
+/// Directories a directory source never descends. `group_vars`/`host_vars` still contribute
+/// variables — they are read as variable directories by [`crate::vars`] — they are just
+/// never parsed as host lists, so a `group_vars/all.yml` is not also an inventory file.
+const IGNORE_DIRS: &[&str] = &["group_vars", "host_vars", "vars_plugins"];
+
+/// A symlinked directory pointing at an ancestor would otherwise recurse until the stack
+/// goes. Deeper than this is not a real inventory layout.
+const MAX_DEPTH: usize = 32;
+
+/// Does expanding a directory source step over this entry? One predicate rather than the
+/// rule restated at each site: the reader, the discovery sniff and the picker's "skips…"
+/// line all ask this, and two of them disagreeing is how a picker comes to advertise a file
+/// the reader never loads.
+pub fn ignored_entry(name: &str) -> bool {
+    name.starts_with('.') || IGNORE_EXTS.iter().any(|e| name.ends_with(e))
+}
+
+/// Does a directory source step over this whole directory? Same reason as
+/// [`ignored_entry`]: discovery must not offer a `group_vars/` as a folder inventory, since
+/// selecting it would read nothing at all.
+pub fn ignored_dir(name: &str) -> bool {
+    name.starts_with('.') || IGNORE_DIRS.contains(&name)
+}
 
 /// What a source turned out to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,21 +103,86 @@ pub fn sources(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in chosen {
         if fs.is_dir(&p) {
-            // A directory source reads every file in it — measured, two inventories in one
-            // directory produced both hosts.
-            let mut files: Vec<PathBuf> = fs
-                .read_dir(&p)
-                .into_iter()
-                .filter(|(_, k)| *k == crate::fs::Kind::File)
-                .map(|(f, _)| f)
-                .collect();
-            files.sort();
-            out.extend(files);
+            out.extend(expand(&p, fs));
         } else if fs.is_file(&p) {
             out.push(p);
         }
     }
     out
+}
+
+/// Every file a directory source contributes, in load order.
+///
+/// Measured on 2.21.2 against one directory holding a file per rule, reading back which
+/// hosts arrived: subdirectories **are** descended, dotfiles and [`IGNORE_EXTS`] are
+/// skipped, and [`IGNORE_DIRS`] are stepped over. None of it applies to a path the user
+/// named directly — `-i x.cfg` is read, `x.cfg` inside a directory is not — which is why
+/// the filtering lives here and not in [`sources`].
+///
+/// Public because the picker shows a folder's contents before you commit to it. That view
+/// and the reader must never disagree, so they are the same function.
+pub fn expand(dir: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    expand_dir(dir, fs, 0, &mut out);
+    out
+}
+
+fn expand_dir(dir: &Path, fs: &dyn Fs, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth >= MAX_DEPTH {
+        return;
+    }
+    let mut entries = fs.read_dir(dir);
+    // By entry name, and subdirectories expanded where their own name sorts rather than
+    // after every file: ansible walks `sorted(os.listdir())` and recurses as it goes, and
+    // this order is what breaks a same-level collision between two of these files.
+    entries.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
+    for (path, kind) in entries {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if kind == crate::fs::Kind::Dir {
+            if !ignored_dir(name) {
+                expand_dir(&path, fs, depth + 1, out);
+            }
+        } else if !ignored_entry(name) {
+            out.push(path);
+        }
+    }
+}
+
+/// Is this file worth *offering* as an inventory? A discovery question, and deliberately
+/// not [`classify`]'s.
+///
+/// [`classify`] answers "how do I parse a file already named as a source" and falls back to
+/// [`Kind::Ini`] for anything it cannot make sense of — correct there, useless here, since
+/// it would make every text file in the workspace a candidate. This one has to be able to
+/// say **no**, so it asks for a positive signal:
+///
+/// - a YAML mapping with an `all:` or `plugin:` key, or any entry whose value has
+///   `hosts:`/`children:` — the group shape. A playbook is a *sequence*, so it cannot
+///   match; a `group_vars/x.yml` is a mapping of names to values, so it does not either.
+/// - an INI `[section]` header.
+///
+/// Extension is still consulted, but only to reject: a file ansible would refuse inside a
+/// directory ([`IGNORE_EXTS`]) is never offered, which is what keeps `ansible.cfg` — a real
+/// INI file full of `[section]` headers — out of the list.
+pub fn looks_like_inventory(path: &Path, text: &str, nodes: &[Node]) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if ignored_entry(name) {
+        return false;
+    }
+    let group_shaped = nodes.iter().any(|n| {
+        n.entries().iter().any(|(k, v)| {
+            matches!(k.as_str(), Some("all") | Some("plugin"))
+                || v.get("hosts").is_some()
+                || v.get("children").is_some()
+        })
+    });
+    group_shaped
+        || text
+            .lines()
+            .map(str::trim)
+            .any(|l| l.starts_with('[') && l.ends_with(']') && l.len() > 2)
 }
 
 /// What this source is, from its content — never from its extension, which ansible does not
@@ -221,6 +323,116 @@ mod tests {
         vars.iter().map(|v| v.name.as_str()).collect()
     }
 
+    /// Resolve `inventory = <value>` the way a user does — through `ansible.cfg` and the
+    /// config reader — rather than by setting the field. Asserting on a hand-built config
+    /// would test [`sources`] against a shape nothing produces.
+    fn sources_for(value: &str, files: &[(&str, &str)], dirs: &[&str]) -> Vec<String> {
+        let cfg_text = format!("[defaults]\ninventory = {value}\n");
+        let mut all: Vec<(&str, &str)> = vec![("/p/ansible.cfg", &cfg_text)];
+        all.extend_from_slice(files);
+        let fs = crate::testing::MemFs::with_dirs(&all, dirs);
+        let cfg = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&fs)
+            .env(&crate::config::EnvMap::empty())
+            .load();
+        sources(&cfg, &fs)
+            .iter()
+            .map(|p| p.strip_prefix("/p").unwrap_or(p).to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Measured on 2.21.2: one directory holding a file per suffix, reading back which hosts
+    /// arrived. `.ini` is read — it lives in `MODULE_IGNORE_EXTS`, not this list — while
+    /// `.cfg`, `.bak`, `.md` and a `~` backup are dropped.
+    #[test]
+    fn a_directory_source_skips_the_suffixes_ansible_ignores() {
+        let got = sources_for(
+            "inv",
+            &[
+                ("/p/inv/a.ini", ""),
+                ("/p/inv/b.yml", ""),
+                ("/p/inv/c", ""),
+                ("/p/inv/e.cfg", ""),
+                ("/p/inv/f.bak", ""),
+                ("/p/inv/notes.md", ""),
+                ("/p/inv/backup~", ""),
+            ],
+            &[],
+        );
+        assert_eq!(got, ["inv/a.ini", "inv/b.yml", "inv/c"]);
+    }
+
+    /// A file the user named directly keeps its ignored suffix — measured, `-i inv/e.cfg`
+    /// reads. The filtering is a property of expanding a directory, not of the file.
+    #[test]
+    fn a_directly_named_file_keeps_an_ignored_suffix() {
+        let got = sources_for("inv/e.cfg", &[("/p/inv/e.cfg", "")], &[]);
+        assert_eq!(got, ["inv/e.cfg"]);
+    }
+
+    /// Measured: a `sub/g.yml` two levels down reached the play. Ordering is by entry name
+    /// with the subdirectory expanded where its own name sorts, not appended after the
+    /// files — the order decides a same-level collision between two of them.
+    #[test]
+    fn a_directory_source_descends_subdirectories_in_name_order() {
+        let got = sources_for(
+            "inv",
+            &[("/p/inv/a.yml", ""), ("/p/inv/m/inner.yml", ""), ("/p/inv/z.yml", "")],
+            &[],
+        );
+        assert_eq!(got, ["inv/a.yml", "inv/m/inner.yml", "inv/z.yml"]);
+    }
+
+    /// Measured: a perfectly parseable `group_vars/sneaky.ini` contributed no host. These
+    /// directories still supply variables — as variable directories, read elsewhere — but
+    /// are never host lists.
+    #[test]
+    fn a_directory_source_steps_over_group_vars_and_host_vars() {
+        let got = sources_for(
+            "inv",
+            &[
+                ("/p/inv/group_vars/all.yml", ""),
+                ("/p/inv/host_vars/web01.yml", ""),
+                ("/p/inv/vars_plugins/x.ini", ""),
+                ("/p/inv/hosts.ini", ""),
+            ],
+            &[],
+        );
+        assert_eq!(got, ["inv/hosts.ini"]);
+    }
+
+    /// The discovery sniff, with its negative controls. Without those this test proves
+    /// nothing: a predicate that says yes to everything passes every positive case.
+    #[test]
+    fn discovery_offers_inventories_and_refuses_everything_else() {
+        fn sniff(name: &str, text: &str) -> bool {
+            let nodes = Document::new(text.to_string()).parse().unwrap_or_default();
+            looks_like_inventory(Path::new(name), text, &nodes)
+        }
+
+        assert!(sniff("db.ini", "[webservers]\nweb01\n"), "an INI section");
+        assert!(sniff("x.yml", "all:\n  hosts:\n    web01:\n"), "the `all:` shape");
+        assert!(sniff("x.yml", "webservers:\n  hosts:\n    web01:\n"), "a bare group");
+        assert!(sniff("x.yml", "plugin: amazon.aws.aws_ec2\n"), "a plugin config");
+
+        // A playbook is a sequence, so the group shape cannot match it.
+        assert!(
+            !sniff("site.yml", "- name: play\n  hosts: webservers\n  tasks: []\n"),
+            "a playbook has `hosts:` and must still be refused"
+        );
+        assert!(!sniff("all.yml", "ntp_server: 10.0.0.1\napp_tier: prod\n"), "a group_vars file");
+        // Real INI, full of sections, and refused on its extension alone.
+        assert!(!sniff("ansible.cfg", "[defaults]\ninventory = inv\n"), "ansible.cfg");
+        assert!(!sniff("README.md", "[a link](x)\n"), "a markdown file");
+        assert!(!sniff(".hidden.ini", "[webservers]\nweb01\n"), "a dotfile");
+    }
+
+    #[test]
+    fn a_directory_source_skips_hidden_files() {
+        let got = sources_for("inv", &[("/p/inv/.hidden.ini", ""), ("/p/inv/hosts.ini", "")], &[]);
+        assert_eq!(got, ["inv/hosts.ini"]);
+    }
+
     /// The measured shapes, from the probe that ran every source at once: a `[group:vars]`
     /// section and the inline `var=value` on a host line both reach the play.
     #[test]
@@ -278,4 +490,3 @@ mod tests {
         assert!(yaml_vars(&nodes).is_empty());
     }
 }
-

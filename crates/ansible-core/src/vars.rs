@@ -2166,6 +2166,20 @@ mod tests {
         // Set: the user's `-i` wins, and the value on screen changes with it. Without this
         // the setting would be a knob that reads back but changes nothing.
         assert_eq!(value_with(vec![d.join("lab.ini")]), "192.168.0.1");
+
+        // Several sources MERGE, the way repeated `-i` and a comma list in `ansible.cfg`
+        // both do (measured: two inventories in one directory produced both hosts). Each
+        // one's own names must survive, not just the last file's.
+        write(&d, "extra.ini", "[web:vars]\nonly_in_extra=yes\n");
+        let cache = ScanCache::default().with_inventory(vec![d.join("lab.ini"), d.join("extra.ini")]);
+        let defs = definitions_with_deps_in(&play, &nodes, &cache).0;
+        for name in ["target_ip", "only_in_extra"] {
+            assert!(
+                defs.iter().any(|x| x.name == name),
+                "{name} missing when two inventories are given: {:?}",
+                names_of(&defs)
+            );
+        }
     }
 
     fn names_of(defs: &[Located]) -> Vec<&str> {
