@@ -2065,6 +2065,30 @@ mod tests {
         std::fs::write(&p, body).unwrap();
     }
 
+    /// An entity *directory* may carry an extension. `find_vars_files` matches the name at
+    /// each extension slot and only then asks whether it is a directory, so `group_vars/web.yml/`
+    /// is web's vars directory and its contents load — measured, `FROM_DIR_NAMED_YML` reaches
+    /// the play. A directory named for an extension Ansible does not accept (`db.txt/`) is
+    /// invisible, which is the control that makes the first half a measurement.
+    ///
+    /// The two rules pull opposite ways — extensions gate the *lookup*, but the recursion
+    /// inside a vars directory skips any subdirectory that has one — so neither can be
+    /// inferred from the other.
+    #[test]
+    fn a_vars_directory_may_carry_an_accepted_extension_in_its_name() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-extdir");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "group_vars/web.yml/inner.yml", "dir_with_ext: 1\n");
+        write(&d, "group_vars/db.txt/inner.yml", "dir_bad_ext: 1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().any(|x| x.name == "dir_with_ext"), "{:?}", names_of(&defs));
+        assert!(!defs.iter().any(|x| x.name == "dir_bad_ext"));
+    }
+
     /// Two files in one vars directory: Ansible merges them with `combine_vars` in sorted
     /// order, so the LATER file wins. Measured on 2.21.2 — and `a.yml` is padded so its
     /// variable sits at a larger byte offset than `b.yml`'s, which is what makes this a
