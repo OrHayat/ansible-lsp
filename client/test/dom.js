@@ -77,12 +77,20 @@ function allText(el) {
 }
 
 // Returns { sent, els } — every postMessage the panel made, and the elements it built.
-function runPanel(scriptSource) {
+//
+// `page` is the full HTML. Without it the stub invents every element with no classes, so an
+// element the markup ships as `class="alt hide"` starts VISIBLE here and hidden in a
+// browser — and a test asking "is this hidden by default" gets the wrong answer with a
+// straight face.
+function runPanel(scriptSource, page) {
   const vm = require("vm");
   const sent = [];
   const els = {};
-  for (const id of ["sel", "avail", "note", "cmd", "browse", "save", "cancel"]) {
+  for (const id of ["sel", "avail", "note", "cmd", "browse", "save", "cancel", "forget"]) {
     els[id] = makeEl("div");
+    const tag = (page || "").match(new RegExp('<[^>]*id="' + id + '"[^>]*>'));
+    const cls = tag && tag[0].match(/class="([^"]*)"/);
+    if (cls) els[id].className = cls[1];
   }
   const radios = {
     local: { value: "local", checked: false },
@@ -104,14 +112,22 @@ function runPanel(scriptSource) {
       return null;
     },
   };
+  // The panel receives host messages through window's listener; tests need to deliver one.
+  const winListeners = [];
   const sandbox = {
     document,
-    window: { addEventListener() {}, innerWidth: 800 },
+    window: {
+      addEventListener(type, fn) { if (type === "message") winListeners.push(fn); },
+      innerWidth: 800,
+    },
     acquireVsCodeApi: () => ({ postMessage: (m) => sent.push(m) }),
   };
   vm.createContext(sandbox);
   vm.runInContext(scriptSource, sandbox, { filename: "inventory-webview.js" });
-  return { sent, els, radios, byTip, allText, walk };
+  return {
+    sent, els, radios, byTip, allText, walk,
+    onMessage: (data) => winListeners.forEach((fn) => fn({ data })),
+  };
 }
 
 module.exports = { runPanel, walk, byTip, allText };

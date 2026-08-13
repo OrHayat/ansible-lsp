@@ -43,6 +43,20 @@ function serverPath(context) {
 // workspaceState handle does not reach; `activate` keeps it current.
 let effectiveInventoryPaths = [];
 
+// Which inventory wins, given the machine-local pick and the committed setting.
+//
+// Three states, and the first two must not collapse: `undefined` is "never chose" and falls
+// back to the committed value, `[]` is "no inventory, deliberately" and outranks it. Written
+// as `local.length ? ... : ...` those were one state, which left no way to clear a pick and
+// no way to override a shared default with nothing — the same distinction `config.rs` keeps
+// between `None` and `Some(vec![])`, learned there for the same reason.
+//
+// At module scope so it can be tested: inside `activate` it is reachable only by running the
+// extension host, which is how it shipped wrong.
+function resolveInventory(local, shared) {
+  return Array.isArray(local) ? local : shared;
+}
+
 // Sent at startup and again on change. Normalised here so the server sees one shape
 // rather than having to know VS Code's nesting.
 function hintSettings() {
@@ -120,12 +134,14 @@ async function paint(editor) {
 // `reads` comes from the same function that later loads it. Deriving that list here in JS
 // would put one copy of ansible's directory rules in the panel and another in the reader,
 // and the panel would eventually advertise a file the reader drops.
-function inventoryHtml(webview, candidates, current, dest, autoSource, autoResolved) {
+function inventoryHtml(webview, candidates, current, dest, autoSource, autoResolved,
+    configFile, hasLocal, shared) {
   const nonce = String(Math.random()).slice(2) + String(Date.now());
   // `<` escaped: a workspace path containing `</script>` would otherwise close the tag and
   // run whatever followed. JSON.stringify does not escape it, and the paths come from the
   // filesystem rather than from us.
-  const data = JSON.stringify({ candidates, current, dest, autoSource, autoResolved }).replace(/</g, "\\u003c");
+  const data = JSON.stringify({ candidates, current, dest, autoSource, autoResolved,
+    configFile, hasLocal, shared }).replace(/</g, "\\u003c");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -168,11 +184,12 @@ function inventoryHtml(webview, candidates, current, dest, autoSource, autoResol
   ol.detail li.drag { opacity: .35; }
   ol.detail li.over { border-color: var(--vscode-focusBorder); }
   .tip {
-    position: fixed; z-index: 10; max-width: 320px;
+    position: fixed; z-index: 10; max-width: 380px;
     background: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
     color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
     border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border));
     border-radius: 4px; padding: 6px 9px; font-size: .9em; pointer-events: none;
+    white-space: pre-line;
     box-shadow: 0 2px 8px rgba(0,0,0,.35);
   }
   .hide { display: none; }
@@ -258,6 +275,7 @@ function inventoryHtml(webview, candidates, current, dest, autoSource, autoResol
   <div class="row actions">
     <button id="save">Save</button>
     <button class="alt" id="cancel">Cancel</button>
+    <button class="alt" id="forget"></button>
   </div>
 
 <script nonce="${nonce}">
@@ -270,6 +288,7 @@ const meta = new Map(state.candidates.map(c => [c.path, c]));
 // instead of at the end.
 let order = state.candidates.map(c => c.path);
 let sel = state.current.slice();
+let hasLocal = state.hasLocal;
 for (const p of sel) if (order.indexOf(p) < 0) order.push(p);
 const info = (p) => meta.get(p) || { path: p, dir: false };
 
@@ -424,13 +443,18 @@ document.body.appendChild(tipEl);
 
 function tip(el, text) {
   if (!text) return el;
+  // The text lives on the element and is read at hover time, so calling this again with new
+  // text just updates it. Rows are rebuilt every render, but the buttons below the list are
+  // not — re-registering there stacked a fresh set of listeners on every repaint.
   el.dataset.tip = text;
+  if (el.tipBound) return el;
+  el.tipBound = true;
   const place = (e) => {
     tipEl.style.left = Math.min(e.clientX + 14, window.innerWidth - 340) + "px";
     tipEl.style.top = e.clientY + 18 + "px";
   };
   el.addEventListener("mouseenter", (e) => {
-    tipEl.textContent = text;
+    tipEl.textContent = el.dataset.tip;
     tipEl.classList.remove("hide");
     place(e);
   });
@@ -462,6 +486,60 @@ function move(from, to) {
   render();
 }
 
+// Naming the rung is not enough. "ansible.cfg" is a category — ansible reads the one in
+// the directory you run FROM, does not walk up to a parent, and never merges a second one,
+// so a repo with more than one has a cwd-dependent answer the editor cannot see. Naming the
+// file we actually read is what lets you notice we read a different one than your run does.
+// The note says which rung answered. This says what every rung held, which is the question
+// you ask second — and the reason the empty box gets a tooltip like every other row rather
+// than being the one dead spot in the panel. It must not restate the note.
+function rungLadder() {
+  const envWins = state.autoSource === "ANSIBLE_INVENTORY";
+  const cfgWins = state.autoSource === "ansible.cfg";
+  const fileWins = state.autoSource === "/etc/ansible/hosts";
+  const found = (state.autoResolved || []).join(", ");
+  const mark = (won) => (won ? "  <-- this is the answer" : "");
+  const rows = [
+    "-i flag: not set in this editor",
+    "ANSIBLE_INVENTORY: " + (envWins ? "set to " + found : "not set") + mark(envWins),
+    (state.configFile || "ansible.cfg") + ": " +
+      (cfgWins ? "sets inventory = " + found
+       : state.configFile ? "found, but sets no inventory"
+       : "no such file above the one you are editing") + mark(cfgWins),
+    "/etc/ansible/hosts: " +
+      (fileWins && found ? "exists"
+       : fileWins ? "not on this machine"
+       : "never reached, a line above answered first"),
+  ];
+  return [
+    "Where ansible looks for an inventory, top to bottom. The first one " +
+      "that is set wins outright -- they never combine.",
+    "",
+    ...rows,
+    "",
+    found ? "So " + found + " is what gets read."
+          : "So nothing is read, and a variable defined only in an inventory " +
+            "stays undefined.",
+  ].join("\\n");
+}
+
+function rungNote() {
+  if (state.autoSource === "ANSIBLE_INVENTORY") {
+    return "From the ANSIBLE_INVENTORY environment variable this server was started with, " +
+      "which outranks ansible.cfg.";
+  }
+  if (state.autoSource === "ansible.cfg") {
+    return "From " + (state.configFile || "ansible.cfg") + ". Ansible reads the ansible.cfg " +
+      "in the directory you run from — it never walks up and never merges a second one — " +
+      "so running from elsewhere can give a different answer.";
+  }
+  const seen = state.configFile
+    ? "Read " + state.configFile + ", which names no inventory. "
+    : "No ansible.cfg here. ";
+  return seen + "ANSIBLE_INVENTORY is unset too, so ansible falls through to " +
+    "/etc/ansible/hosts, which is not found.";
+}
+
 function render() {
   selList.innerHTML = "";
   if (!sel.length) {
@@ -469,11 +547,9 @@ function render() {
     // in the box. Which rung and which paths are a hover away — naming the rung reads like
     // something is configured, when the usual truth is that nothing is read at all.
     const auto = state.autoResolved || [];
-    // No tooltip here on purpose: the note below already says which rung answered, and a
-    // hover repeating a line that is on screen two centimetres away is just noise.
     empty(selList, auto.length
       ? "Nothing chosen — " + state.autoSource + " reads " + auto.join(", ")
-      : "Nothing chosen, and no default here — no inventory is read");
+      : "Nothing chosen, and no default here — no inventory is read", rungLadder());
   }
   sel.forEach((p, i) => {
     const li = document.createElement("li");
@@ -590,18 +666,31 @@ function render() {
   } else if (sel.length === 1) {
     note.textContent = "One inventory file, so nothing to merge and order does not matter.";
     note.classList.remove("hide");
-  } else if ((state.autoResolved || []).length) {
-    note.textContent = "That is " + state.autoSource + "'s answer. Pick one above to " +
-      "override it, the way -i does.";
-    note.classList.remove("hide");
   } else {
     // Shown, not hovered. Which rung answered is the question the empty box raises, and an
     // answer you have to discover by hovering is one most people never see.
-    note.textContent = "Ansible reads -i, then ANSIBLE_INVENTORY, then ansible.cfg, then " +
-      "/etc/ansible/hosts. Here it falls through to " + state.autoSource + ", which is " +
-      "not there.";
+    note.textContent = rungNote();
     note.classList.remove("hide");
   }
+
+  // Named, not generic: "restore the default" is only actionable if you can see what the
+  // default IS without pressing it.
+  const back = (state.shared || []);
+  const shownBack = back.length
+    ? back.map(base).join(", ")
+    : "ansible's own resolution";
+  forget.textContent = "Restore " +
+    (shownBack.length > 44 ? back.length + " committed files" : shownBack);
+  forget.disabled = !hasLocal;
+  // Says what happens to the two stores, not "the value below" — the button is the last
+  // thing on the page, and in the commonest state there is no value anywhere to point at.
+  tip(forget, hasLocal
+    ? (back.length
+        ? "Forgets the inventory you picked on this machine. The committed " +
+          "ansibleLsp.inventory (" + shownBack + ") decides again."
+        : "Forgets the inventory you picked on this machine. Nothing is committed here, " +
+          "so ansible resolves it on its own.")
+    : "Nothing to forget - you have no inventory picked on this machine.");
 
   const eff = effective();
   if (eff.length) {
@@ -625,6 +714,19 @@ document.getElementById("save").addEventListener("click", () => {
 });
 document.getElementById("cancel").addEventListener("click",
   () => vscode.postMessage({ type: "cancel" }));
+// Not the same as saving an empty list, which is why both exist. Saving empty means "no
+// inventory, deliberately" and outranks a committed default; this drops your pick so that
+// default answers again.
+//
+// It does NOT close the panel. Restoring a default is a thing you want to SEE — the list
+// repopulates with what you fell back to, and the button greys out because there is nothing
+// left to forget. Closing to reveal the result meant reopening to find out what happened.
+const forget = document.getElementById("forget");
+
+forget.addEventListener("click", () => {
+  if (!hasLocal) return;
+  vscode.postMessage({ type: "forget" });
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") vscode.postMessage({ type: "cancel" });
 });
@@ -632,6 +734,14 @@ document.addEventListener("keydown", (e) => {
 // It arrives as {path, dir} because only the host can stat it; without that flag a browsed
 // folder would render as a file and claim an order that does not apply to it.
 window.addEventListener("message", (e) => {
+  if (e.data.type === "restored") {
+    sel = (e.data.paths || []).slice();
+    custom.clear();
+    opened.clear();
+    hasLocal = false;
+    render();
+    return;
+  }
   if (e.data.type !== "add") return;
   for (const c of e.data.paths) {
     if (!meta.has(c.path)) meta.set(c.path, c);
@@ -752,15 +862,15 @@ function activate(context) {
   const INV_KEY = "ansibleLsp.inventory.local";
   const INV_DEST = "ansibleLsp.inventory.dest";
 
+  // No default: absent is a meaningful third state, see `resolveInventory`.
   function localInventory() {
-    return context.workspaceState.get(INV_KEY, []);
+    return context.workspaceState.get(INV_KEY);
   }
   function sharedInventory() {
     return vscode.workspace.getConfiguration("ansibleLsp").get("inventory", []);
   }
   function effectiveInventory() {
-    const local = localInventory();
-    const eff = local.length ? local : sharedInventory();
+    const eff = resolveInventory(localInventory(), sharedInventory());
     effectiveInventoryPaths = eff;
     return eff;
   }
@@ -788,7 +898,8 @@ function activate(context) {
   // where the answer is unclear.
   function paintInventory(info) {
     const chosen = effectiveInventory();
-    const where = localInventory().length ? "this machine" : "settings.json";
+    const mine = Array.isArray(localInventory());
+    const where = mine ? "this machine" : "settings.json";
     const resolved = (info && info.resolved) || [];
     if (chosen.length) {
       const first = chosen[0].split("/").pop();
@@ -879,7 +990,10 @@ function activate(context) {
         current,
         context.workspaceState.get(INV_DEST, "local"),
         autoSource(),
-        (lastInventoryInfo && lastInventoryInfo.autoResolved) || []
+        (lastInventoryInfo && lastInventoryInfo.autoResolved) || [],
+        (lastInventoryInfo && lastInventoryInfo.configFile) || null,
+        Array.isArray(localInventory()),
+        sharedInventory()
       );
       panel.webview.onDidReceiveMessage(async (m) => {
         if (m.type === "browse") {
@@ -907,18 +1021,36 @@ function activate(context) {
           panel.dispose();
           return;
         }
+        if (m.type === "forget") {
+          await context.workspaceState.update(INV_KEY, undefined);
+          await context.workspaceState.update(INV_DEST, "local");
+          paintInventory(lastInventoryInfo);
+          client?.sendNotification("workspace/didChangeConfiguration", {
+            settings: hintSettings(),
+          });
+          // The panel stays open and repaints with what now decides, so the effect of the
+          // button is visible where you pressed it.
+          panel.webview.postMessage({ type: "restored", paths: sharedInventory() });
+          return;
+        }
         if (m.type !== "save") return;
         const picked = m.paths || [];
         const cfg = vscode.workspace.getConfiguration("ansibleLsp");
         if (m.dest === "shared") {
           // Cleared, or the local pick would shadow what was just written and the setting
           // would appear to do nothing.
-          await context.workspaceState.update(INV_KEY, []);
+          await context.workspaceState.update(INV_KEY, undefined);
           await context.workspaceState.update(INV_DEST, "shared");
           await cfg.update("inventory", picked, vscode.ConfigurationTarget.Workspace);
         } else {
           await context.workspaceState.update(INV_KEY, picked);
           await context.workspaceState.update(INV_DEST, "local");
+          // Symmetric with the branch above, and it was not. `effectiveInventory` prefers
+          // the local pick only when it is non-empty, so a leftover committed setting kept
+          // answering after you chose "just for me" — and choosing "just for me" with
+          // nothing selected left the old shared value in force, looking like the panel
+          // had ignored you.
+          await cfg.update("inventory", undefined, vscode.ConfigurationTarget.Workspace);
         }
         paintInventory(lastInventoryInfo);
         client?.sendNotification("workspace/didChangeConfiguration", {
