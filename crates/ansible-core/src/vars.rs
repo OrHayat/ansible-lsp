@@ -1173,7 +1173,10 @@ fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
     }
     let nodes: &[Node] = src.nodes.as_deref().map_or(&[], |n| n.as_slice());
     let vars = match crate::inventory::classify(file, nodes, walk.cache) {
-        crate::inventory::Kind::Dynamic => return,
+        // Both are sources we decline to read: a dynamic one we refuse to execute, a TOML
+        // one we cannot parse. Neither contributes definitions, and neither is evidence
+        // that a name is undefined.
+        crate::inventory::Kind::Dynamic | crate::inventory::Kind::Toml => return,
         crate::inventory::Kind::Yaml => crate::inventory::yaml_vars(nodes),
         crate::inventory::Kind::Ini => crate::inventory::ini_vars(&src.text),
     };

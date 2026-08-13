@@ -75,6 +75,16 @@ pub enum Kind {
     Yaml,
     /// A plugin config or an executable script. **Never read, never run** — see [`classify`].
     Dynamic,
+    /// A TOML inventory. Ansible reads these — `toml` is the last entry of
+    /// `INVENTORY_ENABLED` (`['host_list', 'script', 'auto', 'yaml', 'ini', 'toml']`), and a
+    /// `[webservers.vars]` table reaches the play, measured. We do not parse TOML.
+    ///
+    /// Named rather than left to fall through to [`Kind::Ini`]. It already produced nothing
+    /// there — TOML's `key = value` has spaces, so the INI host-line reader takes the whole
+    /// line as a host name and finds no pairs — but that is silence by accident, and an
+    /// accident is not a rule. Naming it makes the gap greppable and lets a reader concede
+    /// the source instead of treating its absence as proof a name is undefined.
+    Toml,
 }
 
 /// A variable an inventory defines, with the span of its **value** so hover can show it.
@@ -204,6 +214,12 @@ pub fn looks_like_inventory(path: &Path, text: &str, nodes: &[Node]) -> bool {
 pub fn classify(path: &Path, nodes: &[Node], fs: &dyn Fs) -> Kind {
     if fs.is_executable(path) {
         return Kind::Dynamic;
+    }
+    // By extension, which is what ansible's own plugins do here: `ini.verify_file` accepts
+    // any readable file EXCEPT `.toml` (`plugins/inventory/ini.py:108-110`), leaving it to
+    // the toml plugin behind it.
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("toml")) {
+        return Kind::Toml;
     }
     if nodes.iter().any(|n| n.get("plugin").is_some()) {
         return Kind::Dynamic;
@@ -533,6 +549,26 @@ mod tests {
         assert_eq!(names(&got), ["json_host_var", "json_group_var"]);
         // And the picker offers it, which is a different predicate from parsing it.
         assert!(looks_like_inventory(Path::new("inv.json"), src, &nodes));
+    }
+
+    /// Ansible reads TOML inventories — measured, a `[webservers.vars]` table reached the
+    /// play — and we do not. The INI fallback already yielded nothing from one, because
+    /// TOML's spaced `key = value` reads as a bare host name, but classifying it says so on
+    /// purpose rather than relying on that.
+    #[test]
+    fn a_toml_inventory_is_named_rather_than_read_as_ini() {
+        let src = concat!(
+            "[webservers.vars]\n",
+            "ntp_server = \"10.0.0.1\"\n",
+            "[webservers.hosts.web01]\n",
+            "host_line_ip = \"10.0.0.11\"\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().unwrap_or_default();
+        let fs = crate::testing::MemFs::new(&[]);
+        assert_eq!(classify(Path::new("inv.toml"), &nodes, &fs), Kind::Toml);
+        assert_eq!(classify(Path::new("INV.TOML"), &nodes, &fs), Kind::Toml, "case");
+        // The same content under a name ansible would hand to the ini plugin still is INI.
+        assert_eq!(classify(Path::new("hosts.ini"), &nodes, &fs), Kind::Ini);
     }
 
     /// The corpus shape: `all:` with `vars:`, and hosts nested under `children:`.
