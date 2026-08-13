@@ -60,10 +60,10 @@ function assert(cond, msg) {
 
 const WEBVIEW = { cspSource: "vscode-webview:" };
 const render = (candidates, current, dest, auto, autoResolved, configFile, hasLocal,
-    shared) =>
+    shared, declined) =>
   inventoryHtml(WEBVIEW, candidates, current, dest || "local", auto || "ansible.cfg",
     autoResolved || [], configFile || null, hasLocal === undefined ? true : hasLocal,
-    shared || []);
+    shared || [], declined || []);
 const file = (path) => ({ path, dir: false });
 
 // The shape the server actually sends, folders included — asserting against a list of bare
@@ -430,6 +430,25 @@ check("hover text updates on repaint without stacking listeners", () => {
     tipEl.text.includes("Nothing to forget"),
     "the hover text was frozen at the first render: " + tipEl.text
   );
+});
+
+// A declined source is in effect AND unread. The list of picks cannot show that — it draws
+// what gets loaded — so the panel has to say it separately, and must stay quiet when there
+// is nothing to say or the warning becomes wallpaper.
+check("a declined inventory says it was not executed, and stays quiet otherwise", () => {
+  const loud = runPanel(scriptOf(render([], ["inv/aws_ec2.yml"], "local", "ansible.cfg", [],
+    null, true, [], ["inv/aws_ec2.yml"])));
+  const shown = allText(loud.els.declined);
+  assert(shown.includes("aws_ec2.yml"), "it must name the file: " + shown);
+  assert(/plugin config|script/.test(shown), "it must say why: " + shown);
+  assert(!loud.els.declined.className.includes("hide"), "the box must be visible");
+
+  // The same panel with nothing declined: the box stays hidden. Without this the assertion
+  // above passes on a panel that always warns, which is worse than not warning at all.
+  const quiet = runPanel(scriptOf(render([], ["inv/hosts.ini"], "local", "ansible.cfg", [],
+    null, true, [], [])));
+  assert(quiet.els.declined.className.includes("hide"),
+    "nothing declined must leave the box hidden: " + quiet.els.declined.className);
 });
 
 process.exit(failed ? 1 : 0);

@@ -988,12 +988,26 @@ impl Backend {
         };
         let auto_resolved =
             if configured.is_empty() { resolved.clone() } else { resolve(Vec::new()) };
+        // Which of the resolved sources we detected as dynamic and did not run. Sent apart
+        // from `resolved` because "this file is in effect" and "we read this file" are two
+        // claims, and showing only the first is what let the picker look omniscient about a
+        // host list it never saw. A declined source is in effect *and* unread.
+        let declined: Vec<String> = root
+            .as_deref()
+            .map(|r| {
+                let cache = ScanCache::default().with_inventory(configured.clone());
+                ansible_core::vars::declined_inventories(&r.join("x.yml"), &cache)
+                    .iter()
+                    .map(|p| p.strip_prefix(r).unwrap_or(p).display().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
         let candidates = Self::inventory_candidates(root.as_deref());
         client
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "ansible-lsp inventory: source={source} resolved={resolved:?} candidates={candidates:?}"
+                    "ansible-lsp inventory: source={source} resolved={resolved:?} declined={declined:?} candidates={candidates:?}"
                 ),
             )
             .await;
@@ -1001,6 +1015,7 @@ impl Backend {
             .send_notification::<InventoryStatus>(serde_json::json!({
                 "source": source,
                 "resolved": resolved,
+                "declined": declined,
                 "autoSource": auto_source,
                 "autoResolved": auto_resolved,
                 "configFile": config_file,

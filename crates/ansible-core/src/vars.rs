@@ -1181,9 +1181,37 @@ fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk
     }
 }
 
+/// The inventory sources resolved for `path` that were **declined** — a plugin config or a
+/// script, which we detect and never run.
+///
+/// Skipping one is not the same as reading one that turned out to be empty, and the whole
+/// point of recording it is that those two states are otherwise identical downstream. An
+/// empty host list means "there is no such host"; a declined source means "the host list is
+/// unknowable". Anything that answers a host-existence question has to tell them apart or it
+/// will confidently report a false error in exactly the workspaces — cloud inventories —
+/// where it has the least standing to.
+///
+/// Recomputed rather than carried on [`Contribution`]: the sources come from `path`'s own
+/// config, so this is a property of one file's context, not something a subtree contributes
+/// upward. Everything it touches is already memoized in the cache, so asking is cheap.
+pub fn declined_inventories(path: &Path, cache: &ScanCache) -> Vec<PathBuf> {
+    let ctx = cache.context(path);
+    crate::inventory::sources(&ctx.config, cache)
+        .into_iter()
+        .filter(|src| {
+            cache.source(src).is_some_and(|s| {
+                let nodes: &[Node] = s.nodes.as_deref().map_or(&[], |n| n.as_slice());
+                crate::inventory::classify(src, &s.text, nodes, cache)
+                    == crate::inventory::Kind::Dynamic
+            })
+        })
+        .collect()
+}
+
 /// Index one inventory source. INI and YAML shapes both go through
 /// [`crate::inventory`]; a dynamic one contributes nothing, because learning its hosts
-/// would mean executing a file out of the workspace.
+/// would mean executing a file out of the workspace. The skip is observable through
+/// [`declined_inventories`], which is what keeps "no hosts" and "hosts unknown" apart.
 fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
     let Some(src) = walk.cache.source(file) else {
         return;
@@ -2063,6 +2091,43 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    /// A declined source is *recorded*, not merely skipped — the two states that must not
+    /// look alike are "read it, there are no hosts" and "did not read it, hosts unknown".
+    ///
+    /// Both produce zero definitions, which is why skipping silently was not enough: a
+    /// host-existence rule reading only `defs` cannot tell a genuinely empty inventory from a
+    /// cloud one we declined, and would report every `hostvars[...]` in the second case as an
+    /// unknown host. The empty-inventory row is the control that makes this a distinction
+    /// rather than a restatement of "dynamic inventories define nothing".
+    #[test]
+    fn a_declined_inventory_is_recorded_and_an_empty_one_is_not() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-declined");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+
+        // A plugin config: nothing defined, and the reason is recorded.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = dyn.yml\n");
+        write(&d, "dyn.yml", "plugin: amazon.aws.aws_ec2\nregions:\n  - us-east-1\n");
+        let cache = ScanCache::default();
+        let declined = declined_inventories(&play, &cache);
+        assert_eq!(declined.len(), 1, "the plugin config must be recorded: {declined:?}");
+        assert!(declined[0].ends_with("dyn.yml"));
+
+        // An inventory that is genuinely empty also defines nothing — and must NOT be
+        // recorded, or the caveat would fire everywhere and mean nothing.
+        write(&d, "ansible.cfg", "[defaults]\ninventory = empty.ini\n");
+        write(&d, "empty.ini", "");
+        let cache = ScanCache::default();
+        assert!(
+            declined_inventories(&play, &cache).is_empty(),
+            "an empty inventory was read, not declined"
+        );
+        assert!(definitions(&play, &nodes).iter().all(|x| x.name != "plugin"));
     }
 
     /// A stray execute bit does not make a data file dynamic.

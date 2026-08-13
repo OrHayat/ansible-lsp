@@ -86,7 +86,16 @@ function runPanel(scriptSource, page) {
   const vm = require("vm");
   const sent = [];
   const els = {};
-  for (const id of ["sel", "avail", "note", "cmd", "browse", "save", "cancel", "forget"]) {
+  // Every id the script asks for gets an element. Read from the SCRIPT rather than from a
+  // hand-kept list, and rather than from `page` — which most call sites do not pass, so a
+  // page-only scan still left the new element missing. A stale list surfaces as "cannot
+  // read properties of undefined" inside unrelated tests, not as "the stub lacks an id",
+  // which is exactly how it presented.
+  const found = [...(scriptSource || "").matchAll(/getElementById\("([^"]+)"\)/g)]
+    .map((m) => m[1])
+    .concat([...(page || "").matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  for (const id of new Set(["sel", "avail", "note", "cmd", "browse", "save", "cancel",
+      "forget", ...found])) {
     els[id] = makeEl("div");
     const tag = (page || "").match(new RegExp('<[^>]*id="' + id + '"[^>]*>'));
     const cls = tag && tag[0].match(/class="([^"]*)"/);

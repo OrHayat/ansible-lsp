@@ -90,8 +90,7 @@ The error is the literal subscript — `_undef(f"hostvars[{host_name!r}]")`,
 Once the inventory is parsed the host list is enumerable, which makes this a cleaner claim
 than T-172's: a name either is a host or is not.
 
-Escapes that must keep it quiet, none of them optional: a dynamic inventory (we refuse to
-execute it, so we do not know the hosts), `add_host` anywhere in the play, and more `-i`
+Escapes that must keep it quiet, none of them optional: a dynamic inventory , `add_host` anywhere in the play, and more `-i`
 files than we resolved. Also `hostvars` auto-creates the implicit localhost on membership
 (`:69-71`) while `list(hostvars)` omits it, so `localhost` must never be flagged.
 
@@ -107,7 +106,12 @@ the opposite of role `defaults/`, where the file shadows the directory
 - [x] extension-less `group_vars/<name>` / `host_vars/<name>` files are indexed
 - [x] `group_vars/<name>/` directories are read, and shadow the same-named `.yml`
 - [x] inventory-adjacent `group_vars/`/`host_vars/` resolve via the inventory's path
-- [x] dynamic inventories are detected and skipped, never executed
+- [x] dynamic inventories are detected and handled — detected, never executed, and the skip
+      **recorded** rather than silent (`vars::declined_inventories`), so "read it, no such
+      host" and "did not read it, hosts unknown" stay apart; box 8 below depends on that
+      distinction. Shown in the inventory panel and the status bar, so the blind spot is
+      visible rather than merely known. Running one on an explicit user command is **not**
+      here — that is T-176.
 - [ ] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
       to INI rather than report it. The INI half of the same rule is already written and
       `#[ignore]`d: `an_unknown_section_type_discards_the_whole_ini_file` — a `[web:var]`

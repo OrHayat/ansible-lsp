@@ -135,13 +135,13 @@ async function paint(editor) {
 // would put one copy of ansible's directory rules in the panel and another in the reader,
 // and the panel would eventually advertise a file the reader drops.
 function inventoryHtml(webview, candidates, current, dest, autoSource, autoResolved,
-    configFile, hasLocal, shared) {
+    configFile, hasLocal, shared, declined) {
   const nonce = String(Math.random()).slice(2) + String(Date.now());
   // `<` escaped: a workspace path containing `</script>` would otherwise close the tag and
   // run whatever followed. JSON.stringify does not escape it, and the paths come from the
   // filesystem rather than from us.
   const data = JSON.stringify({ candidates, current, dest, autoSource, autoResolved,
-    configFile, hasLocal, shared }).replace(/</g, "\\u003c");
+    configFile, hasLocal, shared, declined: declined || [] }).replace(/</g, "\\u003c");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -259,6 +259,7 @@ function inventoryHtml(webview, candidates, current, dest, autoSource, autoResol
 
   <h3>Read in this order</h3>
   <ul id="sel"></ul>
+  <div class="note hide" id="declined"></div>
   <div class="note hide" id="note"></div>
   <pre class="cmd hide" id="cmd"></pre>
 
@@ -295,6 +296,7 @@ const info = (p) => meta.get(p) || { path: p, dir: false };
 const selList = document.getElementById("sel");
 const availList = document.getElementById("avail");
 const note = document.getElementById("note");
+const declinedBox = document.getElementById("declined");
 const cmd = document.getElementById("cmd");
 let dragging = null;
 let subDragging = null;
@@ -673,6 +675,22 @@ function render() {
     note.classList.remove("hide");
   }
 
+  // A declined source is in effect AND unread, which the list above cannot show: it draws
+  // what will be loaded, and this one will not be. Saying so is the whole point of
+  // detecting it — an unread inventory that looks read is how the tool came to answer
+  // host-dependent questions from a picture it never had.
+  const dec = state.declined || [];
+  if (dec.length) {
+    declinedBox.textContent = (dec.length > 1
+      ? dec.join(", ") + " are plugin configs or scripts"
+      : dec[0] + " is a plugin config or a script") +
+      ". Ansible runs these to get the host list; we never do, so the hosts are unknown " +
+      "rather than absent. Variables defined only there cannot resolve.";
+    declinedBox.classList.remove("hide");
+  } else {
+    declinedBox.classList.add("hide");
+  }
+
   // Named, not generic: "restore the default" is only actionable if you can see what the
   // default IS without pressing it.
   const back = (state.shared || []);
@@ -923,6 +941,18 @@ function activate(context) {
         "would.\n\nClick to name the `-i` you run with. Variables defined only in an " +
         "inventory can't resolve until one is set.";
     }
+    // A source detected as a plugin config or a script is in effect but unread. Said here
+    // as well as in the panel because this is the surface that is always on screen, and a
+    // blind spot nobody is told about is indistinguishable from no blind spot.
+    const declined = (info && info.declined) || [];
+    if (declined.length) {
+      inventoryStatus.text += " $(warning)";
+      inventoryStatus.tooltip +=
+        "\n\nNot executed: " + declined.join(", ") +
+        " — a plugin config or script. Ansible runs these to get the host list; we never " +
+        "do, so those hosts are unknown rather than absent, and variables defined only " +
+        "there cannot resolve.";
+    }
     inventoryStatus.show();
   }
   paintInventory(null);
@@ -993,7 +1023,8 @@ function activate(context) {
         (lastInventoryInfo && lastInventoryInfo.autoResolved) || [],
         (lastInventoryInfo && lastInventoryInfo.configFile) || null,
         Array.isArray(localInventory()),
-        sharedInventory()
+        sharedInventory(),
+        (lastInventoryInfo && lastInventoryInfo.declined) || []
       );
       panel.webview.onDidReceiveMessage(async (m) => {
         if (m.type === "browse") {

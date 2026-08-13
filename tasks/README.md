@@ -205,6 +205,7 @@ T-021 is now unblocked on that side.
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
 | T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
 | T-173 | [Expand inventory_hostname when the play names a literal host](open/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | S    | —          |
+| T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 
 ### Downstream — not this repo's code
 
