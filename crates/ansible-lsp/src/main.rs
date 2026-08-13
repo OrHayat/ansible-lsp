@@ -932,16 +932,24 @@ impl Backend {
         // Which rung of Ansible's ladder actually answered. `config.rs` collapses the env
         // var and the file into one field — correct for reading, but the user needs to know
         // *why* a given inventory is in effect before they can argue with it.
-        let cfg_names_one = root
+        // Which `ansible.cfg`, not just "ansible.cfg". Ansible reads the one in the
+        // directory you run from — measured: no walk up a parent, and a second config
+        // never merges, the nearer file wins whole — so a repo with more than one has an
+        // answer that depends on your cwd, which an editor cannot see. Naming the file we
+        // read is what makes that visible instead of a silent mismatch.
+        let (cfg_names_one, config_file) = root
             .as_deref()
             .map(|r| {
-                ScanCache::default()
-                    .context(&r.join("x.yml"))
+                let ctx = ScanCache::default().context(&r.join("x.yml"));
+                let named = ctx.config.inventory.is_some();
+                let file = ctx
                     .config
-                    .inventory
-                    .is_some()
+                    .config_file
+                    .as_ref()
+                    .map(|f| f.strip_prefix(r).unwrap_or(f).display().to_string());
+                (named, file)
             })
-            .unwrap_or(false);
+            .unwrap_or((false, None));
         let source = if !configured.is_empty() {
             "ansibleLsp.inventory"
         } else if std::env::var("ANSIBLE_INVENTORY").is_ok_and(|v| !v.trim().is_empty()) {
@@ -995,6 +1003,7 @@ impl Backend {
                 "resolved": resolved,
                 "autoSource": auto_source,
                 "autoResolved": auto_resolved,
+                "configFile": config_file,
                 "candidates": candidates,
             }))
             .await;
@@ -1094,7 +1103,13 @@ impl Backend {
                 "reads": reads.iter().map(|p| rel(p)).collect::<Vec<_>>(),
             }));
         }
+        // A file already inside an offered folder is not offered again. The folder row
+        // lists it, so the second row said nothing and doubled the list — six rows where
+        // two carried the whole answer.
         for f in &files {
+            if dirs.iter().any(|d| f.starts_with(d)) {
+                continue;
+            }
             out.push(serde_json::json!({ "path": rel(f), "dir": false }));
         }
         out
@@ -3322,6 +3337,17 @@ mod tests {
 
         let files: Vec<String> =
             got.iter().filter(|c| c["dir"] != true).map(path_of).collect();
+        // A file inside an offered folder is covered by that folder's row; offering it
+        // again doubled the list for no extra choice.
+        assert!(
+            !files.iter().any(|f| f.starts_with("inventories/")),
+            "a folder's own files were offered separately: {files:?}"
+        );
+        // A Jinja list indented inside a folded scalar is not an INI section header.
+        assert!(
+            !files.iter().any(|f| f == "tasks/lenient_scalar.yml"),
+            "a task file was offered as an inventory: {files:?}"
+        );
         for want in ["inventory-prod.ini", "inventory-lab.yml", "inventory-dynamic.yml"] {
             assert!(files.contains(&want.to_string()), "{want} missing from {files:?}");
         }

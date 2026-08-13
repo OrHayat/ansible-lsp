@@ -6,10 +6,10 @@
 //! `defaults/`/`vars/`, `vars_files:`, `include_vars:` (file and dir forms, via the ported
 //! module semantics in [`crate::include_vars`]), playbook-adjacent
 //! `group_vars/`/`host_vars/`, and the `set_fact`/`register` in included task files and
-//! roles. Still not covered: group_vars/host_vars kept beside a *separate inventory file*
-//! (needs the inventory's path, not guessed), variables injected by a caller, and the
-//! opaque runtime sources (inventory host-matching, `-e`). So a name absent here is *not*
-//! proof it's undefined.
+//! roles, and — since T-062 — the inventory itself, including the `group_vars/`/`host_vars/`
+//! kept beside it. Still not covered: variables injected by a caller, and the opaque runtime
+//! sources (a dynamic inventory we refuse to execute, inventory host-matching, `-e`). So a
+//! name absent here is *not* proof it's undefined.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

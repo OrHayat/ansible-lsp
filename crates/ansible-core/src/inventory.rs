@@ -178,11 +178,16 @@ pub fn looks_like_inventory(path: &Path, text: &str, nodes: &[Node]) -> bool {
                 || v.get("children").is_some()
         })
     });
+    // `trim_end`, deliberately not `trim`: an INI section header sits at column 0, so a
+    // leading space is enough to disqualify a line. That is the difference between a host
+    // list and `demo/tasks/lenient_scalar.yml`, whose `[_beacon_mode]` is a Jinja list
+    // indented inside a folded scalar — offered as an inventory until this stopped
+    // trimming the left.
     group_shaped
-        || text
-            .lines()
-            .map(str::trim)
-            .any(|l| l.starts_with('[') && l.ends_with(']') && l.len() > 2)
+        || text.lines().any(|l| {
+            let l = l.trim_end();
+            l.starts_with('[') && l.ends_with(']') && l.len() > 2
+        })
 }
 
 /// What this source is, from its content — never from its extension, which ansible does not
@@ -424,6 +429,22 @@ mod tests {
         // Real INI, full of sections, and refused on its extension alone.
         assert!(!sniff("ansible.cfg", "[defaults]\ninventory = inv\n"), "ansible.cfg");
         assert!(!sniff("README.md", "[a link](x)\n"), "a markdown file");
+        // demo/tasks/lenient_scalar.yml: a Jinja list inside a folded scalar, indented, in
+        // a file that is a task list. It was offered as an inventory.
+        // demo/tasks/lenient_scalar.yml, and the same shape in a mapping so the column-0
+        // rule is what rejects it rather than the file happening to be a sequence. Both
+        // were offered as inventories until section headers had to start at column 0.
+        assert!(
+            !sniff(
+                "lenient_scalar.yml",
+                "- name: build argv\n  ansible.builtin.set_fact:\n    a: \"{{\n        [_beacon_mode]\n      }}\"\n"
+            ),
+            "a bracketed jinja list in a task file"
+        );
+        assert!(
+            !sniff("group_vars_all.yml", "argv: \"{{\n    [mode]\n  }}\"\n"),
+            "a bracketed jinja list in a mapping"
+        );
         assert!(!sniff(".hidden.ini", "[webservers]\nweb01\n"), "a dotfile");
     }
 
