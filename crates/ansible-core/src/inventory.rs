@@ -303,8 +303,12 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
                         group(gv, out);
                     }
                 }
-                // A top-level group name (`all:`, or a bare group) — recurse into it.
-                _ => group(v, out),
+                // Anything else is skipped, not walked. Ansible warns "Skipping unexpected
+                // key (x) in group (g), only vars, children and hosts are valid"
+                // (`yaml.py::_parse_group`) — so a typo like `var:` for `vars:` must define
+                // nothing. Walking it invented names, and an invented name is one
+                // `var-undefined` then stops reporting.
+                _ => {}
             }
         }
     }
@@ -317,7 +321,12 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
     }
     let mut out = Vec::new();
     for n in nodes {
-        group(n, &mut out);
+        // Every top-level key is a group name, whatever it is spelled — a file whose first
+        // key is `vars:` declares a *group* called `vars`, measured, and its contents are
+        // not variables. So the section names are only read one level in.
+        for (_, g) in n.entries() {
+            group(g, &mut out);
+        }
     }
     out
 }
@@ -800,5 +809,51 @@ mod tests {
     fn a_bare_host_contributes_nothing() {
         let nodes = Document::new("all:\n  hosts:\n    node1:\n".to_string()).parse().unwrap();
         assert!(yaml_vars(&nodes).is_empty());
+    }
+
+    /// `vars`/`hosts`/`children` are only meaningful *inside* a group. Measured on 2.21.2
+    /// against this exact file: ansible defines `real_var` and nothing else, warning
+    /// "Skipping unexpected key (bogus) in group (all)" and treating top-level `vars:` as a
+    /// group named `vars` — it appears in `all`'s children.
+    ///
+    /// Reading them by name at any depth invents variables from a typo (`var:` for `vars:`),
+    /// which is the one failure that matters here: a name we invent is a name `var-undefined`
+    /// then stops reporting.
+    #[test]
+    fn yaml_section_names_are_read_only_where_a_group_can_have_them() {
+        let src = concat!(
+            "all:\n",
+            "  hosts:\n",
+            "    web01:\n",
+            "      real_var: CONTROL\n",
+            "  bogus:\n",
+            "    vars:\n",
+            "      invented: NESTED_UNEXPECTED\n",
+            "vars:\n",
+            "  toplevel_invented: TOP_LEVEL_VARS\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        assert_eq!(names(&yaml_vars(&nodes)), ["real_var"]);
+    }
+
+    /// The other half of the same rule: a group is still a group two `children:` deep, so
+    /// the sections must keep working there. Without this, "only at group level" is easy to
+    /// implement as "only at depth 1" and the corpus shape above silently stops reading.
+    #[test]
+    fn a_deeply_nested_child_group_still_reads_its_sections() {
+        let src = concat!(
+            "all:\n",
+            "  children:\n",
+            "    tier1:\n",
+            "      children:\n",
+            "        tier2:\n",
+            "          vars:\n",
+            "            deep_var: 1\n",
+            "          hosts:\n",
+            "            h1:\n",
+            "              deep_host_var: 2\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        assert_eq!(names(&yaml_vars(&nodes)), ["deep_var", "deep_host_var"]);
     }
 }
