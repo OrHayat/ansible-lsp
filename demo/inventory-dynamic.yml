@@ -1,0 +1,20 @@
+# T-062: a DYNAMIC inventory — a plugin config. Ansible runs a plugin to build the host
+# list at run time; we never do.
+#
+# Pick this one and nothing appears: no variables, no hosts, no error. That silence is the
+# feature. Learning what this holds would mean executing a plugin against a live cloud
+# account from your editor, on every keystroke — so the tool declines and accepts that its
+# view is incomplete.
+#
+# Detected by the top-level `plugin:` key, which is Ansible's own test. An executable file
+# named as an inventory is the other form and is refused the same way.
+#
+# Not the same as a generator script: that writes an inventory file which Ansible then
+# reads as ordinary static text, and so do we.
+
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+keyed_groups:
+  - key: tags.Name
+    prefix: tag

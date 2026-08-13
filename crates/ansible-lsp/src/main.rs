@@ -928,44 +928,175 @@ impl Backend {
     /// means they picked it, anything else means we followed Ansible's own ladder.
     async fn publish_inventory(state: &Arc<State>, client: &Client) {
         let configured = inventory_setting();
-        let source = if configured.is_empty() { "ansible.cfg" } else { "setting" };
         let root = state.roots.lock().ok().and_then(|r| r.first().cloned());
-        let resolved: Vec<String> = root
+        // Which rung of Ansible's ladder actually answered. `config.rs` collapses the env
+        // var and the file into one field — correct for reading, but the user needs to know
+        // *why* a given inventory is in effect before they can argue with it.
+        let cfg_names_one = root
             .as_deref()
             .map(|r| {
-                let cache = ScanCache::default().with_inventory(configured.clone());
-                ansible_core::inventory::sources(&cache.context(&r.join("x.yml")).config, &cache)
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect()
+                ScanCache::default()
+                    .context(&r.join("x.yml"))
+                    .config
+                    .inventory
+                    .is_some()
             })
-            .unwrap_or_default();
+            .unwrap_or(false);
+        let source = if !configured.is_empty() {
+            "ansibleLsp.inventory"
+        } else if std::env::var("ANSIBLE_INVENTORY").is_ok_and(|v| !v.trim().is_empty()) {
+            "ANSIBLE_INVENTORY"
+        } else if cfg_names_one {
+            "ansible.cfg"
+        } else {
+            "/etc/ansible/hosts"
+        };
+        let resolve = |override_paths: Vec<PathBuf>| -> Vec<String> {
+            root.as_deref()
+                .map(|r| {
+                    let cache = ScanCache::default().with_inventory(override_paths);
+                    ansible_core::inventory::sources(
+                        &cache.context(&r.join("x.yml")).config,
+                        &cache,
+                    )
+                    .iter()
+                    .map(|p| p.strip_prefix(r).unwrap_or(p).display().to_string())
+                    .collect()
+                })
+                .unwrap_or_default()
+        };
+        let resolved = resolve(configured.clone());
+        // What a plain `ansible-playbook` would read here, with the editor's stand-in for
+        // `-i` taken away. The picker's "nothing chosen" state says which rung it would
+        // follow; naming the rung is not the useful half, since `/etc/ansible/hosts`
+        // usually does not exist and the honest answer is that nothing resolves at all.
+        let auto_source = if std::env::var("ANSIBLE_INVENTORY").is_ok_and(|v| !v.trim().is_empty())
+        {
+            "ANSIBLE_INVENTORY"
+        } else if cfg_names_one {
+            "ansible.cfg"
+        } else {
+            "/etc/ansible/hosts"
+        };
+        let auto_resolved =
+            if configured.is_empty() { resolved.clone() } else { resolve(Vec::new()) };
+        let candidates = Self::inventory_candidates(root.as_deref());
+        client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "ansible-lsp inventory: source={source} resolved={resolved:?} candidates={candidates:?}"
+                ),
+            )
+            .await;
         let _ = client
             .send_notification::<InventoryStatus>(serde_json::json!({
                 "source": source,
                 "resolved": resolved,
-                "candidates": Self::inventory_candidates(root.as_deref()),
+                "autoSource": auto_source,
+                "autoResolved": auto_resolved,
+                "candidates": candidates,
             }))
             .await;
     }
 
-    /// Inventory-looking files in the workspace root, for the picker to offer. Deliberately
-    /// shallow and name-based: this list is a convenience, never an authority — what is
-    /// actually read is `resolved` above.
-    fn inventory_candidates(root: Option<&Path>) -> Vec<String> {
+    /// What the picker offers: inventory files anywhere in the workspace, and the
+    /// **directories** that hold them — `-i prod/` is as valid as `-i prod/hosts.ini`, and
+    /// it is the spelling a repo with `prod/db.ini` + `prod/hosts.ini` actually wants.
+    ///
+    /// A directory candidate carries what it expands to, computed by
+    /// [`ansible_core::inventory::expand`] — the same function that reads it. The picker
+    /// showing one set of files while the reader loads another is the failure this avoids,
+    /// and it is not hypothetical: a directory silently drops `.cfg`, `.md` and `.bak`,
+    /// which nobody guesses.
+    ///
+    /// A convenience, never an authority — what is actually read is `resolved` above.
+    fn inventory_candidates(root: Option<&Path>) -> Vec<serde_json::Value> {
         let Some(root) = root else { return Vec::new() };
         use ansible_core::fs::Fs as _;
-        let mut out: Vec<String> = ansible_core::fs::StdFs
-            .read_dir(root)
-            .into_iter()
-            .filter(|(p, _)| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("inventory") || n == "hosts")
-            })
-            .filter_map(|(p, _)| p.file_name()?.to_str().map(str::to_string))
-            .collect();
-        out.sort();
+        let fs = ansible_core::fs::StdFs;
+
+        // Sniffing means reading and parsing, so it is spent only where an inventory could
+        // plausibly live. The walk itself is the cheap half.
+        const PRUNE: &[&str] =
+            &[".git", "node_modules", "target", "__pycache__", ".venv", "venv", "dist", "build"];
+        const BUDGET: usize = 4000;
+
+        let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).to_string_lossy().into_owned();
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut looked = 0usize;
+
+        for (dir, names) in fs.walk(root) {
+            // `group_vars`/`host_vars` are pruned by the same rule the reader uses: a
+            // directory source steps over them, so offering one as a folder would hand the
+            // user a pick that resolves to nothing.
+            if dir.components().any(|c| {
+                c.as_os_str().to_str().is_some_and(|n| {
+                    PRUNE.contains(&n) || ansible_core::inventory::ignored_dir(n)
+                })
+            }) {
+                continue;
+            }
+            let mut here = 0usize;
+            let mut readable = 0usize;
+            for name in &names {
+                if looked >= BUDGET {
+                    break;
+                }
+                if !ansible_core::inventory::ignored_entry(name) {
+                    readable += 1;
+                }
+                let ext_ok = matches!(
+                    Path::new(name).extension().and_then(|e| e.to_str()),
+                    None | Some("yml") | Some("yaml") | Some("ini")
+                );
+                if !ext_ok {
+                    continue;
+                }
+                let path = dir.join(name);
+                looked += 1;
+                let Some(text) = fs.read(&path) else { continue };
+                let nodes = ansible_core::parse::Document::new(text.clone()).parse();
+                if ansible_core::inventory::looks_like_inventory(
+                    &path,
+                    &text,
+                    nodes.as_deref().unwrap_or(&[]),
+                ) {
+                    files.push(path);
+                    here += 1;
+                }
+            }
+            // Two inventories in one directory is what a directory source is *for*. One is
+            // more likely a file that happens to live somewhere, so the folder is not
+            // offered and the file still is.
+            //
+            // The majority clause is what keeps `demo/` out: it holds three inventories
+            // among a dozen playbooks, and `-i demo` would hand every one of those
+            // playbooks to the inventory parser. A folder is only worth offering when the
+            // folder *is* the inventory.
+            if here >= 2 && here * 2 > readable {
+                dirs.push(dir.clone());
+            }
+        }
+
+        files.sort();
+        dirs.sort();
+        let mut out: Vec<serde_json::Value> = Vec::new();
+        for d in &dirs {
+            // In load order, which for a directory is name order and is not the user's to
+            // choose — the picker offers to expand the folder into these files instead,
+            // and those it can reorder.
+            let reads = ansible_core::inventory::expand(d, &fs);
+            out.push(serde_json::json!({
+                "path": rel(d),
+                "dir": true,
+                "reads": reads.iter().map(|p| rel(p)).collect::<Vec<_>>(),
+            }));
+        }
+        for f in &files {
+            out.push(serde_json::json!({ "path": rel(f), "dir": false }));
+        }
         out
     }
 
@@ -3173,6 +3304,39 @@ mod tests {
 
 
     /// No false positives: every demo file except the one built to demonstrate the rule
+    /// The picker's offer for the demo, pinned. `demo/` labels its inventories with what
+    /// they do, and rule 4 says a label is a claim — this is the claim.
+    ///
+    /// The two negatives carry the weight. `demo/` itself must NOT be offered as a folder
+    /// (three inventories among a dozen playbooks; `-i demo` would feed every playbook to
+    /// the inventory parser), and `README.md` must not appear among a folder's `reads`.
+    #[test]
+    fn the_picker_offers_the_demo_folders_and_not_the_demo_itself() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let got = super::Backend::inventory_candidates(Some(&demo));
+        let path_of = |c: &serde_json::Value| c["path"].as_str().unwrap_or("").to_string();
+
+        let folders: Vec<String> =
+            got.iter().filter(|c| c["dir"] == true).map(path_of).collect();
+        assert_eq!(folders, ["inventories/prod", "inventories/staging"]);
+
+        let files: Vec<String> =
+            got.iter().filter(|c| c["dir"] != true).map(path_of).collect();
+        for want in ["inventory-prod.ini", "inventory-lab.yml", "inventory-dynamic.yml"] {
+            assert!(files.contains(&want.to_string()), "{want} missing from {files:?}");
+        }
+        // A playbook is not an inventory, however many `hosts:` keys it has.
+        assert!(!files.iter().any(|f| f == "hostvars.yml"), "a playbook was offered: {files:?}");
+
+        let prod = got.iter().find(|c| path_of(c) == "inventories/prod").unwrap();
+        let reads: Vec<&str> =
+            prod["reads"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        // Measured with `ansible-inventory -i demo/inventories/prod --list`: both `.ini`
+        // files contributed hosts, `group_vars/all.yml` reached every host as a variable
+        // without being a source of its own, and README.md contributed nothing.
+        assert_eq!(reads, ["inventories/prod/db.ini", "inventories/prod/hosts.ini"]);
+    }
+
     /// stays free of placement diagnostics.
     #[test]
     fn every_other_demo_file_is_free_of_placement_diagnostics() {
@@ -4616,6 +4780,7 @@ mod tests {
         }
     }
 }
+
 
 
 

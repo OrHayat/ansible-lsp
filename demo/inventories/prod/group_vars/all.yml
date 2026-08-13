@@ -1,0 +1,6 @@
+---
+# T-062: group_vars BESIDE the inventory, inside the folder. Measured: applied to every
+# host, and never parsed as a host list of its own — `group_vars` is one of the three
+# directory names a directory source steps over (`host_vars` and `vars_plugins` are the
+# others).
+datacenter: prod-dc1

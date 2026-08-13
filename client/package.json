@@ -8,6 +8,9 @@
     "vscode": "^1.75.0"
   },
   "main": "./src/extension.js",
+  "scripts": {
+    "test": "node test/webview.js"
+  },
   "activationEvents": [
     "onLanguage:ansible",
     "onLanguage:yaml"

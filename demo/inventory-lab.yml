@@ -1,0 +1,25 @@
+# T-062: the YAML inventory shape — `all:` / `vars:` / `children:` / `hosts:`.
+#
+# The same variable names as inventory-prod.ini, with different values. That is the point:
+# which inventory you run with decides what a variable *is*, and `-i` is invisible to an
+# editor, so the tool asks rather than guesses.
+#
+# Format is detected from content, not from the extension — this could be called anything.
+
+all:
+  vars:
+    # Applies to every host, whichever group.
+    ntp_server: 192.168.1.1
+  children:
+    webservers:
+      vars:
+        app_tier: lab
+      hosts:
+        web01:
+          host_line_ip: 192.168.1.11
+        web02:
+          host_line_ip: 192.168.1.12
+    db:
+      hosts:
+        db01:
+          host_line_ip: 192.168.1.21

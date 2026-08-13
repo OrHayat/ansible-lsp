@@ -1,0 +1,49 @@
+---
+# T-062: variables that live in the INVENTORY, and why the tool has to be told which one.
+#
+# Ansible resolves the inventory as `-i` -> ANSIBLE_INVENTORY -> ansible.cfg ->
+# /etc/ansible/hosts, taking the highest rung that is set and only that (measured). An
+# editor sees every rung but the first, and `-i` beats them all — so a tool that picks one
+# silently is confidently wrong for anyone who runs with `-i`.
+#
+# Try it: Cmd+Shift+P -> "Ansible LSP: Select Inventory", then hover the names below.
+#
+#   nothing chosen        both undefined — ansible.cfg names no inventory here, so a plain
+#                         `ansible-playbook` reads /etc/ansible/hosts and finds nothing
+#   inventory-prod.ini    ntp_server = 10.0.0.1     app_tier = production
+#   inventory-lab.yml     ntp_server = 192.168.1.1  app_tier = lab
+#   both                  merged — but NOT simply "last wins". Measured with both given:
+#                           ntp_server -> 10.0.0.1 (from prod, the FIRST file)
+#                           app_tier   -> lab      (from lab,  the SECOND file)
+#                         Group precedence runs first: a host beats a named group, a named
+#                         group beats `all`. `ntp_server` is `[webservers:vars]` in prod but
+#                         `all: vars:` in lab, so prod wins on specificity; `app_tier` is in
+#                         `webservers` in both, so there the later file wins.
+#   inventory-dynamic.yml nothing at all — a plugin config is never executed
+#
+# The values genuinely differ, so switching visibly changes the answer. That difference is
+# the argument for asking instead of guessing.
+
+- name: inventory variables demo
+  hosts: webservers
+  gather_facts: false
+  tasks:
+    # GOOD (once an inventory is chosen): a `[group:vars]` entry in the INI, or `vars:` in
+    # the YAML. Hover shows the value and the file; Cmd+click jumps to the line.
+    - name: GOOD a group variable, defined only in the inventory
+      ansible.builtin.debug:
+        msg: "ntp is {{ ntp_server }} on the {{ app_tier }} tier"
+
+    # GOOD: an inline `var=value` on an INI host line, and the same name nested under a
+    # host in the YAML form. Both are host-scoped, so hover marks them as such — which
+    # host it applies to needs group membership we do not resolve.
+    - name: GOOD a per-host variable from the host line
+      ansible.builtin.debug:
+        msg: "this host is at {{ host_line_ip }}"
+
+    # UNDEFINED: no inventory defines this one, and nothing else in the demo does either.
+    # It stays flagged whichever inventory you pick — the control that proves the silence
+    # above is the inventory being read, not the check being asleep.
+    - name: BAD a name no inventory defines
+      ansible.builtin.debug:
+        msg: "{{ not_in_any_inventory }}"
