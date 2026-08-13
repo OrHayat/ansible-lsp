@@ -663,6 +663,14 @@ mod tests {
         assert_eq!(classify(Path::new("inv.json"), &nodes, &crate::testing::MemFs::new(&[])), Kind::Yaml);
         let got = yaml_vars(&nodes);
         assert_eq!(names(&got), ["json_host_var", "json_group_var"]);
+        // Real byte offsets into the file, not a path expression: hover prints this text
+        // and go-to-definition lands on it. Asserting the slice rather than just the name,
+        // because a reader that finds the right names and points at the wrong place is
+        // exactly the confident-wrong-hover this project treats as worse than silence.
+        let h = got.iter().find(|v| v.name == "json_host_var").unwrap();
+        assert_eq!(h.span.slice(src), "FROM_JSON");
+        let g = got.iter().find(|v| v.name == "json_group_var").unwrap();
+        assert_eq!(g.span.slice(src), "FROM_JSON_GROUP");
         // And the picker offers it, which is a different predicate from parsing it.
         assert!(looks_like_inventory(Path::new("inv.json"), src, &nodes));
     }
