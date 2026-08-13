@@ -117,6 +117,36 @@ pub fn sources(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
     out
 }
 
+/// The directory each configured source hands to the vars plugins as its base.
+///
+/// Ansible's `basedir()` returns a directory source *itself*, and a file source's parent —
+/// so the `group_vars/` for `-i inv` is `inv/group_vars`, and it stays there however deep
+/// inside `inv` the actual host files sit. Measured: with `inv/sub/hosts.ini` as the only
+/// host file, `inv/group_vars/web.yml` still applies and `inv/sub/group_vars/web.yml` does
+/// not. Deriving this per *expanded file* got both halves wrong at once.
+pub fn source_dirs(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
+    let chosen: Vec<PathBuf> = match &cfg.inventory {
+        Some(v) => v.clone(),
+        None => vec![PathBuf::from(DEFAULT_HOST_LIST)],
+    };
+    let mut out = Vec::new();
+    for p in chosen {
+        let dir = if fs.is_dir(&p) {
+            Some(p)
+        } else if fs.is_file(&p) {
+            p.parent().map(|d| d.to_path_buf())
+        } else {
+            None
+        };
+        if let Some(d) = dir {
+            if !out.contains(&d) {
+                out.push(d);
+            }
+        }
+    }
+    out
+}
+
 /// Every file a directory source contributes, in load order.
 ///
 /// Measured on 2.21.2 against one directory holding a file per rule, reading back which

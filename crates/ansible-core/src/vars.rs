@@ -1042,15 +1042,15 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // `sources` resolves the same ladder Ansible does; a dynamic one is skipped, never run.
     for src in crate::inventory::sources(&ctx.config, walk.cache) {
         read_inventory(&src, out, walk);
-        // The `group_vars/`/`host_vars/` beside the *inventory*, which are a different pair
-        // from the playbook-adjacent ones read above — Ansible loads both. This is the gap
-        // the module docs called out as "needs the inventory's path, not guessed": now that
-        // the path is resolved rather than guessed, it closes.
-        if let Some(dir) = src.parent() {
-            if dir != ctx.file_dir {
-                read_var_dir(&dir.join("group_vars"), true, out, walk);
-                read_var_dir(&dir.join("host_vars"), false, out, walk);
-            }
+    }
+    // The `group_vars/`/`host_vars/` beside the *inventory*, which are a different pair from
+    // the playbook-adjacent ones read above — Ansible loads both. Keyed on the configured
+    // source's base directory, not on each expanded file's parent: a directory source keeps
+    // its base at the top however deep the host files sit inside it.
+    for dir in crate::inventory::source_dirs(&ctx.config, walk.cache) {
+        if dir != ctx.file_dir {
+            read_var_dir(&dir.join("group_vars"), true, out, walk);
+            read_var_dir(&dir.join("host_vars"), false, out, walk);
         }
     }
 
@@ -1149,7 +1149,17 @@ fn role_task_files(role_main: &Path, walk: &Walk) -> Arc<Vec<PathBuf>> {
 fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk) {
     let files = walk.cache.listing(dir);
     for p in files.iter() {
-        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        // The entity is the `group_vars/<entity>` entry, not the leaf file: everything under
+        // `group_vars/all/` belongs to `all`, however deep, so reading the leaf's stem
+        // classified `group_vars/all/a.yml` as an ordinary group and lost `all`'s lower
+        // precedence rank.
+        let stem = p
+            .strip_prefix(dir)
+            .ok()
+            .and_then(|rel| rel.components().next())
+            .and_then(|c| Path::new(c.as_os_str()).file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         let source = if !group {
             VarSource::HostVars
         } else if stem == "all" {
@@ -2043,6 +2053,101 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+
+    /// Exactly which files a `group_vars/` directory contributes, both halves asserted.
+    ///
+    /// Every row was run on 2.21.2 against this tree and read back through a `debug` task.
+    /// The negatives carry the weight: the old reader filtered extensions at the top level
+    /// but applied *no* filter inside an entity directory, so `.hidden.yml`, `c.yml~` and
+    /// `d.txt` all became definitions — and an invented name is one `var-undefined` then
+    /// stops reporting. It also never descended, and never looked at `.json`, so two real
+    /// sources went missing and produced the opposite failure.
+    #[test]
+    fn group_vars_reads_the_files_ansible_reads_and_no_others() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-gvsurface");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "group_vars/all.json", "{\"json_top\": 1}\n");
+        write(&d, "group_vars/all.txt", "txt_top: 1\n");
+        write(&d, "group_vars/web/a.yml", "dvar: 1\n");
+        write(&d, "group_vars/web/sub/b.yml", "dvar2: 1\n");
+        write(&d, "group_vars/web/.hidden.yml", "hvar: 1\n");
+        write(&d, "group_vars/web/c.yml~", "bvar: 1\n");
+        write(&d, "group_vars/web/d.txt", "tvar: 1\n");
+        write(&d, "group_vars/web/e.json", "{\"jvar\": 1}\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let seen = |n: &str| defs.iter().any(|d| d.name == n);
+        for name in ["json_top", "dvar", "dvar2", "jvar"] {
+            assert!(seen(name), "{name} is read by ansible but missing: {:?}", names_of(&defs));
+        }
+        for name in ["txt_top", "hvar", "bvar", "tvar"] {
+            assert!(!seen(name), "{name} is not read by ansible but was indexed");
+        }
+        // Everything under `group_vars/all/` is `all`'s, however deep — the entity is the
+        // directory entry, not the leaf file, and `all` has its own precedence rank.
+        let _ = std::fs::remove_dir_all(&d);
+        write(&d, "group_vars/all/deep/x.yml", "deep_all: 1\n");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let defs = definitions(&play, &nodes);
+        let hit = defs.iter().find(|x| x.name == "deep_all").expect("nested all/ file");
+        assert_eq!(hit.source, VarSource::GroupVarsAll);
+    }
+
+    /// `find_vars_files` stops at the first extension that exists, so only one of these ever
+    /// loads. Measured as a chain: all four present resolves to the extension-less file, and
+    /// deleting it moves the answer to `.yml` — four files, four different values.
+    #[test]
+    fn one_group_vars_file_per_name_wins_by_extension_order() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-gvprec");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for (rel, body) in [
+            ("group_vars/all", "probe: 1\n"),
+            ("group_vars/all.yml", "probe: 1\n"),
+            ("group_vars/all.yaml", "probe: 1\n"),
+            ("group_vars/all.json", "{\"probe\": 1}\n"),
+        ] {
+            write(&d, rel, body);
+        }
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+
+        let winner = |defs: &[Located]| -> String {
+            let hits: Vec<_> = defs.iter().filter(|x| x.name == "probe").collect();
+            assert_eq!(hits.len(), 1, "one file loads, not {}: {:?}", hits.len(), hits);
+            hits[0].file.file_name().unwrap().to_str().unwrap().to_string()
+        };
+        assert_eq!(winner(&definitions(&play, &nodes)), "all");
+        std::fs::remove_file(d.join("group_vars/all")).unwrap();
+        assert_eq!(winner(&definitions(&play, &nodes)), "all.yml");
+        std::fs::remove_file(d.join("group_vars/all.yml")).unwrap();
+        assert_eq!(winner(&definitions(&play, &nodes)), "all.yaml");
+    }
+
+    /// A directory inventory's `group_vars/` sits at the source root, not beside whichever
+    /// file inside it happens to hold the hosts. Measured with `inv/sub/hosts.ini` as the
+    /// only host file: `inv/group_vars/web.yml` applies, `inv/sub/group_vars/web.yml` does
+    /// not. Deriving the base from each expanded file's parent got both halves wrong.
+    #[test]
+    fn a_directory_inventorys_group_vars_stay_at_the_source_root() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-invbase");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = inv\n");
+        write(&d, "inv/sub/hosts.ini", "[web]\nnode1\n");
+        write(&d, "inv/group_vars/web.yml", "at_source_root: 1\n");
+        write(&d, "inv/sub/group_vars/web.yml", "beside_the_host_file: 1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().any(|x| x.name == "at_source_root"), "{:?}", names_of(&defs));
+        assert!(!defs.iter().any(|x| x.name == "beside_the_host_file"));
     }
 
     /// T-062 end to end: an inventory named by `ansible.cfg` reaches the variable index of

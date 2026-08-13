@@ -94,6 +94,28 @@ impl AtomicStats {
 
 const SHARDS: usize = 32;
 
+/// The extensions a `group_vars/`/`host_vars/` entry may carry, in Ansible's lookup order.
+///
+/// `DataLoader.find_vars_files` tries `[''] + YAML_FILENAME_EXTENSIONS` and **breaks on the
+/// first hit**, so `all` beats `all.yml` beats `all.yaml` beats `all.json`. Measured on
+/// 2.21.2 by writing all four and deleting them one at a time: four different values, so the
+/// order is the file's, not the reader's.
+///
+/// `ini` and `toml` are deliberately absent, though an *inventory* may be either. These files
+/// are loaded by the `host_group_vars` vars plugin, which only ever calls `from_yaml` — there
+/// is no INI or TOML path on that side at all. Measured: a `group_vars/web.ini` holding valid
+/// YAML is not read, so "it failed to parse" is ruled out and it is simply never looked at.
+const VARS_EXTS: &[&str] = &["", "yml", "yaml", "json"];
+
+/// Guards against a symlink cycle turning the recursive vars-directory scan into a hang.
+const MAX_VARS_DEPTH: usize = 32;
+
+/// Where `path`'s extension sits in [`VARS_EXTS`], or `None` if Ansible would not load it.
+fn vars_ext_rank(path: &Path) -> Option<usize> {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    VARS_EXTS.iter().position(|x| *x == ext)
+}
+
 /// A path-keyed map split into [`SHARDS`] independently locked pieces, so two threads
 /// touching unrelated paths don't queue behind each other. Sharded rather than one
 /// `RwLock`: the miss path *writes*, and a scan's first pass is nearly all misses.
@@ -393,8 +415,8 @@ impl ScanCache {
         files
     }
 
-    /// One `group_vars/`/`host_vars/` directory's entries, not descending — memoized, and
-    /// empty when `dir` isn't a directory.
+    /// One `group_vars/`/`host_vars/` directory's live files, memoized, and empty when `dir`
+    /// isn't a directory.
     ///
     /// Ansible probes `''` before `.yml`/`.yaml`/`.json` and breaks on the first hit
     /// (`parsing/dataloader.py:470-491`), which has two consequences this encodes (T-062):
@@ -412,45 +434,63 @@ impl ScanCache {
         if let Some(hit) = self.listings.get(dir) {
             return hit;
         }
-        let mut entries: Vec<(PathBuf, crate::fs::Kind)> = Fs::read_dir(self, dir);
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-        // A directory here is a vars *source*, and its bare name is what it shadows.
-        // Ordered, not a HashSet: these are chained into the returned list, and `vars::dedup`
-        // keeps the FIRST occurrence of a name — so hash order would decide which definition
-        // wins and the scan would answer differently run to run. It did: 233 then 246
-        // undefined variables across two runs of the same tree.
-        let dirs: std::collections::BTreeSet<PathBuf> = entries
-            .iter()
-            .filter(|(_, k)| *k == crate::fs::Kind::Dir)
-            .map(|(p, _)| p.clone())
-            .collect();
-        let files = Arc::new(
-            entries
-                .iter()
-                .filter(|(p, k)| match k {
-                    // Every file in a shadowing directory is read, in name order.
-                    crate::fs::Kind::Dir => false,
-                    _ => {
-                        let ext = p.extension().and_then(|s| s.to_str());
-                        let named = matches!(ext, None | Some("yml") | Some("yaml"));
-                        // `webservers.yml` beside a `webservers/` directory never loads.
-                        named && !dirs.contains(&p.with_extension(""))
-                    }
-                })
-                .map(|(p, _)| p.clone())
-                .chain(dirs.iter().flat_map(|d| {
-                    let mut inner: Vec<PathBuf> = Fs::read_dir(self, d)
-                        .into_iter()
-                        .filter(|(_, k)| *k == crate::fs::Kind::File)
-                        .map(|(p, _)| p)
-                        .collect();
-                    inner.sort();
-                    inner
-                }))
-                .collect::<Vec<_>>(),
-        );
+        // Ansible resolves these BY ENTITY NAME — `find_vars_files(group_vars_dir, "webservers")`
+        // — trying each extension in turn and stopping at the first that exists. We do not
+        // know the group and host names (that needs the membership graph, T-062 box 8), so we
+        // enumerate the directory instead and apply the same rule per *stem*: one winner per
+        // name, chosen by the same order. Enumerating is a deliberate over-approximation of
+        // which entities exist; it must not become an over-approximation of which files load.
+        let mut best: std::collections::BTreeMap<std::ffi::OsString, (usize, PathBuf, crate::fs::Kind)> =
+            std::collections::BTreeMap::new();
+        for (p, k) in Fs::read_dir(self, dir) {
+            let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+            if name.starts_with('.') || name.ends_with('~') {
+                continue;
+            }
+            let Some(rank) = vars_ext_rank(&p) else { continue };
+            let stem = p.file_stem().unwrap_or_default().to_os_string();
+            if best.get(&stem).is_none_or(|(seen, _, _)| rank < *seen) {
+                best.insert(stem, (rank, p, k));
+            }
+        }
+        let mut out = Vec::new();
+        for (_, (_, p, kind)) in best {
+            if kind == crate::fs::Kind::Dir {
+                self.collect_vars_dir(&p, 0, &mut out);
+            } else {
+                out.push(p);
+            }
+        }
+        let files = Arc::new(out);
         self.listings.insert(dir.to_path_buf(), files.clone());
         files
+    }
+
+    /// One entity directory's files, in the order `_get_dir_vars_files` yields them.
+    ///
+    /// Subdirectories are descended, but only extension-less ones — `group_vars/web/sub.yml/`
+    /// is neither read nor recursed. Hidden and `~` backup entries are skipped here too,
+    /// which the old reader did not do: it read every file in the directory whatever its
+    /// name, so `.hidden.yml`, `c.yml~` and `d.txt` all became definitions no run has.
+    fn collect_vars_dir(&self, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        if depth > MAX_VARS_DEPTH {
+            return;
+        }
+        let mut entries: Vec<(PathBuf, crate::fs::Kind)> = Fs::read_dir(self, dir);
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (p, kind) in entries {
+            let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+            if name.starts_with('.') || name.ends_with('~') {
+                continue;
+            }
+            let ext = p.extension().and_then(|s| s.to_str());
+            match kind {
+                crate::fs::Kind::Dir if ext.is_none() => self.collect_vars_dir(&p, depth + 1, out),
+                crate::fs::Kind::Dir => {}
+                _ if vars_ext_rank(&p).is_some() => out.push(p),
+                _ => {}
+            }
+        }
     }
 
     /// The memoized contribution of `canon`, and a tick on the edge counter.
