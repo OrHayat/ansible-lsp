@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P1       | M    | T-112 | —          |
+| partly done | P1  | M    | T-112 | —          |
 
 ## Problem
 
@@ -103,15 +103,15 @@ the opposite of role `defaults/`, where the file shadows the directory
 
 ## Done when
 
-- [ ] `[group:vars]` and host-line `var=value` names are indexed, pinned by test
-- [ ] extension-less `group_vars/<name>` / `host_vars/<name>` files are indexed
-- [ ] `group_vars/<name>/` directories are read, and shadow the same-named `.yml`
-- [ ] inventory-adjacent `group_vars/`/`host_vars/` resolve via the inventory's path
-- [ ] dynamic inventories are detected and skipped, never executed
+- [x] `[group:vars]` and host-line `var=value` names are indexed, pinned by test
+- [x] extension-less `group_vars/<name>` / `host_vars/<name>` files are indexed
+- [x] `group_vars/<name>/` directories are read, and shadow the same-named `.yml`
+- [x] inventory-adjacent `group_vars/`/`host_vars/` resolve via the inventory's path
+- [x] dynamic inventories are detected and skipped, never executed
 - [ ] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
       to INI rather than report it
 - [ ] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING
 - [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
       silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never
       for `localhost`
-- [ ] `var-undefined` stays zero-hit on the corpus with the new sources active
+- [x] `var-undefined` stays zero-hit on the corpus with the new sources active
