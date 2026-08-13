@@ -262,9 +262,19 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
 /// and the inline `var=value` on a host line. `[group:children]` names groups, not
 /// variables, and contributes none.
 pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
+    /// What the lines under the current header are. Three states, not a `is_vars` bool:
+    /// `:children` is neither a vars section nor a host list, and sharing `false` with
+    /// `Hosts` meant its lines went to the host-line reader — harmless for a bare group
+    /// name, but `leafs foo=bar` there invented `foo`.
+    #[derive(PartialEq)]
+    enum Section {
+        Vars,
+        Hosts,
+        Skip,
+    }
     let mut out = Vec::new();
-    // None = the implicit ungrouped-hosts section every ini inventory starts in.
-    let mut in_vars_section = false;
+    // Hosts = the implicit ungrouped-hosts section every ini inventory starts in.
+    let mut section = Section::Hosts;
     let mut at = 0usize;
     for line in text.split_inclusive('\n') {
         let start = at;
@@ -274,15 +284,22 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
             continue;
         }
         if let Some(header) = trimmed.strip_prefix('[').and_then(|h| h.split(']').next()) {
-            in_vars_section = header.ends_with(":vars");
-            // `:children` lists group names; nothing in it is a variable, and the flag
-            // above already excludes it from the pair reader below.
+            section = if header.ends_with(":vars") {
+                Section::Vars
+            } else if header.ends_with(":children") {
+                Section::Skip
+            } else {
+                Section::Hosts
+            };
+            continue;
+        }
+        if section == Section::Skip {
             continue;
         }
         // Offset of `trimmed` within the document, so value spans are absolute.
         let indent = line.len() - line.trim_start().len();
         let base = start + indent;
-        if in_vars_section {
+        if section == Section::Vars {
             if let Some(v) = pair(trimmed, base) {
                 out.push(v);
             }
@@ -478,6 +495,44 @@ mod tests {
         assert_eq!(v.span.slice(src), "FROM_HOST_LINE");
         // A `:children` member is a group name, not a variable.
         assert!(!names(&got).contains(&"leafs"));
+    }
+
+    /// `[g:children]` is neither a vars section nor a host list, and it used to share a
+    /// `false` flag with the host-line reader — so a malformed entry was read as a host
+    /// line and its `k=v` became a variable. Ansible accepts only group names there, so
+    /// the honest response to that input is to ignore it, not to invent a definition.
+    #[test]
+    fn a_children_section_contributes_nothing_even_when_malformed() {
+        let src = concat!(
+            "[webservers:children]\n",
+            "leafs not_a_var=oops\n",
+            "[webservers:vars]\n",
+            "real_var=yes\n",
+        );
+        let got = ini_vars(src);
+        assert_eq!(
+            names(&got),
+            ["real_var"],
+            "a `:children` line contributed a variable"
+        );
+    }
+
+    /// JSON is a static inventory too — measured, `-i inv.json` and the same content with
+    /// no extension both reach the play. It is valid YAML, so this asks whether it survives
+    /// OUR parser rather than assuming the equivalence holds all the way through.
+    #[test]
+    fn a_json_inventory_reads_as_yaml() {
+        let src = concat!(
+            r#"{"all": {"children": {"webservers": {"#,
+            r#""hosts": {"web01": {"json_host_var": "FROM_JSON"}},"#,
+            r#""vars": {"json_group_var": "FROM_JSON_GROUP"}}}}}"#,
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("json parses as yaml");
+        assert_eq!(classify(Path::new("inv.json"), &nodes, &crate::testing::MemFs::new(&[])), Kind::Yaml);
+        let got = yaml_vars(&nodes);
+        assert_eq!(names(&got), ["json_host_var", "json_group_var"]);
+        // And the picker offers it, which is a different predicate from parsing it.
+        assert!(looks_like_inventory(Path::new("inv.json"), src, &nodes));
     }
 
     /// The corpus shape: `all:` with `vars:`, and hosts nested under `children:`.
