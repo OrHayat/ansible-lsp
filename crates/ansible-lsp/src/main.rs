@@ -370,15 +370,43 @@ impl State {
     /// One ERROR at the parse-error position when an open file isn't valid YAML. The parser
     /// matches Ansible (libyaml), so this is invalid for Ansible too — a play that loads the
     /// file will fail. Empty when the file is fine, isn't open, or is `# noqa`-suppressed.
+    ///
+    /// A resolved inventory source gets its own message, because "a play that loads this
+    /// file will fail" is a lie for exactly that file: the inventory manager discards the
+    /// yaml plugin's error and retries the file as INI, surfacing failures only when
+    /// *nothing* parsed (`inventory/manager.py:335`) — measured on 2.21.2, a group whose
+    /// colons were forgotten came back as a *host*, exit 0, empty stderr (T-062, dossier
+    /// `upstream/ansible-inventory-silence.md`).
     fn unparseable_diagnostic(&self, uri: &Url) -> Vec<Diagnostic> {
         let Some(text) = self.text_of(uri) else {
             return Vec::new();
         };
+        let inventory = uri.to_file_path().ok().is_some_and(|p| {
+            Self::is_inventory_source(&p, &ScanCache::default().with_inventory(inventory_setting()))
+        });
+        Self::unparseable_diagnostic_for(text, inventory)
+    }
+
+    fn unparseable_diagnostic_for(text: String, inventory: bool) -> Vec<Diagnostic> {
         let doc = Document::new(text);
         let Some(span) = doc.parse_error() else {
             return Vec::new();
         };
-        if doc.is_suppressed(span.start, "unparseable") {
+        let (code, message) = if inventory {
+            (
+                "inventory-not-yaml",
+                "Invalid YAML — and Ansible will not report it: a `.yml` inventory that \
+                 fails to parse is silently retried as INI, so a run proceeds against an \
+                 inventory this file does not mean. References here aren't analysed.",
+            )
+        } else {
+            (
+                "unparseable",
+                "Invalid YAML — Ansible's parser rejects this too, so a play that loads \
+                 this file will fail. References here aren't analysed.",
+            )
+        };
+        if doc.is_suppressed(span.start, code) {
             return Vec::new();
         }
         let (sl, sc) = doc.byte_to_lsp(span.start);
@@ -387,12 +415,20 @@ impl State {
             range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
             severity: Some(DiagnosticSeverity::ERROR),
             source: Some("ansible-lsp".into()),
-            code: Some(NumberOrString::String("unparseable".into())),
-            message: "Invalid YAML — Ansible's parser rejects this too, so a play that loads \
-                      this file will fail. References here aren't analysed."
-                .into(),
+            code: Some(NumberOrString::String(code.into())),
+            message: message.into(),
             ..Default::default()
         }]
+    }
+
+    /// Is this open file one of the resolved inventory sources? Canonicalised on both
+    /// sides — the editor's URI and the config's relative spelling reach the same file by
+    /// different paths.
+    fn is_inventory_source(path: &Path, cache: &ScanCache) -> bool {
+        let target = canon(path);
+        ansible_core::inventory::sources(&cache.context(path).config, cache)
+            .iter()
+            .any(|s| canon(s) == target)
     }
 
     /// A propagating `when:` whose variable the target itself sets — see
@@ -2767,6 +2803,42 @@ mod tests {
                 _ => assert!(y.is_empty() && j.is_empty(), "ignore means silence everywhere"),
             }
         }
+    }
+
+    /// T-062 box 6: a `.yml` inventory that fails YAML parsing is an ERROR naming the
+    /// silent INI fallback — "a play that loads this file will fail" is the one claim
+    /// that is wrong there. Measured on 2.21.2: a group whose colons were forgotten came
+    /// back as a *host*, exit 0, empty stderr.
+    #[test]
+    fn a_broken_inventory_yml_names_the_ini_fallback_instead_of_the_generic_error() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let broken = "all:\n\thosts:\n".to_string();
+
+        let inv = super::State::unparseable_diagnostic_for(broken.clone(), true);
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(inv[0].code, Some(NumberOrString::String("inventory-not-yaml".into())));
+        assert!(inv[0].message.contains("INI"), "{}", inv[0].message);
+
+        // The control: the same text as an ordinary file keeps the generic claim, which
+        // is what stops this test passing on a message that never varies.
+        let plain = super::State::unparseable_diagnostic_for(broken, false);
+        assert_eq!(plain[0].code, Some(NumberOrString::String("unparseable".into())));
+        assert!(!plain[0].message.contains("INI"), "{}", plain[0].message);
+    }
+
+    /// The detection half of the rule above: the open file is an inventory when it is one
+    /// of the sources the file's own `ansible.cfg` resolves, and its neighbour is not.
+    #[test]
+    fn a_configured_inventory_file_is_recognised_and_its_neighbour_is_not() {
+        let d = std::env::temp_dir().join("ansible-lsp-inv-not-yaml");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = inv.yml\n").unwrap();
+        std::fs::write(d.join("inv.yml"), "all:\n\thosts:\n").unwrap();
+        let cache = super::ScanCache::default().with_env(ansible_core::config::EnvMap::empty());
+        assert!(super::State::is_inventory_source(&d.join("inv.yml"), &cache));
+        assert!(!super::State::is_inventory_source(&d.join("play.yml"), &cache));
     }
 
     /// T-016 against the real demo: exactly the labeled BAD cases warn — the missing

@@ -112,11 +112,16 @@ the opposite of role `defaults/`, where the file shadows the directory
       distinction. Shown in the inventory panel and the status bar, so the blind spot is
       visible rather than merely known. Running one on an explicit user command is **not**
       here — that is T-176.
-- [ ] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
+- [x] a `.yml` inventory that fails YAML parsing is an ERROR, saying Ansible will fall back
       to INI rather than report it. The INI half of the same rule is already written and
       `#[ignore]`d: `an_unknown_section_type_discards_the_whole_ini_file` — a `[web:var]`
       typo makes Ansible discard the **whole file**, measured, while we keep reading it and
-      invent a name. Unignore it with this box.
+      invent a name. Unignore it with this box. Done: `inventory-not-yaml` replaces the
+      generic `unparseable` ERROR on a resolved inventory source, and `ini_vars` defines
+      nothing from a file with an unknown section tag (`[web:hosts]` measured valid and
+      kept as the control). Scope note, measured: the *silent* fallback needs the lines to
+      be INI-acceptable — a bare `key:` line fails the ini plugin too (warnings, still exit
+      0); dossier updated to match.
 - [ ] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING
 - [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
       silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never

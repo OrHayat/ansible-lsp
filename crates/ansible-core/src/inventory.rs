@@ -403,6 +403,12 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
         Hosts,
         Skip,
     }
+    // A section tag outside `hosts`/`children`/`vars` kills the WHOLE file, not the
+    // section: ansible's reader raises on it (`ini.py:189-191`) and a failed plugin
+    // defines nothing — measured, `an_unknown_section_type_discards_the_whole_ini_file`.
+    if text.lines().any(|l| unknown_section_type(l.trim())) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     // Hosts = the implicit ungrouped-hosts section every ini inventory starts in.
     let mut section = Section::Hosts;
@@ -448,6 +454,29 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
         }
     }
     out
+}
+
+/// Does this line carry a section tag ansible rejects? A tag is only read off a line that
+/// matches the section pattern in full (`ini.py::_compile_patterns`): `[name:tag]` with a
+/// non-empty, whitespace-free name, a `\w+` tag, and nothing after the `]` but whitespace
+/// or a `#` comment. `[web:hosts]` is explicit-but-valid — measured, the host and its vars
+/// arrive. A line that misses the pattern is not a section at all and is not this rule's.
+fn unknown_section_type(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix('[') else { return false };
+    let Some(end) = rest.find(']') else { return false };
+    let after = rest[end + 1..].trim_start();
+    if !after.is_empty() && !after.starts_with('#') {
+        return false;
+    }
+    let Some((name, tag)) = rest[..end].split_once(':') else { return false };
+    if name.is_empty()
+        || name.contains(char::is_whitespace)
+        || tag.is_empty()
+        || !tag.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        return false;
+    }
+    !matches!(tag, "hosts" | "children" | "vars")
 }
 
 /// Host-line tokens, as byte ranges into the document.
@@ -903,13 +932,7 @@ mod tests {
     /// control is `real_var`, which sits in a perfectly good `[web]` section *above* the typo
     /// and is still gone — `hostvars` comes back empty. So the rule is file-wide.
     ///
-    /// We read the typo'd header as a host section instead, which is silent for a one-token
-    /// line but invents `second` from the second `k=v` on a multi-token one. Ignored rather
-    /// than deleted because the fix is not "parse this better" — it is the diagnostic in
-    /// T-062's box 6, which owns "a broken inventory is an ERROR" for `.yml` and wants the
-    /// same answer here. Unignore it with that box.
     #[test]
-    #[ignore = "a broken ini inventory must define nothing and say so — T-062 box 6"]
     fn an_unknown_section_type_discards_the_whole_ini_file() {
         let src = concat!(
             "[web]\n",
@@ -921,6 +944,20 @@ mod tests {
         );
         // Ansible parsed none of it, so neither may we — including the valid section.
         assert_eq!(names(&ini_vars(src)), Vec::<&str>::new());
+    }
+
+    /// The control for the rule above, so the detector could not pass by killing every
+    /// tagged section: `hosts` is the third *valid* tag (`ini.py:189`) — measured, the
+    /// host line's vars arrive — and a tag is only read off a full section match, so a
+    /// bracketed jinja list like `[x:y]` inside a value must not condemn the file.
+    #[test]
+    fn a_valid_or_non_section_tag_does_not_discard_the_file() {
+        assert_eq!(names(&ini_vars("[web:hosts]\nnode1 tagged_var=YES\n")), ["tagged_var"]);
+        assert_eq!(
+            names(&ini_vars("[web:vars]\nreal_var={{ a[b:c] }}\n")),
+            ["real_var"],
+            "a sliced jinja value is not a section header"
+        );
     }
 
     /// A host with no variables is a null value, and must not panic or invent a name.

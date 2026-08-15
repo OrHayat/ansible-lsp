@@ -21,13 +21,18 @@ inventory rather than an error.
 
 ```python
 def verify_file(self, path):
-    return super(InventoryModule, self).verify_file(path) and os.path.splitext(path)[1] != '.toml'
+    # hardcode exclusion for TOML to prevent partial parsing of things we know we don't want
+    return super().verify_file(path) and os.path.splitext(path)[1] != '.toml'
 ```
 
-So when a `.yml` inventory has a YAML syntax error, the `yaml` plugin raises, the loop
-continues, and the `ini` plugin happily parses the same file as INI — where almost any text is
-a valid host line. The YAML error is then discarded, because failures are only surfaced if
-*nothing* parsed (`inventory/manager.py:335`):
+That comment (added in the 2.19 Data Tagging overhaul, `35750ed321`; before it the ini
+plugin had no `verify_file` override at all) is upstream acknowledging the plugin does
+"partial parsing of things we know we don't want" — and excluding only TOML. The suggested
+fix below is the same move for `.yml`/`.yaml`.
+
+So when a `.yml` inventory fails YAML parsing, the `yaml` plugin raises, the loop
+continues, and the `ini` plugin parses the same file as INI. The YAML error is then
+discarded, because failures are only surfaced if *nothing* parsed (`inventory/manager.py:335`):
 
 ```python
 # only if no plugin processed files should we show errors.
@@ -37,24 +42,35 @@ if not parsed:
 
 The result is a populated inventory of nonsense host names, and an exit status of 0.
 
-**Reproduction.**
+The window is narrower than "any broken YAML": the ini plugin rejects a host line whose
+first token ends in `:` ("ending in ':' is not allowed, this character is reserved to
+provide a port", via `_expand_hostpattern`), so a typical block-YAML file full of bare
+`all:` / `hosts:` lines fails **both** plugins — which does produce warnings (though still
+exit 0). The silent fallback fires when YAML parsing fails **and** the lines happen to be
+INI-acceptable, which is exactly the shape of realistic typos.
+
+**Reproduction (measured, 2.21.2).**
 
 ```yaml
-# inv.yml — note the bad indentation on 'hosts'
-all:
-  children:
-    web:
-    hosts:
-        web1:
+# typo.yml — meant to be a 'webservers' group with two hosts; the colons were forgotten,
+# so as YAML this is scalars, not a mapping
+webservers
+  web1 ansible_host=10.0.0.5
+  web2
 ```
 
 ```
-$ ansible-inventory -i inv.yml --list
+$ ansible-inventory -i typo.yml --list
 ```
 
-Observed: no error. The inventory contains hosts named after fragments of the YAML — e.g.
-`all:`, `children:`, `web:` — because the INI plugin read them as host lines. The actual YAML
-error is visible only at `-vvv` (`inventory/manager.py:311`).
+Observed: exit 0, **zero bytes of stderr**, and three *hosts* in `ungrouped` —
+`webservers`, `web1`, `web2`. The intended group is now a host Ansible will try to reach,
+and `web1`/`web2` are in no group, so their `group_vars` never apply. The YAML error is
+visible only at `-vvv` (`inventory/manager.py:311`).
+
+The same mechanism also accepts a well-formed INI inventory named `inv.yml` — it parses
+completely and silently via the ini plugin, so the extension lies about which parser owns
+the file (and about the value semantics: `ast.literal_eval` on host lines vs YAML types).
 
 Expected: the YAML failure is reported, or at minimum a warning says the file was parsed by a
 plugin other than the one its extension implies.
