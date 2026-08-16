@@ -13,6 +13,7 @@ mic key on this Mac).
 | `tasks/variables.yml` | where a variable comes from — play/block/task `vars:`, `set_fact`, `register`, precedence and run order, and the two mapping **keys** ansible renders rather than takes literally (T-169) |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |
 | `role_params.yml` | a key on a `roles:` entry that ansible turns into a variable instead of a setting — including the `name:`-as-role-name spelling (T-100) |
+| `add_host_vars.yml` | the other module whose argument keys are variables (T-177) — where they land, and the two documented aliases that leak a variable of their own name |
 | `mutated_conditions.yml` | every construct whose `when:` is copied onto the tasks it brings in, so a `set_fact` inside can flip it mid-run (T-166) — plus the two that look identical and must stay silent |
 | `tasks/role_include_params.yml` | the closed `include_role` arg set (T-063) — what resolves, what is a documented miss, and what `apply:` is for |
 | `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |

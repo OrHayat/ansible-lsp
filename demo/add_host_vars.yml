@@ -1,0 +1,95 @@
+---
+# add_host is one of exactly two modules whose argument keys are variable definitions
+# rather than module parameters (set_fact is the other). Everything below is measured
+# against ansible-core 2.21.2, not read off the docs — the docs give the wrong answer for
+# two of these keys.
+#
+# Where the variables land, all bracketed in one run with live controls:
+#
+#   precedence  level 8 ("inventory file or script host vars") — beats a playbook
+#               group_vars/ entry (7), loses to host_vars/ (9), play vars: (12) and
+#               set_fact (19).
+#   scope       ONLY the hosts this very task created. A host already in the same group,
+#               in the same play, read the variable as UNDEF — so the group name is not a
+#               way to work out who has it, and two add_host tasks do not share.
+#   ordering    not an axis. The calling host reads UNDEF both before and after the task;
+#               it never gets the variable at all, only the hosts it creates.
+#   hostvars    visible. hostvars['alpha'].pod_namespace reads back its value, while a
+#               play var on the same run reads UNDEF through the same expression.
+#
+# The tool indexes these keys, so a later play using one is no longer reported undefined.
+# It cannot say WHICH hosts have it — the names come from `{{ item }}` at runtime — and
+# it deliberately does not try.
+
+- name: add_host defines host variables, and its own parameters are not variables
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    # The T-177 reproduction. This is the documented replacement for the removed
+    # kubernetes.core.k8s inventory plugin, so it is a pattern people are told to migrate
+    # to rather than an exotic one.
+    #
+    # Everything this task defines lands on the same two hosts, which is why the play
+    # below can read all of it. Splitting these keys across two add_host tasks would NOT
+    # work at runtime — see the scope note above.
+    - name: Create hosts and give them variables
+      ansible.builtin.add_host:
+        # Parameters, consumed: these four names define no variable at all.
+        name: "{{ item }}"
+        groups: k8s_pods
+
+        # NO HINT: `host:` and `group:` are documented aliases of the two above, and they
+        # do work as aliases — but upstream's special_args is only
+        # ('name', 'hostname', 'groupname', 'groups'), so these two fall through and ALSO
+        # become ordinary host variables of that name. Measured by diffing a created host
+        # against a name:-only baseline. Indexing them is correct however odd it reads:
+        # `{{ group }}` below really does resolve. `name:`/`groups:` win the alias race,
+        # so the hosts are still called alpha/beta and still land in k8s_pods.
+        host: ignored-as-a-name
+        group: ignored-as-a-group
+
+        # GOOD: an argument key is a host variable on every host this task creates.
+        # Cmd+click pod_namespace below jumps here; hover shows
+        #   add_host · demo/add_host_vars.yml = my-namespace
+        pod_namespace: my-namespace
+
+        # GOOD: the value is a template, and the key is a definition all the same.
+        pod_label: "pod-{{ item }}"
+
+        # NO HINT: a connection variable is an ordinary key here. It stays quiet for the
+        # unrelated reason that every ansible_* name is exempt from the undefined rule.
+        ansible_connection: local
+
+        # NO HINT: a templated KEY defines nothing reachable. Measured — the host variable
+        # is really named `{{ dyn }}`, braces and all, and no expression can name it. So
+        # this row must not make `dyn` look defined, and must not make it look used.
+        "{{ dyn }}": whatever
+      loop: [alpha, beta]
+
+- name: A later play reads what add_host defined
+  hosts: k8s_pods
+  gather_facts: false
+  tasks:
+    # NO HINT: defined by the add_host above. This is the whole point — the play runs
+    # clean, and before T-177 the tool called every one of these undefined.
+    - name: Use them
+      ansible.builtin.debug:
+        msg: "ns={{ pod_namespace }} label={{ pod_label }}"
+
+    # NO HINT: the two leaked aliases are real host variables, so these resolve.
+    - name: Use the aliases that leaked
+      ansible.builtin.debug:
+        msg: "host={{ host }} group={{ group }}"
+
+    # BAD (var-undefined): `name` was consumed as a parameter and defines nothing, and no
+    # other file reachable from here defines it either. Its sibling `groups` would be just
+    # as undefined but stays quiet on its own account, being a magic variable.
+    - name: A consumed parameter is not a variable
+      ansible.builtin.debug:
+        msg: "{{ name }}"
+
+    # BAD (var-undefined): the name the templated key looked like it would create.
+    # Nothing defines `dyn` — reading it here is exactly the mistake that row documents.
+    - name: The name a templated key looked like it would create
+      ansible.builtin.debug:
+        msg: "{{ dyn }}"
