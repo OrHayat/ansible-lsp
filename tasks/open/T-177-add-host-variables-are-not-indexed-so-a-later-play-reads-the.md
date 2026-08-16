@@ -80,30 +80,80 @@ read `addhost=UNDEF` — add_host variables reach only the hosts add_host create
 group they were added to. That is the control that makes the scope claim a measurement rather
 than an assumption.
 
-Still open: **ordering** — whether our "any reachable definition exempts, even a later one"
-rule needs a caveat here. Nothing measured yet.
+Still open, and the only thing left to probe before the code (rule 1): **ordering.** The
+definition exists only after the task runs. `var-undefined`'s documented rule is that any
+reachable definition exempts, even a later one, so this should not need ordering — confirm
+rather than assume, since routing through `in_effect_at` once before imported a `set_fact`
+rule that broke exactly that (see CLAUDE.md rule 3).
 
-Open questions, each needing a probe before the code (rule 1):
-
-- **Which precedence level.** These arrive as host vars, but "inventory host vars" (9/10) and
-  something set at runtime are not obviously the same rung. Measure against a `group_vars`
-  and a play var of the same name.
-- **Scope.** They apply only to the hosts `add_host` created, which we cannot enumerate — the
-  same shape as inventory, so `host_scoped()` is probably right and `visible_to_hostvars()`
-  needs its own answer.
-- **Ordering.** The definition exists only after the task runs. `var-undefined`'s documented
-  rule is that any reachable definition exempts, even a later one, so this should not need
-  ordering — confirm rather than assume, since routing through `in_effect_at` once before
-  imported a `set_fact` rule that broke exactly that (see CLAUDE.md rule 3).
+`visible_to_hostvars()` also needs its own answer. Precedence does not settle it: the split
+is whether the source wrote into the *host's* storage, and `add_host` plausibly did.
 
 Consumers to assert individually: `undefined_uses`, hover, and go-to-definition, which must
 land on the `add_host` key.
+
+## What is knowable from the file, and what is not
+
+The question that keeps coming back is whether the fix needs the set of hosts `add_host`
+created. It does not, and the two tables are why.
+
+Readable without running anything — all four literals:
+
+| fact                                        | from            |
+| ------------------------------------------- | --------------- |
+| there is an `add_host` task                 | the task itself |
+| it defines a variable named `pod_namespace` | a literal key   |
+| its value is `my-namespace`                 | a literal value |
+| the created hosts join group `k8s_pods`     | `groups:`       |
+
+Not readable, and nothing recovers it:
+
+| fact                          | why                                                  |
+| ----------------------------- | ---------------------------------------------------- |
+| *which* hosts were created    | `name: "{{ item }}"` over `loop: "{{ pods.resources }}"` |
+| whether the task ran at all   | a `when:`, or an empty loop                          |
+
+`var-undefined` asks only "does this name have a reachable definition", so the first table is
+the whole of what it needs. Do **not** grow `calls_add_host` into a host-set collector to
+serve this ticket: its one consumer, `unknown_host_diagnostics` (`main.rs:693`), uses it as a
+file-wide veto, and a set that misses a runtime-named host converts a missed report into a
+false ERROR — the trade `main.rs:678-680` deliberately refused.
+
+**The `groups:` literal is knowable and still must not narrow the claim.** It is tempting to
+scope the definition to plays targeting `k8s_pods`. Measured, that is false: `preexisting`,
+already in that group from the inventory and in the same play, read `addhost=UNDEF`. Only the
+created hosts get the variable, so "defined for plays on `k8s_pods`, undefined elsewhere"
+trades one wrong answer for another. Where the literal genuinely pays is a rule this ticket
+does not write: a play whose `hosts:` names a group no inventory declares matches nothing,
+and Ansible says only `skipping: no hosts matched` at exit 0. Any such rule must count
+`add_host`'s `groups:` values as declared groups, or it will warn on working code.
+
+## What comes free once the keys are indexed
+
+`VarDef` (`vars.rs:152`) already carries `source` and a `span` pointing at the **value**, so
+one change lights up four existing features rather than one:
+
+- hover shows `my-namespace` plus the provenance line (T-052, T-066)
+- go-to-definition lands on the `add_host` key (box 5 below)
+- precedence is answerable against a colliding `group_vars`/`host_vars` — level 8, measured
+- `templates/{{ pod_namespace }}/x.j2` resolves, because the value is a known literal (T-056)
+
+## Adjacent, unverified
+
+`calls_add_host` is passed `a.nodes` (`main.rs:315`), which is **one file's** parse. Read
+plainly, an `add_host` inside a role or an included task file therefore does not silence
+`unknown-host` in the playbook that reads `hostvars['thathost']` — a false ERROR on working
+code. Not run yet; rule 1 says that makes it a hypothesis. If it reproduces it is a P1 bug of
+its own, not part of this ticket.
 
 ## Done when
 
 - [ ] the reproduction above reports zero undefined variables, pinned by test
 - [ ] a templated `add_host` key still defines nothing — the T-170 control, re-asserted here
 - [ ] `name`/`hostname`/`groups`/`group` are not themselves indexed as variables
-- [ ] precedence and scope measured, each with a probe that could report either way
+- [x] precedence and scope measured, each with a probe that could report either way — level
+      8, controls `only_group`/`only_addhost`/`only_play`/`only_hostvars` all alive in the
+      same run; scope settled by `preexisting` reading `addhost=UNDEF` from inside the group.
+      Ordering is **not** covered by this box and is still open, above.
 - [ ] hover and go-to-definition answer from the `add_host` key, asserted per consumer
 - [ ] corpus gate: the count can only fall; every disappeared line confirmed `add_host`-defined
