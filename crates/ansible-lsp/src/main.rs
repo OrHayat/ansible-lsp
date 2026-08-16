@@ -1796,18 +1796,20 @@ fn source_label(s: vars::VarSource) -> &'static str {
         IncludeVars => "include_vars",
         RoleParams => "role param",
         RoleEntryVars => "roles: entry vars",
+        AddHost => "add_host",
     }
 }
 
 /// The literal value of a definition, when its span points at a value (play/block/task vars,
-/// vars_files, role defaults/vars). `set_fact`/`register` spans point at the name, so those
-/// carry no value here. Whitespace-collapsed and length-capped for a one-line hover.
+/// vars_files, role defaults/vars, `add_host` args). `set_fact`/`register` spans point at the
+/// name, so those carry no value here. Whitespace-collapsed and length-capped for a one-line
+/// hover.
 fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
         | GroupVarsAll | GroupVars | HostVars | Inventory | IncludeVars | RoleParams
-        | RoleEntryVars => {
+        | RoleEntryVars | AddHost => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
                 return None;
@@ -4412,6 +4414,94 @@ mod tests {
         assert!(md.contains("vars_files"), "provenance label in: {md}");
         assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
         assert!(md.contains("https://api.internal:8443"), "value in: {md}");
+    }
+
+    /// T-177 on the demo, which is where its labels become claims (rule 4).
+    ///
+    /// The whole fixture was run against 2.21.2 before this was written. It reaches the
+    /// second play clean — `pod_namespace`, `pod_label` and the two leaked aliases all
+    /// printed — and then dies on `{{ name }}` with `'name' is undefined`, which is the
+    /// BAD row earning its label. The other BAD row was measured separately: the created
+    /// host's keys really are `['literal_beside_it', '{{ dyn }}']`, so `dyn` is undefined
+    /// and the templated key defines nothing any expression can reach.
+    #[test]
+    fn the_add_host_demo_flags_the_consumed_parameter_and_nothing_it_defines() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo/add_host_vars.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let undefined: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect();
+
+        // Exactly the two BAD rows. Asserting the whole set, not just that the GOOD rows
+        // are quiet: a rule that fired on everything would satisfy "pod_namespace is not
+        // reported" only by accident.
+        assert_eq!(undefined.len(), 2, "{undefined:?}");
+        assert!(undefined.iter().any(|m| m.contains("`name`")), "{undefined:?}");
+        assert!(undefined.iter().any(|m| m.contains("`dyn`")), "{undefined:?}");
+        for quiet in ["pod_namespace", "pod_label", "`host`", "`group`"] {
+            assert!(
+                !undefined.iter().any(|m| m.contains(quiet)),
+                "{quiet} is defined by the add_host and must not be reported: {undefined:?}"
+            );
+        }
+    }
+
+    /// T-177's editor consumers, asserted one per rule 3 rather than trusting that one
+    /// index feeds both. The hover and the jump have contradicted each other before.
+    #[test]
+    fn an_add_host_variable_hovers_and_jumps_to_the_key_that_defined_it() {
+        let path = std::path::Path::new("../../demo/add_host_vars.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+
+        let byte = text.find("{{ pod_namespace }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path)
+            .expect("hover on an add_host-defined variable");
+        assert!(md.contains("add_host"), "provenance label in: {md}");
+        // The value, which is why the definition's span points at it rather than at the
+        // key the way `set_fact` does.
+        assert!(md.contains("my-namespace"), "value in: {md}");
+
+        let (line, character) = doc.byte_to_lsp(byte);
+        let locs = super::Backend::definition_at(
+            &doc,
+            &nodes,
+            tower_lsp::lsp_types::Position { line, character },
+            &uri,
+            &path,
+        )
+        .expect("jump from an add_host-defined variable");
+        assert_eq!(locs.len(), 1, "{locs:?}");
+        let defining_line = text
+            .lines()
+            .nth(locs[0].range.start.line as usize)
+            .expect("the line jumped to");
+        assert!(
+            defining_line.contains("pod_namespace: my-namespace"),
+            "landed on `{defining_line}`"
+        );
+
+        // The control that makes the two assertions above about `add_host` and not about
+        // hover working at all: the consumed parameter beside it defines nothing, so
+        // neither consumer may answer for it.
+        let consumed = text.find("{{ name }}").unwrap() + 3;
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path).is_none());
+        let (line, character) = doc.byte_to_lsp(consumed);
+        assert!(super::Backend::definition_at(
+            &doc,
+            &nodes,
+            tower_lsp::lsp_types::Position { line, character },
+            &uri,
+            &path
+        )
+        .is_none());
     }
 
     /// T-066 against the real demo: `network_mtu` reaches the playbook only through

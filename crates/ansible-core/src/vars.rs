@@ -66,6 +66,11 @@ pub enum VarSource {
     /// [`VarSource::RoleParams`] because it is the documented spelling and because it is
     /// combined *after* the params (`role/__init__.py:552-558`), so it wins a collision.
     RoleEntryVars,
+    /// An argument key on an `add_host:` task — a host variable on the hosts that task
+    /// creates (T-177). Host-scoped like [`VarSource::Inventory`], and for the same reason:
+    /// the hosts are named at runtime (`name: "{{ item }}"` over a loop), so which hosts it
+    /// reaches is not answerable from the file.
+    AddHost,
 }
 
 impl VarSource {
@@ -83,6 +88,14 @@ impl VarSource {
             // wrongly win one.
             VarSource::Inventory => 6,
             VarSource::HostVars => 10,
+            // Level 8, "inventory file or script host vars" — bracketed on both sides by
+            // measurement rather than read off the published table, since a host var set at
+            // runtime is not obviously the same rung as one read from an inventory file. One
+            // run, every source defining the same name on the created host, each also
+            // contributing a unique name so a collision the loser never entered cannot read
+            // as a win: add_host beat playbook `group_vars/` (7) and lost to `host_vars/`
+            // (9), play `vars:` (12) and `set_fact` (19).
+            VarSource::AddHost => 8,
             VarSource::PlayVars => 12,
             VarSource::VarsFiles => 14,
             VarSource::RoleVars => 15,
@@ -105,8 +118,17 @@ impl VarSource {
     /// True for sources whose applicability depends on the target host — a named `group_vars`
     /// or `host_vars` file. We can point at the definition, but not assert it's in effect for
     /// a given host without parsing inventory.
+    ///
+    /// [`VarSource::AddHost`] joins them for a stronger reason than inventory's: its hosts
+    /// are named at runtime, so no amount of parsing enumerates them.
     pub fn host_scoped(self) -> bool {
-        matches!(self, VarSource::GroupVars | VarSource::HostVars | VarSource::Inventory)
+        matches!(
+            self,
+            VarSource::GroupVars
+                | VarSource::HostVars
+                | VarSource::Inventory
+                | VarSource::AddHost
+        )
     }
 
     /// Whether a `hostvars[...]` read can see this source (T-104).
@@ -128,6 +150,11 @@ impl VarSource {
     /// (`action/include_vars.py:149`, the same door `set_fact` uses). Reading the levels
     /// instead of measuring would put `include_vars` on the wrong side and warn on working
     /// code.
+    ///
+    /// `add_host` measured separately (T-177) and visible, with both controls alive in the
+    /// one run: `hostvars['newhost'].addhost_var` read back its value, while a play var on
+    /// the same run read `UNDEF` through the same expression — so the probe could report
+    /// either way. Precedence does not decide this: it writes into the host's storage.
     pub fn visible_to_hostvars(self) -> bool {
         match self {
             VarSource::GroupVarsAll
@@ -136,6 +163,7 @@ impl VarSource {
             | VarSource::Inventory
             | VarSource::IncludeVars
             | VarSource::SetFact
+            | VarSource::AddHost
             | VarSource::Register => true,
             VarSource::PlayVars
             | VarSource::BlockVars
@@ -487,6 +515,19 @@ fn block(b: &Block, idx: &mut VarIndex) {
     }
 }
 
+/// The `add_host:` argument keys consumed as module parameters, so not host variables.
+///
+/// Upstream's own `special_args` (`action/add_host.py:85`), and **not** the module's alias
+/// list, which is where reading the docs goes wrong. `host:` and `group:` are accepted as
+/// aliases when the plugin picks the host name (`:52`) and the group list (`:68`), and are
+/// then left in `args` — so each also lands in `host_vars` as an ordinary variable.
+///
+/// Measured on 2.21.2 by diffing each spelling's created host against a `name:`-only
+/// baseline, which is what makes it evidence rather than a reading: `host:` left `host`
+/// behind and `group:` left `group`, while `hostname:`, `groups:` and `groupname:` left
+/// nothing — and all five created their host and group, so the aliases do work.
+const ADD_HOST_PARAMS: [&str; 4] = ["name", "hostname", "groupname", "groups"];
+
 fn task(t: &Task, idx: &mut VarIndex) {
     // A task's `when:` guards everything it defines — so the variable is only set on the
     // hosts/runs where the condition holds.
@@ -506,6 +547,30 @@ fn task(t: &Task, idx: &mut VarIndex) {
                     // a definition nothing can reach.
                     if name != "cacheable" && !name.contains("{{") {
                         idx.push_cond(name, VarSource::SetFact, fact.span(), cond.clone());
+                    }
+                }
+            }
+        }
+        // The only other module whose argument keys are variable definitions (T-177).
+        //
+        // Mapping args only. The free-form spelling `add_host: name=h ff_var=V` really does
+        // define `ff_var` — measured, it read back in the next play — and `entries()` is
+        // empty for a scalar, so this misses it and a use elsewhere still reports undefined.
+        // Splitting that string is `parse_kv`/shlex semantics, which is T-046's, and a
+        // hand-rolled version is the kind of unmeasured guess this file exists to avoid.
+        // Pinned by `the_free_form_add_host_spelling_is_a_known_miss`.
+        if crate::keywords::core_action(&a.name) == "add_host" {
+            for (key, value) in a.args.entries() {
+                if let Some(name) = key.as_str() {
+                    // Templated keys define nothing reachable, for the reason set_fact's do
+                    // not: measured, the host variable is really named `{{ k }}` (T-170).
+                    if !ADD_HOST_PARAMS.contains(&name) && !name.contains("{{") {
+                        // The *value* span, with play vars and against `set_fact`, which is
+                        // the closer-looking shape. Both are one line apart so the jump is
+                        // the same either way, and only this side lets hover read the value
+                        // out — which is worth having here and not for `set_fact`, whose
+                        // values are templates far more often than literals.
+                        idx.push_cond(name, VarSource::AddHost, value.span(), cond.clone());
                     }
                 }
             }
@@ -1689,6 +1754,159 @@ mod tests {
         assert!(i.get("cacheable").is_empty());
     }
 
+    /// T-177. `add_host` is the second module whose argument keys are definitions, and the
+    /// list of keys that are *not* is upstream's `special_args`, never the module's alias
+    /// list — the docs give the wrong four.
+    ///
+    /// Measured on 2.21.2 by diffing each spelling's created host against a `name:`-only
+    /// baseline. All five spellings created their host and group, so the aliases do work;
+    /// only `host:` and `group:` also left a variable of that name behind.
+    #[test]
+    fn add_host_argument_keys_are_definitions_but_its_own_parameters_are_not() {
+        let i = idx(concat!(
+            "- hosts: localhost\n",
+            "  tasks:\n",
+            "    - ansible.builtin.add_host:\n",
+            "        name: newhost\n",
+            "        groups: created\n",
+            "        pod_namespace: my-namespace\n",
+            "    - add_host:\n",
+            "        hostname: alt\n",
+            "        groupname: alt_group\n",
+            "    - add_host:\n",
+            "        host: leaks\n",
+            "        group: leaks_too\n",
+        ));
+        let src = |n: &str| i.get(n).first().map(|d| d.source);
+        assert_eq!(src("pod_namespace"), Some(VarSource::AddHost));
+        for consumed in ["name", "hostname", "groups", "groupname"] {
+            assert!(
+                i.get(consumed).is_empty(),
+                "`{consumed}` is consumed as a parameter and defines nothing"
+            );
+        }
+        // The measured surprise, and the reason the alias list is the wrong source: these
+        // two are read as aliases *and* fall through into the created host's variables.
+        assert_eq!(src("host"), Some(VarSource::AddHost), "`host:` leaks a variable");
+        assert_eq!(src("group"), Some(VarSource::AddHost), "`group:` leaks a variable");
+    }
+
+    /// T-170's control, re-asserted from this side: a templated `add_host` key defines
+    /// nothing. Measured — the host variable is really named `{{ dyn }}`, which no
+    /// expression can reference, so filing the literal would index an unreachable name.
+    #[test]
+    fn a_templated_add_host_key_defines_nothing() {
+        let i = idx(concat!(
+            "- hosts: localhost\n",
+            "  tasks:\n",
+            "    - add_host:\n",
+            "        name: h\n",
+            "        \"{{ dyn }}\": v\n",
+            "        literal_beside_it: v\n",
+        ));
+        assert!(i.get("dyn").is_empty());
+        assert!(i.get("{{ dyn }}").is_empty());
+        // The control: the same task's literal key is indexed, so the assertion above is
+        // about the braces and not about the task being skipped wholesale.
+        assert_eq!(i.get("literal_beside_it").len(), 1);
+    }
+
+    /// A known miss, pinned so it is a decision rather than an accident.
+    ///
+    /// Measured on 2.21.2: `add_host: name=ff01 groups=ffgroup ff_var=FROM_FREEFORM` creates
+    /// the host and the next play reads `ff_var` back. We index nothing from it, so a use of
+    /// `ff_var` elsewhere is still reported undefined — the same false positive T-177 exists
+    /// to remove, surviving in the other spelling. The fix is `parse_kv`/shlex semantics on
+    /// `_raw_params`, which is T-046's whole subject; guessing at it here is how a splitter
+    /// that disagrees with ansible gets shipped.
+    ///
+    /// When T-046 lands, this test should flip to asserting `ff_var` IS indexed.
+    #[test]
+    fn the_free_form_add_host_spelling_is_a_known_miss() {
+        let i = idx(concat!(
+            "- hosts: localhost\n",
+            "  tasks:\n",
+            "    - add_host: name=ff01 groups=ffgroup ff_var=FROM_FREEFORM\n",
+        ));
+        assert!(i.get("ff_var").is_empty(), "T-046 would make this a definition");
+        // The control: the mapping spelling of the same task is indexed, so this is about
+        // the free-form args and not about `add_host` handling having gone away.
+        let m = idx(concat!(
+            "- hosts: localhost\n",
+            "  tasks:\n",
+            "    - add_host:\n",
+            "        name: ff01\n",
+            "        ff_var: FROM_MAPPING\n",
+        ));
+        assert_eq!(m.get("ff_var").len(), 1);
+    }
+
+    /// The T-177 reproduction. It runs clean on 2.21.2 — measured — while we reported
+    /// `pod_namespace` undefined, which is the failure this project exists to avoid.
+    #[test]
+    fn a_variable_defined_by_add_host_is_not_undefined_in_a_later_play() {
+        let play = |defines: &str| {
+            format!(
+                concat!(
+                    "- hosts: localhost\n",
+                    "  gather_facts: false\n",
+                    "  tasks:\n",
+                    "    - ansible.builtin.add_host:\n",
+                    "        name: \"{{{{ item }}}}\"\n",
+                    "        groups: k8s_pods\n",
+                    "{}",
+                    "      loop: [a, b]\n",
+                    "\n",
+                    "- hosts: k8s_pods\n",
+                    "  gather_facts: false\n",
+                    "  tasks:\n",
+                    "    - debug:\n",
+                    "        msg: \"ns={{{{ pod_namespace }}}}\"\n",
+                ),
+                defines
+            )
+        };
+        assert!(undef(&play("        pod_namespace: my-namespace\n")).is_empty());
+        // The control. Without that one line the read is genuinely undefined, so the
+        // assertion above is the indexing working and not the rule having gone quiet.
+        assert_eq!(undef(&play("")), ["pod_namespace"]);
+    }
+
+    /// Ordering is not the axis here, and the probe says so rather than the reading.
+    ///
+    /// Measured on 2.21.2: a read on the *calling* host is `UNDEF` both before and after
+    /// the `add_host` task — the variable never reaches the host that ran it, only the
+    /// hosts it created. So `add_host` stays out of [`Located::ordered_before`], where a
+    /// `set_fact`-style rule would have made a same-file earlier use a false positive.
+    #[test]
+    fn a_use_before_the_add_host_task_is_still_exempt() {
+        let src = concat!(
+            "- hosts: localhost\n",
+            "  tasks:\n",
+            "    - debug: { msg: \"{{ later_added }}\" }\n",
+            "    - add_host:\n",
+            "        name: h\n",
+            "        later_added: 1\n",
+        );
+        assert!(undef(src).is_empty());
+    }
+
+    /// The rungs measured for T-177, asserted so a later edit to `precedence` has to break
+    /// a named claim rather than a number. Level 8 — bracketed on both sides in one run,
+    /// with `only_group`/`only_addhost`/`only_play`/`only_hostvars` alive as controls.
+    #[test]
+    fn add_host_sits_above_group_vars_and_below_host_vars() {
+        use VarSource::*;
+        assert!(AddHost.precedence() > GroupVars.precedence(), "beat playbook group_vars");
+        assert!(AddHost.precedence() < HostVars.precedence(), "lost to host_vars");
+        assert!(AddHost.precedence() < PlayVars.precedence(), "lost to play vars");
+        assert!(AddHost.precedence() < SetFact.precedence(), "lost to set_fact");
+        // Scope, settled by the same run: `preexisting`, already in the group and in the
+        // play, read the variable as UNDEF. Only the created hosts get it, and they are
+        // named at runtime — so this can never be asserted for a given host.
+        assert!(AddHost.host_scoped());
+    }
+
     /// T-169, the walk consumer: a template in a mapping key is a variable use at the two
     /// places Ansible renders one. Both measured on 2.21.2 — `set_fact` with
     /// `result_name: my_result` created the fact `my_result`, and `set_stats` reported the
@@ -1788,7 +2006,8 @@ mod tests {
     #[test]
     fn hostvars_visibility_matches_what_was_measured() {
         use VarSource::*;
-        for s in [GroupVarsAll, GroupVars, HostVars, IncludeVars, SetFact, Register] {
+        for s in [GroupVarsAll, GroupVars, HostVars, Inventory, IncludeVars, SetFact, Register, AddHost]
+        {
             assert!(s.visible_to_hostvars(), "{s:?} was measured VISIBLE");
         }
         for s in [
