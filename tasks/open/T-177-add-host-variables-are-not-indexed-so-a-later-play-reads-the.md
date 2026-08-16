@@ -57,6 +57,32 @@ Treat an `add_host` task's literal argument keys as definitions, minus the modul
 parameters (`name`/`hostname`, `groups`/`group`). Templated keys stay excluded, which is
 already measured and already asserted — do not regress it while adding this.
 
+## Measured (2.21.2)
+
+Two of the three questions below are now answered. One playbook: play 1 `add_host`s `newhost`
+into group `created`, which an ini inventory already populates with `preexisting`; play 2
+targets `created` and prints every collision. Each source also contributes a **unique** name,
+so a collision the loser was never present for cannot be misread as a win.
+
+| collision, on `newhost`          | winner            | so add_host is |
+| -------------------------------- | ----------------- | -------------- |
+| add_host vs `group_vars/created` | **add_host**      | above group_vars |
+| add_host vs `host_vars/newhost`  | **host_vars**     | below host_vars  |
+| add_host vs play `vars:`         | **play vars**     | below 15         |
+| add_host vs `set_fact`           | **set_fact**      | below 21        |
+
+Bracketed on both sides, that is **level 8, "inventory file or script host vars"** — the rung
+between playbook `group_vars/*` (7) and inventory `host_vars/*` (9). Controls all alive in the
+same run: `only_group`, `only_addhost`, `only_play`, `only_hostvars` each resolved.
+
+**Scope, settled by the same run.** `preexisting` is in the same group, in the same play, and
+read `addhost=UNDEF` — add_host variables reach only the hosts add_host created, never the
+group they were added to. That is the control that makes the scope claim a measurement rather
+than an assumption.
+
+Still open: **ordering** — whether our "any reachable definition exempts, even a later one"
+rule needs a caveat here. Nothing measured yet.
+
 Open questions, each needing a probe before the code (rule 1):
 
 - **Which precedence level.** These arrive as host vars, but "inventory host vars" (9/10) and
