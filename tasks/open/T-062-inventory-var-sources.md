@@ -160,16 +160,22 @@ the opposite of role `defaults/`, where the file shadows the directory
       `hostvars_host_keys`, deliberately: the link-painting caller wants any host name it
       can find, and an ERROR needs the name to be the whole of what was written.
 
-      Corpus: **0 hits**. `demo/ansible.cfg` now names `inventory-lab.yml` so the demo can
+      Corpus: **0 hits** (re-checked at 755 files). `demo/ansible.cfg` now names `inventory-lab.yml` so the demo can
       exercise anything inventory-dependent at all; the full suite is green with it.
-- [x] `var-undefined` gains **no new hit** on the corpus from the new sources — measured, by
-      diffing the two sorted lists rather than the two counts: **677** before the inventory
-      became a variable source (`2e86585~1`), **233** after, and the 233 are a strict subset.
-      Zero lines appear that were not there before; 444 disappeared.
+- [x] `var-undefined` gains **no new hit** on the corpus from the new sources — measured by
+      diffing the two sorted lists, not the two counts. Both sides run against the same
+      corpus state (755 files): **707** at `2e86585~1`, before the inventory was a variable
+      source, and **238** today. Zero lines appear that were not there before; 469
+      disappeared.
+
+      Diff the lists, never the counts. `~/app` is a live working repo — it went from 753 to
+      755 files mid-session and the count moved 233 → 238 with no change to this code at all,
+      so a bare number recorded here rots within the day. "Zero new lines" is the part that
+      stays checkable.
 
       Reworded, because the box used to read "stays zero-hit on the corpus", which the scan
       flatly contradicts — it prints 233 — and which was never the achievable claim: an extra
       variable source can only move this number *down*, so the thing worth gating is that it
       never moves up. Ticked in `7c944a2` with no measurement recorded, which is how the wrong
-      words survived. Re-measured after box 8: still 233, and the new `unknown-host` rule is
-      itself 0-hit on the same corpus.
+      words survived. Re-measured after box 8: unchanged by it, and the new `unknown-host`
+      rule is itself 0-hit on the same corpus.
