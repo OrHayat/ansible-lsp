@@ -132,7 +132,34 @@ the opposite of role `defaults/`, where the file shadows the directory
       does not raise as written). Zero hits on the corpus. Scoped deliberately: the key is
       equally inert in `vars_files:`/play `vars:`, which this does **not** flag — that is a
       wider claim than the box, and it is where people write it that matters.
-- [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
+- [x] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
       silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never
-      for `localhost`
+      for `localhost`. Done: `unknown-host`, on the host-name span, suppressible. The host
+      list comes from new `ini_hosts`/`yaml_hosts`/`toml_hosts` beside the `*_vars` readers,
+      through `vars::inventory_hosts`, which returns **`Option`** — unknowable is a third
+      answer, not a "no", and every escape is that `None`.
+
+      Measured first, all on 2.21.2. Ansible's message is the reason this earns an ERROR: a
+      bad host gives `Error while resolving value for 'msg': hostvars['web0143']` — the
+      expression echoed back — while the control, a real host with a missing variable, says
+      `object of type 'HostVarsVars' has no attribute 'infiniband_ip'`. Only the typo case
+      is cryptic. Host patterns expand the way ansible expands them (`web[01:05]` inclusive
+      and padded, `rack[a:c]`, `s[00:10:5]`, cartesian across two brackets) — and **YAML
+      inventories expand them too**, which the ini plugin owning the syntax would not have
+      suggested. `localhost` is never flagged: `'localhost' in hostvars` is True with no
+      inventory entry, while `hostvars | list` omits it. A group name is not a host —
+      `'num' in hostvars` is False for a group and the read fails identically.
+
+      Two false-positive sources found by the corpus gate rather than by review, both now
+      pinned by tests:
+      - `hostvars[groups['x'][0]]`, the idiomatic "first host of a group". The quoted
+        literal belongs to the *inner* lookup and names a group. This one shape was **20 of
+        the 21** hits the rule first produced, every one working code.
+      - a `hostvars['x']` written inside a `#` comment — 2 more of the 23 literal uses.
+      Both are filtered in `condition::hostvars_host_uses` rather than in
+      `hostvars_host_keys`, deliberately: the link-painting caller wants any host name it
+      can find, and an ERROR needs the name to be the whole of what was written.
+
+      Corpus: **0 hits**. `demo/ansible.cfg` now names `inventory-lab.yml` so the demo can
+      exercise anything inventory-dependent at all; the full suite is green with it.
 - [x] `var-undefined` stays zero-hit on the corpus with the new sources active

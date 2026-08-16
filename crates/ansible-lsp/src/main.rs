@@ -598,6 +598,8 @@ impl Backend {
         if let Ok(path) = uri.to_file_path() {
             diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
+            let cache = ScanCache::default().with_inventory(inventory_setting());
+            diagnostics.extend(Self::unknown_host_diagnostics(&a, &path, &cache));
         }
         self.state.track(uri, &diagnostics);
         self.client
@@ -648,6 +650,65 @@ impl Backend {
                          is discarded.{unreported}",
                         d.key,
                         first_line + 1
+                    ),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// `hostvars['name']` for a host no inventory we parsed declares.
+    ///
+    /// Fatal at runtime, and ansible's own message is the reason this is worth saying: the
+    /// lookup returns an Undefined whose *name* is the subscript itself
+    /// (`_undef(f"hostvars[{host_name!r}]")`, `vars/hostvars.py`), so the failure reads
+    /// `Error while resolving value for 'msg': hostvars['web0143']` — the expression echoed
+    /// back, never "there is no such host". Measured on 2.21.2, beside the control: the same
+    /// play with a host that *does* exist and a missing variable says `object of type
+    /// 'HostVarsVars' has no attribute 'infiniband_ip'`, which names the thing. Only the
+    /// bad-host half is cryptic, and it is the half a typo produces.
+    ///
+    /// An ERROR because it is provable rather than stylistic — once the inventory is parsed a
+    /// name either is a host or is not, with no scope, ordering or precedence in the way.
+    ///
+    /// Everything about it is arranged to stay quiet unless that proof holds:
+    ///
+    /// - the host list is `None` — no inventory resolved, unreadable, or **dynamic** and
+    ///   therefore declined. [`vars::inventory_hosts`] owns that distinction.
+    /// - any `add_host` in the file. It invents hosts at runtime that appear in no inventory,
+    ///   and the check is deliberately the blunt textual one: an escape that over-matches
+    ///   only ever costs a missed report, while one that under-matches costs a false error.
+    /// - `localhost`, always. Measured: `hostvars['localhost']` resolves with no inventory
+    ///   entry at all, because membership auto-creates the implicit host — while
+    ///   `hostvars | list` omits it, so the host list can never contain it.
+    /// - a templated key. `hostvars[some_var]` names no host we can know, and the scan only
+    ///   matches quoted literals, so this falls out rather than being special-cased.
+    ///
+    /// Suppressible with `# noqa: unknown-host`.
+    fn unknown_host_diagnostics(a: &Analysis, path: &Path, cache: &ScanCache) -> Vec<Diagnostic> {
+        if vars::calls_add_host(&a.nodes) {
+            return Vec::new();
+        }
+        let Some(hosts) = vars::inventory_hosts(path, cache) else {
+            return Vec::new();
+        };
+        condition::hostvars_host_uses(&a.doc.text, &a.nodes)
+            .into_iter()
+            .filter(|(name, _, _)| name != "localhost" && !hosts.contains(name))
+            .filter(|(_, s, _)| !a.doc.is_suppressed(*s, "unknown-host"))
+            .map(|(name, s, e)| {
+                let (sl, sc) = a.doc.byte_to_lsp(s);
+                let (el, ec) = a.doc.byte_to_lsp(e);
+                Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("unknown-host".into())),
+                    message: format!(
+                        "No host `{name}` in the inventory, so this read fails at runtime. \
+                         Ansible reports it as `hostvars['{name}']` with no further \
+                         explanation, which reads like a missing variable rather than a \
+                         missing host."
                     ),
                     ..Default::default()
                 }
@@ -3512,6 +3573,119 @@ mod tests {
                 })
                 .map(|d| d.message)
                 .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    use ansible_core::cache::ScanCache;
+
+    fn msgs(ds: &[tower_lsp::lsp_types::Diagnostic]) -> Vec<String> {
+        ds.iter().map(|d| d.message.clone()).collect()
+    }
+
+    /// T-062 box 8 on the demo: the unknown host is flagged, the real one beside it is not.
+    ///
+    /// `demo/hostvars.yml` reads `web01` (in inventory-lab.yml) and `web0143` (not), in the
+    /// same file, through the same syntax. Nothing separates them but the host list, which is
+    /// the claim.
+    #[test]
+    fn the_demo_flags_the_unknown_host_and_not_the_real_one() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/hostvars.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let ds = super::Backend::unknown_host_diagnostics(&a, &path, &ScanCache::default());
+
+        assert_eq!(ds.len(), 1, "expected exactly the one bad host: {:?}", msgs(&ds));
+        assert_eq!(ds[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(ds[0].code, Some(NumberOrString::String("unknown-host".into())));
+        assert!(ds[0].message.contains("web0143"), "the host is not named: {}", ds[0].message);
+
+        // The range covers the host name only — not the quotes, not `hostvars[`.
+        let line = text.lines().nth(ds[0].range.start.line as usize).unwrap();
+        let (s, e) = (ds[0].range.start.character as usize, ds[0].range.end.character as usize);
+        assert_eq!(&line[s..e], "web0143");
+    }
+
+    /// Every reason to stay quiet, each asserted against a case that fires without it.
+    ///
+    /// The control is the first line of each pair: the same file, the same read, one thing
+    /// changed. A silence test that never saw the rule fire proves only that the rule is off.
+    #[test]
+    fn unknown_host_is_silent_wherever_the_host_list_is_not_knowable() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-box8");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        std::fs::write(d.join("dyn.yml"), "plugin: amazon.aws.aws_ec2\nregions: [us-east-1]\n")
+            .unwrap();
+        let play = d.join("play.yml");
+
+        let fires = |text: &str, inventory: Vec<std::path::PathBuf>| {
+            std::fs::write(&play, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &play).unwrap();
+            let cache = ScanCache::default().with_inventory(inventory);
+            super::Backend::unknown_host_diagnostics(&a, &play, &cache).len()
+        };
+        let ini = || vec![d.join("hosts.ini")];
+        let read = "- hosts: all\n  tasks:\n    - debug:\n        msg: \"{{ hostvars['nope'].x }}\"\n";
+
+        // The control. Everything below changes exactly one thing about this.
+        assert_eq!(fires(read, ini()), 1, "control: an unknown host against a read inventory");
+        assert_eq!(fires(read, vec![]), 0, "no inventory resolved");
+        assert_eq!(fires(read, vec![d.join("dyn.yml")]), 0, "a declined dynamic inventory");
+        assert_eq!(fires(read, vec![d.join("missing.ini")]), 0, "an inventory that is not there");
+
+        // A real host, same inventory.
+        let ok = read.replace("nope", "web01");
+        assert_eq!(fires(&ok, ini()), 0, "a host the inventory declares");
+
+        // localhost is conjured by hostvars on membership, so it is never absent.
+        assert_eq!(fires(&read.replace("nope", "localhost"), ini()), 0, "localhost");
+
+        // add_host invents hosts at runtime; one anywhere in the file silences the file.
+        let added = format!("{read}    - add_host:\n        name: nope\n");
+        assert_eq!(fires(&added, ini()), 0, "add_host anywhere in the file");
+
+        // A templated key names no host we can know.
+        let templated = read.replace("'nope'", "some_var");
+        assert_eq!(fires(&templated, ini()), 0, "a templated subscript");
+
+        // The idiomatic "first host of a group". The quoted literal here is a GROUP name,
+        // belonging to the inner `groups[...]`, and the host it resolves to is unknowable.
+        // This one shape produced 20 of the 21 hits the rule first reported against the
+        // reference corpus, every one of them working code.
+        let via_group = read.replace("'nope'", "groups['web'][0]");
+        assert_eq!(fires(&via_group, ini()), 0, "hostvars[groups['web'][0]]");
+        // ...and the group name is not quietly accepted as a host either.
+        let group_named = read.replace("'nope'", "'web'");
+        assert_eq!(fires(&group_named, ini()), 1, "a group name is not a host");
+
+        // In a comment it is prose, not a read — 2 of the corpus's 23 uses look like this.
+        let commented: String =
+            read.lines().map(|l| format!("# {l}\n")).chain(["- hosts: all\n".into()]).collect();
+        assert_eq!(fires(&commented, ini()), 0, "inside a comment");
+
+        // And the ordinary escape hatch.
+        let noqa = read.replace(".x }}\"", ".x }}\" # noqa: unknown-host");
+        assert_eq!(fires(&noqa, ini()), 0, "# noqa");
+    }
+
+    /// The false-positive gate. A wrong ERROR here is worse than the missing feature, so
+    /// every other demo file must stay clean with the demo's own inventory in effect.
+    #[test]
+    fn every_other_demo_file_is_free_of_unknown_host_diagnostics() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "hostvars.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad =
+                msgs(&super::Backend::unknown_host_diagnostics(&a, &path, &ScanCache::default()));
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
     }

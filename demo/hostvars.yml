@@ -67,6 +67,21 @@
       ansible.builtin.debug:
         msg: "{{ hostvars['web01'].infiniband_ip }}"
 
-    - name: not existing host
+    # BAD: there is no host `web0143`. ansible.cfg points at inventory-lab.yml, which
+    # declares web01, web02 and db01 — so this is provably fatal, and the editor is the only
+    # place it shows before the play reaches this task.
+    #
+    # Ansible's own message is why this earns an ERROR rather than a warning. Measured:
+    #
+    #   bad host      Error while resolving value for 'msg': hostvars['web0143']
+    #   bad variable  ... object of type 'HostVarsVars' has no attribute 'infiniband_ip'
+    #
+    # The second names the missing thing. The first echoes your expression back and never
+    # says "no such host", so a typo in a host name reads like a missing variable.
+    #
+    # Silent whenever the host list is not knowable — a dynamic inventory we decline to run,
+    # any add_host in the file, or no inventory resolved at all — and never for localhost,
+    # which hostvars conjures on demand.
+    - name: BAD a host the inventory does not have
       ansible.builtin.debug:
         msg: "{{ hostvars['web0143'].infiniband_ip }}"

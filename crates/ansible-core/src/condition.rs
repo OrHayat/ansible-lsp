@@ -10,6 +10,7 @@
 //! resolving anything. That matters — Ansible has 22 variable precedence levels.
 
 use crate::install::Version;
+use crate::parse::Node;
 
 /// Jinja tests and filters that are not variable references.
 const NOT_VARIABLES: &[&str] = &[
@@ -528,6 +529,60 @@ pub fn hostvars_host_keys(text: &str) -> Vec<(String, usize, usize)> {
         from = end;
     }
     out
+}
+
+/// The [`hostvars_host_keys`] that sit in a **value** the parser kept, dropping any that
+/// live in a `#` comment.
+///
+/// A separate entry point rather than a fix to the scan, because the two callers are asking
+/// different questions. Painting a clickable link over a host name in a comment is helpful
+/// and costs nothing if it is wrong; reporting an ERROR on one is a false positive on a line
+/// that never runs. Measured need, not a hypothetical: of the 23 literal `hostvars['...']`
+/// uses in the reference corpus, 2 are inside comments — both in a role's prose explaining an
+/// inventory schema, neither a use at all.
+///
+/// Containment in a scalar's span is the test, rather than hunting `#` in the text: the key
+/// almost always sits inside a quoted Jinja string, where a textual comment scan has to
+/// re-decide what YAML already decided.
+pub fn hostvars_host_uses(text: &str, nodes: &[Node]) -> Vec<(String, usize, usize)> {
+    fn covers(node: &Node, at: usize) -> bool {
+        match node {
+            Node::Scalar { span, .. } => at >= span.start && at < span.end,
+            Node::Sequence { items, .. } => items.iter().any(|i| covers(i, at)),
+            Node::Mapping { entries, .. } => {
+                entries.iter().any(|(k, v)| covers(k, at) || covers(v, at))
+            }
+            _ => false,
+        }
+    }
+    hostvars_host_keys(text)
+        .into_iter()
+        .filter(|(_, s, e)| is_only_literal(text, *s, *e))
+        .filter(|(_, s, _)| nodes.iter().any(|n| covers(n, *s)))
+        .collect()
+}
+
+/// Is the subscript *nothing but* this quoted string — `hostvars['web01']` and not
+/// `hostvars[groups['web'][0]]`?
+///
+/// [`hostvars_host_keys`] takes the first quoted run inside the balanced brackets, which for
+/// a nested lookup is the inner expression's argument. That is a **group** name, and a group
+/// is not a host, so treating it as one reports a typo in correct code. Measured against the
+/// reference corpus: 20 of the 21 hits this rule first produced were this exact shape,
+/// `hostvars[groups['lustre_servers'][0]]` — the idiomatic "first host of a group", every one
+/// of them working code.
+///
+/// Checked here rather than in the scan for the same reason the comment filter is: the
+/// link-painting caller wants whatever host name it can find, and an ERROR needs the name to
+/// be the whole of what was written.
+fn is_only_literal(text: &str, s: usize, e: usize) -> bool {
+    let (Some(before), Some(after)) = (text.get(..s.saturating_sub(1)), text.get(e + 1..)) else {
+        return false;
+    };
+    // `hostvars[` and not merely `[`: the inner bracket of `hostvars[groups['x'][0]]` ends
+    // with one too, which is how the first version of this passed every case it existed to
+    // reject.
+    before.trim_end().ends_with("hostvars[") && after.trim_start().starts_with(']')
 }
 
 /// One byte past the balanced `[...]` beginning at or after `at`, skipping string

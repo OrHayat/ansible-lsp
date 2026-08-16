@@ -1208,6 +1208,68 @@ pub fn declined_inventories(path: &Path, cache: &ScanCache) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Every host the resolved inventories declare, or `None` when the list is **unknowable**.
+///
+/// The `None` is the whole design. A caller asking "is there a host called `web0143`?" gets
+/// three answers, not two — yes, no, and *I cannot tell* — and only the middle one may become
+/// a diagnostic. Collapsing the third into "no" is how a tool comes to report a confident
+/// false error in precisely the workspaces it understands least.
+///
+/// Unknowable means: no inventory resolved at all (the run's `-i` is invisible to an editor),
+/// a source we could not read, or any **dynamic** source — a plugin config or a script, which
+/// we detect and refuse to execute, so its hosts exist only in an account we are not calling.
+/// That last case is what [`declined_inventories`] was built to keep separable from an
+/// inventory that was read and simply has no such host.
+pub fn inventory_hosts(path: &Path, cache: &ScanCache) -> Option<HashSet<String>> {
+    let ctx = cache.context(path);
+    let sources = crate::inventory::sources(&ctx.config, cache);
+    if sources.is_empty() {
+        return None;
+    }
+    let mut out = HashSet::new();
+    for src in sources {
+        let s = cache.source(&src)?;
+        let nodes: &[Node] = s.nodes.as_deref().map_or(&[], |n| n.as_slice());
+        match crate::inventory::classify(&src, &s.text, nodes, cache) {
+            crate::inventory::Kind::Dynamic => return None,
+            crate::inventory::Kind::Toml => out.extend(crate::inventory::toml_hosts(&s.text)),
+            crate::inventory::Kind::Yaml => out.extend(crate::inventory::yaml_hosts(nodes)),
+            crate::inventory::Kind::Ini => out.extend(crate::inventory::ini_hosts(&s.text)),
+        }
+    }
+    // An empty list is not a finding. It means every source parsed to nothing — a file
+    // ansible discards outright (box 6's unknown section tag) reads exactly like an inventory
+    // with no hosts, and neither is standing to call a name a typo.
+    (!out.is_empty()).then_some(out)
+}
+
+/// Does this file call `add_host`? It invents hosts at runtime that no inventory lists, so
+/// anything answering "is there such a host" has to give up in its presence.
+///
+/// Structural rather than a text search, which is what this started as. A text search reads
+/// the word in a *comment* — including a comment explaining this very rule, which is how the
+/// demo file silenced itself — and an escape that fires on prose disables the rule wherever
+/// it is discussed.
+///
+/// Deliberately generous within that: any key or value whose last dotted segment is
+/// `add_host` counts, so the collection-qualified spelling and `action: add_host` are both
+/// caught. Over-matching costs a missed report; under-matching costs a false error.
+pub fn calls_add_host(nodes: &[Node]) -> bool {
+    fn is_name(n: &Node) -> bool {
+        n.as_str().is_some_and(|s| s.rsplit('.').next() == Some("add_host"))
+    }
+    fn walk(n: &Node) -> bool {
+        match n {
+            Node::Mapping { entries, .. } => {
+                entries.iter().any(|(k, v)| is_name(k) || is_name(v) || walk(v))
+            }
+            Node::Sequence { items, .. } => items.iter().any(walk),
+            _ => false,
+        }
+    }
+    nodes.iter().any(walk)
+}
+
 /// The key ansible reads as a merge-order control rather than storing as a variable.
 const GROUP_PRIORITY: &str = "ansible_group_priority";
 

@@ -340,6 +340,159 @@ fn collect_toml(table: &dyn toml_edit::TableLike, text: &str, out: &mut Vec<Inve
     }
 }
 
+/// Expand an inventory host pattern into the names ansible actually creates.
+///
+/// `web[01:05]` is five hosts, not one, and a rule that reports "no such host" without
+/// expanding would flag `web03` — a false ERROR on a correct file, which is the one outcome
+/// worth more than the feature. Measured on 2.21.2 via `ansible-inventory --list`:
+///
+/// | written              | hosts                                    |
+/// | -------------------- | ---------------------------------------- |
+/// | `web[01:05]`         | `web01`…`web05` — inclusive, padding kept |
+/// | `db[1:3]`            | `db1`, `db2`, `db3` — no padding asked, none given |
+/// | `rack[a:c]`          | `racka`, `rackb`, `rackc`                |
+/// | `s[00:10:5]`         | `s00`, `s05`, `s10` — step, still inclusive |
+/// | `web[01:02].example.com` | suffix survives                      |
+/// | `r[1:2]-n[a:b]`      | all four — several ranges are a cartesian product |
+///
+/// The last row is why this recurses rather than expanding one bracket. Both readers need
+/// it: measured, a YAML inventory expands `node[01:03]:` exactly the same way, which is not
+/// something the ini plugin's ownership of the syntax would have suggested.
+///
+/// A bracket that does not parse as a range is left alone and the pattern returns as one
+/// literal name — ansible fails such a file outright, so there is no host list to be wrong
+/// about.
+pub fn expand_host_pattern(pattern: &str) -> Vec<String> {
+    let Some(open) = pattern.find('[') else {
+        return vec![pattern.to_string()];
+    };
+    let Some(close) = pattern[open..].find(']').map(|i| open + i) else {
+        return vec![pattern.to_string()];
+    };
+    let (prefix, rest) = (&pattern[..open], &pattern[close + 1..]);
+    let Some(values) = range_values(&pattern[open + 1..close]) else {
+        return vec![pattern.to_string()];
+    };
+    // Recurse on the tail so a second bracket multiplies out rather than surviving as text.
+    values
+        .into_iter()
+        .flat_map(|v| {
+            expand_host_pattern(rest).into_iter().map(move |tail| format!("{prefix}{v}{tail}"))
+        })
+        .collect()
+}
+
+/// The values one `start:end` or `start:end:step` produces, or `None` if it is not a range.
+fn range_values(inner: &str) -> Option<Vec<String>> {
+    let mut parts = inner.split(':');
+    let (start, end) = (parts.next()?, parts.next()?);
+    let step: usize = match parts.next() {
+        Some(s) => s.parse().ok().filter(|n| *n > 0)?,
+        None => 1,
+    };
+    if parts.next().is_some() || start.is_empty() || end.is_empty() {
+        return None;
+    }
+    // Alphabetic: single characters only, which is the whole of what ansible accepts here.
+    if let (Ok(a), Ok(b)) = (start.parse::<char>(), end.parse::<char>()) {
+        if a.is_ascii_alphabetic() && b.is_ascii_alphabetic() {
+            return Some(
+                (a as u8..=b as u8).step_by(step).map(|c| (c as char).to_string()).collect(),
+            );
+        }
+    }
+    let (a, b) = (start.parse::<usize>().ok()?, end.parse::<usize>().ok()?);
+    // `01` asks for two digits; `1` asks for none. The width comes from how the *start* was
+    // written, which is what keeps `web[01:05]` from expanding to `web1`.
+    let width = if start.starts_with('0') { start.len() } else { 1 };
+    Some((a..=b).step_by(step).map(|n| format!("{n:0width$}")).collect())
+}
+
+/// Every host name a YAML inventory declares, patterns expanded.
+///
+/// Only `hosts:` keys count. A group name is not a host — measured, `hostvars['web']` for a
+/// *group* called `web` fails exactly like an unknown host — so `children:` is recursed for
+/// the hosts inside it and contributes none of its own names.
+pub fn yaml_hosts(nodes: &[Node]) -> Vec<String> {
+    fn group(node: &Node, out: &mut Vec<String>) {
+        for (k, v) in node.entries() {
+            match k.as_str() {
+                Some("hosts") => {
+                    for (h, _) in v.entries() {
+                        if let Some(name) = h.as_str() {
+                            out.extend(expand_host_pattern(name));
+                        }
+                    }
+                }
+                Some("children") => {
+                    for (_, gv) in v.entries() {
+                        group(gv, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for n in nodes {
+        for (_, g) in n.entries() {
+            group(g, &mut out);
+        }
+    }
+    out
+}
+
+/// Every host name an INI inventory declares: the first token of each host line, in the
+/// implicit ungrouped section and in every `[group]` section, patterns expanded.
+///
+/// `[group:vars]` holds variables and `[group:children]` holds group names, so neither
+/// contributes a host — the same three-state section walk [`ini_vars`] uses, for the same
+/// reason it needed three states rather than a bool.
+pub fn ini_hosts(text: &str) -> Vec<String> {
+    // An unknown section tag discards the whole file for ansible, so it must define no hosts
+    // either — the host list and the variable list have to agree about which files are real.
+    if text.lines().any(|l| unknown_section_type(l.trim())) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut hosts_section = true;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[').and_then(|h| h.split(']').next()) {
+            hosts_section = !header.ends_with(":vars") && !header.ends_with(":children");
+            continue;
+        }
+        if !hosts_section {
+            continue;
+        }
+        // The first token is the host; the rest are `k=v` pairs that `ini_vars` owns.
+        if let Some((s, e)) = host_tokens(trimmed, 0).into_iter().next() {
+            out.extend(expand_host_pattern(&trimmed[s..e]));
+        }
+    }
+    out
+}
+
+/// Every host name a TOML inventory declares — the keys of each `[group.hosts]` table.
+pub fn toml_hosts(text: &str) -> Vec<String> {
+    let Ok(doc) = toml_edit::Document::parse(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (_group, item) in doc.as_table().iter() {
+        let Some(group) = item.as_table_like() else { continue };
+        if let Some(hosts) = group.get("hosts").and_then(|i| i.as_table_like()) {
+            for (host, _) in hosts.iter() {
+                out.extend(expand_host_pattern(host));
+            }
+        }
+    }
+    out
+}
+
 /// Every variable a YAML inventory defines — group vars under `vars:`, host vars under each
 /// entry of `hosts:`, recursing through `children:`.
 ///
@@ -803,6 +956,72 @@ mod tests {
         assert_eq!(g.span.slice(src), "FROM_JSON_GROUP");
         // And the picker offers it, which is a different predicate from parsing it.
         assert!(looks_like_inventory(Path::new("inv.json"), src, &nodes));
+    }
+
+    /// Every row of the range table on [`expand_host_pattern`], measured with
+    /// `ansible-inventory --list` before any of this was written.
+    ///
+    /// This is the piece a "no such host" rule cannot get wrong: under-expanding invents a
+    /// missing host out of a correct file, which is a false ERROR on working code.
+    #[test]
+    fn host_patterns_expand_the_way_ansible_expands_them() {
+        let e = expand_host_pattern;
+        assert_eq!(e("web[01:05]"), ["web01", "web02", "web03", "web04", "web05"]);
+        assert_eq!(e("db[1:3]"), ["db1", "db2", "db3"], "padding not asked for, none given");
+        assert_eq!(e("rack[a:c]"), ["racka", "rackb", "rackc"]);
+        assert_eq!(e("s[00:10:5]"), ["s00", "s05", "s10"], "step, both ends inclusive");
+        assert_eq!(e("web[01:02].example.com"), ["web01.example.com", "web02.example.com"]);
+        assert_eq!(e("r[1:2]-n[a:b]"), ["r1-na", "r1-nb", "r2-na", "r2-nb"], "cartesian");
+        assert_eq!(e("solo"), ["solo"], "a plain name is one host");
+
+        // A bracket that is not a range stays literal rather than expanding to nothing —
+        // losing the name would be the direction that invents a missing host.
+        assert_eq!(e("web[01"), ["web[01"]);
+        assert_eq!(e("web[]"), ["web[]"]);
+        assert_eq!(e("web[a:b:c]"), ["web[a:b:c]"], "unparseable step");
+    }
+
+    /// The host lists each reader returns, with the negatives that matter: a group name is
+    /// not a host, and neither is anything in a `:vars` or `:children` section.
+    ///
+    /// Measured control for the group half — `'num' in hostvars` is **False** for a group
+    /// called `num`, and `hostvars['num']` fails with the same bare message an unknown host
+    /// gives. So a reader that returned group names would silence the rule on real typos.
+    #[test]
+    fn the_readers_return_hosts_and_not_group_names() {
+        let ini = concat!(
+            "ungrouped_host\n",
+            "[web]\n",
+            "web[01:02] host_line_ip=10.0.0.1\n",
+            "[web:vars]\n",
+            "ntp=1\n",
+            "[web:children]\n",
+            "leafs\n",
+        );
+        assert_eq!(ini_hosts(ini), ["ungrouped_host", "web01", "web02"]);
+
+        let yaml = concat!(
+            "all:\n",
+            "  children:\n",
+            "    web:\n",
+            "      hosts:\n",
+            "        node[01:03]:\n",
+            "        plain1:\n",
+            "      vars:\n",
+            "        ntp: 1\n",
+        );
+        let nodes = Document::new(yaml.to_string()).parse().unwrap();
+        assert_eq!(yaml_hosts(&nodes), ["node01", "node02", "node03", "plain1"]);
+
+        let toml = "[web.hosts.web01]\nip = \"1\"\n[web.vars]\nntp = 1\n";
+        assert_eq!(toml_hosts(toml), ["web01"]);
+
+        // The same file-wide rule `ini_vars` follows: an unknown section tag makes ansible
+        // discard the whole file, so it can contribute no hosts either. `:hosts` is *valid*
+        // and is the control — measured, `[web:hosts]` really does put `node1` in the
+        // inventory, so only the `:var` typo may empty the list.
+        assert!(ini_hosts("[web:var]\nnode1\n").is_empty(), "a typo'd tag must discard the file");
+        assert_eq!(ini_hosts("[web:hosts]\nnode1\n"), ["node1"], "`:hosts` is a real tag");
     }
 
     /// The measured shapes, from `ansible-inventory -i inv.toml --list`: a `[group.vars]`
