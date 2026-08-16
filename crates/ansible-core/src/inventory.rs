@@ -846,7 +846,6 @@ mod tests {
         assert!(!sniff(".hidden.ini", "[webservers]\nweb01\n"), "a dotfile");
     }
 
-    #[test]
     /// A `Cargo.toml` is not a host list, and the generic sniff said it was.
     ///
     /// Every TOML `[table]` satisfies "a line starting with `[` and ending with `]`", so the

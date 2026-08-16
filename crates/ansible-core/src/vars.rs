@@ -2355,6 +2355,83 @@ mod tests {
         }
     }
 
+    /// [`inventory_hosts`] directly, including the shapes the editor-level tests never reach:
+    /// a **directory** source expanded to several files, and two sources unioned.
+    ///
+    /// The `None` cases are the ones worth having a test each for. Every escape on the
+    /// `unknown-host` rule is one of them, so a change that quietly turned an unknowable list
+    /// into an empty one would convert all of them into false errors at once.
+    #[test]
+    fn inventory_hosts_unions_its_sources_and_admits_when_it_cannot_tell() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-hosts");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "dir/a.ini", "[web]\nweb[01:02]\n");
+        write(&d, "dir/b.ini", "[db]\ndb01\n");
+        write(&d, "solo.yml", "all:\n  hosts:\n    only1:\n");
+        write(&d, "dyn.yml", "plugin: amazon.aws.aws_ec2\nregions: [us-east-1]\n");
+        write(&d, "empty.ini", "# nothing here\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  tasks: []\n").unwrap();
+
+        let hosts = |sources: Vec<PathBuf>| {
+            inventory_hosts(&play, &ScanCache::default().with_inventory(sources))
+                .map(|h| {
+                    let mut v: Vec<String> = h.into_iter().collect();
+                    v.sort();
+                    v
+                })
+        };
+
+        // A directory is one source that expands to several files, and the hosts of each
+        // reach the same list — with the range expanded, which is the half a "no such host"
+        // rule cannot get wrong.
+        assert_eq!(hosts(vec![d.join("dir")]).unwrap(), ["db01", "web01", "web02"]);
+
+        // Two sources union rather than the last one winning.
+        assert_eq!(
+            hosts(vec![d.join("dir/b.ini"), d.join("solo.yml")]).unwrap(),
+            ["db01", "only1"]
+        );
+
+        // The three ways the answer is "I cannot tell", which must never read as "no hosts".
+        assert!(hosts(vec![]).is_none(), "nothing resolved");
+        assert!(hosts(vec![d.join("dyn.yml")]).is_none(), "a declined dynamic source");
+        assert!(hosts(vec![d.join("nope.ini")]).is_none(), "a source that is not there");
+        assert!(hosts(vec![d.join("empty.ini")]).is_none(), "parsed, but no host in it");
+
+        // One unknowable source poisons the whole list: the others cannot vouch for the
+        // hosts it would have contributed.
+        assert!(hosts(vec![d.join("dir/b.ini"), d.join("dyn.yml")]).is_none());
+    }
+
+    /// [`calls_add_host`] — the escape that keeps the host rule quiet where hosts appear at
+    /// runtime. The comment case is the reason it is structural: it began as a text search,
+    /// and the demo file that documents the rule silenced itself by naming it in prose.
+    #[test]
+    fn add_host_is_found_as_a_task_and_not_as_a_word() {
+        let calls = |src: &str| calls_add_host(&Document::new(src.to_string()).parse().unwrap());
+
+        assert!(calls("- hosts: all\n  tasks:\n    - add_host:\n        name: h\n"));
+        assert!(
+            calls("- hosts: all\n  tasks:\n    - ansible.builtin.add_host:\n        name: h\n"),
+            "the collection-qualified spelling is the same module"
+        );
+        assert!(
+            calls("- hosts: all\n  tasks:\n    - action: add_host\n"),
+            "named as a value rather than a key"
+        );
+        assert!(!calls("- hosts: all\n  tasks: []\n"), "control: no add_host anywhere");
+        assert!(
+            !calls("# explains add_host in prose\n- hosts: all\n  tasks: []\n"),
+            "a comment naming the module is not a call"
+        );
+        assert!(
+            !calls("- hosts: all\n  vars:\n    note: this mentions add_host\n"),
+            "a string that merely contains the word is not a call"
+        );
+    }
+
     /// `ansible_group_priority` is reported exactly where it is inert, and nowhere else.
     ///
     /// The inventory rows are the controls, and they are the whole point: measured on 2.21.2,

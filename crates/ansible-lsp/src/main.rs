@@ -678,9 +678,13 @@ impl Backend {
     /// - any `add_host` in the file. It invents hosts at runtime that appear in no inventory,
     ///   and the check is deliberately the blunt textual one: an escape that over-matches
     ///   only ever costs a missed report, while one that under-matches costs a false error.
-    /// - `localhost`, always. Measured: `hostvars['localhost']` resolves with no inventory
-    ///   entry at all, because membership auto-creates the implicit host — while
-    ///   `hostvars | list` omits it, so the host list can never contain it.
+    /// - the implicit localhost, under all three of its spellings — `localhost`,
+    ///   `127.0.0.1`, `::1` ([`condition::IMPLICIT_HOSTS`]). Measured: each resolves with no
+    ///   inventory entry at all, because membership auto-creates the host, while
+    ///   `hostvars | list` omits it — so the host list can never contain them.
+    /// - an expression that swallows the undefined. `hostvars['nope'].x` is fatal;
+    ///   `hostvars['nope'].x | default('z')` prints `z`, measured. The message here says the
+    ///   read *fails*, and that has to remain true of every case it fires on.
     /// - a templated key. `hostvars[some_var]` names no host we can know, and the scan only
     ///   matches quoted literals, so this falls out rather than being special-cased.
     ///
@@ -694,7 +698,9 @@ impl Backend {
         };
         condition::hostvars_host_uses(&a.doc.text, &a.nodes)
             .into_iter()
-            .filter(|(name, _, _)| name != "localhost" && !hosts.contains(name))
+            .filter(|(name, _, _)| {
+                !condition::IMPLICIT_HOSTS.contains(&name.as_str()) && !hosts.contains(name)
+            })
             .filter(|(_, s, _)| !a.doc.is_suppressed(*s, "unknown-host"))
             .map(|(name, s, e)| {
                 let (sl, sc) = a.doc.byte_to_lsp(s);
@@ -3640,8 +3646,22 @@ mod tests {
         let ok = read.replace("nope", "web01");
         assert_eq!(fires(&ok, ini()), 0, "a host the inventory declares");
 
-        // localhost is conjured by hostvars on membership, so it is never absent.
-        assert_eq!(fires(&read.replace("nope", "localhost"), ini()), 0, "localhost");
+        // The implicit localhost, all three spellings. Measured against an inventory holding
+        // only `web01`: each is a member and each resolves. Shipping with just `localhost`
+        // escaped left the other two as false errors on working code.
+        for implicit in ["localhost", "127.0.0.1", "::1"] {
+            assert_eq!(fires(&read.replace("nope", implicit), ini()), 0, "implicit {implicit}");
+        }
+
+        // An expression that swallows the undefined. `hostvars['nope'].x` is fatal, but
+        // `… | default('z')` prints `z` — so the message's "fails at runtime" would be false.
+        let defaulted = read.replace(".x }}", ".x | default('z') }}");
+        assert_eq!(fires(&defaulted, ini()), 0, "| default() rescues the read");
+        let tested = read.replace(".x }}", ".x if hostvars['nope'] is defined else '' }}");
+        assert_eq!(fires(&tested, ini()), 0, "is defined rescues the read");
+        // ...but a default belonging to a *different* expression rescues nothing.
+        let other = read.replace(".x }}\"", ".x }} {{ y | default(1) }}\"");
+        assert_eq!(fires(&other, ini()), 1, "a default in a neighbouring expression");
 
         // add_host invents hosts at runtime; one anywhere in the file silences the file.
         let added = format!("{read}    - add_host:\n        name: nope\n");

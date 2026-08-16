@@ -558,8 +558,39 @@ pub fn hostvars_host_uses(text: &str, nodes: &[Node]) -> Vec<(String, usize, usi
     hostvars_host_keys(text)
         .into_iter()
         .filter(|(_, s, e)| is_only_literal(text, *s, *e))
+        .filter(|(_, s, e)| !expression_swallows_undefined(text, *s, *e))
         .filter(|(_, s, _)| nodes.iter().any(|n| covers(n, *s)))
         .collect()
+}
+
+/// The names `hostvars` answers for whether or not an inventory lists them.
+///
+/// Ansible's implicit localhost is reachable under all three spellings — measured on 2.21.2
+/// against an inventory containing only `web01`, every one of these is a member *and*
+/// resolves (`ansible_connection` comes back `local`). Escaping only `localhost`, which is
+/// what this rule shipped with first, leaves the other two as false errors.
+pub const IMPLICIT_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// Does the `{{ … }}` expression around this span swallow an undefined value?
+///
+/// `hostvars['web0143'].x` is fatal; `hostvars['web0143'].x | default('nope')` prints
+/// `nope` — measured in the same run. So the subscript alone does not decide whether
+/// anything fails, and a rule that says "this fails at runtime" has to look at the
+/// expression it sits in.
+///
+/// The enclosing `{{ … }}` is the unit, not the whole scalar: in
+/// `"{{ hostvars['typo'].x }} {{ y | default(1) }}"` the default belongs to the second
+/// expression and rescues nothing. Within that unit the test is the blunt substring one
+/// [`is_guarded`] already uses for `when:` clauses, and blunt in the safe direction — a
+/// spurious match costs a missed report, never a false error.
+fn expression_swallows_undefined(text: &str, s: usize, e: usize) -> bool {
+    let open = text[..s].rfind("{{").or_else(|| text[..s].rfind("{%"));
+    let close = text[e..].find("}}").or_else(|| text[e..].find("%}")).map(|i| e + i);
+    let (Some(open), Some(close)) = (open, close) else {
+        return false;
+    };
+    let expr = &text[open..close];
+    expr.contains("default(") || expr.contains(" is defined") || expr.contains(" is not defined")
 }
 
 /// Is the subscript *nothing but* this quoted string — `hostvars['web01']` and not
