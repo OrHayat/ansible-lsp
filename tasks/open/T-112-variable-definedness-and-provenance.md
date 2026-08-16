@@ -51,7 +51,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [ ] T-059 — Call sites must satisfy the callee's required vars (`var-unpassed`)
 - [ ] T-060 — `suspicious-var`: guarded, undefined, and one edit from a real name
 - [ ] T-061 — `undeclared-var`: surface the playbook's required `-e` inputs
-- [ ] T-062 — Index ini inventories and extension-less group_vars/host_vars
+- [x] T-062 — Index ini inventories and extension-less group_vars/host_vars
 - [ ] T-065 — `var-undefined`: raise the bar to workspace-wide absence (the 656 fix)
 - [x] T-066 — Hover provenance breadcrumb for non-obvious definition routes
 - [ ] T-071 — `unconstrained-path-var`: surface the value set a templated path implies

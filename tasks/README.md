@@ -83,7 +83,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
 | T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
-| T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | T-062 |
+| T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | ~~T-062~~ |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
@@ -99,7 +99,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
-| T-062 | [Index ini inventories and extension-less `group_vars`](open/T-062-inventory-var-sources.md) | M    | —          |
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](open/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | M    | —          |
 
 ### P2 — coverage and usability
@@ -120,12 +119,12 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-042 | [Resolver gaps: collections, `*_from`](open/T-042-resolver-gaps.md) | S | — |
 | T-046 | [Harden the module/args split](open/T-046-module-args-split.md) | M | T-044 |
 | T-057 | [Module `DOCUMENTATION`/`RETURN` schema](open/T-057-module-doc-schema.md) | L | T-046 |
-| T-061 | [`undeclared-var`: the playbook's required `-e` inputs](open/T-061-undeclared-var-contract.md) | S | T-062 |
+| T-061 | [`undeclared-var`: the playbook's required `-e` inputs](open/T-061-undeclared-var-contract.md) | S | ~~T-062~~ |
 | T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | ~~T-076~~ |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
 | T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](open/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | S    | —    |
-| T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | T-062 |
+| T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | ~~T-062~~ |
 | T-109 | [Keyword value enums](open/T-109-keyword-value-enums.md) | S    | ~~T-107~~ |
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
 | T-113 | **epic** · [Workspace graph: the reverse index and what it unblocks](open/T-113-workspace-graph-the-reverse-index-and-what-it-unblocks.md) | L    | —    |
@@ -157,7 +156,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
-| T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | T-062 |
+| T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 
@@ -286,6 +285,7 @@ T-021 is now unblocked on that side.
 | T-169 | [A template inside a mapping key is invisible to the var walk](closed/T-169-a-template-inside-a-mapping-key-is-invisible-to-the-var-walk.md) | done     |
 | T-171 | [A hostvars host key is not a jump target](closed/T-171-a-hostvars-host-key-is-not-a-jump-target.md) | done     |
 | T-104 | [hostvars cannot see play, role or task vars](closed/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | done     |
+| T-062 | [Index ini inventories and extension-less `group_vars`](closed/T-062-inventory-var-sources.md) | done     |
 
 ## Settled — don't re-derive these
 
