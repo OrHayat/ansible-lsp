@@ -740,7 +740,11 @@ mod tests {
             .load();
         sources(&cfg, &fs)
             .iter()
-            .map(|p| p.strip_prefix("/p").unwrap_or(p).to_string_lossy().into_owned())
+            .map(|p| {
+                // `sources` joins with the host separator, so on Windows the same walk comes
+                // back `inv\a.ini`. Normalize here, not in each assertion.
+                p.strip_prefix("/p").unwrap_or(p).to_string_lossy().replace('\\', "/")
+            })
             .collect()
     }
 

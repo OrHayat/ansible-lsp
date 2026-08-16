@@ -1185,7 +1185,13 @@ impl Backend {
             &[".git", "node_modules", "target", "__pycache__", ".venv", "venv", "dist", "build"];
         const BUDGET: usize = 4000;
 
-        let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).to_string_lossy().into_owned();
+        // Forward slashes, not the host separator: these strings are saved into
+        // `ansibleLsp.inventory` — which may be the committed, shared setting — shown as
+        // `-i <path>`, and split on `/` by the picker to get a file's base name. A Windows
+        // `inventories\prod` breaks all three, and reads back fine as `/` on Windows.
+        let rel = |p: &Path| {
+            p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\', "/")
+        };
         let mut files: Vec<PathBuf> = Vec::new();
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut looked = 0usize;
