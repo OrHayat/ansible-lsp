@@ -14,6 +14,17 @@ all:
     webservers:
       vars:
         app_tier: lab
+        # NO HINT: this is where `ansible_group_priority` actually works. An inventory source
+        # is *parsed*, and the parser consumes this key as merge order instead of storing it —
+        # measured, it moves the winner between two same-depth groups, and it never appears as
+        # a variable afterwards. The same key in group_vars/ is inert: see
+        # inventories/prod/group_vars/all.yml.
+        #
+        # Our silence here is the top-level rule, not the directory one: a YAML inventory can
+        # only carry this key nested under a group, and we read variables off a vars file's top
+        # level. Right answer, and not for the reason the pairing suggests — so the directory
+        # half is pinned by a synthetic case in the test instead.
+        ansible_group_priority: 10
       hosts:
         web01:
           host_line_ip: 192.168.1.11

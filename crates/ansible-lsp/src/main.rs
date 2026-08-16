@@ -597,6 +597,7 @@ impl Backend {
         diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
         if let Ok(path) = uri.to_file_path() {
             diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
+            diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
         }
         self.state.track(uri, &diagnostics);
         self.client
@@ -648,6 +649,41 @@ impl Backend {
                         d.key,
                         first_line + 1
                     ),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// `ansible_group_priority` in a `group_vars/`/`host_vars/` file, which is a no-op there.
+    ///
+    /// A WARNING rather than an ERROR: nothing fails, the run just merges in an order the
+    /// author did not ask for. Suppressible with `# noqa: group-priority-ignored`.
+    ///
+    /// This is the rare rule with no visible symptom to point at — the key is still there in
+    /// `hostvars` afterwards, which is precisely what makes it read as accepted. The
+    /// measurement, including the controls where the key *does* work, is on
+    /// [`vars::ignored_group_priority`].
+    fn group_priority_diagnostics(a: &Analysis, path: &Path) -> Vec<Diagnostic> {
+        vars::ignored_group_priority(path, &a.nodes)
+            .into_iter()
+            .filter(|s| !a.doc.is_suppressed(s.start, "group-priority-ignored"))
+            .map(|s| {
+                let (sl, sc) = a.doc.byte_to_lsp(s.start);
+                let (el, ec) = a.doc.byte_to_lsp(s.end);
+                Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("group-priority-ignored".into())),
+                    message: "`ansible_group_priority` does nothing in a `group_vars`/\
+                              `host_vars` file — it is consumed while an inventory *source* is \
+                              parsed, and these files are merged afterwards by a vars plugin \
+                              that bypasses it. It survives here as an ordinary variable, so \
+                              it looks accepted. To change merge order, set it in the \
+                              inventory itself: `[<group>:vars]`, or the group's `vars:` in a \
+                              YAML inventory."
+                        .into(),
                     ..Default::default()
                 }
             })
@@ -3474,6 +3510,76 @@ mod tests {
                 .filter(|d| {
                     matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-placement")
                 })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-062 box 7, both halves, as the demo labels them.
+    ///
+    /// `inventories/prod/group_vars/all.yml` is marked WARN and must fire; `inventory-lab.yml`
+    /// is marked NO HINT and must not.
+    ///
+    /// The second half is quiet because the key is nested under a group's `vars:`, which is
+    /// the only place a YAML inventory can carry it — not because the file is an inventory.
+    /// The directory rule is not what saves it, so the synthetic case below carries that: a
+    /// flat top-level key outside a vars directory, which nothing but the path excludes.
+    #[test]
+    fn the_demo_flags_group_priority_only_where_it_is_inert() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let fired = |rel: &str| {
+            let path = demo.join(rel);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let a = super::Backend::analyze_text(text, &path).unwrap();
+            super::Backend::group_priority_diagnostics(&a, &path)
+        };
+
+        let warn = fired("inventories/prod/group_vars/all.yml");
+        assert_eq!(warn.len(), 1, "the WARN row did not fire");
+        assert_eq!(warn[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(
+            warn[0].code,
+            Some(NumberOrString::String("group-priority-ignored".into()))
+        );
+        assert!(warn[0].message.contains("[<group>:vars]"), "no working spelling offered");
+
+        assert!(fired("inventory-lab.yml").is_empty(), "flagged a YAML inventory, where it works");
+
+        // The directory half, which the demo pair does not exercise. Same flat text as the
+        // WARN row, one directory over.
+        let flat = "ansible_group_priority: 10\n".to_string();
+        let outside = std::path::Path::new("/p/vars/common.yml");
+        let a = super::Backend::analyze_text(flat, outside).unwrap();
+        assert!(super::Backend::group_priority_diagnostics(&a, outside).is_empty());
+    }
+
+    /// `# noqa` on the key, since a user who knows it is dead may still want it recorded.
+    #[test]
+    fn group_priority_is_suppressible() {
+        let path = std::path::Path::new("/p/group_vars/all.yml");
+        let text = "ansible_group_priority: 10 # noqa: group-priority-ignored\n".to_string();
+        let a = super::Backend::analyze_text(text, path).unwrap();
+        assert!(super::Backend::group_priority_diagnostics(&a, path).is_empty());
+    }
+
+    /// The false-positive gate. `ansible_group_priority` is a real key people write, and the
+    /// demo carries `group_vars`/`host_vars` trees for other rules — this rule must not start
+    /// firing in any of them.
+    #[test]
+    fn every_other_demo_file_is_free_of_group_priority_diagnostics() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.ends_with("inventories/prod/group_vars/all.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::group_priority_diagnostics(&a, &path)
+                .into_iter()
                 .map(|d| d.message)
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());

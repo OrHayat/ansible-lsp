@@ -4,3 +4,13 @@
 # directory names a directory source steps over (`host_vars` and `vars_plugins` are the
 # others).
 datacenter: prod-dc1
+
+# WARN: `ansible_group_priority` does nothing in a group_vars file. It is consumed while an
+# inventory source is parsed; these files are merged afterwards by a vars plugin that skips
+# that step. Measured on 2.21.2 with two same-depth groups: setting it here left the
+# alphabetically later group winning, while the same key in the inventory flipped it.
+#
+# Nothing about the run shows this. The key stays visible in hostvars, exactly like a
+# variable that was accepted — which is why the editor is the only place to catch it.
+# The working spelling is in inventory-lab.yml.
+ansible_group_priority: 10

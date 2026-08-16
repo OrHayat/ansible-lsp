@@ -118,18 +118,42 @@ ansible_group_priority: 10     # does nothing
 has no effect, while the same key in an inventory file does. Nothing warns, and the variable
 remains visible in `hostvars`, so it looks like it was accepted.
 
-**Reproduction.** Two same-depth groups defining the same variable, with
-`ansible_group_priority` in `group_vars/` intended to break the tie — the alphabetically later
-group wins regardless of the priority set.
+**Reproduction (measured, 2.21.2).** Two same-depth groups defining the same variable, with
+`ansible_group_priority: 10` intended to break the tie. The baseline settles it alphabetically;
+the inventory-file rows are the control, and they came out the other way, so the probe could
+report either answer:
+
+| `ansible_group_priority` set in   | merge winner           | visible as a variable |
+| --------------------------------- | ---------------------- | --------------------- |
+| nowhere (baseline)                | `zulu`                 | absent                |
+| ini inventory `[alpha:vars]`      | **`alpha`** — honoured | absent                |
+| yaml inventory `alpha:`'s `vars:` | **`alpha`** — honoured | absent                |
+| `group_vars/alpha.yml`            | `zulu` — **ignored**   | `10`                  |
+| `host_vars/node1.yml`             | `zulu` — **ignored**   | `10`                  |
+
+The last column is the trap and it is exactly inverted: where the key works it is consumed and
+never becomes a variable, and where it does nothing it survives as an ordinary one. So the only
+evidence a user can see — `{{ ansible_group_priority }}` resolving to `10` — is present
+precisely when the key had no effect.
 
 **Expected.** Either honour it wherever it is set, or warn that it is ignored outside an
 inventory source. Documentation
 (`docs/.../intro_inventory.rst`, "How variables are merged") does not mention the restriction.
 
 **Also note** it is not templated: `int(priority)` runs at parse time
-(`inventory/group.py:253-262`), so `ansible_group_priority: "{{ x }}"` raises `ValueError`
-rather than resolving. And `depth` dominates priority in the sort key, which surprises people
-who expect priority to be absolute.
+(`inventory/group.py:253-262`), so `ansible_group_priority={{ x }}` never resolves. Measured on
+2.21.2, it does not raise — `set_priority` catches the `ValueError` and warns, keeping the
+previous priority:
+
+```
+[WARNING]: Invalid priority value '{{ some_var }}' for group 'alpha'.Setting priority to
+default value: invalid literal for int() with base 10: '{{ some_var }}'
+```
+
+The run then proceeds at the default priority, exit 0. (An earlier reading of this file said
+the `ValueError` propagates; the `try`/`except` around it says otherwise and so does the run.)
+And `depth` dominates priority in the sort key, which surprises people who expect priority to
+be absolute.
 
 ---
 

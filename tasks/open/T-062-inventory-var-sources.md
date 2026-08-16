@@ -122,7 +122,16 @@ the opposite of role `defaults/`, where the file shadows the directory
       kept as the control). Scope note, measured: the *silent* fallback needs the lines to
       be INI-acceptable — a bare `key:` line fails the ini plugin too (warnings, still exit
       0); dossier updated to match.
-- [ ] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING
+- [x] `ansible_group_priority` in `group_vars/`/`host_vars/` is a WARNING —
+      `group-priority-ignored`, on the key span, suppressible. Measured on 2.21.2 with the
+      control the dossier lacked: the same key in an inventory source **does** move the merge
+      winner, so the rule is scoped to the vars-plugin directories and nothing else. The tell
+      is inverted — where it works it is consumed and never becomes a variable; where it is
+      inert it survives as an ordinary one, which is the only thing the user can see. Dossier
+      updated with the table, and with the templated case (warns and falls back at 2.21.2, it
+      does not raise as written). Zero hits on the corpus. Scoped deliberately: the key is
+      equally inert in `vars_files:`/play `vars:`, which this does **not** flag — that is a
+      wider claim than the box, and it is where people write it that matters.
 - [ ] `hostvars['name']` for a host no parsed inventory has is an ERROR naming the host —
       silent under a dynamic inventory, any `add_host`, or an unresolved `-i`, and never
       for `localhost`

@@ -1208,6 +1208,54 @@ pub fn declined_inventories(path: &Path, cache: &ScanCache) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The key ansible reads as a merge-order control rather than storing as a variable.
+const GROUP_PRIORITY: &str = "ansible_group_priority";
+
+/// Is this file loaded by the `host_group_vars` vars plugin rather than parsed as an
+/// inventory source — i.e. does it sit under a `group_vars/`/`host_vars/` directory?
+///
+/// Any depth, because the plugin reads a whole entity directory recursively — the same
+/// reason [`read_var_dir`] takes the entity from the first component and not the leaf.
+fn under_vars_plugin_dir(file: &Path) -> bool {
+    file.ancestors()
+        .skip(1)
+        .any(|a| matches!(a.file_name().and_then(|n| n.to_str()), Some("group_vars" | "host_vars")))
+}
+
+/// Every top-level `ansible_group_priority` in a `group_vars/`/`host_vars/` file, by the span
+/// of the **key** — the thing that does nothing. Empty for any other file.
+///
+/// Measured on 2.21.2, two same-depth groups defining one name, with a control that came out
+/// the other way. The winner is the alphabetically later group unless priority moves it:
+///
+/// | `ansible_group_priority: 10` set in | merge winner       | visible as a variable |
+/// | ----------------------------------- | ------------------ | --------------------- |
+/// | nowhere (baseline)                  | `zulu`             | absent                |
+/// | ini inventory `[alpha:vars]`        | **`alpha`** — honoured | absent            |
+/// | yaml inventory `alpha:`'s `vars:`   | **`alpha`** — honoured | absent            |
+/// | `group_vars/alpha.yml`              | `zulu` — **ignored**   | `10`              |
+/// | `host_vars/node1.yml`               | `zulu` — **ignored**   | `10`              |
+///
+/// The last column is why this needs saying at all: where the key works it is *consumed*
+/// (`Group.set_variable`, `inventory/group.py:216-217`) and never becomes a variable, and
+/// where it is inert it survives as an ordinary one — so the only visible evidence points
+/// the wrong way. Vars-plugin output is merged after inventory parsing and bypasses
+/// `set_variable` entirely (`inventory/manager.py:248-249`).
+///
+/// Top-level only: in a vars file every top-level key is a variable, and a nested one is
+/// just data that was never a candidate for the merge-order slot.
+pub fn ignored_group_priority(file: &Path, nodes: &[Node]) -> Vec<Span> {
+    if !under_vars_plugin_dir(file) {
+        return Vec::new();
+    }
+    nodes
+        .iter()
+        .flat_map(|n| n.entries())
+        .filter(|(k, _)| k.as_str() == Some(GROUP_PRIORITY))
+        .map(|(k, _)| k.span())
+        .collect()
+}
+
 /// Index one inventory source. INI and YAML shapes both go through
 /// [`crate::inventory`]; a dynamic one contributes nothing, because learning its hosts
 /// would mean executing a file out of the workspace. The skip is observable through
@@ -2243,6 +2291,52 @@ mod tests {
         for name in ["from_a_group", "from_a_host", "from_b_group"] {
             assert!(defs.iter().any(|x| x.name == name), "{name} missing: {:?}", names_of(&defs));
         }
+    }
+
+    /// `ansible_group_priority` is reported exactly where it is inert, and nowhere else.
+    ///
+    /// The inventory rows are the controls, and they are the whole point: measured on 2.21.2,
+    /// the same key in `[alpha:vars]` **does** move the merge winner, so a rule that fired on
+    /// every file would be wrong about the one place the key works. The table in
+    /// [`ignored_group_priority`] records both halves.
+    #[test]
+    fn group_priority_is_flagged_in_vars_files_and_not_in_an_inventory() {
+        let parse = |text: &str| Document::new(text.to_string()).parse().unwrap();
+        let key = "ansible_group_priority: 10\nwho: from_alpha\n";
+        let spans = |rel: &str, text: &str| {
+            ignored_group_priority(Path::new("/p").join(rel).as_path(), &parse(text))
+        };
+
+        // Inert: every shape the vars plugin loads.
+        assert_eq!(spans("group_vars/alpha.yml", key).len(), 1, "group_vars file");
+        assert_eq!(spans("host_vars/node1.yml", key).len(), 1, "host_vars file");
+        assert_eq!(spans("group_vars/alpha/main.yml", key).len(), 1, "entity directory");
+        assert_eq!(spans("group_vars/alpha", key).len(), 1, "extension-less");
+        assert_eq!(spans("inv/group_vars/alpha.yml", key).len(), 1, "inventory-adjacent");
+
+        // Honoured: an inventory source is parsed, not merged by the vars plugin. Flagging
+        // these would be a false positive on the only place the key does anything.
+        //
+        // These two are what the *directory* half rests on, and they can fail: the text is a
+        // flat top-level mapping, so nothing but the path keeps them quiet. Verified by
+        // removing the guard — both go red.
+        assert!(spans("hosts.ini", key).is_empty(), "ini inventory");
+        assert!(spans("play.yml", key).is_empty(), "an ordinary playbook");
+
+        // Nested is data, not a variable, so it was never a candidate for the merge slot.
+        assert!(spans("group_vars/alpha.yml", "outer:\n  ansible_group_priority: 10\n").is_empty());
+
+        // A YAML inventory is quiet for the *nesting* reason, not the path one — the key can
+        // only ever sit under a group's `vars:` there, so the top-level filter has already
+        // excluded it before the directory is consulted. Kept because it is the shape a user
+        // writes, but it proves the line above, not the two before it: removing the directory
+        // guard leaves this passing.
+        assert!(spans("inv.yml", "alpha:\n  vars:\n    ansible_group_priority: 10\n").is_empty());
+
+        // The span is the key, not the value — the key is what does nothing.
+        let text = key.to_string();
+        let got = spans("group_vars/alpha.yml", &text);
+        assert_eq!(&text[got[0].start..got[0].end], "ansible_group_priority");
     }
 
     /// An entity *directory* may carry an extension. `find_vars_files` matches the name at
