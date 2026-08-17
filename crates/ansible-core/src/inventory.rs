@@ -1204,9 +1204,9 @@ mod tests {
         let src = concat!(
             "all:\n",
             "  vars:\n",
-            "    lustre_version: 2.6\n",
+            "    app_version: 2.6\n",
             "  children:\n",
-            "    lustre_servers:\n",
+            "    app_servers:\n",
             "      hosts:\n",
             "        server1:\n",
             "          infiniband_ip: 192.168.100.4\n",
@@ -1215,10 +1215,10 @@ mod tests {
         );
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
         let got = yaml_vars(&nodes);
-        assert_eq!(names(&got), ["lustre_version", "infiniband_ip", "infiniband_ip"]);
+        assert_eq!(names(&got), ["app_version", "infiniband_ip", "infiniband_ip"]);
         assert_eq!(got[1].span.slice(src), "192.168.100.4");
         // Group and host names are structure, not variables.
-        assert!(!names(&got).contains(&"lustre_servers"));
+        assert!(!names(&got).contains(&"app_servers"));
         assert!(!names(&got).contains(&"server1"));
     }
 

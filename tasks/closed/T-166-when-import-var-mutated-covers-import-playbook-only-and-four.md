@@ -85,7 +85,7 @@ site.yml:9   import_role     reported
 site.yml:11  include_tasks   absent — correct, it is evaluated once
 ```
 
-Corpus: `~/app/ansible` reports **1**, the same `lustre-deploy-full.yml:247` the rule already
+Corpus: `~/app/ansible` reports **1**, the same `deploy-full.yml:247` the rule already
 found. The widening surfaced nothing new there and nothing false — worth recording as a
 measurement rather than as a clean bill, since the fixture proves the new rows do fire.
 

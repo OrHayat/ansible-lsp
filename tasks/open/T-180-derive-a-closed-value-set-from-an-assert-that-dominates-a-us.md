@@ -24,8 +24,8 @@ The corpus has this everywhere — 107 files carry an `assert`, and the constrai
 the ones a reader can use:
 
 ```
-- lustre_container_operation in ['create', 'destroy', 'query', 'set-attr', 'get-attr']
-- lustre_container_type in ['POSIX', 'HDF5', 'PYTHON']
+- container_operation in ['create', 'destroy', 'query', 'set-attr', 'get-attr']
+- container_type in ['POSIX', 'HDF5', 'PYTHON']
 - spdk_bdev_operation in ['expose', 'unexpose']
 - (unbind_nvmes | default('no')) in ['no', 'inventory', 'all']
 ```

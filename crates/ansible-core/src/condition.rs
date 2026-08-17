@@ -600,7 +600,7 @@ fn expression_swallows_undefined(text: &str, s: usize, e: usize) -> bool {
 /// a nested lookup is the inner expression's argument. That is a **group** name, and a group
 /// is not a host, so treating it as one reports a typo in correct code. Measured against the
 /// reference corpus: 20 of the 21 hits this rule first produced were this exact shape,
-/// `hostvars[groups['lustre_servers'][0]]` — the idiomatic "first host of a group", every one
+/// `hostvars[groups['app_servers'][0]]` — the idiomatic "first host of a group", every one
 /// of them working code.
 ///
 /// Checked here rather than in the scan for the same reason the comment filter is: the

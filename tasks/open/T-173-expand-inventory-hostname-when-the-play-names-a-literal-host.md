@@ -22,7 +22,7 @@ Corpus, counting `hosts:` values across ~320 plays:
 | ------------------------- | ----- | ------------------------------- |
 | `localhost`               | 109   | **yes** — literal single host   |
 | `server1`                 | 35    | **yes**                         |
-| `lustre_servers`            | 130   | no — a group, needs T-062       |
+| `app_servers`            | 130   | no — a group, needs T-062       |
 | `{{ ... }}` (various)     | ~30   | no — T-034                      |
 
 So roughly 45% of plays name a host that needs no inventory to resolve, and
@@ -34,7 +34,7 @@ Narrow: `hosts:` a single literal token that is not a group name we would have t
 Then `hostvars[inventory_hostname]` (and `hostvars[inventory_hostname]['x']`) resolves the
 same way T-171's literal key does, via `host_vars_file`.
 
-The hard part is knowing a bare token is a *host* and not a *group* — `lustre_servers` looks
+The hard part is knowing a bare token is a *host* and not a *group* — `app_servers` looks
 identical to `server1` in the playbook. Without inventory we cannot tell, so the honest
 signal is the filesystem: resolve only when `host_vars/<token>.yml` exists. A group whose
 name matches a `host_vars/` file would be a mis-jump, which is worth a check before landing.
