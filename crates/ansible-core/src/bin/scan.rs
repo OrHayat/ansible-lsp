@@ -42,6 +42,7 @@ fn main() {
     let mut missing: Vec<String> = Vec::new();
     let mut unresolved_roles: Vec<String> = Vec::new();
     let mut unparseable: Vec<String> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     let mut mutated: Vec<String> = Vec::new();
     let mut empty_glob: Vec<String> = Vec::new();
     let mut undefined_vars: Vec<String> = Vec::new();
@@ -55,7 +56,11 @@ fn main() {
     for path in &files {
         // Through the cache: one read *and* one parse per file, shared with the var walk
         // that will reach most of these files again.
+        // Say so. A file that is walked but never opened contributes nothing to any finding,
+        // so staying quiet here reports a clean tree for one whose broken references simply
+        // could not be looked at — the headline counted the file either way.
         let Some(src) = cache.source(path) else {
+            unreadable.push(path.strip_prefix(&root).unwrap_or(path).display().to_string());
             continue;
         };
         let doc = Document::new(src.text.to_string());
@@ -210,7 +215,12 @@ fn main() {
             None => println!("config: <no project root> -> {shown}  ({n} files)"),
         }
     }
-    println!("{} files, {} unparseable", files.len(), unparseable.len());
+    println!(
+        "{} files, {} unparseable, {} unreadable",
+        files.len(),
+        unparseable.len(),
+        unreadable.len()
+    );
     println!(
         "var-walk: {} edges -> {} files ({} uncached), {} reads, {} contexts, \
          {} ansible.cfg, {} defs\n",
@@ -224,6 +234,16 @@ fn main() {
     if !unparseable.is_empty() {
         println!("\nUNPARSEABLE ({}):", unparseable.len());
         for f in &unparseable {
+            println!("  {f}");
+        }
+    }
+
+    // Not part of the exit code, for the same reason UNPARSEABLE isn't: a permissions bit is
+    // not an Ansible fault, and a gate that goes red on one gets switched off. It is printed
+    // loudly instead, so "nothing found" is never confused with "nothing looked at".
+    if !unreadable.is_empty() {
+        println!("\nUNREADABLE ({}) — not analysed:", unreadable.len());
+        for f in &unreadable {
             println!("  {f}");
         }
     }

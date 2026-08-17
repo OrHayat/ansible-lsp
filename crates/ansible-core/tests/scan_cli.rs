@@ -324,15 +324,18 @@ fn noqa_silences_the_finding_it_names_and_not_its_neighbour() {
     assert!(!text.contains("hushed.yml"), "the annotated one is not:\n{text}");
 }
 
-/// A file the walk finds but cannot read is skipped whole, and is **not** an unparseable file.
+/// A file the walk finds but cannot read is **named**, and is not called unparseable.
 ///
-/// The distinction is the assertion: `unparseable` means "Ansible would choke on this too" and
-/// drives a report section, while a permissions failure says nothing about the YAML. The
-/// headline count and the config header disagree by exactly this file — the walk saw it, the
-/// analysis never did.
+/// Both halves are the bug this test was written for. The scan used to drop an unreadable file
+/// silently while still counting it in the headline, so a tree whose only broken reference sat
+/// in a file nobody could open reported a clean bill of health — see the second half below,
+/// which is the whole reason this section exists rather than just a skip.
+///
+/// `unparseable` stays a separate count: it means "Ansible would choke on this too", while a
+/// permissions failure says nothing at all about the YAML.
 #[cfg(unix)]
 #[test]
-fn an_unreadable_file_is_skipped_without_being_called_broken() {
+fn an_unreadable_file_is_named_rather_than_silently_dropped() {
     use std::os::unix::fs::PermissionsExt;
 
     let d = tree("ansible-lsp-scan-unreadable");
@@ -352,10 +355,48 @@ fn an_unreadable_file_is_skipped_without_being_called_broken() {
     let (ok, text) = scan(&d);
     let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
 
-    assert!(ok, "an unreadable file is not a missing reference:\n{text}");
-    assert!(text.contains("3 files, 0 unparseable"), "walked, not blamed:\n{text}");
-    assert!(text.contains("(2 files)"), "only two reached the analysis:\n{text}");
-    assert!(text.contains("import_tasks"), "and the rest of the tree still scanned:\n{text}");
+    assert!(ok, "an unreadable file is not itself a missing reference:\n{text}");
+    assert!(text.contains("3 files, 0 unparseable, 1 unreadable"), "counted apart:\n{text}");
+    assert!(text.contains("UNREADABLE"), "and given its own section:\n{text}");
+    assert!(text.contains("locked.yml"), "naming the file:\n{text}");
+    assert!(text.contains("import_tasks"), "the rest of the tree still scanned:\n{text}");
+}
+
+/// The bug itself: an unreadable file used to hide whatever was inside it, including a broken
+/// reference that fails the gate the moment the same file is readable.
+///
+/// One permissions bit apart, so the probe cannot pass by accident — the readable run must go
+/// red and name the missing include, and the unreadable run must still say out loud that it
+/// could not look. A green with no explanation is the failure this test exists to prevent.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_cannot_quietly_take_a_broken_reference_with_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let d = tree("ansible-lsp-scan-hidden");
+    let hides = d.join("hides.yml");
+    std::fs::write(
+        &hides,
+        "- hosts: all\n  tasks:\n    - ansible.builtin.import_tasks: tasks/gone.yml\n",
+    )
+    .unwrap();
+
+    let (ok, text) = scan(&d);
+    assert!(!ok, "readable, the missing include fails the gate:\n{text}");
+    assert!(text.contains("gone.yml"), "and is named:\n{text}");
+
+    std::fs::set_permissions(&hides, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&hides).is_ok() {
+        return; // running as root
+    }
+    let (_, text) = scan(&d);
+    let _ = std::fs::set_permissions(&hides, std::fs::Permissions::from_mode(0o644));
+
+    assert!(
+        text.contains("UNREADABLE") && text.contains("hides.yml"),
+        "unreadable, the scan must say it could not check the file rather than report \
+         nothing and exit clean:\n{text}"
+    );
 }
 
 /// The config header, in each of the three shapes it can take: a project root with an
