@@ -39,8 +39,8 @@ search never saw. So "must be one of http, ftp" is really "one of http, ftp, or 
 path-shaped value that happens to land on a file" — an under-approximation. One more
 independent reason this hint can never be a warning on its own.
 
-**Later, once a constraint is readable** (T-032 static `when:`, T-041 `choices:`) and the
-domain is **closed** with plain-name values, the glob is replaced by exact substitution of
+**Later, once a constraint is readable** (T-032 static `when:`, T-041 `choices:`, T-180 an
+`assert` that dominates the use) and the domain is **closed** with plain-name values, the glob is replaced by exact substitution of
 each allowed value, and a severity ladder falls out:
 
 - every value misses → the include fails for every permitted input. Equivalent to a

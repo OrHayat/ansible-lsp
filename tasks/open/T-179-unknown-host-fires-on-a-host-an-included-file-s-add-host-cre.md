@@ -82,6 +82,13 @@ If either appears anywhere in the reachable set, the set of created hosts is unk
 the rule must go silent for the file. Keeping it live on a partial set is precisely the
 under-matching that caused this bug: it would fire on a host a templated `add_host` created.
 
+"Unknowable" here means *not readable today*, not unknowable in principle — do not write the
+silence in as though the question were settled. A templated edge is often constrained a few
+lines earlier: `include_tasks: "{{ kind }}.yml"` under an `assert: that: kind in ['x','y']`
+has a closed domain and two readable targets. T-180 is that reader, and when it lands this
+rule should ask it before giving up. Until then the give-up is correct, just wider than it
+needs to be.
+
 So: walk the reachable set; if every edge resolved **and** every `add_host` name is literal,
 add those names and keep the rule live; otherwise silence. `vars::inventory_hosts` already
 returns `Option` for exactly this distinction (T-062) — unknowable is a third answer — so the
