@@ -690,14 +690,26 @@ impl Backend {
     ///
     /// Suppressible with `# noqa: unknown-host`.
     fn unknown_host_diagnostics(a: &Analysis, path: &Path, cache: &ScanCache) -> Vec<Diagnostic> {
-        if vars::calls_add_host(&a.nodes) {
+        // The candidate reads first, and bail when there are none. Both host sets below walk
+        // the include graph, and a file with no `hostvars['literal']` in it cannot produce a
+        // diagnostic however they come out — so computing them first made this rule cost
+        // **4.4s** across the 759-file corpus against 140ms for the whole of the rest of the
+        // diagnostics pass (T-179's cost box, T-131). Nearly every file takes the early exit.
+        let uses = condition::hostvars_host_uses(&a.doc.text, &a.nodes);
+        if uses.is_empty() {
             return Vec::new();
         }
-        let Some(hosts) = vars::inventory_hosts(path, cache) else {
+        // Both sets or nothing. Either being unknowable means a host may exist under a name
+        // we cannot produce, and the rule's claim is absence — so it has to stop answering
+        // rather than answer from the half it has.
+        let (Some(inventory), Some(created)) = (
+            vars::inventory_hosts(path, cache),
+            vars::created_hosts_in(path, &a.nodes, cache),
+        ) else {
             return Vec::new();
         };
-        condition::hostvars_host_uses(&a.doc.text, &a.nodes)
-            .into_iter()
+        let hosts: std::collections::HashSet<&String> = inventory.iter().chain(&created).collect();
+        uses.into_iter()
             .filter(|(name, _, _)| {
                 !condition::IMPLICIT_HOSTS.contains(&name.as_str()) && !hosts.contains(name)
             })
@@ -3699,6 +3711,114 @@ mod tests {
         assert_eq!(fires(&noqa, ini()), 0, "# noqa");
     }
 
+    /// T-179's fixture, asserted as the exact set rather than a count.
+    ///
+    /// The two rows that carry it: `buildbox` comes from an imported file's `add_host` and
+    /// must be silent, while `web0143` in the same file must still fire. A "silence the whole
+    /// file when anything reachable calls add_host" implementation passes the first and fails
+    /// the second, which is the easy wrong fix this pins shut.
+    #[test]
+    fn an_imported_add_host_names_a_host_without_silencing_the_file() {
+        let path =
+            std::path::Path::new("../../demo/unknown_host.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let ds = super::Backend::unknown_host_diagnostics(&a, &path, &ScanCache::default());
+        let named: Vec<&str> =
+            ds.iter().filter_map(|d| d.message.split('`').nth(1)).collect();
+        assert_eq!(named, ["web0143"], "expected only the ghost host: {:?}", msgs(&ds));
+    }
+
+    /// The other half of T-179: when a reachable `add_host` name is **templated**, the
+    /// created set is not enumerable and the rule must stop answering for the file —
+    /// including for a host nothing creates. Answering from the half we can read is exactly
+    /// the under-matching that produced the bug.
+    #[test]
+    fn a_templated_add_host_anywhere_reachable_silences_the_file() {
+        let d = std::env::temp_dir().join("ansible-lsp-t179");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = ./hosts.ini\n").unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        let play = d.join("play.yml");
+        let read = "- hosts: web\n  tasks:\n    - import_tasks: tasks/make.yml\n    \
+                    - debug:\n        msg: \"{{ hostvars['ghost'].x }}\"\n";
+        std::fs::write(&play, read).unwrap();
+
+        let fires = |made: &str| {
+            std::fs::write(d.join("tasks/make.yml"), made).unwrap();
+            let a = super::Backend::analyze_text(read.to_string(), &play).unwrap();
+            super::Backend::unknown_host_diagnostics(&a, &play, &ScanCache::default()).len()
+        };
+
+        // Control: a literal name leaves the rule live, so `ghost` is still reported.
+        assert_eq!(fires("- add_host:\n    name: realhost\n"), 1, "control: literal name");
+        // Templated: nothing can be named, so nothing is claimed.
+        assert_eq!(fires("- add_host:\n    name: \"{{ item }}\"\n  loop: [a]\n"), 0);
+        // The free-form spelling is a known miss on the variable side (T-177); here it must
+        // be unknowable rather than ignored, since a missed name reads as "no such host".
+        assert_eq!(fires("- add_host: name=h\n"), 0, "free-form args");
+    }
+
+    /// Every edge kind that can carry an `add_host`, and the templated filename that cannot.
+    ///
+    /// The role row is measured, not assumed: `roles:` runs before the play's `tasks:`, and a
+    /// role's `add_host` really does reach them — verified against 2.21.2 before this was
+    /// written, with the negative control that an `add_host` in a file nothing includes stays
+    /// invisible.
+    #[test]
+    fn add_host_is_followed_through_roles_and_both_include_forms() {
+        let d = std::env::temp_dir().join("ansible-lsp-t179-edges");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        std::fs::create_dir_all(d.join("roles/maker/tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = ./hosts.ini\n").unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        std::fs::write(
+            d.join("roles/maker/tasks/main.yml"),
+            "- add_host:\n    name: rolehost\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("tasks/make.yml"), "- add_host:\n    name: filehost\n").unwrap();
+        std::fs::write(d.join("tasks/other.yml"), "- debug:\n    msg: hi\n").unwrap();
+
+        let play = d.join("play.yml");
+        let fires = |body: &str, host: &str| {
+            let text = format!(
+                "- hosts: web\n{body}  post_tasks:\n    - debug:\n        \
+                 msg: \"{{{{ hostvars['{host}'].x }}}}\"\n"
+            );
+            std::fs::write(&play, &text).unwrap();
+            let a = super::Backend::analyze_text(text, &play).unwrap();
+            super::Backend::unknown_host_diagnostics(&a, &play, &ScanCache::default()).len()
+        };
+
+        let role = "  roles:\n    - maker\n";
+        let import = "  tasks:\n    - import_tasks: tasks/make.yml\n";
+        let include = "  tasks:\n    - include_tasks: tasks/make.yml\n";
+        let templated = "  tasks:\n    - include_tasks: \"{{ kind }}.yml\"\n";
+        let unrelated = "  tasks:\n    - import_tasks: tasks/other.yml\n";
+
+        assert_eq!(fires(role, "rolehost"), 0, "a role's add_host counts");
+        assert_eq!(fires(import, "filehost"), 0, "import_tasks");
+        assert_eq!(fires(include, "filehost"), 0, "include_tasks is followed too");
+
+        // The controls. Without these the three above are satisfied by a rule that never
+        // fires at all.
+        assert_eq!(fires(role, "ghost"), 1, "control: the rule is alive through a role");
+        assert_eq!(fires(import, "ghost"), 1, "control: alive through import_tasks");
+        assert_eq!(
+            fires(unrelated, "filehost"),
+            1,
+            "an add_host in a file this play never includes must not count"
+        );
+
+        // A templated filename is a hole in the graph: whatever it resolves to may create
+        // hosts, so nothing can be claimed for the file. Not permanent — T-180 would close
+        // it by reading an assert that constrains `kind`.
+        assert_eq!(fires(templated, "ghost"), 0, "a templated include edge");
+    }
+
     /// The false-positive gate. A wrong ERROR here is worse than the missing feature, so
     /// every other demo file must stay clean with the demo's own inventory in effect.
     #[test]
@@ -3707,7 +3827,10 @@ mod tests {
         let files = ansible_core::workspace::yaml_files(&demo);
         assert!(files.len() > 10, "the demo walk found the demo");
         for path in files {
-            if path.file_name().is_some_and(|n| n == "hostvars.yml") {
+            if path
+                .file_name()
+                .is_some_and(|n| n == "hostvars.yml" || n == "unknown_host.yml")
+            {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };

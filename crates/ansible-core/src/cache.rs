@@ -41,10 +41,24 @@ pub struct Source {
 
 /// What one file adds to a variable walk, *before* any caller stamps its provenance on it:
 /// the definitions it and its subtree define, and every file that was read to find them.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Contribution {
     pub defs: Vec<Located>,
     pub deps: std::collections::HashSet<PathBuf>,
+    /// Host names a literal `add_host` creates anywhere in the reachable set (T-179).
+    ///
+    /// Carried on the walk rather than gathered by a second one: the edges that decide which
+    /// `add_host` tasks count are the same edges the definitions walk already follows, and
+    /// two traversals of one graph is how the two of them come to disagree.
+    pub created_hosts: std::collections::HashSet<String>,
+    /// Whether the created set is **not** enumerable — a templated `add_host` name
+    /// (`name: "{{ item }}"`) or an include edge we could not resolve
+    /// (`include_tasks: "{{ kind }}.yml"`) appeared somewhere in the reachable set.
+    ///
+    /// Separate from an empty `created_hosts`, for the reason [`crate::vars::inventory_hosts`]
+    /// returns an `Option`: "creates nothing" and "creates something I cannot name" must not
+    /// collapse, or a rule answering from the partial set reports a typo on a real host.
+    pub hosts_unknowable: bool,
 }
 
 /// Work the cache did rather than avoided — the counter the ticket asks for, since on a fast

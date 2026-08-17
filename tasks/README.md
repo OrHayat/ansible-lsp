@@ -100,7 +100,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](open/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | M    | —          |
-| T-179 | **bug** · [unknown-host fires on a host an included file's add_host creates](open/T-179-unknown-host-fires-on-a-host-an-included-file-s-add-host-cre.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -288,6 +287,7 @@ T-021 is now unblocked on that side.
 | T-171 | [A hostvars host key is not a jump target](closed/T-171-a-hostvars-host-key-is-not-a-jump-target.md) | done     |
 | T-104 | [hostvars cannot see play, role or task vars](closed/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | done     |
 | T-062 | [Index ini inventories and extension-less `group_vars`](closed/T-062-inventory-var-sources.md) | done     |
+| T-179 | **bug** · [unknown-host fires on a host an included file's add_host creates](closed/T-179-unknown-host-fires-on-a-host-an-included-file-s-add-host-cre.md) | done     |
 
 ## Settled — don't re-derive these
 

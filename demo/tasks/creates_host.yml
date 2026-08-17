@@ -1,0 +1,12 @@
+---
+# Included by unknown_host.yml. The point of the fixture is that this file — not the
+# playbook — is where the host comes from, so a rule that reads only the playbook's own
+# parse cannot see it (T-179).
+#
+# The name is a LITERAL, which is what makes the set enumerable: the tool can say
+# `buildbox` is a host, rather than only "something creates hosts here, I give up".
+- name: create a host the inventory has never heard of
+  ansible.builtin.add_host:
+    name: buildbox
+    ansible_connection: local
+    build_root: /srv/build

@@ -910,6 +910,33 @@ pub fn definitions_with_deps_in(
     nodes: &[Node],
     cache: &ScanCache,
 ) -> (Vec<Located>, HashSet<PathBuf>) {
+    let c = contribution_in(path, nodes, cache);
+    (c.defs, c.deps)
+}
+
+/// The hosts an `add_host` anywhere in `path`'s reachable set creates, or `None` when that
+/// set is not enumerable (T-179).
+///
+/// Reachability is the whole question, and both halves are measured on 2.21.2: a role's
+/// `add_host` **is** visible to the playbook that uses the role, and an `add_host` in a file
+/// nothing includes is **not** — reading it back is fatal with the same bare
+/// `hostvars['orphanhost']` an unknown host gives. So this rides the definitions walk, which
+/// already follows exactly those edges and memoizes the result, rather than scanning the
+/// workspace or re-traversing the graph.
+///
+/// `None` is the same third answer [`inventory_hosts`] returns, and for the same reason: a
+/// templated name or an unresolvable include edge means hosts exist that cannot be named, and
+/// a caller answering from the partial set would report a typo on a real host.
+pub fn created_hosts_in(
+    path: &Path,
+    nodes: &[Node],
+    cache: &ScanCache,
+) -> Option<HashSet<String>> {
+    let c = contribution_in(path, nodes, cache);
+    (!c.hosts_unknowable).then_some(c.created_hosts)
+}
+
+fn contribution_in(path: &Path, nodes: &[Node], cache: &ScanCache) -> Contribution {
     let mut walk = Walk {
         cache,
         // The root is on the stack from the start: a subtree that loops back to it is
@@ -920,7 +947,7 @@ pub fn definitions_with_deps_in(
     };
     if let Some(hit) = cache.contribution(path) {
         cache.count_defs(hit.defs.len());
-        return (hit.defs.clone(), hit.deps.clone());
+        return (*hit).clone();
     }
     let mut c = Contribution::default();
     if let Some(canon) = cache.canonical(path) {
@@ -937,10 +964,15 @@ pub fn definitions_with_deps_in(
     if !walk.truncated {
         cache.store(
             path.to_path_buf(),
-            Arc::new(Contribution { defs: c.defs.clone(), deps: c.deps.clone() }),
+            Arc::new(Contribution {
+                defs: c.defs.clone(),
+                deps: c.deps.clone(),
+                created_hosts: c.created_hosts.clone(),
+                hosts_unknowable: c.hosts_unknowable,
+            }),
         );
     }
-    (c.defs, c.deps)
+    c
 }
 
 /// Same var reached by two routes (a vars file two plays share, a role listed twice)
@@ -1058,6 +1090,36 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         }
     }
 
+    // The hosts `add_host` creates in this file (T-179). Collected here rather than in
+    // `task()`, which owns the *variable* index and has no view of the contribution — and
+    // this has to travel across include edges, which is what the contribution is for.
+    each_task(&tree, &mut |t| {
+        let Some(a) = &t.action else { return };
+        if crate::keywords::core_action(&a.name) != "add_host" {
+            return;
+        }
+        // Mapping args only, the same limit T-177 records for the variable side: the
+        // free-form `add_host: name=h` really does create the host, and `get()` cannot see
+        // it. Unknowable rather than ignored — a missed name here would be read as "no such
+        // host" and reported.
+        let Some(name) = a.args.get("name").or_else(|| a.args.get("hostname")) else {
+            out.hosts_unknowable = true;
+            return;
+        };
+        match name.as_str() {
+            // `name: "{{ item }}"` over a loop — the case T-177 came from. The host is real
+            // and its name is not readable, so the set stops being enumerable.
+            Some(n) if n.contains("{{") => out.hosts_unknowable = true,
+            // Taken whole. A comma looks like a host list and is not one — measured,
+            // `name: "alpha,beta"` creates a single host *named* `alpha,beta`, so splitting
+            // would register two hosts that do not exist and silence a real typo on either.
+            Some(n) => {
+                out.created_hosts.insert(n.to_string());
+            }
+            None => out.hosts_unknowable = true,
+        }
+    });
+
     // include_vars tasks — load a file or a directory at a point in the play. The task's
     // when: guards the load, so it carries a condition. Templated targets are skipped.
     each_task(&tree, &mut |t| {
@@ -1143,7 +1205,18 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             ) {
                 continue;
             }
-            for target in resolve::resolve_in(&r, &ctx, walk.cache).targets {
+            let resolved = resolve::resolve_in(&r, &ctx, walk.cache);
+            // A templated edge is a hole in the reachable set: whatever `{{ kind }}.yml`
+            // turns out to be may call `add_host`, so the created hosts stop being
+            // enumerable here (T-179). Not permanent — a value set derived from a
+            // dominating `assert` would close it (T-180) — but unreadable today.
+            //
+            // Only this flag is set, never `truncated`: the *definitions* half is unchanged
+            // by a skipped edge and stays cacheable exactly as before.
+            if resolved.skip_reason == Some(resolve::SkipReason::Templated) {
+                out.hosts_unknowable = true;
+            }
+            for target in resolved.targets {
                 if r.kind == ReferenceKind::Role {
                     let files = role_task_files(&target, walk);
                     for f in files.iter() {
@@ -1208,6 +1281,10 @@ fn collect_disk(path: &Path, out: &mut Contribution, walk: &mut Walk) {
 fn merge(out: &mut Contribution, from: &Contribution) {
     out.defs.extend(from.defs.iter().cloned());
     out.deps.extend(from.deps.iter().cloned());
+    out.created_hosts.extend(from.created_hosts.iter().cloned());
+    // One unknowable subtree makes the whole set unknowable: the files that *did* resolve
+    // cannot vouch for the hosts the one that didn't would have contributed.
+    out.hosts_unknowable |= from.hosts_unknowable;
 }
 
 /// A role contributes every task file it has (`tasks_from` reaches beyond `main.yml`).
@@ -1306,33 +1383,6 @@ pub fn inventory_hosts(path: &Path, cache: &ScanCache) -> Option<HashSet<String>
     // ansible discards outright (box 6's unknown section tag) reads exactly like an inventory
     // with no hosts, and neither is standing to call a name a typo.
     (!out.is_empty()).then_some(out)
-}
-
-/// Does this file call `add_host`? It invents hosts at runtime that no inventory lists, so
-/// anything answering "is there such a host" has to give up in its presence.
-///
-/// Structural rather than a text search, which is what this started as. A text search reads
-/// the word in a *comment* — including a comment explaining this very rule, which is how the
-/// demo file silenced itself — and an escape that fires on prose disables the rule wherever
-/// it is discussed.
-///
-/// Deliberately generous within that: any key or value whose last dotted segment is
-/// `add_host` counts, so the collection-qualified spelling and `action: add_host` are both
-/// caught. Over-matching costs a missed report; under-matching costs a false error.
-pub fn calls_add_host(nodes: &[Node]) -> bool {
-    fn is_name(n: &Node) -> bool {
-        n.as_str().is_some_and(|s| s.rsplit('.').next() == Some("add_host"))
-    }
-    fn walk(n: &Node) -> bool {
-        match n {
-            Node::Mapping { entries, .. } => {
-                entries.iter().any(|(k, v)| is_name(k) || is_name(v) || walk(v))
-            }
-            Node::Sequence { items, .. } => items.iter().any(walk),
-            _ => false,
-        }
-    }
-    nodes.iter().any(walk)
 }
 
 /// The key ansible reads as a merge-order control rather than storing as a variable.
@@ -2622,33 +2672,6 @@ mod tests {
         // One unknowable source poisons the whole list: the others cannot vouch for the
         // hosts it would have contributed.
         assert!(hosts(vec![d.join("dir/b.ini"), d.join("dyn.yml")]).is_none());
-    }
-
-    /// [`calls_add_host`] — the escape that keeps the host rule quiet where hosts appear at
-    /// runtime. The comment case is the reason it is structural: it began as a text search,
-    /// and the demo file that documents the rule silenced itself by naming it in prose.
-    #[test]
-    fn add_host_is_found_as_a_task_and_not_as_a_word() {
-        let calls = |src: &str| calls_add_host(&Document::new(src.to_string()).parse().unwrap());
-
-        assert!(calls("- hosts: all\n  tasks:\n    - add_host:\n        name: h\n"));
-        assert!(
-            calls("- hosts: all\n  tasks:\n    - ansible.builtin.add_host:\n        name: h\n"),
-            "the collection-qualified spelling is the same module"
-        );
-        assert!(
-            calls("- hosts: all\n  tasks:\n    - action: add_host\n"),
-            "named as a value rather than a key"
-        );
-        assert!(!calls("- hosts: all\n  tasks: []\n"), "control: no add_host anywhere");
-        assert!(
-            !calls("# explains add_host in prose\n- hosts: all\n  tasks: []\n"),
-            "a comment naming the module is not a call"
-        );
-        assert!(
-            !calls("- hosts: all\n  vars:\n    note: this mentions add_host\n"),
-            "a string that merely contains the word is not a call"
-        );
     }
 
     /// `ansible_group_priority` is reported exactly where it is inert, and nowhere else.

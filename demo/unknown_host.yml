@@ -1,0 +1,64 @@
+---
+# `unknown-host` — reading hostvars for a host that does not exist.
+#
+# The rule and why it is an ERROR: the read is fatal, and ansible's own message is the
+# expression echoed back at you. Measured on 2.21.2, the two failures side by side:
+#
+#   bad host      Error while resolving value for 'msg': hostvars['web0143']
+#   bad variable  ... object of type 'HostVarsVars' has no attribute 'infiniband_ip'
+#
+# The second names the missing thing. The first never says "there is no such host", so a
+# typo in a host name reads like a missing variable and sends you to the wrong file.
+#
+# ansible.cfg names inventory-lab.yml, which declares web01, web02 and db01. That is the
+# whole host list — plus whatever add_host creates, which is what this file is really about.
+
+- name: hosts the tool can account for
+  hosts: web01
+  gather_facts: false
+  tasks:
+    - name: bring a host into existence from an imported file
+      ansible.builtin.import_tasks: tasks/creates_host.yml
+
+    # NO HINT: `buildbox` is in no inventory. It exists because the file imported above
+    # creates it with a literal name, and the tool follows import/include/role edges to
+    # find that — measured, a role's add_host reaches the playbook that uses it, while an
+    # add_host in a file nothing includes does not.
+    #
+    # This row is T-179. Before that fix the escape read only this file's own parse, so
+    # this line carried a red ERROR while `ansible-playbook` ran it clean (ok=2 failed=0).
+    - name: NO HINT a host created by an imported file
+      ansible.builtin.debug:
+        msg: "{{ hostvars['buildbox'].build_root }}"
+
+    # NO HINT: web01 is in inventory-lab.yml.
+    - name: NO HINT a host the inventory declares
+      ansible.builtin.debug:
+        msg: "{{ hostvars['web01'].app_tier }}"
+
+    # BAD: nothing anywhere creates `web0143` — not the inventory, not the import above.
+    # This is the row that proves the fix above added a NAME rather than switching the rule
+    # off for the file: silencing the whole file would take this error with it.
+    - name: BAD a host nothing creates
+      ansible.builtin.debug:
+        msg: "{{ hostvars['web0143'].app_tier }}"
+
+    # NO HINT: `| default(...)` swallows the undefined, so nothing fails — measured, this
+    # prints the default. The message claims the read fails at runtime, and that has to
+    # stay true of every line it fires on.
+    - name: NO HINT the same missing host, rescued by a default
+      ansible.builtin.debug:
+        msg: "{{ hostvars['web0143'].app_tier | default('none') }}"
+
+    # NO HINT: the implicit localhost, which hostvars conjures on membership whether or not
+    # any inventory lists it. Measured: `127.0.0.1` and `::1` resolve the same way.
+    - name: NO HINT the implicit localhost
+      ansible.builtin.debug:
+        msg: "{{ hostvars['localhost'].ansible_connection | default('implicit') }}"
+
+    # NO HINT: the quoted literal here belongs to the INNER groups[...] lookup, so it names
+    # a group, not a host. This shape — "first host of a group" — produced 20 of the 21
+    # hits the rule reported on its first run against a real repo, every one working code.
+    - name: NO HINT a group name inside a nested lookup
+      ansible.builtin.debug:
+        msg: "{{ hostvars[groups['webservers'][0]].app_tier }}"

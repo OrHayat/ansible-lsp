@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | M    | —          |
+| done   | bug  | P1       | M    | —          |
 
 ## Symptom
 
@@ -105,19 +105,34 @@ Two things to settle before writing it, each with a probe:
 
 ## Done when
 
-- [ ] the three-file fixture above is a demo fixture, and the imported-`add_host` row is
-      silent while both controls keep their current verdicts
-- [ ] **a literal imported `add_host` name is added to the host set, not merely silenced** —
-      asserted by a `hostvars['ghost']` read in the *same file* still firing. Without that
-      row a "silence the whole file" implementation passes every other box here, which is
-      the fixture's easy case doing the work instead of the rule.
-- [ ] a **templated** imported `add_host` name (`name: "{{ item }}"`) silences the file
-      instead, and the `ghost` read beside it goes quiet too — the set is unknowable, so the
-      rule must stop answering rather than answer from a partial set
-- [ ] a role's `add_host` counts for a playbook that uses the role, asserted separately from
-      the `import_tasks` case
-- [ ] `include_tasks` (dynamic) asserted as well as `import_tasks`, both for a literal
-      filename and for a templated one — a templated edge is an unknowable set
-- [ ] the reachable-set walk is measured against the diagnostics pass, not assumed cheap
-- [ ] corpus gate: `unknown-host` hits on `~/app/ansible` can only fall, and any that
-      disappear are confirmed `add_host`-created
+- [x] the three-file fixture above is a demo fixture, and the imported-`add_host` row is
+      silent while both controls keep their current verdicts — `demo/unknown_host.yml` plus
+      `demo/tasks/creates_host.yml`, asserted as the *exact* named set, not a count
+- [x] **a literal imported `add_host` name is added to the host set, not merely silenced** —
+      `buildbox` is silent and `web0143` in the same file still fires. Verified by disabling
+      the union and watching the fixture report both, which is the shape a "silence the file"
+      implementation would ship.
+- [x] a **templated** imported `add_host` name (`name: "{{ item }}"`) silences the file
+      instead, and the `ghost` read beside it goes quiet too, with a literal-name control in
+      the same test proving the rule was live. The free-form `add_host: name=h` spelling is
+      unknowable rather than ignored — T-177 records it as a known miss on the variable side,
+      and a missed name here would be read as "no such host" and reported.
+- [x] a role's `add_host` counts for a playbook that uses the role, asserted separately from
+      the `import_tasks` case. Measured on 2.21.2 first: `roles:` runs before the play's
+      tasks and `rolehost` reads back, while the negative control — an `add_host` in a file
+      nothing includes — is fatal with the same bare message an unknown host gives. That pair
+      is what settled "which direction the edges count": reachability outward, never a
+      workspace scan.
+- [x] `include_tasks` (dynamic) asserted as well as `import_tasks`, both for a literal
+      filename and for a templated one — a templated edge is an unknowable set, via
+      `SkipReason::Templated`, which `resolve` already reports and nothing was reading.
+- [x] the reachable-set walk is measured against the diagnostics pass, not assumed cheap —
+      and it was not. First cut: **4.42s** over the 759-file corpus against **140ms** for the
+      whole of `diagnostics_of`, i.e. 31x the rest of the pass, because both host sets were
+      computed before anything checked whether the file contains a `hostvars['literal']` at
+      all. Moving that check first takes it to **248ms** vs 143ms. Nearly every file now exits
+      before the walk, and the cost that remains is only on files that could actually produce
+      a diagnostic.
+- [x] corpus gate: **0 hits** before and after, so nothing fell and nothing appeared. The
+      corpus never contained this bug's shape — the fixture had to be built — which is the
+      argument for the demo fixture carrying it rather than the corpus.
