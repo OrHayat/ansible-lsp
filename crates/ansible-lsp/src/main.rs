@@ -3851,6 +3851,47 @@ mod tests {
         assert_eq!(fires(templated, "ghost"), 0, "a templated include edge");
     }
 
+    /// An `add_host` inside an include **cycle** still names its host.
+    ///
+    /// The walk truncates on a cycle (`walk.truncated`) and returns without merging that
+    /// frame, which is what makes it terminate. The question this pins is whether the
+    /// truncation eats the host: a lost name reads as "no such host" and becomes a red ERROR
+    /// on working code, the same failure T-179 was. Reasoning says the cycle member's own
+    /// tasks are collected before it re-enters, but that is exactly the kind of reasoning
+    /// this file exists to distrust.
+    #[test]
+    fn a_cycle_in_the_include_graph_does_not_lose_the_host_it_creates() {
+        let d = std::env::temp_dir().join("ansible-lsp-t179-cycle");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = ./hosts.ini\n").unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        // a -> b -> a, with the add_host on the far side of the loop.
+        std::fs::write(
+            d.join("tasks/a.yml"),
+            "- import_tasks: b.yml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("tasks/b.yml"),
+            "- add_host:\n    name: cyclehost\n- import_tasks: a.yml\n",
+        )
+        .unwrap();
+
+        let play = d.join("play.yml");
+        let fires = |host: &str| {
+            let text = format!(
+                "- hosts: web\n  tasks:\n    - import_tasks: tasks/a.yml\n    - debug:\n        \
+                 msg: \"{{{{ hostvars['{host}'].x }}}}\"\n"
+            );
+            std::fs::write(&play, &text).unwrap();
+            let a = super::Backend::analyze_text(text, &play).unwrap();
+            super::Backend::unknown_host_diagnostics(&a, &play, &ScanCache::default()).len()
+        };
+        assert_eq!(fires("cyclehost"), 0, "the cycle swallowed the host it creates");
+        assert_eq!(fires("ghost"), 1, "control: the rule survives the cycle at all");
+    }
+
     /// The false-positive gate. A wrong ERROR here is worse than the missing feature, so
     /// every other demo file must stay clean with the demo's own inventory in effect.
     #[test]

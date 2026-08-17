@@ -1414,9 +1414,12 @@ pub fn inventory_hosts(path: &Path, cache: &ScanCache) -> Option<HashSet<String>
         let nodes: &[Node] = s.nodes.as_deref().map_or(&[], |n| n.as_slice());
         match crate::inventory::classify(&src, &s.text, nodes, cache) {
             crate::inventory::Kind::Dynamic => return None,
-            crate::inventory::Kind::Toml => out.extend(crate::inventory::toml_hosts(&s.text)),
-            crate::inventory::Kind::Yaml => out.extend(crate::inventory::yaml_hosts(nodes)),
-            crate::inventory::Kind::Ini => out.extend(crate::inventory::ini_hosts(&s.text)),
+            // `?` on each: a reader gives up when one pattern expands past
+            // `MAX_PATTERN_HOSTS`, and that has to reach the caller as "unknowable" rather
+            // than as a short list, which would report every host past the cap as a typo.
+            crate::inventory::Kind::Toml => out.extend(crate::inventory::toml_hosts(&s.text)?),
+            crate::inventory::Kind::Yaml => out.extend(crate::inventory::yaml_hosts(nodes)?),
+            crate::inventory::Kind::Ini => out.extend(crate::inventory::ini_hosts(&s.text)?),
         }
     }
     // An empty list is not a finding. It means every source parsed to nothing — a file
