@@ -1156,6 +1156,51 @@ mod tests {
         assert_eq!(&e[s..t], "app_port");
     }
 
+    /// [`hostvars_host_uses`] — the *host* half, which feeds an ERROR rather than a link, so
+    /// each filter it adds over [`hostvars_host_keys`] gets asserted here.
+    #[test]
+    fn hostvars_host_uses_keeps_only_what_an_error_may_stand_on() {
+        let hosts = |src: &str| -> Vec<String> {
+            let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
+            hostvars_host_uses(src, &nodes).into_iter().map(|(n, _, _)| n).collect()
+        };
+        // A folded block scalar, so the expression reaches the document text unescaped —
+        // a double-quoted YAML scalar would put a backslash before every inner quote, and
+        // this scan reads the raw text, not the parsed value.
+        let msg = |e: &str| format!("- hosts: all\n  tasks:\n    - debug:\n        msg: >-\n          {e}\n");
+
+        // Both quotings, and whitespace inside the subscript.
+        assert_eq!(hosts(&msg("{{ hostvars['web01'].x }}")), ["web01"]);
+        assert_eq!(hosts(&msg("{{ hostvars[\"web01\"].x }}")), ["web01"]);
+        assert_eq!(hosts(&msg("{{ hostvars[ 'web01' ].x }}")), ["web01"]);
+
+        // Several on one line, each its own use.
+        assert_eq!(hosts(&msg("{{ hostvars['a'].x }}{{ hostvars['b'].y }}")), ["a", "b"]);
+
+        // `hostvars` as part of a longer identifier is not `hostvars`.
+        assert!(hosts(&msg("{{ myhostvars['a'].x }}")).is_empty());
+        assert!(hosts(&msg("{{ result.hostvars['a'].x }}")).is_empty());
+
+        // In a comment it is prose. 2 of the reference corpus's 23 literal uses are this.
+        let commented = "# {{ hostvars['web01'].x }}\n- hosts: all\n  tasks: []\n";
+        assert!(hosts(commented).is_empty());
+
+        // A group name reached through the inner lookup is not the host key.
+        assert!(hosts(&msg("{{ hostvars[groups['web'][0]].x }}")).is_empty());
+
+        // Swallowed by the expression it sits in, so nothing fails and nothing is claimed.
+        assert!(hosts(&msg("{{ hostvars['w'].x | default('z') }}")).is_empty());
+        assert!(hosts(&msg("{{ hostvars['w'].x if hostvars['w'] is defined else '' }}")).is_empty());
+        // ...but a default in a *neighbouring* expression rescues nothing.
+        assert_eq!(hosts(&msg("{{ hostvars['w'].x }} {{ y | default(1) }}")), ["w"]);
+
+        // A host key is read from a `when:` exactly as from a value — same expression
+        // language, and a rule that only looked at `msg:` would miss half the corpus.
+        let when = "- hosts: all\n  tasks:\n    - debug:\n        msg: hi\n      \
+                    when: hostvars['w'].ready\n";
+        assert_eq!(hosts(when), ["w"]);
+    }
+
     /// The shapes it must refuse. Each would be a claim about a name Ansible never reads
     /// there — the expensive kind of wrong, since it ends in a hover pointing somewhere.
     #[test]

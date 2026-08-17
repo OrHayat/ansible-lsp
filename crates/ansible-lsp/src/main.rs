@@ -3851,6 +3851,63 @@ mod tests {
         assert_eq!(fires(templated, "ghost"), 0, "a templated include edge");
     }
 
+    /// Several reads in one file are judged one at a time, and the rule reaches every place
+    /// an expression can sit — not just `msg:`.
+    #[test]
+    fn every_read_in_a_file_is_judged_on_its_own() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-many");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = ./hosts.ini\n").unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nreal1\nreal2\n").unwrap();
+        let play = d.join("play.yml");
+
+        let named = |text: &str| -> Vec<String> {
+            std::fs::write(&play, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &play).unwrap();
+            super::Backend::unknown_host_diagnostics(&a, &play, &ScanCache::default())
+                .iter()
+                .filter_map(|d| d.message.split('`').nth(1).map(str::to_owned))
+                .collect()
+        };
+
+        // Four reads, two of them real. Only the two ghosts are named, and the good ones
+        // between them do not shift or suppress the verdicts.
+        let mixed = "- hosts: all\n  tasks:\n    - debug:\n        msg: >-\n          \
+                     {{ hostvars['real1'].a }} {{ hostvars['nope1'].b }}\n          \
+                     {{ hostvars['real2'].c }} {{ hostvars['nope2'].d }}\n";
+        assert_eq!(named(mixed), ["nope1", "nope2"]);
+
+        // A `when:` is the same expression language — a rule that only read task args would
+        // miss it, and the read is just as fatal there.
+        let cond = "- hosts: all\n  tasks:\n    - debug:\n        msg: hi\n      \
+                    when: hostvars['nope3'].ready\n";
+        assert_eq!(named(cond), ["nope3"]);
+
+        // A play-level `vars:` value, which is neither a task arg nor a condition.
+        let pv = "- hosts: all\n  vars:\n    leader: \"{{ hostvars['nope4'].ip }}\"\n  tasks: []\n";
+        assert_eq!(named(pv), ["nope4"]);
+
+        // `# noqa` reaches the same line and the one immediately before it, and no further —
+        // `Document::is_suppressed`'s rule, shared by every rule in the tool. Two lines up,
+        // with `- debug:` in between, it does not apply, and that is worth pinning because a
+        // reader would expect a comment heading the task to cover the whole task.
+        let two_above = "- hosts: all\n  tasks:\n    # noqa: unknown-host\n    - debug:\n        \
+                         msg: \"{{ hostvars['nope5'].x }}\"\n";
+        assert_eq!(named(two_above), ["nope5"], "two lines up is out of reach");
+        let one_above = "- hosts: all\n  tasks:\n    - debug:\n        # noqa: unknown-host\n        \
+                         msg: \"{{ hostvars['nope5'].x }}\"\n";
+        assert!(named(one_above).is_empty(), "the line immediately above does apply");
+        let trailing = "- hosts: all\n  tasks:\n    - debug:\n        \
+                        msg: \"{{ hostvars['nope6'].x }}\" # noqa: unknown-host\n";
+        assert!(named(trailing).is_empty(), "a trailing noqa must silence it");
+
+        // A different rule's noqa does not silence this one.
+        let other = "- hosts: all\n  tasks:\n    - debug:\n        \
+                     msg: \"{{ hostvars['nope7'].x }}\" # noqa: var-undefined\n";
+        assert_eq!(named(other), ["nope7"]);
+    }
+
     /// An `add_host` inside an include **cycle** still names its host.
     ///
     /// The walk truncates on a cycle (`walk.truncated`) and returns without merging that

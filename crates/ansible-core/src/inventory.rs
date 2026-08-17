@@ -1072,6 +1072,28 @@ mod tests {
         let toml = "[web.hosts.web01]\nip = \"1\"\n[web.vars]\nntp = 1\n";
         assert_eq!(toml_hosts(toml).unwrap(), ["web01"]);
 
+        // A trailing comment is not a host, and neither is anything after the first token.
+        assert_eq!(ini_hosts("node1  # a comment\n").unwrap(), ["node1"]);
+        assert_eq!(ini_hosts("node1 ansible_host=10.0.0.1 x=2\n").unwrap(), ["node1"]);
+        assert_eq!(ini_hosts("; leading semicolon comment\nnode1\n").unwrap(), ["node1"]);
+
+        // The implicit ungrouped section is where a file starts, so a host before any header
+        // counts — and a `[group]` header itself is never a host.
+        assert_eq!(ini_hosts("first\n[g]\nsecond\n").unwrap(), ["first", "second"]);
+
+        // A YAML group with an empty or absent `hosts:` contributes none, and must not
+        // panic on the null.
+        let empty = Document::new("all:\n  children:\n    web:\n      hosts:\n".to_string())
+            .parse()
+            .unwrap();
+        assert!(yaml_hosts(&empty).unwrap().is_empty());
+        let novars = Document::new("all:\n  vars:\n    x: 1\n".to_string()).parse().unwrap();
+        assert!(yaml_hosts(&novars).unwrap().is_empty(), "a vars-only file declares no host");
+
+        // TOML with hosts and no vars table, and the invalid-TOML silence.
+        assert_eq!(toml_hosts("[web.hosts.only1]\n").unwrap(), ["only1"]);
+        assert!(toml_hosts("[unclosed\nx = ").unwrap().is_empty());
+
         // The same file-wide rule `ini_vars` follows: an unknown section tag makes ansible
         // discard the whole file, so it can contribute no hosts either. `:hosts` is *valid*
         // and is the control — measured, `[web:hosts]` really does put `node1` in the

@@ -2717,6 +2717,55 @@ mod tests {
         assert!(hosts(vec![d.join("dir/b.ini"), d.join("dyn.yml")]).is_none());
     }
 
+    /// [`created_hosts_in`] on its own, rather than only through the diagnostic that uses it.
+    ///
+    /// The `Some(empty)` vs `None` distinction is the whole contract and it has no other
+    /// test: a file that creates no hosts and a file whose hosts cannot be named look
+    /// identical to a caller that only counts.
+    #[test]
+    fn created_hosts_distinguishes_creating_nothing_from_not_knowing() {
+        let d = std::env::temp_dir().join("ansible-lsp-t179-core");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        let play = d.join("play.yml");
+
+        let hosts = |body: &str| {
+            std::fs::write(&play, body).unwrap();
+            let nodes = Document::new(body.to_string()).parse().unwrap();
+            created_hosts_in(&play, &nodes, &ScanCache::default()).map(|h| {
+                let mut v: Vec<String> = h.into_iter().collect();
+                v.sort();
+                v
+            })
+        };
+
+        // Creates nothing, and says so — an empty set, not an absent one.
+        assert_eq!(hosts("- hosts: all\n  tasks: []\n").unwrap(), Vec::<String>::new());
+
+        // Every literal spelling of the name, all three measured to create their host.
+        assert_eq!(hosts("- hosts: all\n  tasks:\n    - add_host:\n        name: a\n").unwrap(), ["a"]);
+        assert_eq!(hosts("- hosts: all\n  tasks:\n    - add_host:\n        host: b\n").unwrap(), ["b"]);
+        assert_eq!(hosts("- hosts: all\n  tasks:\n    - add_host: name=c\n").unwrap(), ["c"]);
+
+        // A comma is part of the name, not a separator — measured, `name: \"a,b\"` creates a
+        // single host called `a,b`. Splitting would invent two hosts and silence typos on both.
+        assert_eq!(
+            hosts("- hosts: all\n  tasks:\n    - add_host:\n        name: \"x,y\"\n").unwrap(),
+            ["x,y"]
+        );
+
+        // Unknowable: a templated name with nothing to substitute from.
+        assert!(hosts("- hosts: all\n  tasks:\n    - add_host:\n        name: \"{{ v }}\"\n").is_none());
+        // Unknowable: no name key at all, so whatever it creates cannot be named.
+        assert!(hosts("- hosts: all\n  tasks:\n    - add_host:\n        groups: g\n").is_none());
+
+        // A task that is not add_host contributes nothing and knows nothing.
+        assert_eq!(
+            hosts("- hosts: all\n  tasks:\n    - set_fact:\n        name: notahost\n").unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
     /// `ansible_group_priority` is reported exactly where it is inert, and nowhere else.
     ///
     /// The inventory rows are the controls, and they are the whole point: measured on 2.21.2,
@@ -2761,6 +2810,21 @@ mod tests {
         let text = key.to_string();
         let got = spans("group_vars/alpha.yml", &text);
         assert_eq!(&text[got[0].start..got[0].end], "ansible_group_priority");
+
+        // Written twice: legal YAML, the later value wins, and *both* keys are equally
+        // inert. Reporting one would leave a live-looking copy on the line above.
+        let twice = "ansible_group_priority: 10\nansible_group_priority: 20\n";
+        assert_eq!(spans("group_vars/alpha.yml", twice).len(), 2);
+
+        // A JSON-content vars file is read by the same plugin, so the key is just as dead.
+        assert_eq!(spans("group_vars/alpha.json", "{\"ansible_group_priority\": 10}").len(), 1);
+
+        // Nested one directory deeper inside an entity directory — still the vars plugin's.
+        assert_eq!(spans("group_vars/alpha/deep/x.yml", key).len(), 1);
+
+        // A directory merely *named* like one is not one; the component must match exactly.
+        assert!(spans("my_group_vars/alpha.yml", key).is_empty());
+        assert!(spans("group_vars_old/alpha.yml", key).is_empty());
     }
 
     /// An entity *directory* may carry an extension. `find_vars_files` matches the name at
