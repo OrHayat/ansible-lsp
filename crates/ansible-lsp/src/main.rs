@@ -3908,6 +3908,99 @@ mod tests {
         assert_eq!(named(other), ["nope7"]);
     }
 
+    /// The host set reaches the rule from every source that can supply one, and the two
+    /// contributors are checked independently rather than as one blob.
+    ///
+    /// The range row is the integration the unit tests do not cover: `expand_host_pattern`
+    /// is asserted on its own, but nothing until now checked that an expanded host actually
+    /// arrives at the diagnostic — a reader that dropped the expansion would pass every
+    /// range test and still red-flag `web03`.
+    #[test]
+    fn a_host_counts_from_whichever_source_supplies_it() {
+        let d = std::env::temp_dir().join("ansible-lsp-t062-sources");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.ini"), "[web]\nweb[01:03]\n").unwrap();
+        std::fs::write(d.join("b.yml"), "all:\n  hosts:\n    fromsecond:\n").unwrap();
+        std::fs::write(d.join("c.toml"), "[web.hosts.fromtoml]\nip = \"1\"\n").unwrap();
+        std::fs::write(d.join("huge.ini"), "[web]\nbig[1:1000000]\n").unwrap();
+        let play = d.join("play.yml");
+
+        let fires = |host: &str, inv: Vec<std::path::PathBuf>| {
+            let text = format!(
+                "- hosts: all\n  tasks:\n    - debug:\n        msg: \"{{{{ hostvars['{host}'].x }}}}\"\n"
+            );
+            std::fs::write(&play, &text).unwrap();
+            let a = super::Backend::analyze_text(text, &play).unwrap();
+            let cache = ScanCache::default().with_inventory(inv);
+            super::Backend::unknown_host_diagnostics(&a, &play, &cache).len()
+        };
+        let all = || vec![d.join("a.ini"), d.join("b.yml"), d.join("c.toml")];
+
+        // A range-expanded host arrives at the rule, ends included.
+        for h in ["web01", "web02", "web03"] {
+            assert_eq!(fires(h, all()), 0, "{h} came from the expansion");
+        }
+        assert_eq!(fires("web04", all()), 1, "control: one past the range is still unknown");
+
+        // Each source contributes, including the second and third of a list.
+        assert_eq!(fires("fromsecond", all()), 0, "a yaml source later in the list");
+        assert_eq!(fires("fromtoml", all()), 0, "a toml source later in the list");
+
+        // Host names are case-sensitive; `WEB01` is not `web01`.
+        assert_eq!(fires("WEB01", all()), 1, "host names are not case-folded");
+
+        // A pattern past MAX_PATTERN_HOSTS makes the whole list unknowable, so the rule stops
+        // answering — never a truncated list, which would report every host past the cut.
+        assert_eq!(fires("anything", vec![d.join("huge.ini")]), 0, "over the cap is unknowable");
+        assert_eq!(
+            fires("anything", vec![d.join("a.ini"), d.join("huge.ini")]),
+            0,
+            "one uncountable source poisons the others"
+        );
+    }
+
+    /// Edges the walk must follow that the earlier test does not reach: `import_playbook`,
+    /// and a role's non-`main.yml` task file via `tasks_from`.
+    #[test]
+    fn add_host_is_followed_through_import_playbook_and_tasks_from() {
+        let d = std::env::temp_dir().join("ansible-lsp-t179-edges2");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/maker/tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = ./hosts.ini\n").unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        std::fs::write(
+            d.join("roles/maker/tasks/extra.yml"),
+            "- add_host:\n    name: extrahost\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("inner.yml"),
+            "- hosts: web\n  tasks:\n    - add_host:\n        name: innerhost\n",
+        )
+        .unwrap();
+
+        let play = d.join("play.yml");
+        let fires = |body: &str, host: &str| {
+            let text = format!(
+                "{body}- hosts: web\n  tasks:\n    - debug:\n        \
+                 msg: \"{{{{ hostvars['{host}'].x }}}}\"\n"
+            );
+            std::fs::write(&play, &text).unwrap();
+            let a = super::Backend::analyze_text(text, &play).unwrap();
+            super::Backend::unknown_host_diagnostics(&a, &play, &ScanCache::default()).len()
+        };
+
+        let imported = "- import_playbook: inner.yml\n";
+        assert_eq!(fires(imported, "innerhost"), 0, "import_playbook carries its add_host");
+        assert_eq!(fires(imported, "ghost"), 1, "control: alive through import_playbook");
+
+        let from = "- hosts: web\n  tasks:\n    - include_role:\n        name: maker\n        \
+                    tasks_from: extra.yml\n";
+        assert_eq!(fires(from, "extrahost"), 0, "tasks_from reaches a role's other file");
+        assert_eq!(fires(from, "ghost"), 1, "control: alive through tasks_from");
+    }
+
     /// An `add_host` inside an include **cycle** still names its host.
     ///
     /// The walk truncates on a cycle (`walk.truncated`) and returns without merging that
