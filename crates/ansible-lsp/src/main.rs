@@ -5211,6 +5211,122 @@ mod tests {
         }
     }
 
+    /// `ansibleLsp.inventory` parsing, including every shape a settings blob can be wrong in.
+    ///
+    /// The filtering is the point: a blank entry reaching the resolver would name the
+    /// workspace root as an inventory, and a non-string one would be silently dropped by
+    /// `as_str` anyway — better to know which.
+    #[test]
+    fn the_inventory_setting_keeps_only_usable_paths() {
+        // Built inline rather than deriving `Default` on `State`: the production struct is
+        // constructed once, in `main`, and widening its API for a test is the wrong trade.
+        let state = super::State {
+            docs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            roots: std::sync::Mutex::new(Vec::new()),
+            flagged: std::sync::Mutex::new(std::collections::HashSet::new()),
+            mutations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            settings: std::sync::Mutex::new(Default::default()),
+            inventory: std::sync::Mutex::new(Vec::new()),
+            startup_note: std::sync::Mutex::new(String::new()),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+        };
+        let set = |v: serde_json::Value| {
+            state.set_inventory(&v);
+            state.inventory.lock().unwrap().clone()
+        };
+
+        assert_eq!(
+            set(serde_json::json!({"inventory": ["a.ini", "dir/b.yml"]})),
+            [std::path::PathBuf::from("a.ini"), std::path::PathBuf::from("dir/b.yml")]
+        );
+        // Blank and whitespace-only entries are dropped: either would resolve to the
+        // workspace root and make every file in it an inventory source.
+        assert_eq!(
+            set(serde_json::json!({"inventory": ["", "   ", "real.ini"]})),
+            [std::path::PathBuf::from("real.ini")]
+        );
+        // Non-strings are dropped rather than stringified.
+        assert_eq!(
+            set(serde_json::json!({"inventory": [1, true, null, "keep.ini"]})),
+            [std::path::PathBuf::from("keep.ini")]
+        );
+        // Every shape that means "nothing set" ends empty rather than erroring.
+        for v in [
+            serde_json::json!({}),
+            serde_json::json!({"inventory": null}),
+            serde_json::json!({"inventory": "not-an-array"}),
+            serde_json::json!({"inventory": []}),
+        ] {
+            assert!(set(v.clone()).is_empty(), "{v} should clear the setting");
+        }
+
+        // Setting it bumps the cache epoch, because a changed inventory changes what every
+        // file can see and nothing computed under the old one may survive.
+        let before = super::var_cache().lock().unwrap().epoch;
+        state.set_inventory(&serde_json::json!({"inventory": ["x.ini"]}));
+        let after = super::var_cache().lock().unwrap().epoch;
+        assert_ne!(before, after, "a changed inventory must invalidate wholesale");
+
+        state.set_inventory(&serde_json::json!({}));
+    }
+
+    /// A templated path that resolved by **substitution** explains itself: what it points
+    /// at, and for each variable the value used and where that value came from.
+    ///
+    /// "Why does this go to prod.yml" is the question, and the answer is only useful if it
+    /// names the definition — so the assertions are on the value, the source label and the
+    /// link, not merely on the target.
+    #[test]
+    fn a_substituted_path_hovers_the_value_and_where_it_came_from() {
+        let d = std::env::temp_dir().join("ansible-lsp-subst-hover");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tasks")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::write(d.join("tasks/prod.yml"), "- debug:\n    msg: hi\n").unwrap();
+        let play = d.join("play.yml");
+        let text = "- hosts: all\n  vars:\n    env: prod\n  tasks:\n                        - include_tasks: \"tasks/{{ env }}.yml\"\n";
+        std::fs::write(&play, text).unwrap();
+
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&play);
+        let refs = ansible_core::references::extract(&nodes);
+        let r = refs.iter().find(|r| r.value.contains("{{ env }}")).expect("the templated ref");
+        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
+
+        let (md, range) =
+            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play).expect("hover");
+        assert!(md.contains("prod.yml"), "the target it reached: {md}");
+        assert!(md.contains("Substituting"), "the section header: {md}");
+        assert!(md.contains("env"), "the variable substituted: {md}");
+        assert!(md.contains("prod"), "the value used: {md}");
+        // The range covers the reference, so the hover box sits on the path.
+        let line = text.lines().nth(range.start.line as usize).unwrap();
+        assert!(line.contains("include_tasks"), "anchored on the reference line: {line}");
+
+        // Nothing to substitute means no hover, rather than an empty box.
+        let plain = refs.iter().find(|r| !r.value.contains("{{"));
+        if let Some(pr) = plain {
+            let pres = ansible_core::resolve::resolve_with(pr, &ctx, &Default::default());
+            assert!(
+                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play).is_none(),
+                "a literal path has nothing to substitute"
+            );
+        }
+
+        // A templated name with no reachable definition also declines — the value is what
+        // the hover exists to show, so without one there is nothing to say.
+        let t2 = "- hosts: all\n  tasks:\n    - include_tasks: \"tasks/{{ unknown_v }}.yml\"\n";
+        std::fs::write(&play, t2).unwrap();
+        let d2 = ansible_core::parse::Document::new(t2.to_string());
+        let n2 = d2.parse().unwrap();
+        let refs2 = ansible_core::references::extract(&n2);
+        let r2 = &refs2[0];
+        let res2 = ansible_core::resolve::resolve_with(r2, &ctx, &Default::default());
+        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play).is_none());
+    }
+
     /// T-029 box 4: a resolved module hovers one line of provenance — collection and
     /// origin — not the raw candidate paths. `ansible.builtin.debug` also has an action
     /// twin in core, so the documentation-only caveat must appear.
