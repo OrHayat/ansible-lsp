@@ -1098,15 +1098,33 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         if crate::keywords::core_action(&a.name) != "add_host" {
             return;
         }
-        // Mapping args only, the same limit T-177 records for the variable side: the
-        // free-form `add_host: name=h` really does create the host, and `get()` cannot see
-        // it. Unknowable rather than ignored — a missed name here would be read as "no such
-        // host" and reported.
-        let Some(name) = a.args.get("name").or_else(|| a.args.get("hostname")) else {
+        // All three spellings of the host name. `host` and `hostname` are the module's own
+        // aliases (`aliases: [host, hostname]`) and all three were measured to create their
+        // host — reading only two of them made `add_host: {host: x}` unknowable, which
+        // silenced the whole file for a name sitting in plain view.
+        const NAME_KEYS: [&str; 3] = ["name", "host", "hostname"];
+        let named = NAME_KEYS.iter().find_map(|k| a.args.get(k)).and_then(|n| n.as_str());
+        let named = match named {
+            Some(n) => Some(n.to_string()),
+            // The free-form spelling, `add_host: name=h ansible_connection=local`, which
+            // really does create the host — measured. `entries()` is empty for a scalar, so
+            // this used to fall through to unknowable; `parse_kv` is the shlex-based splitter
+            // ansible itself uses, already ported for `include_vars`, so there is nothing to
+            // hand-roll here.
+            None => match &a.args {
+                Node::Scalar { value, .. } => crate::splitter::parse_kv(value, false)
+                    .ok()
+                    .and_then(|kv| {
+                        NAME_KEYS.iter().find_map(|k| kv.get(k).map(str::to_owned))
+                    }),
+                _ => None,
+            },
+        };
+        let Some(name) = named else {
             out.hosts_unknowable = true;
             return;
         };
-        match name.as_str() {
+        match Some(name.as_str()) {
             // `name: "{{ item }}"` over a loop — the case T-177 came from. The host is real
             // and its name is not readable, so the set stops being enumerable.
             Some(n) if n.contains("{{") => out.hosts_unknowable = true,

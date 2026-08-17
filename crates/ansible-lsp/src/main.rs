@@ -3755,9 +3755,12 @@ mod tests {
         assert_eq!(fires("- add_host:\n    name: realhost\n"), 1, "control: literal name");
         // Templated: nothing can be named, so nothing is claimed.
         assert_eq!(fires("- add_host:\n    name: \"{{ item }}\"\n  loop: [a]\n"), 0);
-        // The free-form spelling is a known miss on the variable side (T-177); here it must
-        // be unknowable rather than ignored, since a missed name reads as "no such host".
-        assert_eq!(fires("- add_host: name=h\n"), 0, "free-form args");
+        // The free-form spelling and the `host:`/`hostname:` aliases are all readable, and
+        // all three were measured to create their host. Each names a host, so `ghost` beside
+        // it is still reported — silence here would mean the name was not read.
+        assert_eq!(fires("- add_host: name=freeform\n"), 1, "free-form args are parsed");
+        assert_eq!(fires("- add_host:\n    host: aliased\n"), 1, "the host: alias");
+        assert_eq!(fires("- add_host:\n    hostname: aliased\n"), 1, "the hostname: alias");
     }
 
     /// Every edge kind that can carry an `add_host`, and the templated filename that cannot.
