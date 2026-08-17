@@ -383,6 +383,43 @@ mod tests {
         assert_eq!(target.span().slice(src), "go.yml");
     }
 
+    /// A failed parse always says where. Both functions run the same libyaml scan, so "no
+    /// nodes" and "an error span" are one fact read twice — but callers treat them as two, and
+    /// `bin/scan` carries a branch for the pair disagreeing. Pin the invariant so that branch
+    /// stays the dead code it currently is, rather than becoming a file reported with no
+    /// location. `corpus_smoke` asserts the same thing over every file in a real tree.
+    #[test]
+    fn a_file_that_does_not_parse_always_reports_where() {
+        let cases = [
+            "",
+            "---\n",
+            "- hosts: all\n",
+            "{a: 1}\n",
+            "---\n- one\n---\n- two\n",
+            "- name: Block form with a file: parameter\n",
+            "- a: [1, 2\n",
+            "- a: \"unclosed\n",
+            "key: value\n\tkey2: tab\n",
+            "- *never_anchored\n",
+            "%YAML 1.9\n---\n- x\n",
+            "a: 1\n a: 2\n",
+            "- !!binary not base64 !\n",
+        ];
+        for c in cases {
+            assert_eq!(
+                parse_lenient(c).is_none(),
+                parse_lenient_error(c).is_some(),
+                "the two disagree on {c:?}"
+            );
+        }
+        // Measured at 6 of the 13. The guard is here because an invariant over inputs that all
+        // parse is satisfied by two functions that both always return "fine".
+        assert!(
+            cases.iter().filter(|c| parse_lenient(c).is_none()).count() >= 4,
+            "these cases must include real failures, or the invariant is untested"
+        );
+    }
+
     #[test]
     #[ignore = "corpus smoke: ANSIBLE_CORPUS=<path> cargo test -p ansible-core corpus_smoke -- --ignored --nocapture"]
     fn corpus_smoke() {
@@ -396,7 +433,14 @@ mod tests {
         let mut bad = Vec::new();
         for f in &files {
             let Ok(text) = std::fs::read_to_string(f) else { continue };
-            if parse_lenient(&text).is_some() {
+            let parsed = parse_lenient(&text);
+            assert_eq!(
+                parsed.is_none(),
+                parse_lenient_error(&text).is_some(),
+                "{} parses and errors inconsistently",
+                f.display()
+            );
+            if parsed.is_some() {
                 ok += 1;
             } else {
                 bad.push(f.strip_prefix(&root).unwrap_or(f).display().to_string());

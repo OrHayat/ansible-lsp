@@ -212,6 +212,152 @@ fn a_condition_the_import_itself_mutates_is_reported() {
     assert!(text.contains("sets.yml"), "and the file that sets it:\n{text}");
 }
 
+/// The templated-variables section ranks by how often each name is used, which is the only
+/// reason it is a list rather than a set — it answers "which variable would a substitution
+/// have to know first". One-variable fixtures never run the comparator, so the order was
+/// never checked.
+#[test]
+fn templated_variables_are_ranked_by_how_often_they_appear() {
+    let d = tree("ansible-lsp-scan-tmplvars");
+    write(
+        &d,
+        "play.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.include_tasks: \"{{ common }}.yml\"\n    - ansible.builtin.include_tasks: \"{{ common }}/x.yml\"\n    - ansible.builtin.include_tasks: \"{{ rare }}.yml\"\n",
+    );
+
+    let (ok, text) = scan(&d);
+    assert!(ok, "{text}");
+    let at = |name: &str| {
+        text.lines()
+            .position(|l| l.split_whitespace().nth(1) == Some(name))
+            .unwrap_or_else(|| panic!("no `{name}` row in:\n{text}"))
+    };
+    assert!(text.contains("   2  common"), "counted twice:\n{text}");
+    assert!(text.contains("   1  rare"), "and the other once:\n{text}");
+    assert!(at("common") < at("rare"), "the commoner name is listed first:\n{text}");
+}
+
+/// A role's `meta/main.yml` dependencies are references too, and *only* from that filename.
+///
+/// The controls are the point: the same `dependencies:` block in the role's `vars/main.yml`
+/// and in a `meta/other.yml` must be read by nobody. Without them this passes against a scan
+/// that treats every `dependencies:` key anywhere as a role list.
+///
+/// The `ctx.role_dir.is_some()` half of the guard is not probed here because it cannot fail:
+/// `is_role_dir` is "has a `tasks`, `defaults` or `meta` dir", so a file at `<d>/meta/main.yml`
+/// always sits in something that answers yes. A control for it would be a test that cannot
+/// come out the other way.
+#[test]
+fn a_role_meta_dependency_is_a_reference_and_only_from_main_yml() {
+    let d = tree("ansible-lsp-scan-meta");
+    write(&d, "roles/r/tasks/main.yml", "- ansible.builtin.debug:\n    msg: hi\n");
+    write(&d, "roles/r/meta/main.yml", "dependencies:\n  - ghost-role\n");
+    write(&d, "roles/r/vars/main.yml", "dependencies:\n  - ghost-in-vars\n");
+    write(&d, "roles/r/meta/other.yml", "dependencies:\n  - ghost-in-other-meta\n");
+    write(&d, "play.yml", "- hosts: all\n  roles:\n    - r\n");
+
+    let (ok, text) = scan(&d);
+    assert!(!ok, "a dependency on a role that isn't there fails the gate:\n{text}");
+    assert!(text.contains("ghost-role"), "the meta dependency is followed:\n{text}");
+    assert!(!text.contains("ghost-in-vars"), "`vars/main.yml` is not a meta file:\n{text}");
+    assert!(!text.contains("ghost-in-other-meta"), "nor is `meta/other.yml`:\n{text}");
+}
+
+/// `include_vars` splits into two kinds by shape — a file and a `dir:` sweep resolve by
+/// different rules, so they are counted apart. Asserting the whole row catches the dir form
+/// being folded into the file count.
+#[test]
+fn include_vars_is_counted_apart_from_its_dir_form() {
+    let d = tree("ansible-lsp-scan-includevars");
+    write(&d, "vars/v.yml", "k: 1\n");
+    write(
+        &d,
+        "play.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.include_vars: vars/v.yml\n    - ansible.builtin.include_vars:\n        dir: vars\n",
+    );
+
+    let (ok, text) = scan(&d);
+    assert!(ok, "{text}");
+    let row = |kind: &str| {
+        text.lines()
+            .find(|l| l.split_whitespace().next() == Some(kind))
+            .unwrap_or_else(|| panic!("no `{kind}` row in:\n{text}"))
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(row("include_vars"), ["include_vars", "1", "0", "0"], "one file, resolved");
+    assert_eq!(row("include_vars_dir"), ["include_vars_dir", "1", "0", "0"], "the dir, apart");
+}
+
+/// `# noqa` silences the finding it names and nothing else. Each half of this test is a pair:
+/// an annotated site that must disappear and an identical one that must not, so a suppression
+/// that had grown to swallow everything fails here.
+#[test]
+fn noqa_silences_the_finding_it_names_and_not_its_neighbour() {
+    let d = tree("ansible-lsp-scan-noqa");
+    write(
+        &d,
+        "play.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.debug:\n        msg: \"{{ hushed_var }}\"  # noqa: var-undefined\n    - ansible.builtin.debug:\n        msg: \"{{ loud_var }}\"\n",
+    );
+    write(
+        &d,
+        "sets.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.set_fact:\n        ready: true\n",
+    );
+    write(
+        &d,
+        "hushed.yml",
+        "- ansible.builtin.import_playbook: sets.yml\n  when: ready | default(false)  # noqa: when-import-var-mutated\n",
+    );
+    write(
+        &d,
+        "loud.yml",
+        "- ansible.builtin.import_playbook: sets.yml\n  when: ready | default(false)\n",
+    );
+
+    let (_, text) = scan(&d);
+    assert!(text.contains("loud_var"), "the unannotated use is still reported:\n{text}");
+    assert!(!text.contains("hushed_var"), "the annotated one is not:\n{text}");
+    assert!(text.contains("loud.yml"), "the unannotated import is still reported:\n{text}");
+    assert!(!text.contains("hushed.yml"), "the annotated one is not:\n{text}");
+}
+
+/// A file the walk finds but cannot read is skipped whole, and is **not** an unparseable file.
+///
+/// The distinction is the assertion: `unparseable` means "Ansible would choke on this too" and
+/// drives a report section, while a permissions failure says nothing about the YAML. The
+/// headline count and the config header disagree by exactly this file — the walk saw it, the
+/// analysis never did.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_is_skipped_without_being_called_broken() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let d = tree("ansible-lsp-scan-unreadable");
+    write(&d, "tasks/real.yml", "- ansible.builtin.debug:\n    msg: hi\n");
+    write(
+        &d,
+        "play.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.import_tasks: tasks/real.yml\n",
+    );
+    let locked = d.join("locked.yml");
+    std::fs::write(&locked, "- hosts: all\n  tasks: []\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&locked).is_ok() {
+        return; // running as root, where the mode proves nothing
+    }
+
+    let (ok, text) = scan(&d);
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+
+    assert!(ok, "an unreadable file is not a missing reference:\n{text}");
+    assert!(text.contains("3 files, 0 unparseable"), "walked, not blamed:\n{text}");
+    assert!(text.contains("(2 files)"), "only two reached the analysis:\n{text}");
+    assert!(text.contains("import_tasks"), "and the rest of the tree still scanned:\n{text}");
+}
+
 /// The config header, in each of the three shapes it can take: a project root with an
 /// `ansible.cfg`, no root at all, and an `ANSIBLE_CONFIG` override that beats both.
 #[test]
