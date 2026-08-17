@@ -119,6 +119,13 @@ pub struct Task {
     pub when_span: Option<Span>,
     /// The task has a `loop:`/`with_*`, so it may run many times.
     pub looped: bool,
+    /// The literal values a `loop:` list holds, when every item is a plain scalar.
+    ///
+    /// Empty whenever the iteration is not readable — a `with_*` form, a templated
+    /// `loop: "{{ hosts }}"`, or a list with a non-scalar item — which is *not* the same as
+    /// an unlooped task: pair it with [`Task::looped`], never read it alone. A consumer that
+    /// treats empty as "no iterations" would conclude a templated loop runs zero times.
+    pub loop_items: Vec<String>,
     /// `register:` name — a variable this task defines for the rest of the play.
     pub register: Option<String>,
     /// Span of the `register:` value, if present.
@@ -263,6 +270,28 @@ fn is_looped(node: &Node) -> bool {
     node.entries().iter().any(|(k, _)| {
         matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
     })
+}
+
+/// The literal items of a `loop:` list. Empty unless *every* item is a plain scalar with no
+/// template in it, so a caller can substitute them and know it has the whole iteration.
+///
+/// `loop:` only — the `with_*` forms each run a lookup plugin with its own semantics, and
+/// guessing those is the kind of unmeasured leap this crate exists to avoid.
+fn loop_items_of(node: &Node) -> Vec<String> {
+    let Some(Node::Sequence { items, .. }) = node.get("loop") else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for i in items {
+        match i.as_str() {
+            Some(s) if !s.contains("{{") => out.push(s.to_string()),
+            // One unreadable item makes the whole iteration unreadable: the caller cannot
+            // tell a partial list from a complete one, and a partial one is what turns a
+            // real value into "not in the set".
+            _ => return Vec::new(),
+        }
+    }
+    out
 }
 
 /// `vars_files:` entries. A bare scalar value is Ansible's one-element-list shorthand.
@@ -559,6 +588,7 @@ fn build_task(node: &Node, handlers: bool) -> Task {
         when: when.map(clauses).unwrap_or_default(),
         when_span: when.map(|w| w.span()),
         looped: is_looped(node),
+        loop_items: loop_items_of(node),
         register: node.get("register").and_then(|n| n.as_str()).map(str::to_owned),
         register_span: node.get("register").map(|n| n.span()),
         vars: vars_of(node),

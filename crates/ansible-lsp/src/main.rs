@@ -3753,8 +3753,37 @@ mod tests {
 
         // Control: a literal name leaves the rule live, so `ghost` is still reported.
         assert_eq!(fires("- add_host:\n    name: realhost\n"), 1, "control: literal name");
-        // Templated: nothing can be named, so nothing is claimed.
-        assert_eq!(fires("- add_host:\n    name: \"{{ item }}\"\n  loop: [a]\n"), 0);
+        // A templated name over a LITERAL loop is readable — substitute and the iteration is
+        // enumerable, so the rule stays live and `ghost` is still reported. Measured: this
+        // really does create one host per item, suffix included.
+        assert_eq!(
+            fires("- add_host:\n    name: \"{{ item }}\"\n  loop: ['la', 'lb']\n"),
+            1,
+            "a literal loop is enumerable"
+        );
+        assert_eq!(
+            fires("- add_host:\n    name: \"{{ item }}-web\"\n  loop: ['la']\n"),
+            1,
+            "a suffix survives substitution"
+        );
+
+        // Templated over something unreadable: nothing can be named, so nothing is claimed.
+        // Each of these leaves a `{{` behind after substitution, which is the one guard.
+        assert_eq!(fires("- add_host:\n    name: \"{{ item }}\"\n  loop: \"{{ found }}\"\n"), 0);
+        assert_eq!(fires("- add_host:\n    name: \"{{ item }}\"\n  with_items: [a]\n"), 0);
+        assert_eq!(
+            fires("- add_host:\n    name: \"{{ item }}-{{ env }}\"\n  loop: ['la']\n"),
+            0,
+            "a second variable in the name is not resolved by the loop"
+        );
+        assert_eq!(
+            fires(
+                "- add_host:\n    name: \"{{ node }}\"\n  loop: ['la']\n  \
+                 loop_control:\n    loop_var: node\n"
+            ),
+            0,
+            "loop_var renames item; unhandled, and the guard makes that silence not a lie"
+        );
         // The free-form spelling and the `host:`/`hostname:` aliases are all readable, and
         // all three were measured to create their host. Each names a host, so `ghost` beside
         // it is still reported — silence here would mean the name was not read.

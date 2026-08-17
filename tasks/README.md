@@ -208,6 +208,7 @@ T-021 is now unblocked on that side.
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](open/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | S    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
+| T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 
 ### Downstream — not this repo's code
 

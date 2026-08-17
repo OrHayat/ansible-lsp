@@ -1125,8 +1125,30 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             return;
         };
         match Some(name.as_str()) {
-            // `name: "{{ item }}"` over a loop — the case T-177 came from. The host is real
-            // and its name is not readable, so the set stops being enumerable.
+            // A templated name over a *literal* loop is readable: substitute each item and
+            // the whole iteration is enumerable. Measured — `name: "{{ item }}"` with
+            // `loop: ['loopa','loopb']` creates both, and `"{{ item }}-web"` creates
+            // `a-web`/`b-web`, so the substitution is textual and covers a suffix for free.
+            //
+            // Anything still holding a `{{` after that is not resolved — a second variable
+            // in the name, or `loop_control: loop_var:` renaming `item` out from under this
+            // — and falls through to unknowable. That guard is what lets the unhandled
+            // iteration forms (`with_*`, a templated `loop:`) stay correct without being
+            // enumerated here: they yield no items, nothing substitutes, the `{{` survives.
+            Some(n) if n.contains("{{") && !t.loop_items.is_empty() => {
+                let expanded: Vec<String> = t
+                    .loop_items
+                    .iter()
+                    .map(|i| n.replace("{{ item }}", i).replace("{{item}}", i))
+                    .collect();
+                if expanded.iter().any(|e| e.contains("{{")) {
+                    out.hosts_unknowable = true;
+                } else {
+                    out.created_hosts.extend(expanded);
+                }
+            }
+            // `name: "{{ item }}"` over something unreadable — the case T-177 came from,
+            // where the loop is a `k8s_info` result. The host is real and its name is not.
             Some(n) if n.contains("{{") => out.hosts_unknowable = true,
             // Taken whole. A comma looks like a host list and is not one — measured,
             // `name: "alpha,beta"` creates a single host *named* `alpha,beta`, so splitting
