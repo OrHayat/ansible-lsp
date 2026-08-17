@@ -596,3 +596,183 @@ impl Fs for ScanCache {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::Counting;
+
+    fn tree(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::write(d.join("a.yml"), "- hosts: all\n  tasks: []\n").unwrap();
+        std::fs::write(d.join("sub/b.yml"), "- debug:\n    msg: hi\n").unwrap();
+        d
+    }
+
+    /// The cache exists to make the *second* ask free, so that is what this asserts — not
+    /// that the answers match, which a cache that re-read everything would also satisfy.
+    ///
+    /// Counting the backend is the only way to see it: a wrapper outside the cache counts
+    /// asks, this one sits underneath and counts what actually reached the disk.
+    #[test]
+    fn a_second_ask_is_answered_without_touching_the_disk() {
+        let d = tree("ansible-lsp-cache-memo");
+        let cache = ScanCache::new(Counting::new(StdFs));
+        // `backend()` hands back the layer a miss falls through to, which is where the
+        // syscall tallies live — the only way to see that a hit avoided the disk.
+        assert!(cache.backend().is_file(&d.join("a.yml")), "the backend answers for itself");
+
+        let first = cache.source(&d.join("a.yml")).expect("the file reads");
+        let again = cache.source(&d.join("a.yml")).expect("and reads again");
+        assert_eq!(first.text, again.text);
+        assert_eq!(cache.stats().reads, 1, "the second ask did not re-read");
+
+        // A different file is a different key.
+        cache.source(&d.join("sub/b.yml")).unwrap();
+        assert_eq!(cache.stats().reads, 2);
+
+        // A remembered *failure* is a hit too — asking twice for something absent must not
+        // probe twice, which is the half a cache that stores only successes gets wrong.
+        assert!(cache.source(&d.join("nope.yml")).is_none());
+        let after = cache.stats().reads;
+        assert!(cache.source(&d.join("nope.yml")).is_none());
+        assert_eq!(cache.stats().reads, after, "a miss is remembered as a miss");
+    }
+
+    /// `prime` exists so the scan does not read a file twice — once as the subject of its
+    /// own analysis, once when another file's walk reaches it.
+    #[test]
+    fn a_primed_file_is_never_read_from_disk() {
+        let d = tree("ansible-lsp-cache-prime");
+        let cache = ScanCache::new(Counting::new(StdFs));
+        let path = d.join("a.yml");
+        let text = "- hosts: primed\n  tasks: []\n";
+        let nodes = Document::new(text.to_string()).parse().unwrap();
+
+        cache.prime(&path, text, &nodes);
+        let got = cache.source(&path).expect("the primed entry answers");
+        assert_eq!(&*got.text, text, "the primed text, not what is on disk");
+        assert_eq!(cache.stats().reads, 0, "priming means no read at all");
+
+        // Priming something that does not exist cannot key itself, so it is a no-op rather
+        // than an entry under a path nothing will ask for.
+        cache.prime(&d.join("ghost.yml"), "x", &[]);
+        assert!(cache.source(&d.join("ghost.yml")).is_none());
+    }
+
+    /// Directory-shaped memos, and the counters that report them.
+    #[test]
+    fn contexts_trees_and_listings_are_each_memoized_once() {
+        let d = tree("ansible-lsp-cache-dirs");
+        let cache = ScanCache::default();
+
+        // A context is keyed by *directory*, so two files in one directory share it.
+        let c1 = cache.context(&d.join("a.yml"));
+        let c2 = cache.context(&d.join("other.yml"));
+        assert!(Arc::ptr_eq(&c1, &c2), "same directory, same context");
+        assert_eq!(cache.stats().contexts, 1);
+        cache.context(&d.join("sub/b.yml"));
+        assert_eq!(cache.stats().contexts, 2, "a different directory is a different key");
+
+        // `tree` and `listing` both memoize; asking twice returns the same Arc.
+        let t1 = cache.tree(&d);
+        let t2 = cache.tree(&d);
+        assert!(Arc::ptr_eq(&t1, &t2));
+        let l1 = cache.listing(&d);
+        assert!(Arc::ptr_eq(&l1, &cache.listing(&d)));
+        // Both descend — a vars directory is read however deep, the same way ansible reads
+        // everything under `group_vars/all/`. What separates them is which files they accept.
+        let has = |v: &[PathBuf], n: &str| v.iter().any(|p| p.file_name().is_some_and(|f| f == n));
+        assert!(has(&t1, "b.yml"), "tree descends: {t1:?}");
+        assert!(has(&l1, "b.yml"), "listing descends too: {l1:?}");
+
+        // `listing` applies the vars-file extension rules; `tree` is every YAML file. An
+        // extension ansible would not load for vars is the case that tells them apart.
+        std::fs::write(d.join("notes.txt"), "x: 1\n").unwrap();
+        std::fs::write(d.join("c.json"), "{\"y\": 2}\n").unwrap();
+        let fresh = ScanCache::default();
+        let listed = fresh.listing(&d);
+        assert!(has(&listed, "c.json"), "json is a vars extension: {listed:?}");
+        assert!(!has(&listed, "notes.txt"), "txt is not: {listed:?}");
+        assert!(!has(&fresh.tree(&d), "notes.txt"), "tree is yaml files only");
+
+        // Neither invents anything for a path that is not a directory.
+        assert!(fresh.listing(&d.join("nope")).is_empty(), "no such directory");
+        assert!(fresh.listing(&d.join("a.yml")).is_empty(), "a file is not a directory");
+    }
+
+    /// Contributions are stored and served by path, and the two counters callers tick by
+    /// hand report what the walk could not memoize.
+    #[test]
+    fn contributions_round_trip_and_the_hand_counters_add_up() {
+        let d = tree("ansible-lsp-cache-contrib");
+        let cache = ScanCache::default();
+        let key = d.join("a.yml");
+
+        assert!(cache.contribution(&key).is_none(), "nothing stored yet");
+        cache.store(key.clone(), Arc::new(Contribution::default()));
+        assert!(cache.contribution(&key).is_some(), "and now it answers");
+
+        cache.count_uncached();
+        cache.count_uncached();
+        cache.count_defs(5);
+        cache.count_defs(3);
+        let s = cache.stats();
+        assert_eq!(s.uncached, 2);
+        assert_eq!(s.defs, 8, "defs is a running sum, not a last-value");
+
+        // `stats()` is a snapshot: taking it twice with no work between gives the same
+        // numbers, so a report cannot drift while it is being rendered.
+        assert_eq!(cache.stats().defs, s.defs);
+    }
+
+    /// The builders are the seam tests use to keep a fixture from inheriting the shell's
+    /// environment, so each must actually take effect.
+    #[test]
+    fn the_builders_replace_the_environment_and_the_inventory() {
+        let d = tree("ansible-lsp-cache-builders");
+        let inv = vec![d.join("hosts.ini")];
+        let cache = ScanCache::default().with_inventory(inv.clone()).with_env(EnvMap::empty());
+        let ctx = cache.context(&d.join("a.yml"));
+        assert_eq!(ctx.config.inventory.as_ref(), Some(&inv), "the override reaches the config");
+
+        // Without it, the same tree resolves no inventory of its own (the fixture's
+        // ansible.cfg names none).
+        let plain = ScanCache::default().with_env(EnvMap::empty());
+        assert!(plain.context(&d.join("a.yml")).config.inventory.is_none());
+    }
+
+    /// `canonical` resolves the parent once and settles the tail with one `lstat`, so the
+    /// tail cases are where it can go wrong: a symlink must be followed, and two spellings
+    /// of one file must land on one identity — that is what cycle detection is built on.
+    #[cfg(unix)]
+    #[test]
+    fn canonical_settles_the_tail_and_gives_one_identity_per_file() {
+        let d = tree("ansible-lsp-cache-canon");
+        let cache = ScanCache::default();
+        let direct = d.join("a.yml");
+        let roundabout = d.join("sub").join("..").join("a.yml");
+
+        assert_eq!(Fs::canonical(&cache, &direct), Fs::canonical(&cache, &roundabout));
+        assert!(Fs::canonical(&cache, &d.join("nope")).is_none());
+
+        // A symlinked tail is resolved rather than reported as itself — the `Kind::Other`
+        // branch, which is the whole reason the fast path checks `symlink_kind` at all.
+        let link = d.join("link.yml");
+        std::os::unix::fs::symlink(&direct, &link).unwrap();
+        assert_eq!(
+            Fs::canonical(&cache, &link),
+            Fs::canonical(&cache, &direct),
+            "a link and its target are one identity"
+        );
+
+        // A `..` tail has no name to append, so it falls through to the real thing.
+        assert_eq!(
+            Fs::canonical(&cache, &d.join("sub").join("..")),
+            Fs::canonical(&cache, &d)
+        );
+    }
+}
