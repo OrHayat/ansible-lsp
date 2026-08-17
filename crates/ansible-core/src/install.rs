@@ -670,4 +670,100 @@ __codename__ = "Fool in the Rain"
         let name = if cfg!(windows) { "cmd" } else { "sh" };
         assert!(which(name).is_some(), "which should locate `{name}` on PATH");
     }
+
+    /// [`Version::parse`] and the two readers built on it, including the real strings each
+    /// was written against.
+    #[test]
+    fn versions_parse_from_every_shape_ansible_reports_one() {
+        let v = |s: &str| Version::parse(s).map(|x| (x.major, x.minor, x.patch));
+        assert_eq!(v("2.21.2"), Some((2, 21, 2)));
+        assert_eq!(v("2.22.0.dev0"), Some((2, 22, 0)), "a trailing segment is ignored");
+        assert_eq!(v("2.9"), Some((2, 9, 0)), "missing parts default to zero");
+        assert_eq!(v("3"), Some((3, 0, 0)));
+        assert_eq!(v("  2.21.2  "), Some((2, 21, 2)), "surrounding space is trimmed");
+        // The numeric *head*: `2.21.2rc1` is a version, `core` is not.
+        assert_eq!(v("2.21.2rc1"), Some((2, 21, 2)));
+        assert_eq!(v("core"), None, "must start with a digit");
+        assert_eq!(v(""), None);
+        assert_eq!(v("."), None);
+
+        // Display round-trips to the three-part form whatever was written.
+        assert_eq!(Version::parse("2.9").unwrap().to_string(), "2.9.0");
+        assert_eq!(Version::parse("2.22.0.dev0").unwrap().to_string(), "2.22.0");
+
+        // Ordering is what the version-gated rules ask for, so it must be by number and not
+        // by string — `2.9` is *older* than `2.21`, which a lexical compare gets backwards.
+        assert!(Version::parse("2.9.0") < Version::parse("2.21.0"));
+        assert!(Version::parse("2.21.2") > Version::parse("2.21.1"));
+    }
+
+    /// `release.py` is read instead of shelling out, so its exact shape matters.
+    #[test]
+    fn the_version_comes_out_of_release_py_and_the_version_banner() {
+        let rel = version_from_release_py;
+        assert_eq!(rel("__version__ = '2.22.0.dev0'\n").unwrap().to_string(), "2.22.0");
+        assert_eq!(rel("__version__ = \"2.21.2\"\n").unwrap().to_string(), "2.21.2");
+        assert_eq!(
+            rel("# a comment\n__author__ = 'x'\n  __version__ = '2.18.1'\n").unwrap().to_string(),
+            "2.18.1",
+            "found among other assignments, and indented"
+        );
+        assert!(rel("__author__ = 'Ansible'\n").is_none(), "no version line");
+        assert!(rel("__version__\n").is_none(), "no assignment");
+        assert!(rel("").is_none());
+
+        // The `--version` banner, both eras: bracketed core, and the bare pre-split form.
+        let ban = version_from_version_output;
+        assert_eq!(ban("ansible [core 2.21.2]\n  config file = None\n").unwrap().to_string(), "2.21.2");
+        assert_eq!(ban("ansible 2.9.27\n").unwrap().to_string(), "2.9.27");
+        assert_eq!(
+            ban("ansible-playbook [core 2.16.3]\n").unwrap().to_string(),
+            "2.16.3",
+            "the tool name varies; the first numeric token does not"
+        );
+        assert!(ban("").is_none());
+        assert!(ban("ansible [core unknown]\n").is_none(), "no numeric token at all");
+    }
+
+    /// [`names_a_python`] rejects the shapes that name something other than an interpreter —
+    /// each of them a real thing found on a real machine, per its own doc comment.
+    #[test]
+    fn only_a_path_that_names_a_python_is_believed() {
+        let n = |s: &str| names_a_python(Path::new(s));
+        assert!(n("/usr/bin/python3"));
+        assert!(n("/venv/bin/python"));
+        assert!(n("/venv/bin/python3.12"));
+        // The stem is what is read, so an extension does not hide the name. (Spelled with
+        // forward slashes: on unix a backslash is an ordinary character, not a separator,
+        // so a literal windows path is one component and would not test this at all.)
+        assert!(n("/opt/py/python.exe"));
+        // The two shebang forms that name something else.
+        assert!(!n("/usr/bin/env"), "`#!/usr/bin/env python3` names env, not python");
+        assert!(!n("/bin/sh"), "the exec form pip writes when the prefix has spaces");
+        // And a `--version` line too old to carry the interpreter.
+        assert!(!n("(main,"));
+        assert!(!n(""));
+        assert!(!n("/usr/bin/ansible"));
+    }
+
+    /// Every [`Source`] renders a stable id — these strings reach the client, so a silent
+    /// rename would change a protocol value rather than a label.
+    #[test]
+    fn every_detection_source_has_a_stable_name() {
+        let all = [
+            (Source::NotFound, "not-found"),
+            (Source::Override, "override"),
+            (Source::PathWalkUp, "path-walk-up"),
+            (Source::ToolInstall, "tool-install"),
+            (Source::VersionCommand, "version-command"),
+        ];
+        for (s, want) in all {
+            assert_eq!(s.as_str(), want);
+        }
+        assert_eq!(Source::default(), Source::NotFound, "nothing found is the default");
+        // All five distinct: a copy-paste in the match would collapse two.
+        let names: std::collections::BTreeSet<&str> =
+            all.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(names.len(), 5);
+    }
 }
