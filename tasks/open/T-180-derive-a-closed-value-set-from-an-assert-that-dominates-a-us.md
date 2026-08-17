@@ -12,6 +12,14 @@ and says so in three tickets as an aside rather than as work: T-071 lists an `as
 the reasons its hint can never be a warning, T-179 gives up on a file whose include is
 templated, and T-041 covers only the `meta/argument_specs.yml` half of the same question.
 
+**This is type checking, but not the kind [T-106] does**, and the distinction decides where
+it belongs. That epic transcribes *ansible's* closed keyword schema from six `FieldAttribute`
+tables — a fixed vocabulary with declared types, where the work is transcription. This is the
+domain of a *user's* variable, inferred from their own code: no table to transcribe, nothing
+closed in advance, and the hard part is dominance rather than coverage. Same family, different
+machinery. It belongs with the "what do we actually know about this name" tickets under
+[T-112], where [T-071] already sits, and not under T-106.
+
 The corpus has this everywhere — 107 files carry an `assert`, and the constraining forms are
 the ones a reader can use:
 
@@ -82,6 +90,13 @@ claim:
   records for its glob.
 - Do not let this become a diagnostic of its own without a separate ticket. "This value is
   not in the asserted set" is a different, much stronger claim than anything here.
+- **A domain is not a definition.** An `assert` constrains a value; it never sets one. A name
+  with a closed domain and no definition anywhere is still undefined, and this must not
+  exempt it from `var-undefined` — the set says what the value may be *if* it exists.
+
+[T-071]: T-071-unconstrained-path-var.md
+[T-106]: T-106-keyword-schema-and-value-types.md
+[T-112]: T-112-variable-definedness-and-provenance.md
 
 ## Done when
 

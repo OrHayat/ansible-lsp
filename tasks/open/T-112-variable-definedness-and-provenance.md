@@ -55,6 +55,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [ ] T-065 — `var-undefined`: raise the bar to workspace-wide absence (the 656 fix)
 - [x] T-066 — Hover provenance breadcrumb for non-obvious definition routes
 - [ ] T-071 — `unconstrained-path-var`: surface the value set a templated path implies
+- [x] T-182 — Derive a variable's value domain from the assert that constrains it
 
 ## Done when
 

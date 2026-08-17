@@ -289,6 +289,7 @@ T-021 is now unblocked on that side.
 | T-104 | [hostvars cannot see play, role or task vars](closed/T-104-hostvars-cannot-see-play-role-or-task-vars.md) | done     |
 | T-062 | [Index ini inventories and extension-less `group_vars`](closed/T-062-inventory-var-sources.md) | done     |
 | T-179 | **bug** · [unknown-host fires on a host an included file's add_host creates](closed/T-179-unknown-host-fires-on-a-host-an-included-file-s-add-host-cre.md) | done     |
+| T-182 | [Derive a variable's value domain from the assert that constrains it](closed/T-182-derive-a-variable-s-value-domain-from-the-assert-that-constr.md) | **rejected** |
 
 ## Settled — don't re-derive these
 
