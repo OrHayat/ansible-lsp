@@ -147,3 +147,99 @@ fn the_root_defaults_to_the_working_directory() {
     assert!(text.contains(" files,"), "scanned the cwd:\n{text}");
     assert!(out.status.success());
 }
+
+/// The report's **finding** sections, each from a tree that actually contains that fault.
+///
+/// These are the sections a human reads, and every one of them was dark: the other tests
+/// here scan healthy trees plus one missing file, so the happy path and a single failure
+/// were covered while the six kinds of finding the report can print were not.
+#[test]
+fn every_finding_section_prints_when_the_tree_earns_it() {
+    let d = tree("ansible-lsp-scan-findings");
+
+    // A `when:` that cannot work: `{{ }}` inside a condition, which ansible-core rejects.
+    write(
+        &d,
+        "broken.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.debug:\n        msg: hi\n      when: \"{{ flag }}\"\n",
+    );
+    // A role whose directory exists but has no `tasks/main.yml`, referenced with
+    // `tasks_from`. That is the shape the report singles out: the role *is* there, so
+    // "missing file" would be wrong, but nothing placed its entry point — the section asks
+    // whether it is really installed elsewhere or simply wrong. It also gives the
+    // `tasks_from` kind its row.
+    write(&d, "roles/nomain/tasks/other.yml", "- ansible.builtin.debug:\n    msg: hi\n");
+    write(
+        &d,
+        "from.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.include_role:\n        name: nomain\n        tasks_from: other.yml\n",
+    );
+
+    let (_, text) = scan(&d);
+    assert!(text.contains("BROKEN `when:`"), "the broken-condition section:\n{text}");
+    assert!(text.contains("when-jinja-delimiters"), "naming the rule:\n{text}");
+    assert!(text.contains("UNRESOLVED ROLE NAMES"), "the unresolved-role section:\n{text}");
+    assert!(text.contains("nomain"), "naming the role:\n{text}");
+    assert!(
+        text.lines().any(|l| l.split_whitespace().next() == Some("tasks_from")),
+        "the tasks_from kind row:\n{text}"
+    );
+}
+
+/// The cross-file check: an import gated on a variable its own target sets. The condition is
+/// evaluated before the target runs, so the gate never sees the value — a fault only a
+/// two-file view can find, and the one report section that needs a second file to exist.
+#[test]
+fn a_condition_the_import_itself_mutates_is_reported() {
+    let d = tree("ansible-lsp-scan-mutated");
+    write(
+        &d,
+        "sets.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.set_fact:\n        ready: true\n",
+    );
+    write(
+        &d,
+        "play.yml",
+        "- ansible.builtin.import_playbook: sets.yml\n  when: ready | default(false)\n",
+    );
+
+    let (_, text) = scan(&d);
+    assert!(
+        text.contains("CONDITION VARIABLE MUTATED BY THE IMPORT"),
+        "the cross-file section:\n{text}"
+    );
+    assert!(text.contains("ready"), "naming the variable:\n{text}");
+    assert!(text.contains("sets.yml"), "and the file that sets it:\n{text}");
+}
+
+/// The config header, in each of the three shapes it can take: a project root with an
+/// `ansible.cfg`, no root at all, and an `ANSIBLE_CONFIG` override that beats both.
+#[test]
+fn the_config_header_names_which_file_was_used() {
+    let d = tree("ansible-lsp-scan-config");
+    write(&d, "play.yml", "- hosts: all\n  tasks: []\n");
+
+    let (_, text) = scan(&d);
+    assert!(text.contains("ansible.cfg"), "the project's own config:\n{text}");
+
+    // An override is announced, because a config from the environment explains a resolution
+    // nothing in the tree accounts for.
+    let other = d.join("elsewhere.cfg");
+    std::fs::write(&other, "[defaults]\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_scan"))
+        .arg(&d)
+        .env("ANSIBLE_CONFIG", &other)
+        .output()
+        .expect("runs with an override");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("config override"), "the override is announced:\n{text}");
+    assert!(text.contains("elsewhere.cfg"), "by name:\n{text}");
+
+    // A tree with no `ansible.cfg` anywhere has no project root to report.
+    let bare = std::env::temp_dir().join("ansible-lsp-scan-noroot");
+    let _ = std::fs::remove_dir_all(&bare);
+    std::fs::create_dir_all(&bare).unwrap();
+    write(&bare, "play.yml", "- hosts: all\n  tasks: []\n");
+    let (_, text) = scan(&bare);
+    assert!(text.contains("no project root"), "says so rather than inventing one:\n{text}");
+}
