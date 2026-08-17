@@ -448,4 +448,227 @@ mod tests {
             found.join("\n  ")
         );
     }
+
+    use super::*;
+
+    fn tree(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("a.yml"), "x: 1\n").unwrap();
+        std::fs::write(d.join("sub/b.yml"), "y: 2\n").unwrap();
+        d
+    }
+
+    /// [`StdFs`] against a real tree: the four kind answers, and the two that only a real
+    /// filesystem can produce.
+    #[test]
+    fn stdfs_reports_each_kind_it_can_meet() {
+        let d = tree("ansible-lsp-fs-kinds");
+        let fs = StdFs;
+
+        assert_eq!(fs.kind(&d.join("a.yml")), Some(Kind::File));
+        assert_eq!(fs.kind(&d.join("sub")), Some(Kind::Dir));
+        assert_eq!(fs.kind(&d.join("nope")), None, "nothing there is None, not Other");
+        assert!(fs.is_file(&d.join("a.yml")));
+        assert!(fs.is_dir(&d.join("sub")));
+        assert!(fs.exists(&d.join("a.yml")));
+        assert!(!fs.exists(&d.join("nope")));
+
+        assert_eq!(fs.read(&d.join("a.yml")).as_deref(), Some("x: 1\n"));
+        assert_eq!(fs.read(&d.join("nope")), None, "an unreadable path is None, never empty");
+        // A directory is not readable as text, and must not come back as an empty file.
+        assert_eq!(fs.read(&d.join("sub")), None);
+    }
+
+    /// `symlink_kind` is the one method whose whole purpose is *not* matching `kind`.
+    ///
+    /// A symlink reports `Other` however it resolves — the signal to resolve it properly —
+    /// while `kind` follows it. A test asserting only one of them would pass against an
+    /// implementation that had them identical, which is exactly the default this overrides.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_kind_refuses_to_follow_where_kind_follows() {
+        let d = tree("ansible-lsp-fs-links");
+        let link = d.join("link_to_a");
+        std::os::unix::fs::symlink(d.join("a.yml"), &link).unwrap();
+        let dirlink = d.join("link_to_sub");
+        std::os::unix::fs::symlink(d.join("sub"), &dirlink).unwrap();
+        let fs = StdFs;
+
+        assert_eq!(fs.kind(&link), Some(Kind::File), "kind follows the link");
+        assert_eq!(fs.symlink_kind(&link), Some(Kind::Other), "symlink_kind does not");
+        assert_eq!(fs.kind(&dirlink), Some(Kind::Dir));
+        assert_eq!(fs.symlink_kind(&dirlink), Some(Kind::Other));
+        // A link to nothing: both agree it is not there, by different routes.
+        let broken = d.join("broken");
+        std::os::unix::fs::symlink(d.join("gone"), &broken).unwrap();
+        assert_eq!(fs.kind(&broken), None, "kind follows into nothing");
+        assert_eq!(fs.symlink_kind(&broken), Some(Kind::Other), "the link itself is there");
+
+        // A symlinked directory still lists as a Dir, which is what keeps a symlinked role
+        // walkable — `file_type()` alone would call it Other.
+        let listed = fs.read_dir(&d);
+        let seen = listed.iter().find(|(p, _)| p == &dirlink).expect("the link is listed");
+        assert_eq!(seen.1, Kind::Dir, "read_dir resolves a symlinked directory");
+    }
+
+    /// `read_dir`, `read_dir_paths` and `walk` describe the same tree, so they must agree.
+    #[test]
+    fn the_listing_walk_and_paths_view_agree() {
+        let d = tree("ansible-lsp-fs-walk");
+        let fs = StdFs;
+
+        let mut names: Vec<String> = fs
+            .read_dir(&d)
+            .into_iter()
+            .filter_map(|(p, _)| p.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.yml", "sub"]);
+
+        // The default `read_dir_paths` is the same listing minus the kinds.
+        let mut paths = fs.read_dir_paths(&d);
+        paths.sort();
+        let mut expect = vec![d.join("a.yml"), d.join("sub")];
+        expect.sort();
+        assert_eq!(paths, expect);
+
+        // `walk` yields one entry per directory, files only — subdirectories appear as their
+        // own entry rather than as a name in the parent's list.
+        let walked = fs.walk(&d);
+        let of = |dir: &Path| {
+            walked.iter().find(|(p, _)| p == dir).map(|(_, f)| {
+                let mut v = f.clone();
+                v.sort();
+                v
+            })
+        };
+        assert_eq!(of(&d).unwrap(), ["a.yml"], "sub is a directory, not a file name");
+        assert_eq!(of(&d.join("sub")).unwrap(), ["b.yml"]);
+
+        // A path that is not a directory lists nothing rather than failing.
+        assert!(fs.read_dir(&d.join("a.yml")).is_empty());
+        assert!(fs.read_dir(&d.join("nope")).is_empty());
+    }
+
+    #[test]
+    fn canonical_and_same_file_see_through_a_relative_spelling() {
+        let d = tree("ansible-lsp-fs-canon");
+        let fs = StdFs;
+        let direct = d.join("a.yml");
+        let roundabout = d.join("sub").join("..").join("a.yml");
+
+        assert_eq!(fs.canonical(&direct), fs.canonical(&roundabout));
+        assert!(fs.same_file(&direct, &roundabout), "two spellings, one file");
+        assert!(!fs.same_file(&direct, &d.join("sub/b.yml")), "control: different files");
+        // Nothing there canonicalises to nothing, and `same_file` is false rather than a
+        // vacuous true when either side is missing.
+        assert_eq!(fs.canonical(&d.join("nope")), None);
+        assert!(!fs.same_file(&d.join("nope"), &d.join("nope")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_executable_reads_any_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tree("ansible-lsp-fs-exec");
+        let f = d.join("a.yml");
+        let fs = StdFs;
+        let chmod = |m: u32| {
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(m)).unwrap();
+        };
+        chmod(0o644);
+        assert!(!fs.is_executable(&f), "control: a plain file is not executable");
+        chmod(0o755);
+        assert!(fs.is_executable(&f), "owner bit");
+        chmod(0o604);
+        assert!(!fs.is_executable(&f));
+        chmod(0o614);
+        assert!(fs.is_executable(&f), "group bit alone counts");
+        chmod(0o645);
+        assert!(fs.is_executable(&f), "other bit alone counts");
+        chmod(0o644);
+        assert!(!fs.is_executable(&d.join("nope")), "a missing path is not executable");
+    }
+
+    /// The [`Counting`] decorator: every method tallied to its own counter, misses separated
+    /// from hits, and the totals summing what the five counters hold.
+    #[test]
+    fn counting_tallies_each_method_separately() {
+        let d = tree("ansible-lsp-fs-count");
+        let fs = Counting::new(StdFs);
+
+        fs.kind(&d.join("a.yml"));
+        fs.kind(&d.join("nope"));
+        fs.symlink_kind(&d.join("a.yml"));
+        fs.read(&d.join("a.yml"));
+        fs.read_dir(&d);
+        fs.walk(&d);
+        fs.canonical(&d.join("a.yml"));
+        fs.canonical(&d.join("nope"));
+
+        let s = fs.stats();
+        // `symlink_kind` shares the `kind` counter deliberately — both are one stat call.
+        assert_eq!(s.kind.calls.load(Relaxed), 3);
+        assert_eq!(s.read.calls.load(Relaxed), 1);
+        assert_eq!(s.read_dir.calls.load(Relaxed), 1);
+        assert_eq!(s.walk.calls.load(Relaxed), 1);
+        assert_eq!(s.canonical.calls.load(Relaxed), 2);
+        assert_eq!(s.calls(), 8, "the total is the sum of the five");
+
+        // Only `kind` and `canonical` can answer "nothing there", so only they miss.
+        assert_eq!(s.kind.misses.load(Relaxed), 1);
+        assert_eq!(s.canonical.misses.load(Relaxed), 1);
+        assert_eq!(s.read.misses.load(Relaxed), 0, "a read never reports a miss");
+        assert_eq!(s.misses(), 2);
+
+        // `each` names all five, in a fixed order the report depends on.
+        let names: Vec<&str> = s.each().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["kind", "read", "read_dir", "walk", "canonical"]);
+        assert_eq!(s.each().len(), 5);
+
+        // The decorator still answers correctly — counting must not change the answer.
+        assert_eq!(fs.inner().kind(&d.join("a.yml")), Some(Kind::File));
+        assert_eq!(fs.read(&d.join("a.yml")).as_deref(), Some("x: 1\n"));
+    }
+
+    /// Path tallying is off unless asked for, because it is the one thing here behind a lock.
+    #[test]
+    fn path_tallies_are_absent_until_the_env_asks_for_them() {
+        let d = tree("ansible-lsp-fs-paths");
+        let fs = Counting::new(StdFs);
+        fs.kind(&d.join("a.yml"));
+        assert_eq!(fs.stats().distinct(), None, "off by default");
+        assert!(fs.stats().top_paths(5).is_empty());
+    }
+
+    /// Stacking is the whole design: an inner [`Counting`] counts what reached the disk, an
+    /// outer one counts what was asked. Neither implementation tracks both.
+    #[test]
+    fn counting_wrappers_stack_and_arc_delegates_every_method() {
+        let d = tree("ansible-lsp-fs-stack");
+        let inner = std::sync::Arc::new(Counting::new(StdFs));
+        let outer = Counting::new(inner.clone());
+
+        // Through the Arc impl, which delegates each method to the inner value.
+        outer.kind(&d.join("a.yml"));
+        outer.symlink_kind(&d.join("a.yml"));
+        outer.read(&d.join("a.yml"));
+        outer.read_dir(&d);
+        outer.walk(&d);
+        outer.canonical(&d.join("a.yml"));
+
+        assert_eq!(outer.stats().calls(), 6, "the outer layer saw every ask");
+        assert_eq!(inner.stats().calls(), 6, "and each one reached the disk");
+
+        // The Arc's own trait impl answers the same as the thing it wraps.
+        let arc: std::sync::Arc<Counting<StdFs>> = inner.clone();
+        assert_eq!(arc.kind(&d.join("a.yml")), Some(Kind::File));
+        assert_eq!(arc.symlink_kind(&d.join("sub")), Some(Kind::Dir));
+        assert_eq!(arc.read(&d.join("a.yml")).as_deref(), Some("x: 1\n"));
+        assert_eq!(arc.read_dir(&d).len(), 2);
+        assert!(!arc.walk(&d).is_empty());
+        assert!(arc.canonical(&d.join("a.yml")).is_some());
+    }
 }

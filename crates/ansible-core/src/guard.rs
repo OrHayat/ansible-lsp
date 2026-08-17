@@ -330,4 +330,80 @@ mod tests {
     fn unguarded_use_is_not_our_case() {
         assert_eq!(coverage_gap(&[], &[g("a")]), None);
     }
+
+    /// Parenthesised and negated clauses, which the tokeniser and parser both have branches
+    /// for and nothing exercised.
+    ///
+    /// The pair matters together: `not (a or b)` and `not a or b` group differently, so a
+    /// parser that dropped the parens would still satisfy either one alone.
+    #[test]
+    fn parentheses_and_not_change_what_a_guard_covers() {
+        let gap = |u: &[&str], d: &[&[&str]]| {
+            coverage_gap(
+                &u.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                &d.iter()
+                    .map(|g| g.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        // A use guarded by `a or b`, defined only under `a`, is uncovered when b holds alone.
+        assert_eq!(gap(&["a or b"], &[&["a"]]), Some("b".into()));
+
+        // Parenthesised, the same shape must still be seen — the parens are the branch here.
+        assert_eq!(gap(&["(a or b)"], &[&["a"]]), Some("b".into()));
+        assert_eq!(gap(&["(a or b) and c"], &[&["a and c"]]), Some("b and c".into()));
+
+        // `not` is its own token. A use under `not a` is covered by a definition under
+        // `not a`, and uncovered by one under `a`.
+        assert_eq!(gap(&["not a"], &[&["not a"]]), None);
+        assert!(gap(&["not a"], &[&["a"]]).is_some());
+
+        // Grouping is load-bearing: `not (a or b)` is true only when both are false, so a
+        // definition under `not a` covers it. Without the parens `not a or b` does not.
+        assert_eq!(gap(&["not (a or b)"], &[&["not a"]]), None);
+
+        // The all-false counterexample takes the negated rendering, which is the only path
+        // through `describe`'s fallback arm.
+        let negated = gap(&["not a"], &[&["a"]]).unwrap();
+        assert_eq!(negated, "not (a)");
+    }
+
+    /// The refusals — each returns `None` for a different reason, and each is a branch.
+    #[test]
+    fn coverage_gap_declines_what_it_cannot_soundly_relate() {
+        let gap = |u: &[&str], d: &[&[&str]]| {
+            coverage_gap(
+                &u.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                &d.iter()
+                    .map(|g| g.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        // An unguarded use: nothing to compare.
+        assert_eq!(gap(&[], &[&["a"]]), None);
+        // An unconditional definition covers every case.
+        assert_eq!(gap(&["a"], &[&[]]), None);
+        // No definitions at all is "never defined", a different rule's business.
+        assert_eq!(gap(&["a"], &[]), None);
+        // A definition naming an atom the use never mentions is outside its vocabulary.
+        assert_eq!(gap(&["a"], &[&["b"]]), None);
+        // Too many atoms to enumerate — 17 distinct names, one past the cap.
+        let many: Vec<String> = (0..17).map(|i| format!("v{i}")).collect();
+        let one = many.join(" or ");
+        assert_eq!(coverage_gap(&[one], &[vec!["v0".to_string()]].as_slice()), None);
+    }
+
+    /// [`crate::condition::is_guarded`] — every clause must guard itself, so one bare clause spoils the set.
+    #[test]
+    fn is_guarded_needs_every_clause_to_handle_undefinedness() {
+        let g = |c: &[&str]| crate::condition::is_guarded(&c.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert!(g(&["x | default(false)"]));
+        assert!(g(&["x is defined"]));
+        assert!(g(&["x is not defined"]));
+        assert!(g(&["x is defined", "y | default(1)"]), "each clause guards itself");
+        assert!(!g(&["x is defined", "y"]), "one bare clause is enough to spoil it");
+        assert!(!g(&["x"]));
+        assert!(!g(&[]), "no clauses is not guarded, it is unguarded");
+    }
 }
