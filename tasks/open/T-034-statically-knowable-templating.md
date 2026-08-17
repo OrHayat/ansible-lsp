@@ -39,6 +39,37 @@ this globs `*.j2`; it should resolve to exactly two files, and warn if either is
 `TaskContext` already reads `loop:`/`with_*` to set `repeated`, but discards the values.
 Capturing them is the same change that `conditions` needed.
 
+## What `| default('literal')` actually costs today (measured 2026-08-17)
+
+`substitute_literals` accepts only a **bare identifier** — any filter and the whole value is
+abandoned. So the commonest defensive idiom in Ansible never substitutes, and the reference
+falls through to globbing, which does not merely miss the answer: it returns wrong ones.
+
+Two candidate files, one variable with a known literal:
+
+| value                                       | result |
+| ------------------------------------------- | ------ |
+| `{{ shared_dir }}/inc.yml`                  | 1 target — `tasks/inc.yml`, substituted |
+| `{{ shared_dir \| default('tasks') }}/inc.yml` | 2 targets — `other/inc.yml` **and** `tasks/inc.yml`, globbed |
+
+The decoy is what makes this readable. With only the real file present both rows say
+"Resolved" and the filter looks supported — a probe that cannot fail. The second file is the
+control that separates substitution from a glob that happened to land.
+
+Worth noting for the implementation: `{{ x | default('lit') }}` is **always** knowable, which
+is stronger than the table above suggests. If `x` has a known literal, that value wins; if `x`
+has no definition anywhere, the literal wins. Two candidates at worst, never zero — strictly
+better than the glob.
+
+Real instance, and it is knowable twice over:
+`ad_keytab_path: "{{ samba_ctdb_deploy_dir | default('/opt/samba-docker') }}/krb5.keytab"`
+in `roles/ad/defaults/main.yml`, where `samba_ctdb_deploy_dir` is also defined outright at
+`group_vars/all.yml:452` — and `GroupVarsAll` is already an accepted literal source, so the
+value is sitting in the `literals` map when the filter throws it away.
+
+That one is a *hover* win, not a navigation win: the path names a file on the managed host,
+not in the repo, so it must never be resolved as a workspace reference — only explained.
+
 ## Approach
 
 Extend the expansion that `role_path` uses, rather than adding a parallel mechanism.

@@ -159,6 +159,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
+| T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -209,6 +210,7 @@ T-021 is now unblocked on that side.
 | T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](open/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | S    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
+| T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
