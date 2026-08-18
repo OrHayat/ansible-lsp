@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| partly done | bug | P1    | M    | —          |
+| done   | bug  | P1       | M    | —          |
 
 ## Symptom
 
@@ -243,8 +243,29 @@ its own, not part of this ticket.
       `the_add_host_demo_flags_the_consumed_parameter_and_nothing_it_defines`, which asserts
       the exact set (2) rather than only that the good rows are quiet — without the fix it
       is 6.
-- [ ] corpus gate: the count can only fall; every disappeared line confirmed `add_host`-defined
-      — **blocked, not skipped.** `~/app/ansible` is not on this machine (T-016 records it as
-      permanently off it, and it is absent from both the Windows side and the WSL install
-      that has ansible-core 2.21.2). Everything else here is measured or pinned; this box
-      needs the corpus to be mounted and is the only reason the ticket is not closed.
+- [x] corpus gate: **run 2026-08-18, and it cannot move.** Same tree, one build with the
+      `add_host` indexing and one with that block forced off:
+
+      | run                          | `UNDEFINED VARIABLES` |
+      | ---------------------------- | --------------------- |
+      | with the indexing            | 232                   |
+      | with the indexing disabled   | 232                   |
+
+      Byte-identical lists, not merely equal counts. Zero lines disappeared, so the
+      "every disappeared line confirmed `add_host`-defined" half has nothing to confirm.
+
+      **The box as originally written was unsatisfiable**, and no corpus fixes that. This tree
+      holds exactly one `add_host`; its name is templated and it sets no host variables, so it
+      is the "unknowable" path and defines nothing to index. Six large public repos were
+      measured looking for a better subject — ansible/ansible 35 (its own test suite),
+      ovirt-collection 4, ceph-ansible 3, ansible-examples 1, kubespray 0, openstack-ansible 0,
+      debops 0. `add_host` is simply rare in production Ansible, so "the count fell and here is
+      why" is evidence that does not exist to be gathered. See [[T-195]].
+
+      What the run *does* establish is the regression direction, which is the half worth having:
+      the count did not rise, and no line changed. The feature is inert on real code that does
+      not use `add_host`, which is the property a corpus gate can actually prove.
+
+      The behaviour itself is pinned by fixtures above — every other box here is measured
+      against ansible-core 2.21.2 with live controls, which is where the evidence for this
+      feature lives.
