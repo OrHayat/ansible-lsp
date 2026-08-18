@@ -226,7 +226,6 @@ T-021 is now unblocked on that side.
 
 | ID    | Title                                                          | Size |
 | ----- | -------------------------------------------------------------- | ---- |
-| T-030 | [`site.yml:6` references a role that doesn't exist](open/T-030-fix-lustre-reference.md) | S |
 
 ## Closed
 
@@ -303,6 +302,7 @@ T-021 is now unblocked on that side.
 | T-179 | **bug** · [unknown-host fires on a host an included file's add_host creates](closed/T-179-unknown-host-fires-on-a-host-an-included-file-s-add-host-cre.md) | done     |
 | T-182 | [Derive a variable's value domain from the assert that constrains it](closed/T-182-derive-a-variable-s-value-domain-from-the-assert-that-constr.md) | **rejected** |
 | T-183 | **bug** · [scan drops an unreadable file silently, hiding its references from the gate](closed/T-183-scan-drops-an-unreadable-file-silently-hiding-its-references.md) | done     |
+| T-030 | [`site.yml:6` references a role that doesn't exist](closed/T-030-fix-lustre-reference.md) | **rejected** |
 
 ## Settled — don't re-derive these
 
