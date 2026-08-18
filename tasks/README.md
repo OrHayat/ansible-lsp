@@ -217,6 +217,7 @@ T-021 is now unblocked on that side.
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 | T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
+| T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
