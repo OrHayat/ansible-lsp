@@ -165,6 +165,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
 | T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
+| T-194 | [The scan reports templated paths as unresolved that the editor navigates](open/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | S    | —    |
+| T-195 | [Validate rules against public corpora, not one codebase](open/T-195-validate-rules-against-public-corpora-not-one-codebase.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -218,6 +220,7 @@ T-021 is now unblocked on that side.
 | T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
+| T-193 | [A looped task's register has no module keys, only results](open/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
