@@ -164,6 +164,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-187 | **bug** · [Conditions without spaces around their operators never classify](open/T-187-conditions-without-spaces-around-their-operators-never-class.md) | S    | —    |
 | T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
+| T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
