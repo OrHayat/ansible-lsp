@@ -100,6 +100,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](open/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | M    | —          |
+| T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](open/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -160,6 +161,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | —    |
+| T-187 | **bug** · [Conditions without spaces around their operators never classify](open/T-187-conditions-without-spaces-around-their-operators-never-class.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
