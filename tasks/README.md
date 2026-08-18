@@ -163,6 +163,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | —    |
 | T-187 | **bug** · [Conditions without spaces around their operators never classify](open/T-187-conditions-without-spaces-around-their-operators-never-class.md) | S    | —    |
 | T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
+| T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -214,6 +215,7 @@ T-021 is now unblocked on that side.
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 | T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
+| T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
