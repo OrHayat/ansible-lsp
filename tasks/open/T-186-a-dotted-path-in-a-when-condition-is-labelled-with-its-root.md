@@ -45,22 +45,38 @@ the shared extractor, not in the arm that surfaced it.
 
 ## Fix
 
-Two candidate directions; pick with a probe, do not assume:
+The field is misnamed, and that is the defect rather than a consequence of it. `r.stdout` is
+not a variable — it is an **expression**: an accessor applied to the variable `r`. Jinja
+resolves it as `getattr(r, 'stdout')` with an `r['stdout']` fallback. The same is true in every
+language that has the syntax: `r.stdout` is a field access, `r` is the name being bound.
 
-1. **Carry the full path** so the label reads `runs only if r.stdout is non-empty`. Correct and
-   keeps the hint. `Verdict::var()` then returns something that is not a variable name — today
-   that is safe, because `var()` has exactly **one** caller and it is a test, but a future
-   consumer doing a definition lookup on it would break. If this direction is taken, either
-   split the field (root for lookup, full path for display) or document the meaning at the
-   type.
-2. **Refuse the shape** — a dotted path classifies as `Unknown`, so no hint is shown. Loses
-   information but cannot mislead.
+`Verdict::RequiresNonEmpty { var: String }` collapses those into one string, so the type cannot
+represent the thing the condition actually talks about. Truncating to the root is the only
+option the type leaves, and the wrong label follows from that automatically.
 
-Direction 1 is preferred: the hint is genuinely useful on a registered result, and silence is
-the outcome we already get for everything unclassified.
+Model the two separately, because two different consumers want two different halves:
 
-Whichever is chosen, `label()` and `requirement()` are the only display consumers
-(`main.rs:1909`, `main.rs:1917`) and both must be asserted, not just the one in the repro.
+- the **root variable** (`r`) — what a definition lookup, hover target, or provenance walk must
+  resolve; the accessor is meaningless to those
+- the **full expression** (`r.stdout`) — what the label and `requirement()` must render, because
+  it is what the condition is a statement about
+
+Something like `{ root: String, expr: String }`, or a parsed accessor path if the shapes below
+argue for it. Do not simply widen `var` to hold `"r.stdout"`: that makes `Verdict::var()` return
+a value no lookup can use, and today's single caller (a test) would stop being a warning sign.
+
+The shapes that must be representable, all real Jinja:
+
+```
+r.stdout              attribute
+r['stdout']           subscript, same meaning
+r.results[0].stdout   mixed, through a list
+hostvars[h].x         subscript with a variable key — root is `hostvars`, not `h`
+```
+
+Deciding how far to model these is part of the ticket. A defensible floor: represent root plus
+the literal accessor text, and classify anything with a non-literal subscript as `Unknown`
+rather than guessing a root.
 
 ## Done when
 
@@ -73,3 +89,5 @@ Whichever is chosen, `label()` and `requirement()` are the only display consumer
 - [ ] a deeper path (`r.results[0].stdout`) is asserted too — either correct or `Unknown`,
       not a claim about `r`
 - [ ] seen red before the fix
+
+**Root cause:** see [[T-188]] — the classifier matches strings; this is one symptom.

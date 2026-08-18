@@ -162,6 +162,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | —    |
 | T-187 | **bug** · [Conditions without spaces around their operators never classify](open/T-187-conditions-without-spaces-around-their-operators-never-class.md) | S    | —    |
+| T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

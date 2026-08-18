@@ -52,3 +52,5 @@ rise, and the drift test is what proves the change did something.
 - [ ] the T-032 corpus classification percentage is re-measured and recorded here — it must not
       fall, and if it does not rise the fix did nothing worth having
 - [ ] seen red before the fix
+
+**Root cause:** see [[T-188]] — the classifier matches strings; this is one symptom.
