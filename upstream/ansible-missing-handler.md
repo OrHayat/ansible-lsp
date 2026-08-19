@@ -157,9 +157,26 @@ straight fix.
   `tags` (`playbook/taggable.py:53-54`). So `notify: "restart a, restart b"` is **one**
   handler named `"restart a, restart b"` — which, combined with the above, is silent on every
   unchanged run. Worth mentioning in the same report; possibly its own issue.
-- Duplicate handler names are not reported either: handlers are iterated reversed so "the last
-  handler loaded with the same name wins" (`plugins/strategy/__init__.py:468-469`), and the
-  earlier one is unreachable dead code.
+- Duplicate handler names are not reported either, and the comment describing which one wins
+  is misleading (`plugins/strategy/__init__.py:468-469`):
+
+  ```python
+  handlers = [h for b in reversed(iterator._play.handlers) for h in b.block]
+  # iterate in reversed order since last handler loaded with the same name wins
+  ```
+
+  `reversed` applies to the *blocks*, not to the handlers inside one, and the match loop
+  `break`s on its first hit. So "last loaded wins" holds only across blocks. Measured on
+  2.21.2, both directions:
+
+  | duplicate spelling                         | winner                    |
+  | ------------------------------------------ | ------------------------- |
+  | two handlers, same name, one `handlers:` list | the **first** one        |
+  | a role's `handlers/main.yml` vs the play's `handlers:` | the **play's** (later block) |
+
+  So the unreachable one is the *second* duplicate within a block — the opposite of what the
+  comment leads a reader to expect — and the first duplicate across blocks. Either way it is
+  silent: nothing reports that a handler can never run.
 
 ## Our side
 

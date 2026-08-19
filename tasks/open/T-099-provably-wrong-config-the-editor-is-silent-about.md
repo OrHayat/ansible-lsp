@@ -43,6 +43,9 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-157 — A block or import_tasks in handlers: makes the handler's name unnotifiable
 - [ ] T-164 — Role params in meta/main.yml dependencies get no diagnostic
 - [x] T-165 — A loop on meta: is silently discarded
+- [ ] T-196 — missing-handler: warn where the handler set is provably closed
+- [ ] T-197 — A notify resolved only by a later dynamic include_role is fatal on order alone
+- [ ] T-198 — A handler with a templated name and no listen: can never be notified
 
 ## Done when
 

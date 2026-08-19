@@ -91,7 +91,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
-| T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
@@ -99,6 +98,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
+| T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 
 ### P2 — coverage and usability
 
@@ -165,6 +165,9 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
 | T-194 | [The scan reports templated paths as unresolved that the editor navigates](open/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | S    | —    |
 | T-195 | [Validate rules against public corpora, not one codebase](open/T-195-validate-rules-against-public-corpora-not-one-codebase.md) | M    | —    |
+| T-197 | [A notify resolved only by a later dynamic include_role is fatal on order alone](open/T-197-a-notify-resolved-only-by-a-later-dynamic-include-role-is-fa.md) | M    | T-196 |
+| T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
+| T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
