@@ -99,7 +99,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
-| T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](open/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | S    | —          |
 
 ### P2 — coverage and usability
 
@@ -303,6 +302,7 @@ T-021 is now unblocked on that side.
 | T-183 | **bug** · [scan drops an unreadable file silently, hiding its references from the gate](closed/T-183-scan-drops-an-unreadable-file-silently-hiding-its-references.md) | done     |
 | T-030 | [`site.yml:6` references a role that doesn't exist](closed/T-030-fix-lustre-reference.md) | **rejected** |
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](closed/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | done     |
+| T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](closed/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | done     |
 
 ## Settled — don't re-derive these
 

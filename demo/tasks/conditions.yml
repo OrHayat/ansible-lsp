@@ -65,6 +65,14 @@
   ansible.builtin.include_tasks: sibling.yml
   when: demo_hosts | default('') | length > 0
 
+- name: "RequiresNonEmpty on an accessor — the hint names the path, not the variable"
+  # T-186: this used to read "runs only if demo_result is non-empty". `demo_result` is a
+  # registered result — a dict carrying `changed`, `rc` and friends, so never empty — which
+  # made the hint promise a run in exactly the cases the task is skipped. What has to be
+  # non-empty is `demo_result.stdout`, and the root stays available underneath for lookups.
+  ansible.builtin.include_tasks: sibling.yml
+  when: demo_result.stdout | length > 0
+
 - name: "Always — a no-op condition, the mirror of `when: false`"
   # Worth surfacing because it reads as if it gates something and doesn't. Usually a
   # leftover from debugging.
@@ -95,6 +103,12 @@
 - name: "NO HINT — an unrecognised filter could change the result"
   ansible.builtin.include_tasks: sibling.yml
   when: demo_hosts | default('') | some_custom_filter
+
+- name: "NO HINT — a subscript that is itself a variable, so the path cannot be spelled"
+  # The root here is `hostvars`, never `demo_target`. But naming a path we cannot write out
+  # is the T-186 mistake in the other direction, so the whole reference is refused.
+  ansible.builtin.include_tasks: sibling.yml
+  when: hostvars[demo_target].stdout | length > 0
 
 # ------------------------------------------------------------- ANDed CLAUSES (a list)
 # A list `when:` is clauses ANDed. Reporting one of them as the whole condition

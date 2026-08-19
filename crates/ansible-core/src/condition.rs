@@ -77,33 +77,80 @@ fn strip_outer_parens(s: &str) -> &str {
     }
 }
 
+/// A variable reference in a condition: the name that is bound, and the accessor path
+/// applied to it. They part company the moment there is an accessor — `r.stdout` binds `r`,
+/// but what the condition is a statement *about* is `r.stdout` — and the two halves go to
+/// different consumers. A definition lookup, hover target or provenance walk resolves the
+/// root and has no use for the accessor; a label or a requirement must render the whole
+/// path, because that is what the condition said.
+///
+/// Collapsing both into one `String` is T-186: only the root fit, so the hint on
+/// `r.stdout | length > 0` read "runs only if r is non-empty". A registered result is a dict
+/// carrying `changed`, `rc` and friends, so `r` is never empty — the hint asserted the task
+/// would run in exactly the cases it is skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarRef {
+    root: String,
+    expr: String,
+}
+
+impl VarRef {
+    /// The name a lookup resolves. Never the accessor path — nothing can look that up.
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
+    /// The reference as written, which is the only thing a label may make a claim about.
+    pub fn expr(&self) -> &str {
+        &self.expr
+    }
+}
+
+/// Renders the expression, so every `{var}` in a label or requirement names the whole path
+/// without each call site having to remember which half it wanted.
+impl std::fmt::Display for VarRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.expr)
+    }
+}
+
+/// Test-only, so a fabricated root cannot reach production: real references come from
+/// [`parse_var_ref`], which refuses shapes this cannot represent. Panics rather than
+/// inventing a root, so a typo in an expectation fails instead of quietly asserting itself.
+#[cfg(test)]
+impl From<&str> for VarRef {
+    fn from(s: &str) -> Self {
+        parse_var_ref(s).unwrap_or_else(|| panic!("not a variable reference: {s}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// `not (skip_x | default(false) | bool)` — 80% of import-level conditions here.
-    UnlessSet { var: String },
+    UnlessSet { var: VarRef },
     /// `x | default(true) | bool`
-    UnlessCleared { var: String },
+    UnlessCleared { var: VarRef },
     /// `x | default(false) | bool` — the flag has to be turned on.
-    OnlyIfSet { var: String },
+    OnlyIfSet { var: VarRef },
     /// `mode | default('native') == 'native'`. `matches_default` is whether the
     /// defaulted value satisfies the comparison, i.e. whether this runs when unset.
     WhenEquals {
-        var: String,
+        var: VarRef,
         value: String,
         negated: bool,
         matches_default: bool,
     },
     /// `mode in ['a', 'b']`
     WhenIn {
-        var: String,
+        var: VarRef,
         values: Vec<String>,
         negated: bool,
     },
     /// `x is defined` / `x is not defined`. Statically this is the interesting one:
     /// if `x` is defined nowhere in the workspace, the branch can never be taken.
-    RequiresDefined { var: String, negated: bool },
+    RequiresDefined { var: VarRef, negated: bool },
     /// `x | default('') | length > 0`
-    RequiresNonEmpty { var: String },
+    RequiresNonEmpty { var: VarRef },
     /// Literal `when: false`.
     Never,
     /// Literal `when: true` — the condition has no effect at all.
@@ -199,7 +246,10 @@ impl Verdict {
         })
     }
 
-    /// The variable this verdict hinges on, if it hinges on exactly one.
+    /// The variable this verdict hinges on, if it hinges on exactly one. The **root**, so
+    /// the result is a name something can resolve — `r.stdout` hinges on `r`. What the
+    /// verdict is a statement about is the whole path, which is what [`Verdict::label`]
+    /// renders; the two are deliberately not the same string (T-186).
     pub fn var(&self) -> Option<&str> {
         match self {
             Verdict::UnlessSet { var }
@@ -208,7 +258,7 @@ impl Verdict {
             | Verdict::WhenEquals { var, .. }
             | Verdict::WhenIn { var, .. }
             | Verdict::RequiresDefined { var, .. }
-            | Verdict::RequiresNonEmpty { var } => Some(var),
+            | Verdict::RequiresNonEmpty { var } => Some(var.root()),
             Verdict::Never | Verdict::Always | Verdict::All { .. } | Verdict::Unknown => None,
         }
     }
@@ -860,7 +910,7 @@ pub fn classify(cond: &str) -> Verdict {
             None => (false, rest.trim()),
         };
         if test == "defined" {
-            if let Some(var) = plain_var(lhs.trim()) {
+            if let Some(var) = parse_var_ref(lhs.trim()) {
                 return Verdict::RequiresDefined { var, negated };
             }
         }
@@ -870,7 +920,7 @@ pub fn classify(cond: &str) -> Verdict {
     // `x | default('') | length > 0`
     if let Some(lhs) = s.strip_suffix("> 0").map(str::trim) {
         if let Some(base) = lhs.strip_suffix("| length").map(str::trim) {
-            if let Some(var) = parse_defaulted(base).map(|(v, _)| v).or_else(|| plain_var(base)) {
+            if let Some(var) = parse_defaulted(base).map(|(v, _)| v).or_else(|| parse_var_ref(base)) {
                 return Verdict::RequiresNonEmpty { var };
             }
         }
@@ -883,7 +933,7 @@ pub fn classify(cond: &str) -> Verdict {
             Some(l) => (l.trim(), true),
             None => (lhs, false),
         };
-        if let Some(var) = parse_defaulted(lhs).map(|(v, _)| v).or_else(|| plain_var(lhs)) {
+        if let Some(var) = parse_defaulted(lhs).map(|(v, _)| v).or_else(|| parse_var_ref(lhs)) {
             let values = list_literals(rhs);
             if !values.is_empty() {
                 return Verdict::WhenIn { var, values, negated };
@@ -902,7 +952,7 @@ pub fn classify(cond: &str) -> Verdict {
                 return Verdict::WhenEquals { var, value, negated, matches_default };
             }
             // Unguarded `x == 'lit'`: no default, so nothing is known about an unset run.
-            if plain_var(lhs).is_some() {
+            if parse_var_ref(lhs).is_some() {
                 return Verdict::Unknown;
             }
             return Verdict::Unknown;
@@ -1056,25 +1106,61 @@ fn list_literals(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// A bare variable name, with an optional dotted path. Returns the root.
-fn plain_var(s: &str) -> Option<String> {
+/// A variable, plus any attribute and literal-subscript accessors hanging off it:
+/// `r`, `r.stdout`, `r['stdout']`, `r.results[0].stdout`. Everything after the root is kept
+/// rather than cut off, which is what lets a label name what the condition actually talks
+/// about instead of the variable underneath it.
+///
+/// A subscript that is not a literal — `hostvars[h].x` — makes the path unspellable here,
+/// since `h` is exactly the thing that is not known statically. The whole reference is
+/// refused in that case. Reporting the root instead would be T-186 again: `hostvars` is
+/// genuinely the root, and a claim about it is still not a claim the condition made.
+fn parse_var_ref(s: &str) -> Option<VarRef> {
     let s = strip_outer_parens(s);
-    let root = s.split('.').next()?.trim();
-    if root.is_empty() || !root.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
-    }
+    let mut i = ident_end(s, 0)?;
+    let root = &s[..i];
     if NOT_VARIABLES.contains(&root) {
         return None;
     }
-    Some(root.to_string())
+    while i < s.len() {
+        i = match s.as_bytes()[i] {
+            b'.' => ident_end(s, i + 1)?,
+            b'[' => literal_subscript_end(s, i)?,
+            _ => return None,
+        };
+    }
+    Some(VarRef { root: root.to_string(), expr: s.to_string() })
 }
 
-/// `x | default(false) | bool` -> `("x", "false")`. `None` unless the pipeline is a plain
-/// variable followed by a `default(...)`, so anything with real logic falls through.
-fn parse_defaulted(s: &str) -> Option<(String, String)> {
+/// End of the identifier starting at `from`, or `None` if there isn't one.
+fn ident_end(s: &str, from: usize) -> Option<usize> {
+    let end = s[from..]
+        .char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_'))
+        .map_or(s.len(), |(i, _)| from + i);
+    (end > from).then_some(end)
+}
+
+/// End of a `['key']` or `[0]` subscript opening at `open`, or `None` for anything else —
+/// including a quoted key containing a `]`, where the first `]` found is the wrong one and
+/// the slice fails to read as a literal. Refusing is the right answer either way.
+fn literal_subscript_end(s: &str, open: usize) -> Option<usize> {
+    let close = open + 1 + s[open + 1..].find(']')?;
+    let inner = s[open + 1..close].trim();
+    let quoted = inner.len() >= 2
+        && inner.starts_with(['\'', '"'])
+        && inner.ends_with(inner.chars().next()?)
+        && !inner[1..inner.len() - 1].contains(inner.chars().next()?);
+    let indexed = !inner.is_empty() && inner.bytes().all(|c| c.is_ascii_digit());
+    (quoted || indexed).then_some(close + 1)
+}
+
+/// `x | default(false) | bool` -> `("x", "false")`. `None` unless the pipeline is a single
+/// reference followed by a `default(...)`, so anything with real logic falls through.
+fn parse_defaulted(s: &str) -> Option<(VarRef, String)> {
     let s = strip_outer_parens(s);
     let mut parts = s.split('|').map(str::trim);
-    let var = plain_var(parts.next()?)?;
+    let var = parse_var_ref(parts.next()?)?;
     let mut dflt = None;
     for p in parts {
         if let Some(arg) = p.strip_prefix("default(").and_then(|a| a.strip_suffix(')')) {
@@ -1313,6 +1399,68 @@ mod tests {
             classify("storage_hosts | default('') | length > 0"),
             Verdict::RequiresNonEmpty { var: "storage_hosts".into() }
         );
+    }
+
+    /// T-186. Every arm that carries a variable is fed by the same two extractors, and those
+    /// kept only the root of a dotted path — so the hint made a claim about `r` when the
+    /// condition was about `r.stdout`. For a registered result that is the dangerous
+    /// direction: `r` is a dict with `changed` and `rc` in it and is never empty, so the hint
+    /// promised a run that will be skipped. Asserted per arm rather than on the one that
+    /// surfaced it, because the defect is in the shared extractor.
+    #[test]
+    fn a_dotted_path_is_named_in_full_never_reduced_to_its_root() {
+        let cases = [
+            ("not (r.skip | default(false) | bool)", "runs unless r.skip is set", "r.skip unset"),
+            (
+                "r.enabled | default(true) | bool",
+                "runs unless r.enabled is false",
+                "r.enabled not false",
+            ),
+            ("r.flag | default(false) | bool", "runs only if r.flag is set", "r.flag set"),
+            (
+                "r.mode | default('native') == 'native'",
+                "runs unless r.mode changes from native",
+                "r.mode = native",
+            ),
+            ("r.mode in ['a', 'b']", "runs only if r.mode is one of [a, b]", "r.mode in [a, b]"),
+            ("r.stdout is defined", "runs only if r.stdout is set", "r.stdout set"),
+            ("r.stdout | length > 0", "runs only if r.stdout is non-empty", "r.stdout non-empty"),
+        ];
+        for (cond, label, requirement) in cases {
+            let v = classify(cond);
+            assert_eq!(v.label().as_deref(), Some(label), "{cond}");
+            assert_eq!(v.requirement().as_deref(), Some(requirement), "{cond}");
+            // The root stays separately available: it is what a definition lookup or
+            // provenance walk resolves, and widening `var` to hold the whole path would fix
+            // the label by handing every other consumer a name it cannot look up.
+            assert_eq!(v.var(), Some("r"), "{cond}");
+        }
+        // The control. A bare name has no accessor, so root and label are the same word and
+        // this row must come out exactly as it did before the split existed.
+        let plain = classify("hosts | length > 0");
+        assert_eq!(plain, Verdict::RequiresNonEmpty { var: "hosts".into() });
+        assert_eq!(plain.label().unwrap(), "runs only if hosts is non-empty");
+        assert_eq!(plain.var(), Some("hosts"));
+    }
+
+    /// The rest of the accessor shapes, all real Jinja. The floor T-186 settled on is: name
+    /// the path when every step of it is literal, and refuse the whole reference otherwise
+    /// rather than reporting a root the condition never talked about.
+    #[test]
+    fn accessor_paths_are_named_whole_or_refused() {
+        for (cond, want) in [
+            ("r['stdout'] | length > 0", "runs only if r['stdout'] is non-empty"),
+            ("r.results[0].stdout | length > 0", "runs only if r.results[0].stdout is non-empty"),
+        ] {
+            let v = classify(cond);
+            assert_eq!(v.label().as_deref(), Some(want), "{cond}");
+            assert_eq!(v.var(), Some("r"), "{cond}");
+        }
+        // A subscript that is itself a variable: the key is unknown here, so the path cannot
+        // be stated. `hostvars` is the root — never `h` — but naming a path we cannot spell
+        // is the T-186 mistake again, so this declines instead.
+        assert_eq!(classify("hostvars[h].stdout | length > 0"), Verdict::Unknown);
+        assert_eq!(classify("hostvars[h].mode | default('a') == 'a'"), Verdict::Unknown);
     }
 
     #[test]
@@ -1978,6 +2126,12 @@ mod corpus {
             "RequiresDefined !"
         );
         assert!(has(&|v| matches!(v, Verdict::RequiresNonEmpty { .. })), "RequiresNonEmpty");
+        // T-186, pinned by its exact wording: the label is the demo's claim, and the claim
+        // is that the hint names the accessor path rather than the variable it hangs off.
+        assert!(
+            has(&|v| v.label().as_deref() == Some("runs only if demo_result.stdout is non-empty")),
+            "the accessor hint stopped naming the path (T-186)"
+        );
         assert!(has(&|v| *v == Verdict::Never), "Never");
         assert!(has(&|v| *v == Verdict::Always), "Always");
         assert!(has(&|v| *v == Verdict::Unknown), "Unknown");
@@ -2049,10 +2203,13 @@ mod corpus {
             .iter()
             .filter(|c| is_guarded(std::slice::from_ref(&(*c).to_string())))
             .count();
-        // 14/111 and 10/111 as measured. Low by design, and in line with the full sweep
+        // 16/111 and 10/111 as measured. Low by design, and in line with the full sweep
         // (166/1313 across the collections, 221/2261 across kubespray) — the sample tracks
         // the corpus it came from rather than being cherry-picked for a flattering number.
-        assert!(classified >= 14, "only {classified}/{} classified", REAL_WHENS.len());
+        // It was 14 before T-186: reading the accessor path instead of cutting it off also
+        // reads two `acme_*[N].subject_key_identifier is defined` rows that used to be
+        // refused outright, so the correctness fix bought reach rather than costing it.
+        assert!(classified >= 16, "only {classified}/{} classified", REAL_WHENS.len());
         assert!(guarded >= 10, "only {guarded} guarded conditions recognised");
     }
 
