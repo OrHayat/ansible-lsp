@@ -78,6 +78,59 @@ $ ansible-playbook repro.yml     # run 2 -> ok=1  changed=0  failed=0
 task changed. Either check it unconditionally when `notify` is present, or document the
 `changed` gate — the current text does not hint at it.
 
+**The value is already in hand, unconditionally, before the module runs.** The natural defence
+of the gate — that a `notify:` can be templated, so its names are host-dependent and only
+knowable at run time — does not survive reading the order of operations. `notify` is a plain
+`FieldAttribute(isa='list')` (`playbook/notifiable.py:10`) with no static flag, so
+`Base.post_validate` templates it like any other field (`playbook/base.py:591`), and that call
+happens at `executor/task_executor.py:443` — before `self._handler.run(...)` at
+`executor/task_executor.py:538`. The play's handler list was compiled long before either.
+
+So at line 443 both halves of the check are present: the fully rendered notification names, and
+the handlers to match them against. The check is not late because it cannot be early. It is
+late because it was written where `changed` happened to be available, and then gated on it.
+
+Measured on **2.21.2** (the source above is 2.22.0.dev0; the gate is identical in both). One
+play, one run, neither task reporting `changed`:
+
+```yaml
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: B — literal name matching no handler
+      ansible.builtin.debug: { msg: t }
+      notify: definitely not a real handler
+
+    - name: A — undefined var inside notify
+      ansible.builtin.debug: { msg: t }
+      notify: "restart {{ nonexistent_var }}"
+  handlers:
+    - name: a real handler
+      ansible.builtin.debug: { msg: hello }
+```
+
+```
+TASK [B — literal name matching no handler] ok: [localhost]
+TASK [A — undefined var inside notify]
+[ERROR]: Task failed: Error processing keyword 'notify': 'nonexistent_var' is undefined
+localhost : ok=1  changed=0  unreachable=0  failed=1
+```
+
+One keyword, one run, two properties: an undefined variable *inside* the notify is fatal on a
+converged host, while a literal name that matches no handler at all is silent on that same
+host. The eager half already proves the lazy half could be eager too.
+
+**Also measured:** `ERROR_ON_MISSING_HANDLER=False` (`ANSIBLE_ERROR_ON_MISSING_HANDLER`,
+`config/base.yml:1376`, default `True`) turns the changed-run failure into
+`display.warning` with `exit=0`, as the code above says. It does not make the unchanged run
+report anything — the toggle chooses the *severity* of a check that the `changed` gate has
+already decided not to run.
+
+**A `listen:` topic with no listeners takes the identical path.** Measured: notifying a topic
+nobody listens to produces the same `The requested handler '...' was not found in either the
+main handlers list nor in the listening handlers list`, from the same `handler is Sentinel`
+branch, and inherits the same `changed` gate. Any fix here covers both.
+
 **Suggested fix.** Hoist the existence check out of the `changed` branch, keeping the
 *notification recording* where it is:
 
