@@ -103,6 +103,10 @@ pub struct Block {
     pub when_span: Option<Span>,
     /// `vars:` bound at block scope.
     pub vars: Vec<VarBinding>,
+    /// `notify:` written on the block, which every task inside it inherits. Legal here
+    /// (`NOTIFIABLE` is in Block's set, `keywords.rs`) — unlike `listen:`, which is not,
+    /// and so has no field on this type.
+    pub notify: Vec<HandlerRef>,
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this block.
     pub unknown_keys: Vec<UnknownKey>,
@@ -132,6 +136,13 @@ pub struct Task {
     pub register_span: Option<Span>,
     /// `vars:` bound at task scope.
     pub vars: Vec<VarBinding>,
+    /// Handler names or `listen:` topics this task notifies.
+    pub notify: Vec<HandlerRef>,
+    /// `listen:` topics this task subscribes to. Only meaningful in handler position, and
+    /// this type does not know whether it is in one — `listen:` on an ordinary task is
+    /// already reported as an invalid attribute, so filling the field regardless keeps
+    /// that verdict in one place instead of two.
+    pub listen: Vec<HandlerRef>,
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this task (or under its `loop_control:`).
     pub unknown_keys: Vec<UnknownKey>,
@@ -181,6 +192,25 @@ pub struct RoleParam {
     pub name: String,
     pub key_span: Span,
     pub value_span: Span,
+}
+
+/// One name written in a `notify:` or a `listen:`.
+///
+/// Carries the value, not just a span, because these are the first references matched by
+/// *name* rather than resolved as a path — and one entry per written name, because the
+/// list form is several independent references and a single span over the sequence could
+/// not anchor a diagnostic on the one that missed.
+#[derive(Debug, Clone)]
+pub struct HandlerRef {
+    pub name: String,
+    pub span: Span,
+    /// Contains `{{ }}`. The two keys diverge here, measured on 2.21.2: a handler's
+    /// `name:` *is* templated, so `notify: restart nginx` reaches
+    /// `name: "restart {{ svc }}"` — which makes a templated name a wildcard no rule can
+    /// prove absent. `listen:` is *not* templated: the braces stay in the topic, so
+    /// notifying the rendered value is a fatal "handler not found" (see
+    /// [`crate::static_fields`], which already reports that half).
+    pub templated: bool,
 }
 
 /// An Ansible-owned key on a play/block/task, with the spans of its key and value.
@@ -263,6 +293,30 @@ fn clauses(when: &Node) -> Vec<String> {
             .filter_map(|i| i.as_str().map(str::to_owned))
             .collect(),
         other => other.as_str().map(str::to_owned).into_iter().collect(),
+    }
+}
+
+/// The names written in `node`'s `key` (`notify:` or `listen:`): a scalar is Ansible's
+/// one-element-list shorthand, a sequence is one reference per item.
+///
+/// A non-scalar item is dropped rather than failing the whole list, the opposite of
+/// [`loop_items_of`]. The two want different things from a partial read: an iteration that
+/// is only partly known is worse than useless, while a name that is only partly known just
+/// means one fewer navigable reference — the others are still exactly themselves.
+fn handler_refs(node: &Node, key: &str) -> Vec<HandlerRef> {
+    let Some(v) = node.get(key) else {
+        return Vec::new();
+    };
+    let one = |n: &Node| {
+        n.as_str().map(|s| HandlerRef {
+            name: s.to_string(),
+            span: n.span(),
+            templated: s.contains("{{"),
+        })
+    };
+    match v {
+        Node::Sequence { items, .. } => items.iter().filter_map(one).collect(),
+        scalar => one(scalar).into_iter().collect(),
     }
 }
 
@@ -542,9 +596,11 @@ fn build_block(node: &Node, handlers: bool) -> Block {
         when: when.map(clauses).unwrap_or_default(),
         when_span: when.map(|w| w.span()),
         vars: vars_of(node),
+        notify: handler_refs(node, "notify"),
         directives: collect_directives(node, |k| {
             keywords::is_block_directive(k)
                 && k != "name"
+                && k != "notify"
                 && !keywords::BLOCK_TASK_CONTAINERS.contains(&k)
         }),
         unknown_keys: unknown_keys_of(node, KeyContext::Block, |_| false),
@@ -592,10 +648,17 @@ fn build_task(node: &Node, handlers: bool) -> Task {
         register: node.get("register").and_then(|n| n.as_str()).map(str::to_owned),
         register_span: node.get("register").map(|n| n.span()),
         vars: vars_of(node),
-        directives: collect_directives(node, |k| keywords::is_task_directive(k) && k != "name"),
+        notify: handler_refs(node, "notify"),
+        listen: handler_refs(node, "listen"),
+        directives: collect_directives(node, |k| {
+            keywords::is_task_directive(k) && !TASK_STRUCTURAL.contains(&k)
+        }),
         unknown_keys,
     }
 }
+
+/// Captured structurally on [`Task`], so not repeated in `directives`.
+const TASK_STRUCTURAL: &[&str] = &["name", "notify", "listen"];
 
 /// The module on a task: the value of `action:`/`local_action:`, else the first key that
 /// isn't a directive (a bare non-directive, or any FQCN).
@@ -1014,6 +1077,112 @@ mod tests {
         // `name` is Base vocabulary; LoopControl skips Base entirely (`loop_control.py:27`).
         assert_eq!(keys, ["name"]);
         assert_eq!(t.unknown_keys[0].ctx, KeyContext::LoopControl);
+    }
+
+    /// The list form is several independent references, so each name gets its own span —
+    /// a single span over the sequence could not underline the one that missed.
+    #[test]
+    fn notify_carries_one_ref_per_written_name() {
+        let src = "- hosts: web\n  tasks:\n    - command: echo hi\n      notify:\n        \
+                   - restart nginx\n        - reload haproxy\n";
+        let a = ast(src);
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        let names: Vec<&str> = t.notify.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["restart nginx", "reload haproxy"]);
+        // The span must cover its own name and nothing else.
+        for n in &t.notify {
+            assert_eq!(&src[n.span.start..n.span.end], n.name);
+        }
+    }
+
+    /// The scalar spelling is Ansible's one-element-list shorthand, so it must produce the
+    /// same shape as the list — a consumer reading `notify` should never branch on which
+    /// spelling was written.
+    #[test]
+    fn a_scalar_notify_is_a_one_element_list() {
+        let src = "- hosts: web\n  tasks:\n    - command: echo hi\n      notify: restart nginx\n";
+        let a = ast(src);
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        assert_eq!(t.notify.len(), 1);
+        assert_eq!(t.notify[0].name, "restart nginx");
+        assert_eq!(&src[t.notify[0].span.start..t.notify[0].span.end], "restart nginx");
+        assert!(!t.notify[0].templated);
+    }
+
+    /// Per name, not per key: one templated entry in a list must not mark its literal
+    /// siblings, or a rule that skips templated names would go silent on the whole task.
+    #[test]
+    fn templated_is_per_name_not_per_key() {
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - command: echo hi\n      notify:\n        \
+             - restart {{ svc }}\n        - reload haproxy\n",
+        );
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        let flags: Vec<bool> = t.notify.iter().map(|n| n.templated).collect();
+        assert_eq!(flags, [true, false]);
+    }
+
+    /// `listen:` is the other half of the index — a topic is a valid `notify:` target, so
+    /// it has to be readable by name the same way.
+    #[test]
+    fn listen_is_captured_on_a_handler() {
+        let src = "- hosts: web\n  handlers:\n    - name: h\n      debug:\n      listen:\n        \
+                   - restart web\n        - restart all\n";
+        let a = ast(src);
+        let Stmt::Task(t) = &first_play(&a).handlers[0] else { panic!() };
+        let names: Vec<&str> = t.listen.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["restart web", "restart all"]);
+        assert!(t.notify.is_empty());
+    }
+
+    /// Both keys are captured structurally, so they must leave `directives` — the
+    /// convention the play's `STRUCTURAL` list already follows. Two representations of one
+    /// key is how a consumer ends up reading the stale one.
+    #[test]
+    fn notify_and_listen_leave_the_directive_list() {
+        let a = ast(
+            "- hosts: web\n  handlers:\n    - name: h\n      debug:\n      listen: topic\n      \
+             notify: other\n      when: x\n",
+        );
+        let Stmt::Task(t) = &first_play(&a).handlers[0] else { panic!() };
+        let keys: Vec<&str> = t.directives.iter().map(|d| d.key.as_str()).collect();
+        assert!(!keys.contains(&"notify"), "found: {keys:?}");
+        assert!(!keys.contains(&"listen"), "found: {keys:?}");
+        // The control: an unrelated directive is still collected, so the filter is not
+        // simply emptying the list.
+        assert!(keys.contains(&"when"), "found: {keys:?}");
+    }
+
+    /// `notify:` is legal on a block and inherits to every task inside it; `listen:` is
+    /// not in Block's set at all. The asymmetry is Ansible's, so the model keeps it rather
+    /// than smoothing it over with a field that could never be filled.
+    #[test]
+    fn a_block_carries_notify_and_rejects_listen() {
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - block:\n        - debug: {msg: x}\n      \
+             notify: restart nginx\n      listen: nope\n",
+        );
+        let Stmt::Block(b) = &first_play(&a).tasks[0] else { panic!("expected a block") };
+        assert_eq!(b.notify.len(), 1);
+        assert_eq!(b.notify[0].name, "restart nginx");
+        let keys: Vec<&str> = b.directives.iter().map(|d| d.key.as_str()).collect();
+        assert!(!keys.contains(&"notify"), "found: {keys:?}");
+        let unknown: Vec<&str> = b.unknown_keys.iter().map(|u| u.key.as_str()).collect();
+        assert_eq!(unknown, ["listen"]);
+    }
+
+    /// A non-scalar entry drops itself and leaves its siblings intact — the opposite of
+    /// `loop:`, where one unreadable item voids the list. Each name here is independently
+    /// exactly itself, so there is nothing for a partial read to falsify.
+    #[test]
+    fn an_unreadable_notify_entry_drops_only_itself() {
+        let a = ast(
+            "- hosts: web\n  tasks:\n    - command: echo hi\n      notify:\n        - good\n        \
+             - {a: b}\n        - also good\n",
+        );
+        let Stmt::Task(t) = &first_play(&a).tasks[0] else { panic!() };
+        let names: Vec<&str> = t.notify.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["good", "also good"]);
     }
 
     #[test]
