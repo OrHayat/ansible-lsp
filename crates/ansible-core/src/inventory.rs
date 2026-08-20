@@ -90,6 +90,34 @@ pub struct InventoryVar {
     pub span: Span,
 }
 
+/// The key ansible reads as a merge-order control instead of storing as a variable — in a
+/// **group** position only. `Group.set_variable` intercepts it (`inventory/group.py:216-217`);
+/// `Host.set_variable` (`inventory/host.py:119-130`) has no such branch, so on a host it is an
+/// ordinary variable and stays indexed. Measured across all three formats and every position
+/// these readers walk — see `ini_vars_drops_group_priority_from_every_vars_section` for the
+/// table (T-178).
+pub(crate) const GROUP_PRIORITY: &str = "ansible_group_priority";
+
+/// Whether a collector is walking a group's `vars` or a host's own variables. Named rather
+/// than a `bool`, for the reason [`ini_vars`]'s `Section` is: `bindings(v, true, out)` at a
+/// call site says nothing, and this flag is exactly the thing that must not be got wrong.
+///
+/// It lives on the *caller*, never inside the collector — both collectors serve both
+/// positions, so a filter one level down would drop the key from hosts too, which is the
+/// mistake T-178 originally prescribed.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum GroupPosition {
+    Yes,
+    No,
+}
+
+impl GroupPosition {
+    /// Does ansible eat this key here instead of defining it?
+    fn consumes(self, name: &str) -> bool {
+        self == Self::Yes && name == GROUP_PRIORITY
+    }
+}
+
 /// The inventory sources in effect, in load order, with directories expanded to their
 /// files.
 ///
@@ -307,12 +335,12 @@ pub fn toml_vars(text: &str) -> Vec<InventoryVar> {
     for (_group, item) in doc.as_table().iter() {
         let Some(group) = item.as_table_like() else { continue };
         if let Some(vars) = group.get("vars").and_then(|i| i.as_table_like()) {
-            collect_toml(vars, text, &mut out);
+            collect_toml(vars, text, GroupPosition::Yes, &mut out);
         }
         if let Some(hosts) = group.get("hosts").and_then(|i| i.as_table_like()) {
             for (_host, entry) in hosts.iter() {
                 if let Some(host_vars) = entry.as_table_like() {
-                    collect_toml(host_vars, text, &mut out);
+                    collect_toml(host_vars, text, GroupPosition::No, &mut out);
                 }
             }
         }
@@ -324,8 +352,16 @@ pub fn toml_vars(text: &str) -> Vec<InventoryVar> {
 ///
 /// The quotes are trimmed off a string so hover shows `10.0.0.1` rather than `"10.0.0.1"`,
 /// matching what the INI and YAML readers hand back for the same inventory.
-fn collect_toml(table: &dyn toml_edit::TableLike, text: &str, out: &mut Vec<InventoryVar>) {
+fn collect_toml(
+    table: &dyn toml_edit::TableLike,
+    text: &str,
+    position: GroupPosition,
+    out: &mut Vec<InventoryVar>,
+) {
     for (name, item) in table.iter() {
+        if position.consumes(name) {
+            continue;
+        }
         let Some(range) = item.span() else { continue };
         let (mut start, mut end) = (range.start, range.end);
         let raw = text.get(start..end).unwrap_or("");
@@ -529,12 +565,12 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
     fn group(node: &Node, out: &mut Vec<InventoryVar>) {
         for (k, v) in node.entries() {
             match k.as_str() {
-                Some("vars") => bindings(v, out),
+                Some("vars") => bindings(v, GroupPosition::Yes, out),
                 Some("hosts") => {
                     // Each entry is a host; its mapping is that host's variables. A host
                     // with no vars is a null value, which has no entries and is skipped.
                     for (_, hv) in v.entries() {
-                        bindings(hv, out);
+                        bindings(hv, GroupPosition::No, out);
                     }
                 }
                 Some("children") => {
@@ -551,9 +587,12 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
             }
         }
     }
-    fn bindings(node: &Node, out: &mut Vec<InventoryVar>) {
+    fn bindings(node: &Node, position: GroupPosition, out: &mut Vec<InventoryVar>) {
         for (k, v) in node.entries() {
             if let Some(name) = k.as_str() {
+                if position.consumes(name) {
+                    continue;
+                }
                 out.push(InventoryVar { name: name.to_string(), span: v.span() });
             }
         }
@@ -619,7 +658,9 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
         let base = start + indent;
         if section == Section::Vars {
             if let Some(v) = pair(trimmed, base) {
-                out.push(v);
+                if !GroupPosition::Yes.consumes(&v.name) {
+                    out.push(v);
+                }
             }
             continue;
         }
@@ -1287,5 +1328,118 @@ mod tests {
         );
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
         assert_eq!(names(&yaml_vars(&nodes)), ["real_var"]);
+    }
+
+    /// `ansible_group_priority` is a merge-order control rather than a variable — but only
+    /// where it is written. Measured on core 2.21.3 with `ansible-inventory --host node1`
+    /// over thirteen fixtures covering every position these three readers walk, each
+    /// carrying an ordinary `control` variable in the *same* position so that an absence is
+    /// an absence and not a fixture that was never read:
+    ///
+    /// | position                                             | ansible defines it |
+    /// | ---------------------------------------------------- | ------------------ |
+    /// | `[g:vars]`, `vars:`, `[g.vars]` — any group, any depth | **no**            |
+    /// | host line, `hosts:` entry, `[g.hosts.h]` — any host   | **yes**, `10`      |
+    ///
+    /// `Group.set_variable` consumes it (`inventory/group.py:216-217`); `Host.set_variable`
+    /// (`inventory/host.py:119-130`) has no such branch and stores it like any other key.
+    /// So the drop is scoped to the group position: dropping it from the host position too
+    /// would delete a variable that really exists, trading "hover points at a non-variable"
+    /// for "hover says a real variable is never defined" (T-178).
+    ///
+    /// `all` and a parent group are not special — they are group positions like any other,
+    /// which is why one gate per reader covers every one of them.
+    #[test]
+    fn ini_vars_drops_group_priority_from_every_vars_section() {
+        let src = concat!(
+            "[web]\n",
+            "node1\n",
+            "\n",
+            "[web:vars]\n",
+            "ansible_group_priority=10\n",
+            "group_var=FROM_GROUP\n",
+            "\n",
+            "[all:vars]\n",
+            "ansible_group_priority=20\n",
+            "all_var=FROM_ALL\n",
+        );
+        assert_eq!(names(&ini_vars(src)), ["group_var", "all_var"]);
+    }
+
+    /// The control for the test above: the same key on a host line **is** a variable, and
+    /// the fix T-178 originally proposed — a reader-wide drop — fails right here.
+    #[test]
+    fn ini_vars_keeps_group_priority_on_a_host_line() {
+        let src = concat!(
+            "node1 ansible_group_priority=10 ungrouped_var=FROM_UNGROUPED\n",
+            "[web]\n",
+            "node2 ansible_group_priority=20 host_var=FROM_HOST\n",
+        );
+        assert_eq!(
+            names(&ini_vars(src)),
+            ["ansible_group_priority", "ungrouped_var", "ansible_group_priority", "host_var"]
+        );
+    }
+
+    /// Nesting does not change the answer: a `vars:` under `children:` is still a group
+    /// position. The recursion reuses one match arm, so one gate covers every depth.
+    #[test]
+    fn yaml_vars_drops_group_priority_from_group_vars_at_any_depth() {
+        let src = concat!(
+            "parent:\n",
+            "  vars:\n",
+            "    ansible_group_priority: 10\n",
+            "    parent_var: FROM_PARENT\n",
+            "  children:\n",
+            "    web:\n",
+            "      hosts:\n",
+            "        node1:\n",
+            "      vars:\n",
+            "        ansible_group_priority: 20\n",
+            "        child_var: FROM_CHILD\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        assert_eq!(names(&yaml_vars(&nodes)), ["parent_var", "child_var"]);
+    }
+
+    /// The control: a `hosts:` entry keeps it, nested or not.
+    #[test]
+    fn yaml_vars_keeps_group_priority_on_a_host_entry() {
+        let src = concat!(
+            "parent:\n",
+            "  children:\n",
+            "    web:\n",
+            "      hosts:\n",
+            "        node1:\n",
+            "          ansible_group_priority: 10\n",
+            "          host_var: FROM_HOST\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        assert_eq!(names(&yaml_vars(&nodes)), ["ansible_group_priority", "host_var"]);
+    }
+
+    #[test]
+    fn toml_vars_drops_group_priority_from_a_vars_table() {
+        let src = concat!(
+            "[web.vars]\n",
+            "ansible_group_priority = 10\n",
+            "group_var = \"FROM_GROUP\"\n",
+            "[web.hosts.node1]\n",
+            "[all.vars]\n",
+            "ansible_group_priority = 20\n",
+            "all_var = \"FROM_ALL\"\n",
+        );
+        assert_eq!(names(&toml_vars(src)), ["group_var", "all_var"]);
+    }
+
+    /// The control: a `[g.hosts.h]` table keeps it.
+    #[test]
+    fn toml_vars_keeps_group_priority_in_a_host_table() {
+        let src = concat!(
+            "[web.hosts.node1]\n",
+            "ansible_group_priority = 10\n",
+            "host_var = \"FROM_HOST\"\n",
+        );
+        assert_eq!(names(&toml_vars(src)), ["ansible_group_priority", "host_var"]);
     }
 }

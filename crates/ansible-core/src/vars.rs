@@ -1428,9 +1428,6 @@ pub fn inventory_hosts(path: &Path, cache: &ScanCache) -> Option<HashSet<String>
     (!out.is_empty()).then_some(out)
 }
 
-/// The key ansible reads as a merge-order control rather than storing as a variable.
-const GROUP_PRIORITY: &str = "ansible_group_priority";
-
 /// Is this file loaded by the `host_group_vars` vars plugin rather than parsed as an
 /// inventory source — i.e. does it sit under a `group_vars/`/`host_vars/` directory?
 ///
@@ -1455,6 +1452,7 @@ fn under_vars_plugin_dir(file: &Path) -> bool {
 /// | yaml inventory `alpha:`'s `vars:`   | **`alpha`** — honoured | absent            |
 /// | `group_vars/alpha.yml`              | `zulu` — **ignored**   | `10`              |
 /// | `host_vars/node1.yml`               | `zulu` — **ignored**   | `10`              |
+/// | ini inventory host line             | `zulu` — **ignored**   | `10`              |
 ///
 /// The last column is why this needs saying at all: where the key works it is *consumed*
 /// (`Group.set_variable`, `inventory/group.py:216-217`) and never becomes a variable, and
@@ -1471,7 +1469,7 @@ pub fn ignored_group_priority(file: &Path, nodes: &[Node]) -> Vec<Span> {
     nodes
         .iter()
         .flat_map(|n| n.entries())
-        .filter(|(k, _)| k.as_str() == Some(GROUP_PRIORITY))
+        .filter(|(k, _)| k.as_str() == Some(crate::inventory::GROUP_PRIORITY))
         .map(|(k, _)| k.span())
         .collect()
 }
@@ -2973,6 +2971,51 @@ mod tests {
     /// the parsers passing proves nothing about the wiring — deleting the call site left
     /// every other test in this file green.
     #[test]
+    /// The wiring half of T-178. `definitions` is what hover and go-to-definition read, and
+    /// the readers being right is not the same as the index being right — the comment in
+    /// `a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not` records this
+    /// repo shipping that exact confusion twice.
+    ///
+    /// The two rows must move in opposite directions, which is why they are one test: a
+    /// blanket drop passes the first assertion and fails the second, and that blanket drop
+    /// is what T-178 originally prescribed.
+    #[test]
+    fn group_priority_reaches_the_index_from_a_host_and_never_from_a_group() {
+        let d = std::env::temp_dir().join("ansible-lsp-t178-wiring");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "ansible.cfg", "[defaults]\ninventory = hosts.ini\n");
+        write(
+            &d,
+            "hosts.ini",
+            "[web]\nnode1 ansible_group_priority=10 beside_the_host=yes\n\n             [web:vars]\nansible_group_priority=20\nbeside_the_group=yes\n",
+        );
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: web\n  tasks: []\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+
+        // Both controls are indexed, so an absence below is an absence and not a file that
+        // was never read.
+        for name in ["beside_the_host", "beside_the_group"] {
+            assert!(
+                defs.iter().any(|x| x.name == name),
+                "{name} not indexed: {:?}",
+                names_of(&defs)
+            );
+        }
+        // Exactly one definition survives: the host one. `Group.set_variable` ate the other.
+        let hits: Vec<&Located> =
+            defs.iter().filter(|x| x.name == crate::inventory::GROUP_PRIORITY).collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected the host-line definition only, got {:?}",
+            hits.iter().map(|h| h.source).collect::<Vec<_>>()
+        );
+        assert_eq!(hits[0].source, VarSource::Inventory);
+    }
+
     fn a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not() {
         let d = std::env::temp_dir().join("ansible-lsp-t062-wiring");
         let _ = std::fs::remove_dir_all(&d);

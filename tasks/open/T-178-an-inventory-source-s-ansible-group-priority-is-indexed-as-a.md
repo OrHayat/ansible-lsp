@@ -7,29 +7,31 @@
 ## Symptom
 
 All three readers return `ansible_group_priority` as a variable the inventory defines, from
-**both** positions it can be written in. Ansible defines it in only one of them. Run against
-the readers, six fixtures, one per format per position:
+**every** position it can be written in. Ansible defines it in only some of them. Run against
+the readers over thirteen fixtures — every position the three readers walk, enumerated from
+their own branches, not from a guess about which ones matter:
 
-```
-reader/position | returns
-----------------+---------------------------------------
-ini   group     | ["ansible_group_priority", "control"]   <- wrong
-ini   host      | ["ansible_group_priority", "control"]   <- correct
-yaml  group     | ["ansible_group_priority", "control"]   <- wrong
-yaml  host      | ["ansible_group_priority", "control"]   <- correct
-toml  group     | ["ansible_group_priority", "control"]   <- wrong
-toml  host      | ["ansible_group_priority", "control"]   <- correct
-```
+| #  | fixture                       | ansible  | us before | verdict   |
+| -- | ----------------------------- | -------- | --------- | --------- |
+| 01 | ini `[web:vars]`              | `ABSENT` | `10`      | **wrong** |
+| 02 | ini host line                 | `10`     | `10`      | ok        |
+| 03 | ini ungrouped host line       | `10`     | `10`      | ok        |
+| 04 | ini `[all:vars]`              | `ABSENT` | `10`      | **wrong** |
+| 05 | ini `[parent:vars]`           | `ABSENT` | `10`      | **wrong** |
+| 06 | yaml group `vars:`            | `ABSENT` | `10`      | **wrong** |
+| 07 | yaml host entry               | `10`     | `10`      | ok        |
+| 08 | yaml child group `vars:`      | `ABSENT` | `10`      | **wrong** |
+| 09 | yaml child host entry         | `10`     | `10`      | ok        |
+| 10 | yaml `all:` `vars:`           | `ABSENT` | `10`      | **wrong** |
+| 11 | toml `[web.vars]`             | `ABSENT` | `10`      | **wrong** |
+| 12 | toml `[web.hosts.node1]`      | `10`     | `10`      | ok        |
+| 13 | toml `[all.vars]`             | `ABSENT` | `10`      | **wrong** |
 
-Against what Ansible actually defines for the same six files (below), that is:
-
-| position written | ansible defines it | we return it | verdict              |
-| ---------------- | ------------------ | ------------ | -------------------- |
-| group `vars`     | **no**             | yes          | **wrong** — this bug |
-| host entry       | **yes**, `10`      | yes          | correct today        |
-
-Identical in ini, yaml and toml — the format is irrelevant, the position is everything. Three
-of six cells are wrong.
+**Eight of thirteen**, not the three of six a first six-fixture probe suggested. `all:vars`,
+a parent group's vars and a child group's vars are broken too, and none of them appeared in
+that first probe — the count was wrong until the position list came from the readers' own
+branches. The rule does hold across all thirteen: every group position is consumed, every
+host position is stored, in all three formats.
 
 Hover and go-to-definition are the visible surfaces: both point at the inventory line as the
 definition of a variable that does not exist. `var-undefined` is unaffected either way —
@@ -154,19 +156,32 @@ this ticket is the false definition, not the missing hint.
 
 ## Done when
 
-- [ ] `ini_vars`, `yaml_vars` and `toml_vars` each drop the key from a **group vars**
-      position, one test per reader
-- [ ] each reader still returns it from a **host** position, one test per reader — this is
+- [x] `ini_vars`, `yaml_vars` and `toml_vars` each drop the key from a **group vars**
+      position, one test per reader — covering `all`, a parent and a child group, since one
+      gate per reader turned out to cover every depth
+- [x] each reader still returns it from a **host** position, one test per reader — this is
       the control, and the fix this ticket originally proposed fails it
-- [ ] the measured tables above sit in a doc comment at the drop site, and `vars.rs:1445`
-      gains the host-entry row
+- [x] the measured tables above sit in a doc comment at the drop site, and `vars.rs` gained
+      the host-entry row
 - [ ] hover and go-to-definition report nothing for the key in a group position, and still
-      answer for it in a host position, asserted per consumer
-- [ ] the key is still indexed from `group_vars/`/`host_vars/`, where it genuinely is a
-      variable — the T-062 box 7 control, re-asserted here so the two halves cannot drift
-- [ ] `GROUP_PRIORITY` is the only spelling of the name in the codebase
-- [ ] seen red before the fix, per rule 5
-- [ ] corpus count unchanged (the key appears zero times in `~/app`, so any move is a bug)
+      answer for it in a host position, asserted per consumer — **not done.** Asserted one
+      level down instead, at `definitions()`, which is the index both consumers read
+      (`group_priority_reaches_the_index_from_a_host_and_never_from_a_group`). A true
+      per-consumer test needs an LSP workspace-and-settings harness that does not exist yet;
+      the existing hover helpers only cover injected vars. Left open rather than ticked on a
+      technicality — rule 3's corollary asks for the read sites, not a shared helper.
+- [x] the key is still indexed from `group_vars/`/`host_vars/`, where it genuinely is a
+      variable — the T-062 box 7 control, still green at `vars.rs`
+- [x] `GROUP_PRIORITY` is the only spelling of the name in the codebase — moved to
+      `inventory.rs` as `pub(crate)`, `vars.rs` reads it from there
+- [x] seen red before the fix, per rule 5 — and red in **both** directions: with no gate the
+      wiring test reports 2 definitions instead of 1, and with the reader-wide drop this
+      ticket originally prescribed it reports 0. The first break attempt was not faithful
+      (flipping `GroupPosition::consumes` leaves ini host lines untouched, because that path
+      never calls it) and passed; the honest simulation is a `retain` over the reader's whole
+      output, and that one fails both the wiring test and the ini control.
+- [x] corpus count unchanged — the key appears zero times in `~/app/ansible`, so nothing
+      could move
 
 [T-132]: T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md
 [T-133]: T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md
