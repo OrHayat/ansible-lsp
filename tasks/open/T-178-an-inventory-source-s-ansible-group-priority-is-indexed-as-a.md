@@ -112,6 +112,44 @@ The third row is T-062 box 7, already handled by `vars::ignored_group_priority`.
 row was unknown when this ticket was written, and it is what breaks the fix it originally
 proposed.
 
+## What the source says, and the one case measurement missed
+
+Reading the plugins after the fix landed turned up a case no fixture covered. All three
+static plugins set **group** vars directly (`ini.py:234`, `yaml.py:155`, `toml.py:120`) but
+route **host** vars through `_populate_host_vars` (`plugins/inventory/__init__.py:223-231`),
+which calls `InventoryData.set_variable` — and that dispatches on the *name*, not the
+position (`inventory/data.py:233-245`):
+
+```python
+if entity in self.groups:      # <- tested FIRST
+    inv_object = self.groups[entity]
+elif entity in self.hosts:
+    inv_object = self.hosts[entity]
+```
+
+So a host sharing a name with a group has its host-line vars applied to the **Group**, which
+consumes the key. Measured on 2.21.3, with a non-colliding host in the same file as control:
+
+| inventory                                      | host  | priority defined |
+| ---------------------------------------------- | ----- | ---------------- |
+| `[web]` + host `web` (ini, yaml and toml alike) | `web` | **no** — consumed |
+| `[web]` + host `node1` (control)                | `node1` | yes, `10`      |
+
+Ansible warns `Found both group and host with same name: web` and carries on. **We still
+report the key there**, so the rule as shipped is "group position → not a variable", while
+the true rule is "whatever the entity name resolves to, groups first".
+
+Two other things the source settles, both negative: `Group.set_variable` intercepts exactly
+one key — a single `if key == 'ansible_group_priority'` — so no other name is consumed this
+way; and `_parse_host_definition` (`ini.py:299-330`) puts every `k=v` into the vars dict
+untouched, the port coming from the hostname token rather than a pair, so nothing is quietly
+removed from host-line vars either.
+
+Closing the collision case needs the inventory's set of group names, which no reader has —
+they deliberately return hosts and not group names, and a directory source spreads groups
+across files, so it cannot be answered per file. Recorded as a limit on `GroupPosition` in
+`inventory.rs` rather than left to be rediscovered.
+
 ## Fix
 
 **This ticket's original fix was wrong and would have made the tool lie worse.** It said to
@@ -182,6 +220,9 @@ this ticket is the false definition, not the missing hint.
       output, and that one fails both the wiring test and the ini control.
 - [x] corpus count unchanged — the key appears zero times in `~/app/ansible`, so nothing
       could move
+- [ ] a host sharing a name with a group has the key consumed, and we still report it — see
+      the section above. Needs a group-name set assembled across the whole inventory source,
+      so it is not a reader-local change. Fix here or split out, but not silently.
 
 [T-132]: T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md
 [T-133]: T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md

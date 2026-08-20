@@ -105,6 +105,15 @@ pub(crate) const GROUP_PRIORITY: &str = "ansible_group_priority";
 /// It lives on the *caller*, never inside the collector — both collectors serve both
 /// positions, so a filter one level down would drop the key from hosts too, which is the
 /// mistake T-178 originally prescribed.
+///
+/// **Known limit.** The position is not the last word: all three plugins set host vars through
+/// `InventoryData.set_variable` (`inventory/data.py:233-245`), which dispatches on the *name* —
+/// `if entity in self.groups` is tested **before** hosts. So a host sharing a name with a group
+/// has its host-line vars applied to the Group, which eats the key. Measured on 2.21.3, all
+/// three formats: ansible warns `Found both group and host with same name: web` and the key is
+/// absent, while a non-colliding host in the same file keeps it. We still report it there.
+/// Closing that needs the inventory's group-name set, which no reader has — they deliberately
+/// return hosts and not group names, and a directory source spreads groups across files.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum GroupPosition {
     Yes,
