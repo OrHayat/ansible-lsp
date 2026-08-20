@@ -182,10 +182,17 @@ the code it justifies. The table on `vars.rs:1445` carries only two of the three
 needs the host-entry row, or the two will drift.
 
 The drop is unconditional in that position — an **invalid** value does not change it.
-Measured on 2.21.2: `ansible_group_priority={{ some_var }}` in an inventory does not raise;
+Re-measured on 2.21.3, both shapes an invalid value can take:
+
+| written                                    | result                                       |
+| ------------------------------------------ | -------------------------------------------- |
+| `ansible_group_priority=not_a_number`      | warns, default priority, key still consumed  |
+| `ansible_group_priority={{ undefined_x }}` | warns, default priority, key still consumed  |
+
 `set_priority` catches the `ValueError`, warns `Invalid priority value ... Setting priority to
-default value`, and the run proceeds at the default. So the key is still consumed and still
-not a variable even when it is unusable, and no validity test is needed.
+default value`, and the run proceeds. The key is consumed even when it is unusable, so the
+drop needs no validity test. (The non-numeric literal was an open question in this ticket
+until now; both shapes are settled.)
 
 Out of scope, but the second row raises it fairly: a host-entry priority is an inert control,
 the same finding box 7 reports for `group_vars/`. `ignored_group_priority` gates on
