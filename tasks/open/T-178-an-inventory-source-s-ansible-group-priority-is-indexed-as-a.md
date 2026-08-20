@@ -199,6 +199,38 @@ the same finding box 7 reports for `group_vars/`. `ignored_group_priority` gates
 `under_vars_plugin_dir` and so cannot see an inventory source. File separately if wanted —
 this ticket is the false definition, not the missing hint.
 
+## Why the per-consumer test is writable
+
+An earlier revision of the per-consumer box said the assertion needed "an LSP
+workspace-and-settings harness that does not exist yet", and that "the existing hover helpers
+only cover injected vars". Both are false. The note was written from the shape of the call
+graph rather than from reading it, which is rule 1 applied to our own code instead of
+ansible's.
+
+What is true is the part that makes it *look* blocked. Both consumers reach the index through
+`cached_definitions` (`main.rs:194`), which takes its inventory paths from `inventory_setting()`
+— two process-global mutexes, `INVENTORY_SETTING` and `WORKSPACE_ROOT` (`main.rs:218-220`). A
+test cannot set those: they are process-wide and the suite runs in parallel threads in one
+binary. Every inventory test in the tree sidesteps them by building
+`ScanCache::default().with_inventory(..)` and calling core directly — which is exactly why
+none of them reaches hover or go-to-definition, and why the surface looked untestable.
+
+The way through is that `with_inventory` sets `inventory_override` (`cache.rs:411`), and an
+**empty** override falls through to `cfg.inventory` — the `inventory =` key of an
+`ansible.cfg`. So a fixture directory carrying its own `ansible.cfg` drives the real consumers
+with no global touched. The calling pattern already exists and is not injected-vars-only:
+`variable_hover_at` and `definition_at` are called directly against fixture paths throughout
+`main.rs:4758-5170`. T-171's Cmd+click assertion at `main.rs:5005` is the model — it is
+deliberately routed through `definition_at` rather than the helper, with a comment recording
+that calling the helper is what let a missing paint ship. Same argument, same shape.
+
+One hazard to clear when writing it, not a blocker: `cached_definitions` builds
+`ScanCache::default()` **without** `with_env(EnvMap::empty())`, so an ambient `ANSIBLE_CONFIG`
+in the invoking shell can replace the fixture's cfg — `cache.rs:299-302` exists for exactly
+this. A test that passes because the cfg was never read is the rule-2 shape: it must be seen
+red in both directions first — with the group gate removed, and with the fixture's inventory
+made unreachable.
+
 ## Done when
 
 - [x] `ini_vars`, `yaml_vars` and `toml_vars` each drop the key from a **group vars**
@@ -209,12 +241,12 @@ this ticket is the false definition, not the missing hint.
 - [x] the measured tables above sit in a doc comment at the drop site, and `vars.rs` gained
       the host-entry row
 - [ ] hover and go-to-definition report nothing for the key in a group position, and still
-      answer for it in a host position, asserted per consumer — **not done.** Asserted one
-      level down instead, at `definitions()`, which is the index both consumers read
-      (`group_priority_reaches_the_index_from_a_host_and_never_from_a_group`). A true
-      per-consumer test needs an LSP workspace-and-settings harness that does not exist yet;
-      the existing hover helpers only cover injected vars. Left open rather than ticked on a
-      technicality — rule 3's corollary asks for the read sites, not a shared helper.
+      answer for it in a host position, asserted per consumer — **not done, and not
+      blocked.** Asserted one level down instead, at `definitions()`, which is the index both
+      consumers read (`group_priority_reaches_the_index_from_a_host_and_never_from_a_group`).
+      Rule 3's corollary asks for the read sites, not a shared helper, so it stays unticked.
+      An earlier revision of this box called it blocked on an LSP harness that does not
+      exist; that was wrong — see "Why the per-consumer test is writable".
 - [x] the key is still indexed from `group_vars/`/`host_vars/`, where it genuinely is a
       variable — the T-062 box 7 control, still green at `vars.rs`
 - [x] `GROUP_PRIORITY` is the only spelling of the name in the codebase — moved to
