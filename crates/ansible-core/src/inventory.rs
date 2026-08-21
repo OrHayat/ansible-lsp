@@ -1375,6 +1375,44 @@ mod tests {
         assert_eq!(names(&ini_vars(src)), ["group_var", "all_var"]);
     }
 
+    /// A duplicate of the key inside **one** vars section. Measured on core 2.21.2:
+    /// `[alpha:vars]` carrying `20` then `1`, against a same-depth `zulu`, leaves `zulu` the
+    /// merge winner — so the **last** duplicate wins, where the first would have made it
+    /// `alpha`. Unlike a `group_vars` file, ini gets no `duplicate mapping key` warning.
+    ///
+    /// Which one wins does not matter here: both are consumed, so neither is a variable and
+    /// the gate has to drop every occurrence rather than the first.
+    #[test]
+    fn ini_vars_drops_every_duplicate_of_group_priority_in_one_section() {
+        let src = concat!(
+            "[alpha]\n",
+            "node1\n",
+            "\n",
+            "[alpha:vars]\n",
+            "ansible_group_priority=20\n",
+            "ansible_group_priority=1\n",
+            "group_var=FROM_GROUP\n",
+        );
+        assert_eq!(names(&ini_vars(src)), ["group_var"]);
+    }
+
+    /// The same duplicate, in a YAML group `vars:` mapping. Ansible warns here and keeps the
+    /// last; both are consumed either way.
+    #[test]
+    fn yaml_vars_drops_every_duplicate_of_group_priority_in_one_mapping() {
+        let src = concat!(
+            "alpha:\n",
+            "  hosts:\n",
+            "    node1:\n",
+            "  vars:\n",
+            "    ansible_group_priority: 20\n",
+            "    ansible_group_priority: 1\n",
+            "    group_var: FROM_GROUP\n",
+        );
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        assert_eq!(names(&yaml_vars(&nodes)), ["group_var"]);
+    }
+
     /// The control for the test above: the same key on a host line **is** a variable, and
     /// the fix T-178 originally proposed — a reader-wide drop — fails right here.
     #[test]

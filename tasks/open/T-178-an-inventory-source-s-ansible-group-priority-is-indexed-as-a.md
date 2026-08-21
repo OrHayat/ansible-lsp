@@ -33,13 +33,49 @@ that first probe — the count was wrong until the position list came from the r
 branches. The rule does hold across all thirteen: every group position is consumed, every
 host position is stored, in all three formats.
 
-Hover and go-to-definition are the visible surfaces: both point at the inventory line as the
-definition of a variable that does not exist. `var-undefined` is unaffected either way —
-every `ansible_*` name is already unconditionally exempt, so no diagnostic moves.
+### Which surface actually shows it
 
-P3 rather than P1 despite being a lie: one rarely-written key, two answer surfaces, no false
-squiggle. Same tier as [T-132] and [T-133], the other "hover points somewhere imprecise"
-tickets.
+This ticket twice claimed, without running it, that hover and go-to-definition are the visible
+surfaces. **They are not.** Measured against the six consumers of `cached_definitions`, with
+the key in a **host** position — where it genuinely is a variable — and an ordinary `control`
+variable on the same line as the control that must come out different:
+
+| consumer                        | answers for `ansible_group_priority` | for `control` |
+| ------------------------------- | ------------------------------------ | ------------- |
+| `variable_hover_at`             | **no** — `<none>`                    | yes, `= from_host_line` |
+| `definition_at`                 | **no** — no jump                     | yes, `inv.ini` line 1 |
+| condition hover (`hover_at`)    | **no** — `<none>`                    | n/a |
+| `path_substitution_hover`       | **YES**                              | n/a |
+| `variable_coverage_diagnostics` | exempt by design, every `ansible_*`  | n/a |
+| `resolved_references`           | not measured — needs a `Client`      | n/a |
+
+The index carries the key in every case (`INDEX -> ["ansible_group_priority", "control"]`), so
+this is the consumers filtering, not the index withholding.
+
+**Why the first two are silent:** `is_injected` returns true for *any* name starting with
+`ansible_` (`condition.rs:476`). `variable_hover_at` short-circuits on it at `main.rs:1678`
+before reading the index, and `variable_defs_at` uses `vars::uses`, which drops injected names
+outright. No `ansible_*` name can reach either surface from any position, before or after this
+fix.
+
+**The surface that does show it** is the templated-path hover. Given
+`vars_files: - "vars/{{ ansible_group_priority }}.yml"`:
+
+```
+→ vars/10.yml
+Substituting:
+- `ansible_group_priority` = `10` — inventory · inv.ini:2
+```
+
+Correct from a host position. From a **group** position that is the lie this ticket is about: a
+confident value, sourced to an inventory line, for something ansible never defined — the exact
+shape the project's opening rule names.
+
+`var-undefined` is unaffected either way, every `ansible_*` name being unconditionally exempt,
+so no diagnostic moves.
+
+P3 rather than P1: one rarely-written key, one answer surface, and that surface needs the key
+used inside a templated path. Same tier as [T-132] and [T-133].
 
 ## Cause
 
@@ -274,13 +310,16 @@ made unreachable.
       the control, and the fix this ticket originally proposed fails it
 - [x] the measured tables above sit in a doc comment at the drop site, and `vars.rs` gained
       the host-entry row
-- [ ] hover and go-to-definition report nothing for the key in a group position, and still
-      answer for it in a host position, asserted per consumer — **not done, and not
-      blocked.** Asserted one level down instead, at `definitions()`, which is the index both
-      consumers read (`group_priority_reaches_the_index_from_a_host_and_never_from_a_group`).
-      Rule 3's corollary asks for the read sites, not a shared helper, so it stays unticked.
-      An earlier revision of this box called it blocked on an LSP harness that does not
-      exist; that was wrong — see "Why the per-consumer test is writable".
+- [x] `path_substitution_hover` substitutes the key from a **host** position and refuses to
+      from a **group** position, asserted at that consumer —
+      `group_priority_substitutes_a_path_from_a_host_position_and_never_from_a_group`. Two
+      earlier revisions of this box named hover and go-to-definition instead; both are silent
+      for every `ansible_*` name, so as written it asked for an assertion that cannot hold.
+      Seen red three ways, per rule 5: with the group gate removed the group case substitutes
+      and fails; with the reader-wide drop this ticket originally prescribed the host case
+      stops substituting and fails; and with the fixture's `ansible.cfg` pointed at a missing
+      inventory the `control` assertion fails, which is what keeps the negative from passing
+      on an inventory that was never read.
 - [x] the key is still indexed from `group_vars/`/`host_vars/`, where it genuinely is a
       variable — the T-062 box 7 control, still green at `vars.rs`
 - [x] `GROUP_PRIORITY` is the only spelling of the name in the codebase — moved to

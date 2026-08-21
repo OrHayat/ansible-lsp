@@ -5756,6 +5756,94 @@ mod tests {
             );
         }
     }
+
+    /// T-178's per-consumer box, at the one surface measured to show the key.
+    ///
+    /// Hover and go-to-definition cannot carry this assertion: `is_injected`
+    /// (`condition.rs:476`) matches every `ansible_*` name, so `variable_hover_at`
+    /// short-circuits at the injected branch and `variable_defs_at` never sees the use at
+    /// all — both are silent from *any* position, before or after the fix. The templated-path
+    /// hover is the consumer that reads the index for this name and says something.
+    ///
+    /// Each fixture carries an ordinary `control` variable in the SAME position, used in a
+    /// second templated path. That is what keeps the negative honest: the group case asserts
+    /// an absence, and an absence also appears when the inventory was never read at all —
+    /// `cached_definitions` builds `ScanCache::default()` with no `with_env`, so an ambient
+    /// `ANSIBLE_CONFIG` can replace the fixture's `ansible.cfg`. If that happens the control
+    /// path stops substituting and this test fails loudly instead of passing empty.
+    #[test]
+    fn group_priority_substitutes_a_path_from_a_host_position_and_never_from_a_group() {
+        use ansible_core::testing::project;
+
+        const PLAY: &str = concat!(
+            "- hosts: all\n",
+            "  vars_files:\n",
+            "    - \"vars/{{ ansible_group_priority }}.yml\"\n",
+            "    - \"vars/{{ control }}.yml\"\n",
+        );
+
+        // Both fixtures resolve to the same target file, so the only difference between them
+        // is the inventory position the value came from.
+        let group = project(
+            "t178-path-group",
+            "[defaults]\ninventory = inv.ini\n",
+            &[
+                ("inv.ini", "[web]\nnode1\n\n[web:vars]\nansible_group_priority=10\ncontrol=10\n"),
+                ("vars/10.yml", "x: 1\n"),
+                ("play.yml", PLAY),
+            ],
+        );
+        let host = project(
+            "t178-path-host",
+            "[defaults]\ninventory = inv.ini\n",
+            &[
+                ("inv.ini", "[web]\nnode1 ansible_group_priority=10 control=10\n"),
+                ("vars/10.yml", "x: 1\n"),
+                ("play.yml", PLAY),
+            ],
+        );
+
+        let hover_on = |root: &std::path::Path, name: &str| -> String {
+            let path = root.join("play.yml");
+            let doc = super::Document::new(PLAY.to_string());
+            let nodes = doc.parse().expect("fixture parses");
+            let needle = format!("vars/{{{{ {name} }}}}.yml");
+            let byte = PLAY.find(&needle).expect("fixture carries the path") + 1;
+            super::hover_at(&doc, &nodes, &path, byte, Default::default())
+                .map(|h| h.0)
+                .unwrap_or_default()
+        };
+
+        // Host position: the key is a real variable there, so the path substitutes with it
+        // and the hover sources the value to the inventory line.
+        let from_host = hover_on(&host, "ansible_group_priority");
+        assert!(
+            from_host.contains("`ansible_group_priority` = `10`"),
+            "host position must substitute:\n{from_host}"
+        );
+        assert!(
+            from_host.contains("inv.ini"),
+            "and name the inventory as the source:\n{from_host}"
+        );
+
+        // Group position: ansible consumes the key as merge order and never defines it, so
+        // there is nothing to substitute and the hover must not claim a value.
+        let from_group = hover_on(&group, "ansible_group_priority");
+        assert!(
+            !from_group.contains("`ansible_group_priority` = "),
+            "group position must not substitute:\n{from_group}"
+        );
+
+        // The control, in the same group `[web:vars]` section: an ordinary name there IS a
+        // variable, and must still substitute. Without this the assertion above would also
+        // pass on a fixture whose inventory was never read.
+        let control = hover_on(&group, "control");
+        assert!(
+            control.contains("`control` = `10`") && control.contains("inv.ini"),
+            "the group vars section was read, and only the priority key was dropped:\n{control}"
+        );
+    }
+
 }
 
 

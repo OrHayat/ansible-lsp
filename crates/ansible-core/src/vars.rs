@@ -1460,6 +1460,13 @@ fn under_vars_plugin_dir(file: &Path) -> bool {
 /// the wrong way. Vars-plugin output is merged after inventory parsing and bypasses
 /// `set_variable` entirely (`inventory/manager.py:248-249`).
 ///
+/// Priority only orders groups at the **same depth**. Measured on 2.21.2 with
+/// `[parent:children]` holding `alpha` and a same-depth sibling `zulu`: the baseline winner is
+/// `alpha` (the deeper group), and giving the parent `ansible_group_priority=20` against the
+/// child's `1` still leaves `alpha` the winner. A child always overrides its parent, so
+/// nesting never changes whether this key is a variable — which is why one gate per reader
+/// covers every depth.
+///
 /// Top-level only: in a vars file every top-level key is a variable, and a nested one is
 /// just data that was never a candidate for the merge-order slot.
 pub fn ignored_group_priority(file: &Path, nodes: &[Node]) -> Vec<Span> {
@@ -2770,6 +2777,36 @@ mod tests {
     /// the same key in `[alpha:vars]` **does** move the merge winner, so a rule that fired on
     /// every file would be wrong about the one place the key works. The table in
     /// [`ignored_group_priority`] records both halves.
+    /// A duplicate of the key in **one** `group_vars` file: every occurrence is reported.
+    ///
+    /// Measured on 2.21.2: ansible warns `Found duplicate mapping key
+    /// 'ansible_group_priority'`, keeps the **last** value — which survives as an ordinary
+    /// variable, `ansible_group_priority: 99` — and the merge winner stays `zulu`. So both
+    /// occurrences are inert, and reporting both is right rather than merely harmless: the
+    /// hint says "this does nothing here", which is true of each one.
+    ///
+    /// Note this deliberately differs from the convention at `placement.rs:474`, where a
+    /// diagnostic points at the surviving key alone. That rule is for a diagnostic about the
+    /// *value*, where only the winner matters; this one is about the key being in the wrong
+    /// file, which is equally true of every copy.
+    #[test]
+    fn group_priority_is_flagged_once_per_duplicate_in_a_vars_file() {
+        let parse = |text: &str| Document::new(text.to_string()).parse().unwrap();
+        let dup = concat!(
+            "who: alpha\n",
+            "ansible_group_priority: 10\n",
+            "ansible_group_priority: 99\n",
+        );
+        let spans = ignored_group_priority(Path::new("/p/group_vars/alpha.yml"), &parse(dup));
+        assert_eq!(spans.len(), 2, "one hint per occurrence");
+        assert_ne!(spans[0].start, spans[1].start, "and they are distinct keys");
+
+        // The control: an inventory source with the same duplicate stays quiet, because there
+        // the key is consumed rather than inert. Without this the count above would pass on a
+        // rule that fired everywhere.
+        assert!(ignored_group_priority(Path::new("/p/hosts.ini"), &parse(dup)).is_empty());
+    }
+
     #[test]
     fn group_priority_is_flagged_in_vars_files_and_not_in_an_inventory() {
         let parse = |text: &str| Document::new(text.to_string()).parse().unwrap();
