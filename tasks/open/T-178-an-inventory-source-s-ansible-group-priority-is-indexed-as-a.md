@@ -224,6 +224,40 @@ with no global touched. The calling pattern already exists and is not injected-v
 deliberately routed through `definition_at` rather than the helper, with a comment recording
 that calling the helper is what let a missing paint ship. Same argument, same shape.
 
+### Why not `MemFs`
+
+The obvious question, since `ansible_core::testing::MemFs` exists and would need no disk. Two
+reasons, and the second is the one that matters.
+
+`testing.rs:27` states the rule the crate already follows: prefer `MemFs` where the code under
+test takes a `&dyn Fs`, and `tree` for the paths that **hardcode `StdFs`**. `cached_definitions`
+is the second kind — it builds `ScanCache::default()` internally, and the consumers hand it no
+cache. Injection only happens at `ScanCache::new(fs)` (`cache.rs:272`), one level below where
+these two calls sit.
+
+But even threading a `ScanCache` down would not work, because the LSP crate reads disk outside
+the `Fs` seam entirely — `main.rs:2711` (`located_at`, turning a byte span into a line/column),
+and `1609`, `1710`, `1727` (hover rendering a definition's value). `Fs` is ansible-core's door
+by design (`fs.rs:1`); this crate never adopted it. A `MemFs` fixture would therefore make
+go-to-definition return `None` and hover render blanks — and **silently**, via `.ok()?` and
+`unwrap_or_default()` at those sites. The negative half of this box would go green for entirely
+the wrong reason: the rule-2 trap again, and harder to spot than the `ANSIBLE_CONFIG` one.
+
+That disk-only property is a bug in its own right, measured and filed as [T-199] — hover
+reports the saved value and go-to-definition returns a saved-file line while the editor draws
+an unsaved buffer. Its fix threads `State` into these same two consumers, which is the seam
+this box wants; whoever takes either one should read the other first.
+
+One build note for whoever writes the test: `ansible_core::testing` is gated behind
+`feature = "test-fixtures"` (`ansible-core/Cargo.toml:18`), which only ansible-core enables for
+itself. Using `project()` from here needs a dev-dependency added to
+`crates/ansible-lsp/Cargo.toml`:
+
+```toml
+[dev-dependencies]
+ansible-core = { path = "../ansible-core", features = ["test-fixtures"] }
+```
+
 One hazard to clear when writing it, not a blocker: `cached_definitions` builds
 `ScanCache::default()` **without** `with_env(EnvMap::empty())`, so an ambient `ANSIBLE_CONFIG`
 in the invoking shell can replace the fixture's cfg — `cache.rs:299-302` exists for exactly
@@ -265,3 +299,4 @@ made unreachable.
 
 [T-132]: T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md
 [T-133]: T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md
+[T-199]: T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md
