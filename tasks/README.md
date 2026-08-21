@@ -216,13 +216,13 @@ T-021 is now unblocked on that side.
 | T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
 | T-173 | [Expand inventory_hostname when the play names a literal host](open/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | S    | —          |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
-| T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](open/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | S    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 | T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
 | T-193 | [A looped task's register has no module keys, only results](open/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | S    | —          |
+| T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
@@ -307,6 +307,7 @@ T-021 is now unblocked on that side.
 | T-030 | [`site.yml:6` references a role that doesn't exist](closed/T-030-fix-lustre-reference.md) | **rejected** |
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](closed/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | done     |
 | T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](closed/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | done     |
+| T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](closed/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | done     |
 
 ## Settled — don't re-derive these
 

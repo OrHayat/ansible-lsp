@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P3       | S    | —          |
+| done   | bug  | P3       | S    | —          |
 
 ## Symptom
 
@@ -332,10 +332,14 @@ made unreachable.
       output, and that one fails both the wiring test and the ini control.
 - [x] corpus count unchanged — the key appears zero times in `~/app/ansible`, so nothing
       could move
-- [ ] a host sharing a name with a group has the key consumed, and we still report it — see
-      the section above. Needs a group-name set assembled across the whole inventory source,
-      so it is not a reader-local change. Fix here or split out, but not silently.
+- [x] a host sharing a name with a group has the key consumed, and we still report it —
+      **split out to [T-200]**, not fixed here. It is a different rule (the entity name
+      decides which object receives the vars, groups first), needs a group-name set assembled
+      across the whole inventory source rather than a per-reader gate, and is an M against
+      this ticket's S. The measurement and the `GroupPosition` limit comment stay here; the
+      work moved.
 
 [T-132]: T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md
 [T-133]: T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md
 [T-199]: T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md
+[T-200]: T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md
