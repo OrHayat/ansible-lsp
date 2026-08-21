@@ -168,7 +168,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-197 | [A notify resolved only by a later dynamic include_role is fatal on order alone](open/T-197-a-notify-resolved-only-by-a-later-dynamic-include-role-is-fa.md) | M    | T-196 |
 | T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
-| T-199 | **bug** · [Hover and go-to-definition read the saved file, so an unsaved buffer gets a wrong value and a wrong line](open/T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -308,6 +307,7 @@ T-021 is now unblocked on that side.
 | T-177 | **bug** · [add_host variables are not indexed, so a later play reads them as undefined](closed/T-177-add-host-variables-are-not-indexed-so-a-later-play-reads-the.md) | done     |
 | T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](closed/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | done     |
 | T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](closed/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | done     |
+| T-199 | **bug** · [Hover and go-to-definition read the saved file, so an unsaved buffer gets a wrong value and a wrong line](closed/T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md) | done     |
 
 ## Settled — don't re-derive these
 

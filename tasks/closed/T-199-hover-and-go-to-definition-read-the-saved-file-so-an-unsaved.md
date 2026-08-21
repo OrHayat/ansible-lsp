@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | M    | —          |
+| done   | bug  | P2       | M    | —          |
 
 ## Symptom
 
@@ -72,43 +72,83 @@ shape. There isn't one.
 
 ## Fix
 
-Give the two consumers access to the open buffers, and prefer a buffer over disk wherever a
-file is read for an answer.
+Landed as an overlay, so **exact** — the jump goes to the buffer's line rather than refusing.
+Refusing would have been the honest fallback only if the buffers could not reach the
+definitions, and they can: `Fs` is already ansible-core's one door to the filesystem
+(`fs.rs:1`), so `OverlayFs` overrides `read` alone and every consumer gets the same text. The
+reasoning sits on `OpenDocs` in `main.rs`, at the site.
 
-- `definition_at` and `variable_hover_at` do not receive `State` today. Threading it is the
-  same seam [T-178]'s last-but-one box needs for its per-consumer test, so the two should be
-  done together or at least not fight each other.
-- The four `read_to_string` sites become "buffer if open, else disk". `located_at` already
-  has the shape for this at `main.rs:2708` — it just only knows about one file.
-- The *definitions* are the harder half: they come from `cached_definitions` → `StdFs`, so a
-  buffer-aware answer means either an `Fs` implementation that overlays open documents, or
-  passing the open text down the way the current file's `nodes` already are. The overlay is
-  the one that generalises, and it is the only route that makes `MemFs` usable from this
-  crate — see [T-178]'s "Why the per-consumer test is writable" for why it is not today.
+The buffers travel as a value, `OpenDocs` — a path-keyed snapshot taken once per request —
+not as `&State`:
 
-Sized M for that reason: the rendering half is small, the definition half is a seam.
+- `State` is the server's lifecycle object (client-tracked diagnostics, the scan flag,
+  workspace roots). The readers are rendering functions; handing them `State` puts the scan
+  flag in scope of a markdown renderer, and forces 30 unrelated tests to build a server.
+- It cannot cross the crate boundary. The definitions are built inside ansible-core behind
+  `Fs`, which knows nothing about the LSP crate. `OpenDocs` wraps into `OverlayFs`; `State`
+  could not.
+- Its `Default` is a claim, not a filler: empty means "no editor behind this". Tests spell it
+  `no_buffers()`.
+- A snapshot cannot shift under one answer, so a hover can't report a value read before an
+  edit against a line number read after it.
 
-**Decide explicitly whether jumping into a dirty buffer should be exact or refused.** If the
-overlay is too costly, the honest fallback is to return nothing rather than a line we know may
-be wrong — silence beats a wrong jump target. That is a product call, not an implementation
-detail, and it belongs in this ticket rather than in the diff.
+`State.docs` stays the only storage — `State::open_docs()` derives the snapshot per request,
+dropping `untitled:` URLs, which have no path for another file to name. A first attempt used a
+process-global registry beside `State.docs`; two lists of open documents that must be kept in
+step is the drift this project files bugs about, and it was dropped.
+
+Every reader of the variable index was enumerated (rule 3) and each passes what it has:
+
+| consumer                          | gets                                    |
+| --------------------------------- | --------------------------------------- |
+| `variable_hover_at`               | threaded from the `hover` handler       |
+| `variable_defs_at` / `definition_at` | threaded from `goto_definition`      |
+| `path_substitution_hover`         | threaded from `hover_at`                |
+| `variable_coverage_diagnostics`   | `Analysis::open`, so the diagnostic and the hover cannot contradict each other over one variable |
+| `resolved_references`             | a snapshot, so what is painted clickable matches what go-to-definition answers |
+| the workspace scan                | one snapshot for the pass — it skips *open* files, but a closed file it analyses may read an open one |
+
+The `ScanCache` inside `analyze_text_in` stays disk-backed on purpose: it answers "what does
+the tree look like", which an unsaved edit to a file's contents does not change. Only the
+variable index reads text for values, and `cached_definitions` builds its own overlay-backed
+cache.
 
 ## Done when
 
-- [ ] hover on a use whose definition sits in an open, unsaved file reports the **buffer's**
+- [x] hover on a use whose definition sits in an open, unsaved file reports the **buffer's**
       value, not the saved one — asserted per consumer, with a saved-file control that must
       still answer from disk when the file is not open
-- [ ] go-to-definition returns a range valid against the **buffer**, so the jump lands on the
+- [x] go-to-definition returns a range valid against the **buffer**, so the jump lands on the
       definition after an edit that shifts its line — the ten-lines-prepended fixture above,
       which is the shape that made this visible
-- [ ] a file open and unsaved but *unedited* still answers identically to the disk path, so
+- [x] a file open and unsaved but *unedited* still answers identically to the disk path, so
       the overlay cannot change answers it has no reason to
-- [ ] seen red before the fix, per rule 5, in both directions: the current code fails the two
+- [x] seen red before the fix, per rule 5, in both directions: the current code fails the two
       boxes above, and an overlay that reads the buffer unconditionally fails the saved-file
       control
-- [ ] whichever way the "exact or refused" call goes, it is written down at the site with the
+- [x] whichever way the "exact or refused" call goes, it is written down at the site with the
       reason, not just implemented
 
 [T-132]: T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md
 [T-133]: T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md
 [T-178]: T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md
+
+## What landed
+
+Three tests in `crates/ansible-lsp/src/main.rs`, one fixture: `shared_port` defined in
+`vars/x.yml`, used from `play.yml`, so every answer has to read a *second* file.
+
+| test | asserts |
+| ---- | ------- |
+| `hover_of_a_cross_file_use_reads_the_open_buffer_not_the_saved_file` | `9999` and `x.yml:11`, never `8080` |
+| `go_to_definition_returns_a_range_valid_against_the_open_buffer` | range starts at line 10, not 0 |
+| `an_open_but_unedited_buffer_answers_exactly_like_the_saved_file` | the overlay is inert where it has nothing to add |
+
+Both directions of rule 5 were run, and both mutations were confirmed present in the file
+before believing the result:
+
+- **Buffers ignored** (`OpenDocs::read` → straight to disk): the two tests fail on `8080` and
+  line 0. The saved-file controls still pass, which is what says they are testing the
+  *preference* and not just the plumbing.
+- **A buffer handed to the control**: the "a closed file answers from disk" assertions fail
+  (line 10 where 0 is required). The controls discriminate; they are not decoration.
