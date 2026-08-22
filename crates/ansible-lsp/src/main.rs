@@ -208,11 +208,14 @@ fn cached_definitions(
     open: &OpenDocs,
     inv: &[PathBuf],
     cache: &Mutex<VarCache>,
+    install: Option<&Arc<AnsibleInstall>>,
 ) -> Arc<Vec<vars::Located>> {
     cached_definitions_in(
         path,
         nodes,
-        &ScanCache::new(OverlayFs(open.clone())).with_inventory(inv.to_vec()),
+        &ScanCache::new(OverlayFs(open.clone()))
+            .with_inventory(inv.to_vec())
+            .with_install(install.cloned()),
         inv,
         cache,
     )
@@ -388,6 +391,11 @@ struct State {
     /// (T-201 box 5): `initialize` records it, `startup` hands it to
     /// [`AnsibleInstall::init`], and nothing on a request path can reach it.
     ansible_path: Mutex<Option<PathBuf>>,
+    /// The detected Ansible install (T-201 box 4), owned here rather than in a process-wide
+    /// `OnceLock` inside `ansible-core`. `None` until `startup` has detected one; every
+    /// reader takes it from the `FileContext` it was given, so "not detected yet" is a
+    /// missing answer rather than a wrong one.
+    install: Mutex<Option<Arc<ansible_core::install::AnsibleInstall>>>,
     /// The workspace scan `initialized` starts.
     ///
     /// Held rather than discarded. A bare `tokio::spawn` drops the handle, and with it both
@@ -476,6 +484,11 @@ impl State {
                 _ => p,
             })
             .collect()
+    }
+
+    /// The detected Ansible install, if startup has got there.
+    fn install(&self) -> Option<Arc<ansible_core::install::AnsibleInstall>> {
+        self.install.lock().ok().and_then(|i| i.clone())
     }
 
     /// The `ansibleLsp.ansiblePath` setting, if the client sent one.
@@ -779,7 +792,9 @@ impl Backend {
             let inv = self.state.inventory_setting();
             diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes, &inv, &self.state.var_cache));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
-            let cache = ScanCache::default().with_inventory(inv.clone());
+            let cache = ScanCache::default()
+                .with_inventory(inv.clone())
+                .with_install(self.state.install());
             diagnostics.extend(Self::unknown_host_diagnostics(&a, &path, &cache));
         }
         self.state.track(uri, &diagnostics);
@@ -951,7 +966,7 @@ impl Backend {
     }
 
     fn diagnostics_of(a: &Analysis) -> Vec<Diagnostic> {
-        Self::diagnostics_with(a, AnsibleInstall::detected().and_then(|i| i.version))
+        Self::diagnostics_with(a, a.ctx.install.as_ref().and_then(|i| i.version))
     }
 
     /// `core` is the detected ansible-core version, taken as an argument rather than read
@@ -1135,7 +1150,7 @@ impl Backend {
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
     ) -> Vec<Diagnostic> {
-        let defs = cached_definitions(path, nodes, &a.open, inv, cache);
+        let defs = cached_definitions(path, nodes, &a.open, inv, cache, a.ctx.install.as_ref());
         let mut out = Vec::new();
         for u in vars::uses(nodes) {
             if u.guard.is_empty() {
@@ -1219,7 +1234,7 @@ impl Backend {
         // borrow it.
         let ansible_path = state.ansible_path();
         let install = tokio::task::spawn_blocking(move || {
-            ansible_core::install::AnsibleInstall::init(ansible_path).clone()
+            ansible_core::install::AnsibleInstall::detect(ansible_path)
         })
         .await
         .unwrap_or_default();
@@ -1518,7 +1533,7 @@ impl Backend {
         // Counting sits *under* the memo, so it reports what actually reached the disk —
         // the walk is ~98% syscalls on a network/9p workspace, so this is the number.
         let disk = Arc::new(Counting::new(StdFs));
-        let scan_cache = Arc::new(ScanCache::new(disk.clone()));
+        let scan_cache = Arc::new(ScanCache::new(disk.clone()).with_install(state.install()));
 
         // Analyse several files at once. 580 files: ext4 19 -> 3 ms at `nproc`, 9p 14.5 -> 1.2 s.
         let in_flight = state
@@ -1675,6 +1690,7 @@ impl Backend {
                 &self.state.open_docs(),
                 &self.state.inventory_setting(),
                 &self.state.var_cache,
+                self.state.install().as_ref(),
             );
             for u in vars::uses(nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
@@ -1711,15 +1727,16 @@ impl Backend {
         open: &OpenDocs,
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<Vec<Location>> {
         let Some(reference) = Self::reference_at(doc, nodes, pos) else {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
-            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache)
+            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache, install)
                 // Or on the host half of a `hostvars['web01']` read (T-171).
                 .or_else(|| Self::host_key_defs_at(doc, pos, path));
         };
-        let ctx = FileContext::discover(path);
+        let ctx = FileContext::discover(path).with_install(install.cloned());
         let res = resolve::resolve(&reference, &ctx);
         if res.status != Status::Resolved {
             return None;
@@ -1776,13 +1793,14 @@ impl Backend {
         open: &OpenDocs,
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
-        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache)
+        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache, install)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
             .cloned()
@@ -1809,12 +1827,13 @@ impl Backend {
         open: &OpenDocs,
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<(String, Range)> {
         let idents = template_idents(&r.value);
         if idents.is_empty() {
             return None;
         }
-        let defs = cached_definitions(path, nodes, open, inv, cache);
+        let defs = cached_definitions(path, nodes, open, inv, cache, install);
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
@@ -1891,6 +1910,7 @@ impl Backend {
         open: &OpenDocs,
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<(String, Range)> {
         // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
         // ones, so asking it first and falling back to a second, complementary scan walked
@@ -1899,9 +1919,9 @@ impl Backend {
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         if condition::is_injected(&use_.name) {
-            return Self::injected_var_hover_at(doc, &use_, AnsibleInstall::detected());
+            return Self::injected_var_hover_at(doc, &use_, install.map(|i| i.as_ref()));
         }
-        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache)
+        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
@@ -2230,7 +2250,9 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
         // No collection tree: the builtin package, or a pre-collections legacy `library/`
         // dir — `ansible.legacy` is Ansible's own name for that namespace.
         None => {
-            let builtin = ansible_core::install::AnsibleInstall::detected()
+            let builtin = ctx
+                .install
+                .as_ref()
                 .and_then(|i| i.package_dir.as_ref())
                 .is_some_and(|d| won.starts_with(d));
             if builtin {
@@ -2582,8 +2604,9 @@ fn hover_at(
     open: &OpenDocs,
     inv: &[PathBuf],
     cache: &Mutex<VarCache>,
+    install: Option<&Arc<AnsibleInstall>>,
 ) -> Option<(String, Range)> {
-    let ctx = FileContext::discover(path);
+    let ctx = FileContext::discover(path).with_install(install.cloned());
     let range = |s: Span| {
         let (sl, sc) = doc.byte_to_lsp(s.start);
         let (el, ec) = doc.byte_to_lsp(s.end);
@@ -2619,11 +2642,11 @@ fn hover_at(
         // Resolve just this reference. A templated path gets the substitution hover
         // (what the `{{ }}` expands to and where those values are defined); a literal
         // one gets the resolved target and the candidates tried, winner marked.
-        let defs = cached_definitions(path, nodes, open, inv, cache);
+        let defs = cached_definitions(path, nodes, open, inv, cache, install);
         let literals = vars::known_literals(&defs, path, &doc.text);
         let res = resolve::resolve_with(r, &ctx, &literals);
         if r.templated {
-            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache) {
+            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache, install) {
                 return Some(hit);
             }
         }
@@ -2667,7 +2690,7 @@ fn hover_at(
     }
 
     // Variable hover: where the variable under the cursor is defined, and its value.
-    Backend::variable_hover_at(doc, nodes, byte, path, open, inv, cache)
+    Backend::variable_hover_at(doc, nodes, byte, path, open, inv, cache, ctx.install.as_ref())
 }
 
 #[tower_lsp::async_trait]
@@ -2807,6 +2830,7 @@ impl LanguageServer for Backend {
                 &self.state.open_docs(),
                 &inv,
                 &self.state.var_cache,
+                self.state.install().as_ref(),
             )
             .map(
                 |(value, range)| Hover {
@@ -2891,6 +2915,7 @@ impl LanguageServer for Backend {
                 &self.state.open_docs(),
                 &self.state.inventory_setting(),
                 &self.state.var_cache,
+                self.state.install().as_ref(),
             )
                 .map(GotoDefinitionResponse::Array),
         )
@@ -3002,6 +3027,7 @@ async fn main() {
             var_cache: Mutex::new(VarCache::default()),
             scan_task: Mutex::new(None),
             ansible_path: Mutex::new(None),
+            install: Mutex::new(None),
         }),
     })
     .custom_method("ansible/references", Backend::resolved_references)
@@ -5031,7 +5057,7 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text.clone());
         let nodes = doc.parse().unwrap();
         let byte = text.find("{{ shared_endpoint }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
             .expect("hover expected");
         assert!(md.contains("vars_files"), "provenance label in: {md}");
         assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
@@ -5084,7 +5110,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
 
         let byte = text.find("{{ pod_namespace }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
             .expect("hover on an add_host-defined variable");
         assert!(md.contains("add_host"), "provenance label in: {md}");
         // The value, which is why the definition's span points at it rather than at the
@@ -5101,6 +5127,7 @@ mod tests {
             &no_buffers(),
                         &[],
                             &no_cache(),
+                            None,
             )
         .expect("jump from an add_host-defined variable");
         assert_eq!(locs.len(), 1, "{locs:?}");
@@ -5117,7 +5144,7 @@ mod tests {
         // hover working at all: the consumed parameter beside it defines nothing, so
         // neither consumer may answer for it.
         let consumed = text.find("{{ name }}").unwrap() + 3;
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[], &no_cache(), None).is_none());
         let (line, character) = doc.byte_to_lsp(consumed);
         assert!(super::Backend::definition_at(
             &doc,
@@ -5128,6 +5155,7 @@ mod tests {
         , &no_buffers(),
                 &[],
                             &no_cache(),
+                            None,
             )
         .is_none());
     }
@@ -5184,7 +5212,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let hover_at_last = |name: &str| {
             let byte = text.rfind(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache()).map(|h| h.0)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None).map(|h| h.0)
         };
 
         // Used inside its own entry: in scope, so the definition is offered.
@@ -5230,14 +5258,14 @@ mod tests {
         // is defined in three and its value depends on group membership we cannot know.
         {
             let byte = at("'web01'].web01_ib_ip");
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
                 .expect("no hover on the host_vars read")
                 .0;
             assert!(md.contains("10.0.0.1"), "hover shows the value: {md}");
             let (line, character) = doc.byte_to_lsp(byte);
             let pos = tower_lsp::lsp_types::Position { line, character };
             assert!(
-                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache()).is_some(),
+                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None).is_some(),
                 "no jump target on the host_vars read"
             );
         }
@@ -5245,10 +5273,10 @@ mod tests {
         // INVISIBLE: a play var. Hover declines and go-to-definition declines, because
         // offering the play var would point at a value this read can never produce.
         let byte = at("'web01'].play_scoped");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None).is_none());
         let (line, character) = doc.byte_to_lsp(byte);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None).is_none());
 
         // ...and the warning takes over on exactly the two BAD rows, naming the source it
         // found rather than claiming the variable was never defined.
@@ -5273,7 +5301,7 @@ mod tests {
             1
         );
         let inv = at("'web01'].infiniband_ip");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[], &no_cache(), None).is_none());
 
         // T-171, the other half of the same line: the HOST key. `host_vars/web01.yml` is a
         // deterministic path — the filename is the host name — so this resolves without an
@@ -5284,7 +5312,7 @@ mod tests {
         let key = text.find("hostvars['web01']").unwrap() + "hostvars['".len() + 1;
         let (line, character) = doc.byte_to_lsp(key);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache())
+        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
             .expect("host key jumps");
         assert_eq!(locs.len(), 1);
         assert!(
@@ -5331,7 +5359,7 @@ mod tests {
         // branch is last in the chain and must not shadow it.
         let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache()).expect("var jumps");
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None).expect("var jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
 
         for m in &msgs {
@@ -5371,12 +5399,12 @@ mod tests {
         let nested_key = key_on("nested_map:");
 
         for (byte, what) in [(set_fact_key, "set_fact"), (set_stats_key, "set_stats data")] {
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
                 .unwrap_or_else(|| panic!("no hover on the {what} key"))
                 .0;
             assert!(md.contains("my_result"), "{what} hover shows the play var: {md}");
 
-            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[], &no_cache())
+            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[], &no_cache(), None)
                 .unwrap_or_else(|| panic!("no jump target on the {what} key"));
             // Jumps to the play var it reads, not to the key it sits in.
             assert_eq!(locs.len(), 1, "{what}: {locs:?}");
@@ -5390,8 +5418,8 @@ mod tests {
 
         // The boundary row: nested in a fact's value the braces are data, so both views
         // stay silent rather than claiming a name Ansible keeps literal.
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[], &no_cache()).is_none());
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[], &no_cache(), None).is_none());
     }
 
     #[test]
@@ -5405,7 +5433,7 @@ mod tests {
 
         let hover = |name: &str| {
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
                 .expect("hover expected")
                 .0
         };
@@ -5429,7 +5457,7 @@ mod tests {
         for depth in 0..=5usize {
             let name = format!("chain_depth{depth}");
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
             // One nested "dependency of" line per hop.
@@ -5449,7 +5477,7 @@ mod tests {
 
         // include_vars through the chain: mechanism on the def line, route underneath.
         let byte = text.find("{{ chain_included }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
             .expect("hover expected");
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
@@ -5512,6 +5540,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
             startup_note: std::sync::Mutex::new(String::new()),
             scanning: std::sync::atomic::AtomicBool::new(false),
         };
@@ -5581,7 +5610,7 @@ mod tests {
         assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
 
         let (md, range) =
-            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[], &no_cache()).expect("hover");
+            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[], &no_cache(), None).expect("hover");
         assert!(md.contains("prod.yml"), "the target it reached: {md}");
         assert!(md.contains("Substituting"), "the section header: {md}");
         assert!(md.contains("env"), "the variable substituted: {md}");
@@ -5595,7 +5624,7 @@ mod tests {
         if let Some(pr) = plain {
             let pres = ansible_core::resolve::resolve_with(pr, &ctx, &Default::default());
             assert!(
-                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache()).is_none(),
+                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache(), None).is_none(),
                 "a literal path has nothing to substitute"
             );
         }
@@ -5609,7 +5638,7 @@ mod tests {
         let refs2 = ansible_core::references::extract(&n2);
         let r2 = &refs2[0];
         let res2 = ansible_core::resolve::resolve_with(r2, &ctx, &Default::default());
-        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache(), None).is_none());
     }
 
     /// T-029 box 4: a resolved module hovers one line of provenance — collection and
@@ -5617,7 +5646,7 @@ mod tests {
     /// twin in core, so the documentation-only caveat must appear.
     #[test]
     fn hover_shows_module_provenance_not_paths() {
-        if ansible_core::install::AnsibleInstall::init(None).package_dir.is_none() {
+        if ansible_core::install::AnsibleInstall::detect(None).package_dir.is_none() {
             return; // ansible not on PATH
         }
         let path = std::path::Path::new("../../demo/tasks/modules.yml")
@@ -5881,7 +5910,7 @@ mod tests {
         for hints in [true, false] {
             let settings = Settings { hints, ..Settings::default() };
             let hover = |byte: usize| {
-                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[], &no_cache())
+                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[], &no_cache(), None)
                     .unwrap_or_else(|| panic!("hover expected at {byte} (hints={hints})"))
                     .0
             };
@@ -5918,13 +5947,13 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let settings = Settings { hints: true, ..Settings::default() };
 
-        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache())
+        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None)
             .expect("module hover expected")
             .0;
         assert!(md.contains("ansible.legacy"), "provenance, not the condition, in: {md}");
 
         // And the condition is still reachable — on its keyword.
-        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache())
+        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None)
             .expect("when hover expected")
             .0;
         assert!(plain(&kw).contains("when:"), "condition on its keyword in: {kw}");
@@ -6094,7 +6123,7 @@ mod tests {
             let nodes = doc.parse().expect("fixture parses");
             let needle = format!("vars/{{{{ {name} }}}}.yml");
             let byte = PLAY.find(&needle).expect("fixture carries the path") + 1;
-            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache())
+            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None)
                 .map(|h| h.0)
                 .unwrap_or_default()
         };
@@ -6381,6 +6410,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
         };
         state.set_inventory(&serde_json::json!({ "inventory": [inv] }));
         state
@@ -6398,7 +6428,7 @@ mod tests {
         let doc = super::Document::new(T201_PLAY.to_string());
         let nodes = doc.parse().expect("fixture parses");
         let byte = T201_PLAY.find("vars/{{ control }}.yml").expect("fixture carries the path") + 1;
-        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv, cache)
+        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv, cache, None)
             .map(|h| h.0)
             .unwrap_or_default()
     }
@@ -6508,6 +6538,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
         })
     }
 
@@ -6577,6 +6608,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
         });
         (lsp_service(state), root)
     }
@@ -6754,6 +6786,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
         });
         let service = lsp_service(state.clone());
         let b = service.inner();
@@ -6857,6 +6890,7 @@ mod tests {
             var_cache: no_cache(),
             scan_task: Default::default(),
             ansible_path: Default::default(),
+            install: Default::default(),
         });
         (state, root)
     }

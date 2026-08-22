@@ -409,6 +409,72 @@ cosmetics. `dead_code` on a test function means the test is not running, and not
 the workflow says so - the suite reports a smaller number and looks green.
 
 
+## Box (4), and the test suite that could not fail
+
+### It was the *easier* box, not the hardest
+
+The ticket priced (4) as the biggest: "13 call sites across `resolve.rs`, `workspace.rs` and
+`main.rs`". Only **two of those are production** - `resolve_module` (three reads) and
+`FileContext::collection_roots`; the rest are tests. And both already hold a `FileContext`,
+which made it the carrier: `ctx.install`, fed by `ScanCache::with_install` -> `context()`, plus
+`FileContext::with_install` for the two uncached `discover` sites in the editor paths.
+
+By contrast **(6) is the harder one**, which is worth recording before someone picks it up
+expecting the reverse. `module_redirect`'s memo belongs on `ScanCache`, but `resolve_module`
+only ever sees `&dyn Fs` - which cannot be downcast back to the `ScanCache` it may or may not
+be. There is no carrier in scope, and that is the whole problem.
+
+`AnsibleInstall::detect(override)` now returns an owned value and nothing memoises it. The
+readers take it from the context they were given; `None` means detection has not finished,
+which is a missing answer and never a wrong one.
+
+### The suite was green with the resolver's install removed entirely
+
+This is the part to keep. After the change, `cargo test --workspace` passed - and so did
+`cargo test --workspace` with `ctx.install` replaced by `None` inside `resolve_module`. Both
+runs green, one of them against a resolver that could not find a single builtin module.
+
+Cause: the three tests covering module resolution open with
+
+```rust
+if AnsibleInstall::detect(None).package_dir.is_none() { return; }
+```
+
+and **there is no `ansible` on this machine** - the working ansible-core 2.21.2 lives in WSL,
+which is where this repo's live verification happens, and which a Windows-side `cargo test`
+cannot see. So they returned before asserting anything and reported `ok`. Rule 2, exactly: a
+probe that cannot fail feels like evidence and is not. Filed as [[T-203]], where the sweep found
+**eight** such sites rather than the three first counted.
+
+Closed here with two tests that need no real install, because they test our plumbing rather
+than upstream's tree:
+
+| test | pins |
+| ---- | ----- |
+| `a_builtin_module_resolves_through_the_install_on_the_context` | resolution reads the install off `FileContext`, against a synthetic package dir |
+| `the_install_a_cache_carries_reaches_the_contexts_it_builds` | the `ScanCache` -> `FileContext` handoff, one line nothing else crossed |
+
+Faking the tree is right for these and wrong for the three they sit beside: those ask whether
+*detection finds* a real install, these ask whether the found install *reaches* the resolver.
+Only the second is ours.
+
+### One spelling is not one code path
+
+The first version of the synthetic test covered `ansible.builtin.ping` only. That takes the
+three-part branch of `resolve_module` (`:656`); the **bare** `ping:` spelling takes a different
+branch (`:629`) that reads the install separately. Breaking `:629` left the new test green - a
+second unfalsifiable probe, written inside the fix for the first one. Both spellings are covered
+now and each break fails exactly one test.
+
+### A smell this left behind
+
+`hover_at`, `definition_at` and `cached_definitions` now take **four** parallel per-request
+parameters - `open`, `inv`, `cache`, `install` - each threaded down the same route by a separate
+box of this ticket. That wants bundling into one request-context value. Not done here: it would
+balloon a change that already crosses both crates, and the right time is when the fifth one
+would otherwise be added.
+
+
 ## Done when
 
 One box per global. The bar is the same for each: the value either travels with the caller,
@@ -425,8 +491,8 @@ or it is proven to hold no request state and the proof is written at the site.
 - [x] **(3)** the `VarCache` `OnceLock` is gone - **done**. It is a `State` field, still
       reached by every reader through the `Arc` (the detached scan included), and its key now
       carries the inventory. `ansible-lsp` has **no process globals left**
-- [ ] **(4)** `install::DETECTED` is gone - the detected install is a value owned by `State`
-      and passed to its 13 call sites across `resolve.rs`, `workspace.rs` and `main.rs`
+- [x] **(4)** `install::DETECTED` is gone - **done**. The install is an owned value on
+      `State`, carried into `ansible-core` on the `FileContext` every reader already had
 - [x] **(5)** `install::OVERRIDE` is gone - **done**, and *without* (4). It became an argument
       to `AnsibleInstall::init`, and the path it carries now lives on `State::ansible_path`.
       The reload is settled the second way the box allowed: a changed `ansiblePath` needs a

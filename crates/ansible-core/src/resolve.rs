@@ -2,7 +2,6 @@
 
 use crate::fs::{Fs, StdFs};
 use crate::include_vars;
-use crate::install::AnsibleInstall;
 use crate::references::{Reference, ReferenceKind};
 use crate::workspace::FileContext;
 use std::collections::HashMap;
@@ -626,7 +625,7 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                         candidates.extend(found);
                     }
                 }
-                if let Some(pkg) = AnsibleInstall::detected().and_then(|i| i.package_dir.as_ref()) {
+                if let Some(pkg) = ctx.install.as_ref().and_then(|i| i.package_dir.as_ref()) {
                     let file = format!("{bare}.py");
                     candidates.push(pkg.join("modules").join(&file));
                     candidates.push(pkg.join("plugins/action").join(&file));
@@ -634,8 +633,7 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
                     .then(|| {
-                        AnsibleInstall::detected()
-                            .and_then(|i| i.builtin_module_redirect(bare))
+                        ctx.install.as_ref().and_then(|i| i.builtin_module_redirect(bare))
                     })
                     .flatten();
                 (res, redirect)
@@ -657,7 +655,7 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 // ansible.builtin lives in the ansible package, not a collection tree.
                 if (ns, coll) == ("ansible", "builtin") {
                     if let Some(p) =
-                        AnsibleInstall::detected().and_then(|i| i.builtin_module(module))
+                        ctx.install.as_ref().and_then(|i| i.builtin_module(module))
                     {
                         candidates.insert(0, p);
                     }
@@ -880,13 +878,20 @@ fn normalise(p: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use crate::install::AnsibleInstall;
     use super::*;
     use crate::parse::Document;
     use crate::references::extract;
 
+    /// Resolve every reference in `src`, against the real installed Ansible.
+    ///
+    /// The install is detected here and attached to the context (T-201 box 4). It used to
+    /// arrive through a process-wide `OnceLock` that any caller could populate, which is
+    /// exactly why "which install answered this" was untestable.
     fn resolve_src(file: &Path, src: &str) -> Vec<(Reference, Resolution)> {
         let doc = Document::new(src.to_string());
-        let ctx = FileContext::discover(file);
+        let ctx = FileContext::discover(file)
+            .with_install(Some(std::sync::Arc::new(AnsibleInstall::detect(None))));
         extract(&doc.parse().unwrap())
             .into_iter()
             .map(|r| {
@@ -1284,7 +1289,7 @@ mod tests {
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
         assert!(res.targets[0].ends_with("demo/library/ping.py"), "got {:?}", res.targets);
 
-        if AnsibleInstall::init(None).package_dir.is_none() {
+        if AnsibleInstall::detect(None).package_dir.is_none() {
             return; // no install: the remaining shapes can't resolve on this machine
         }
 
@@ -2315,7 +2320,7 @@ mod tests {
     /// the test would then prove the fixture rather than the resolver.
     #[test]
     fn builtin_modules_resolve_into_the_installed_ansible() {
-        if AnsibleInstall::init(None).package_dir.is_none() {
+        if AnsibleInstall::detect(None).package_dir.is_none() {
             return; // ansible not on PATH
         }
         let root = crate::testing::project("builtin-modules", "", &[("playbooks/site.yml", "")]);
@@ -2328,11 +2333,85 @@ mod tests {
         assert!(res.targets[0].ends_with("ansible/modules/systemd.py"));
     }
 
+    /// T-201 box 4: the install travels on the `FileContext`, and resolution uses *that* one.
+    ///
+    /// Written against a synthetic package dir rather than the real Ansible, deliberately.
+    /// The two tests around it gate on `package_dir.is_none()` and return early, so on a
+    /// machine with no Ansible — this one, and CI — they assert nothing and the whole
+    /// install-carrying path went unverified. That is what a probe that cannot fail looks
+    /// like: `cargo test` was green with the install removed from the context entirely.
+    ///
+    /// Faking the tree is right *here* even though it would be wrong for those two: they test
+    /// whether detection finds a real install, this tests whether the found install reaches
+    /// the resolver. Only the second is about our plumbing.
+    #[test]
+    fn a_builtin_module_resolves_through_the_install_on_the_context() {
+        let root = crate::testing::project(
+            "ctx-install",
+            "",
+            &[
+                ("playbooks/site.yml", ""),
+                ("fake/ansible/modules/ping.py", ""),
+            ],
+        );
+        let file = root.join("playbooks/site.yml");
+        let src = "- ansible.builtin.ping:
+";
+        let install = AnsibleInstall {
+            package_dir: Some(root.join("fake/ansible")),
+            ..Default::default()
+        };
+
+        let resolve_against = |install: Option<AnsibleInstall>| {
+            let doc = Document::new(src.to_string());
+            let ctx = FileContext::discover(&file)
+                .with_install(install.map(std::sync::Arc::new));
+            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
+            resolve(&r, &ctx)
+        };
+
+        let res = resolve_against(Some(install.clone()));
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert!(
+            res.targets[0].ends_with("fake/ansible/modules/ping.py"),
+            "and into the install the context carried: {:?}",
+            res.targets
+        );
+
+        // The *bare* spelling is a different branch of `resolve_module` and reads the install
+        // separately. Covering only the FQCN left that branch unpinned — found by breaking it
+        // and watching this test stay green.
+        let bare = {
+            let doc = Document::new("- ping:
+".to_string());
+            let ctx = FileContext::discover(&file)
+                .with_install(Some(std::sync::Arc::new(install.clone())));
+            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
+            resolve(&r, &ctx)
+        };
+        assert_eq!(bare.status, Status::Resolved, "bare name, tried {:#?}", bare.candidates);
+        assert!(
+            bare.targets[0].ends_with("fake/ansible/modules/ping.py"),
+            "the bare spelling resolves through the same install: {:?}",
+            bare.targets
+        );
+
+        // The control, and the whole point: with no install on the context the same module
+        // must not resolve. Without this, the assertion above would also pass on a build that
+        // went back to reading a process-wide slot.
+        let none = resolve_against(None);
+        assert_ne!(
+            none.status,
+            Status::Resolved,
+            "with no install on the context there is nowhere for a builtin to resolve to"
+        );
+    }
+
     /// An installed collection you never wrote, found via `ansible --version`. Gated on the
     /// install alone, for the reason given just above.
     #[test]
     fn installed_collection_modules_resolve() {
-        if AnsibleInstall::init(None).collection_roots.is_empty() {
+        if AnsibleInstall::detect(None).collection_roots.is_empty() {
             return;
         }
         let root =

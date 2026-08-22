@@ -192,34 +192,23 @@ impl Source {
     }
 }
 
-static DETECTED: OnceLock<AnsibleInstall> = OnceLock::new();
-
 impl AnsibleInstall {
-    /// Run detection, once, from the one place that is allowed to pay for it.
+    /// Run detection. ~300 ms cold, and on a cold `ansible --version` fallback seconds
+    /// (3.6 s measured, T-084), so exactly one caller may do this: the server's startup task.
     ///
-    /// `override_dir` is the client's `ansibleLsp.ansiblePath` — an argument rather than the
-    /// process slot it used to be (T-201 box 5). The slot could not be read back, so nothing
-    /// could test that the setting arrived, and `OnceLock::set` dropped a second write in
-    /// silence while its own doc promised the value was "live on reload".
+    /// An owned value, not a process-wide `OnceLock` (T-201 box 4). The install is per
+    /// *server*, not per process — indistinguishable while there is one server, but the slot
+    /// made "which install answered this" untestable, let any caller start the 300 ms probe
+    /// from a request path, and silently pinned the first `ansiblePath` a process ever saw.
     ///
-    /// There is deliberately no `detect()` any more. It was `get_or_init`, so *any* caller
-    /// could start detection — and four of them were on request paths (`resolve_module`,
-    /// `FileContext::collection_roots`), which is the 3.6 s freeze on the message pump that
-    /// T-084 measured and that [`detected`](Self::detected)'s own doc forbids. Now a request
-    /// path can only ask what is already known.
+    /// Readers take it from the [`FileContext`](crate::workspace::FileContext) they were
+    /// given. `None` there means detection has not finished, which is a missing answer and
+    /// never a wrong one.
     ///
-    /// Still `OnceLock`, so a second call is ignored: a changed `ansiblePath` needs a restart.
-    /// That is the honest version of what the old code did by accident — see T-201 box (4),
-    /// which is what would make it genuinely reloadable.
-    pub fn init(override_dir: Option<PathBuf>) -> &'static Self {
-        DETECTED.get_or_init(|| Self::run(override_dir))
-    }
-
-    /// The result if detection has already run — never starting it. `None` means startup has
-    /// not got there yet, and a caller must answer without the install rather than wait: this
-    /// is a request path's only accessor.
-    pub fn detected() -> Option<&'static Self> {
-        DETECTED.get()
+    /// `override_dir` is the client's `ansibleLsp.ansiblePath` (T-201 box 5) — an argument
+    /// rather than the second global it used to be, which nothing could read back.
+    pub fn detect(override_dir: Option<PathBuf>) -> Self {
+        Self::run(override_dir)
     }
 
     fn run(override_dir: Option<PathBuf>) -> Self {
@@ -567,7 +556,7 @@ mod tests {
 
     #[test]
     fn finds_the_local_ansible_install() {
-        let i = AnsibleInstall::init(None);
+        let i = AnsibleInstall::detect(None);
         if i.package_dir.is_none() {
             return; // ansible not on PATH
         }

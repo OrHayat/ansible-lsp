@@ -1,6 +1,8 @@
 //! Where a file sits in an Ansible project.
 
 use crate::config::AnsibleConfig;
+use std::sync::Arc;
+
 use crate::fs::{Fs, Kind, StdFs};
 use crate::install::AnsibleInstall;
 use std::path::{Path, PathBuf};
@@ -19,6 +21,17 @@ pub struct FileContext {
     /// The including file's own directory.
     pub file_dir: PathBuf,
     pub config: AnsibleConfig,
+    /// The Ansible install this file resolves against (T-201 box 4).
+    ///
+    /// A value carried with the context rather than a process-wide `OnceLock`: the install is
+    /// per-*server*, not per-process, and while a slot was indistinguishable from that in a
+    /// single server it made "which install answered this" untestable and let any caller start
+    /// the ~300 ms detection from a request path (T-084).
+    ///
+    /// `None` means detection has not run yet, and every reader must treat it as "not known
+    /// yet" rather than "no Ansible": before startup finishes, builtin modules simply do not
+    /// resolve, which is a missing answer and never a wrong one.
+    pub install: Option<Arc<AnsibleInstall>>,
 }
 
 impl FileContext {
@@ -48,7 +61,16 @@ impl FileContext {
             role_anchor_dir,
             file_dir,
             config,
+            install: None,
         }
+    }
+
+    /// Attach the detected Ansible install. A builder rather than a `discover` parameter so
+    /// the many callers that have no install — every test with no server behind it — keep
+    /// saying so by omission instead of threading a `None`.
+    pub fn with_install(mut self, install: Option<Arc<AnsibleInstall>>) -> Self {
+        self.install = install;
+        self
     }
 
     /// Base dirs for task includes, in Ansible's order.
@@ -185,7 +207,7 @@ impl FileContext {
         // `detected`, not a detection: this runs on every hover and jump, and starting the
         // ~300 ms probe here is the freeze T-084 measured. Before startup has detected, an
         // installed collection simply is not offered yet.
-        for r in AnsibleInstall::detected().iter().flat_map(|i| &i.collection_roots) {
+        for r in self.install.iter().flat_map(|i| &i.collection_roots) {
             push_unique(&mut dirs, Some(r.clone()));
         }
         dirs

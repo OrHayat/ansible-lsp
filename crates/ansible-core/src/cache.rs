@@ -259,6 +259,9 @@ pub struct ScanCache {
     /// here rather than threaded through the walk because it is the top rung of the same
     /// ladder `config()` already resolves.
     inventory_override: Vec<PathBuf>,
+    /// The Ansible install every [`FileContext`] this cache builds is given (T-201 box 4).
+    /// `None` until startup has detected one — a missing answer, never a wrong one.
+    install: Option<Arc<crate::install::AnsibleInstall>>,
     stats: AtomicStats,
 }
 
@@ -284,6 +287,7 @@ impl ScanCache {
             listings: Map::default(),
             env: EnvMap::from_process(),
             inventory_override: Vec::new(),
+            install: None,
             stats: AtomicStats::default(),
         }
     }
@@ -293,6 +297,13 @@ impl ScanCache {
     /// Must be set before any config is computed, since configs are memoized per root.
     pub fn with_inventory(mut self, paths: Vec<PathBuf>) -> Self {
         self.inventory_override = paths;
+        self
+    }
+
+    /// The Ansible install to hand every context this cache builds. Set it before any context
+    /// is computed, since contexts are memoized per directory.
+    pub fn with_install(mut self, install: Option<Arc<crate::install::AnsibleInstall>>) -> Self {
+        self.install = install;
         self
     }
 
@@ -393,7 +404,10 @@ impl ScanCache {
     pub fn context(&self, file: &Path) -> Arc<FileContext> {
         let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
         let (ctx, computed) = self.contexts.get_or_init(&dir, || {
-            Arc::new(FileContext::discover_with(file, self, |root| self.config(root)))
+            Arc::new(
+                FileContext::discover_with(file, self, |root| self.config(root))
+                    .with_install(self.install.clone()),
+            )
         });
         if computed {
             self.stats.contexts.fetch_add(1, Ordering::Relaxed);
@@ -599,6 +613,35 @@ impl Fs for ScanCache {
 
 #[cfg(test)]
 mod tests {
+
+    /// T-201 box 4: the install a cache is given reaches every context it builds.
+    ///
+    /// One line (`context()`'s `.with_install`), and nothing else in the workspace crosses it:
+    /// replacing it with `None` left the whole suite green. Without it the editor's module
+    /// resolution silently loses the Ansible install — "module not found" on a module that is
+    /// installed, which is the class of wrong answer this repo exists to avoid.
+    #[test]
+    fn the_install_a_cache_carries_reaches_the_contexts_it_builds() {
+        let install = std::sync::Arc::new(crate::install::AnsibleInstall {
+            package_dir: Some(PathBuf::from("/fake/ansible")),
+            ..Default::default()
+        });
+        let file = Path::new("/p/play.yml");
+
+        // Control first: a cache with no install hands out contexts with none, so the
+        // assertion below cannot pass by accident on a default-populated field.
+        let bare = ScanCache::new(crate::testing::MemFs::new(&[("/p/play.yml", "")]));
+        assert!(bare.context(file).install.is_none(), "no install in, none out");
+
+        let with = ScanCache::new(crate::testing::MemFs::new(&[("/p/play.yml", "")]))
+            .with_install(Some(install.clone()));
+        assert_eq!(
+            with.context(file).install.as_ref().and_then(|i| i.package_dir.clone()),
+            install.package_dir.clone(),
+            "the context must carry the cache's install"
+        );
+    }
+
     use super::*;
     use crate::fs::Counting;
 
