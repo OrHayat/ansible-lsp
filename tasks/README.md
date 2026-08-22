@@ -138,7 +138,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-122 | [changed_when, failed_when and until are the same expression language](open/T-122-changed-when-failed-when-and-until-are-the-same-expression-l.md) | M    | —    |
 | T-123 | **epic** · [Module and role contracts](open/T-123-module-and-role-contracts.md) | L    | —    |
 | T-124 | **epic** · [LSP protocol surface](open/T-124-lsp-protocol-surface.md) | L    | —    |
-| T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | S    | —    |
 | T-126 | [Semantic tokens instead of client-side decorations](open/T-126-semantic-tokens-instead-of-client-side-decorations.md) | M    | —    |
 | T-127 | [A completion provider](open/T-127-a-completion-provider.md) | M    | —    |
 | T-128 | **epic** · [ansible-lint parity](open/T-128-ansible-lint-parity.md) | L    | —    |
@@ -169,6 +168,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
+| T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
