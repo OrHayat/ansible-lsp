@@ -555,6 +555,30 @@ or not a redirect fired; `hover_marks_the_split_table_redirect` returns early un
 already resolved. Both are [[T-203]]'s subject.
 
 
+### The widened-window probe, re-run
+
+The `sleep(300ms)` from the Symptom is an experiment, not committed code - it goes into the
+*writer* (`the_inventory_setting_keeps_only_usable_paths`) to hold its window open, which is
+what took the flake from 2/30 to 7/10 and confirmed the diagnosis. Put back and re-run against
+the fixed tree:
+
+| | failures |
+| - | -------- |
+| before the fix, widened | 7/10 |
+| after, widened | **0/10** |
+
+Checked that the probe still executes rather than silently not applying: the widened writer
+reports `finished in 0.30s` where the victim reports `0.01s`, and both are in the same test
+binary. Without that check "0/10" is indistinguishable from an edit that did not land - the
+failure mode rule 5 already cost this repo once.
+
+Worth stating what this does **not** prove, though. The window is now being widened around a
+write to a `State` the test owns; there is no process-wide slot left for another test to read
+through, so the experiment has nothing to race on any more. 0/10 is consistent with the fix and
+could not have come out otherwise - it is confirmation, not independent evidence. The load-
+bearing measurements are the 30x0 unwidened runs and the per-consumer tests, both above.
+
+
 ## Done when
 
 One box per global. The bar is the same for each: the value either travels with the caller,
@@ -584,8 +608,8 @@ or it is proven to hold no request state and the proof is written at the site.
       settled with a measurement rather than an argument, and the reasoning lives at the site
 - [x] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
       fail on the pre-fix binary - **0/30**, against 2/30 before
-- [ ] the widened-window probe from the Symptom is re-run and now passes, since that is the
-      version of the race that reproduces reliably
+- [x] the widened-window probe from the Symptom is re-run and now passes - **0/10**,
+      against 7/10 before, with the widener confirmed to be executing
 - [x] a test per consumer of each moved value (rule 3), not one test per global - done for
       (1), (2) and (3); see the coverage section below
 - [x] the 10/10 pair reproducer is re-run after the fix and the victim passes - and the
