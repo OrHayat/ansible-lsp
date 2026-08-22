@@ -232,6 +232,113 @@ in its doc that a name must be unique per test or they race, and they did - one 
 only when run alongside the others, and passed alone.
 
 
+## What (1)-(3) cost, and what they turned up
+
+### The cache key was hiding the same bug
+
+`inventory_setting()` became a method on `State`, which already owned both halves, and the
+value is passed to the six readers alongside the `OpenDocs` [[T-199]] threads on the same
+route. That part was mechanical. This part was not:
+
+**The var cache was keyed by path alone.** With the setting global there was only ever one
+inventory in flight and `set_inventory` cleared the cache wholesale on change, so a path-only
+key was safe by accident. The moment the value travels with the request, two requests can
+legitimately carry different inventories - and the second was handed the first's answer. The
+first version of `each_request_answers_from_the_inventory_it_was_given` failed on exactly
+that. Fixed by keying on `(canon(path), inventory_key(inv))`.
+
+Two consequences in writing:
+
+- `invalidate_var_cache` drops **every** inventory's entry for a file, since "the entry for
+  this file" became a set.
+- `analyze_text_measured` (`:664`) builds its own `ScanCache` and never called
+  `with_inventory`, so it passes `&[]` and keys separately from the hover path. Under the old
+  key those two **shared an entry, so whichever ran first decided whether the setting applied
+  at all** - a latent rule-3 inconsistency, invisible until the key made the two answers
+  distinguishable. Each path's behaviour is unchanged; they no longer overwrite each other.
+
+### The handler layer had no coverage at all, and seven wiring lines survived mutation
+
+Every test in `main.rs` entered *below* the handler - `set_inventory`, `hover_at`,
+`analyze_text` - which proves the machinery works and says nothing about whether the server
+ever calls it. Measured by deleting one line at a time and running the suite:
+
+| line deleted | before | after |
+| ------------ | ------ | ----- |
+| `did_open`/`did_change`/`did_close` don't invalidate | survived | caught |
+| `did_change` never stores the new text | caught | caught |
+| `initialize` records no workspace roots | survived | caught |
+| `initialize` drops `initializationOptions` inventory | survived | caught |
+| `did_change_configuration` ignores the new settings | survived | caught |
+| `did_change_configuration` doesn't re-publish the inventory | survived | caught |
+| `publish_diagnostics` stops tracking what it published | survived | caught |
+| `publish_diagnostics` never sends | survived | caught |
+| `did_close` leaves the buffer in the map | survived | caught |
+| `initialized` never starts the scan | survived | caught |
+| **`initialize` ignores `ansiblePath`** | survived | **still survives - this is box (5)** |
+
+The last one cannot be tested until `install::OVERRIDE` stops being a `pub(crate)` `OnceLock`
+with no getter. Nothing can read back what `initialize` set, and being write-once, a second
+test in the same process could not set it anyway. **Box (5) is what makes that test writable**,
+which is the reverse of the order this ticket assumed.
+
+### What made the handler layer reachable
+
+`Client` has no public constructor - the closure passed to `LspService::new` is the only
+source - so nothing could reach `scan_workspace`, `publish_inventory` or any `did_*` handler.
+The harness is 25 lines and needed no transport, no duplex pipe and no JSON-RPC framing; the
+pattern is the one tower-lsp uses in its own `service.rs` tests, which was in the vendored
+source the whole time. Two facts it cost real time to learn, both recorded at the call site:
+
+- The socket is **dropped**, not held. `Client`'s send is
+  `if tx.send(req).await.is_err() { return Err(...) }` (`service/client.rs:549`), so with the
+  receiver gone every publish fails instantly and is swallowed. *Holding* it unpolled is what
+  deadlocks - the channel is `mpsc::channel(1)`.
+- For the two tests that read what was sent, the socket is held and drained, and the drain
+  terminates on `drop(service)` rather than a timeout. Those tests first collected only
+  `["window/logMessage", "window/logMessage"]`: **`Client::send_notification` suppresses every
+  notification until the server is initialized** (`service/client.rs:441`), and calling
+  `Backend::initialize` directly does not set that - only routing a real `initialize` request
+  through the service layer does (`service/layers.rs:73`). Read as "our code sends nothing",
+  that would have been a bug report against code that is correct.
+
+### Two production changes that stand on their own
+
+Both are the shape of `unparseable_diagnostic`/`_for` and `diagnostics_of`/`_with`, not a
+test-only seam:
+
+- `publish_inventory` split into `inventory_status` (all the decisions, returns the payload)
+  and delivery. The status bar's claims - the setting beats `ansible.cfg`, *which* cfg was
+  read, what a plain `ansible-playbook` would have read - are now assertable as a value.
+- `initialized` keeps the scan's `JoinHandle` in `State::scan_task` instead of discarding it.
+  A bare `tokio::spawn` swallows the task's panic, so a scan that dies takes every diagnostic
+  with it silently; `shutdown` also now has somewhere to `abort()` from. Both a deleted spawn
+  and a *discarded handle* fail the test.
+
+### Verification
+
+- `cargo test --workspace`: nine targets green, `ansible-lsp` 95 -> 107.
+- `cargo test -p ansible-lsp` **30 runs, 0 failures** (2/30 before).
+- Zero compiler warnings, used as a check in its own right: an ignored `cache` parameter warns,
+  which is how three helpers were caught taking the parameter and still calling `no_cache()`.
+  Probed that the check can fail before trusting it.
+- Rule 5, every break confirmed present in the file first: `cached_definitions` ignoring its
+  `inv` (2 failed), the cache key ignoring the inventory (1), invalidation dropping nothing
+  (2), `inventory_setting` ignoring its `State` (3), the scan getting its own cache (1), the
+  status precedence rule inverted (1), plus the eleven handler mutations tabled above.
+- The multi-root bug is confirmed **unchanged** ([[T-202]]) - this was a de-globalising change,
+  not a behaviour change.
+
+Two things went wrong while writing this and both are worth keeping:
+
+- The three new T-201 tests first shared one `testing::project` name. `tree()`'s doc says a
+  name must be unique per test or they race - and one failed only alongside the others.
+- A helper-fixing script exited before its `write()`, so `t201_hover`, `t199_hover` and
+  `t199_definition` took a `cache` parameter and ignored it. Every cache test was passing
+  vacuously, and the only reason it surfaced is that **rule 5's breaks stopped biting**. A
+  green suite proved nothing; the mutations did.
+
+
 ## Done when
 
 One box per global. The bar is the same for each: the value either travels with the caller,
@@ -245,10 +352,9 @@ or it is proven to hold no request state and the proof is written at the site.
       is now a method on `State`, which already holds `roots`. The resolution rule is
       deliberately still `roots.first()`; [[T-202]] owns changing it and now has the whole
       `Vec` in scope at the one place that reads it
-- [ ] **(3)** the `VarCache` `OnceLock` is gone - it hangs off `State`, whose `Arc` every
-      writer (`:2713`/`:2730`/`:2741`) and reader already holds. **Partly done**: its *key*
-      now carries the inventory (see below), which was forced by (1). The slot itself is
-      still global
+- [x] **(3)** the `VarCache` `OnceLock` is gone - **done**. It is a `State` field, still
+      reached by every reader through the `Arc` (the detached scan included), and its key now
+      carries the inventory. `ansible-lsp` has **no process globals left**
 - [ ] **(4)** `install::DETECTED` is gone - the detected install is a value owned by `State`
       and passed to its 13 call sites across `resolve.rs`, `workspace.rs` and `main.rs`
 - [ ] **(5)** `install::OVERRIDE` is gone, folded into (4) as an input to detection rather than
@@ -257,13 +363,14 @@ or it is proven to hold no request state and the proof is written at the site.
 - [ ] **(6)** `module_redirect::TABLES` is gone - it moves onto `ScanCache`, which is already
       the per-request memo (`cache.rs`, `Map` fields) for exactly this kind of parse
 - [ ] **(7)** `splitter::ESCAPES` is gone - see the open question below before doing this one
-- [ ] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
-      fail on the pre-fix binary - the flake is the measurement, so the count is the evidence
+- [x] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
+      fail on the pre-fix binary - **0/30**, against 2/30 before
 - [ ] the widened-window probe from the Symptom is re-run and now passes, since that is the
       version of the race that reproduces reliably
-- [ ] a test per consumer of each moved value (rule 3), not one test per global
-- [ ] the 10/10 pair reproducer above is re-run after the fix and the victim passes, with the
-      probe's writes shown to be unreachable rather than merely no longer colliding
+- [x] a test per consumer of each moved value (rule 3), not one test per global - done for
+      (1), (2) and (3); see the coverage section below
+- [x] the 10/10 pair reproducer is re-run after the fix and the victim passes - and the
+      probe's writes are unreachable by construction: there is no process-wide slot to write
 - [ ] `scratchpad/t201_multiroot_probe.rs` is promoted into the suite by [[T-202]], or the
       ticket records why it stays a scratchpad probe - an uncommitted probe with no assertion
       is a test that cannot fail
