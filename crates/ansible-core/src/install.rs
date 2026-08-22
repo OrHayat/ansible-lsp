@@ -24,10 +24,21 @@ pub struct AnsibleInstall {
     pub detect_ms: f64,
     /// Core's own `config/ansible_builtin_runtime.yml`, parsed at detection.
     ///
-    /// A field rather than a lazy per-call parse (T-201 box 6): this table lives inside
-    /// site-packages, so it cannot change while the server runs, and detection already
-    /// happens once on a blocking task. It used to be parsed on the first bare-name miss —
-    /// on the message pump, in the middle of a request.
+    /// A field rather than a lazy per-call parse (T-201 box 6). It used to be parsed on the
+    /// first bare-name miss — on the message pump, in the middle of a request, which is the
+    /// freeze T-084 is about. Detection already runs once on a blocking task, so it reads here.
+    ///
+    /// **Not** "this table never changes": upgrading Ansible rewrites it. It is that
+    /// `detect` runs exactly once, from `startup`, and nothing re-detects — so an upgrade
+    /// mid-session is already invisible for every field of this struct (`version`,
+    /// `package_dir`, `collection_roots`), and this one now behaves the same way rather than
+    /// differently. A changed install needs a server restart, the same answer box (5) gave
+    /// for `ansiblePath`.
+    ///
+    /// One narrow behaviour change came with the move, and it is a loss: the old lazy parse
+    /// would have picked up an upgrade that landed between startup and the first bare-name
+    /// miss. That window is now closed in the other direction. Traded knowingly for taking
+    /// the 368 KB parse off the request path.
     pub builtin_routing: RoutingTable,
 }
 
