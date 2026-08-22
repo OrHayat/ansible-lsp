@@ -32,6 +32,10 @@ pub struct FileContext {
     /// yet" rather than "no Ansible": before startup finishes, builtin modules simply do not
     /// resolve, which is a missing answer and never a wrong one.
     pub install: Option<Arc<AnsibleInstall>>,
+    /// Collection routing tables, shared with the cache that built this context (T-201 box 6).
+    /// Default is an empty memo of its own — correct for a context with no cache behind it,
+    /// which then parses what it needs and drops it.
+    pub routing: Arc<crate::cache::RoutingTables>,
 }
 
 impl FileContext {
@@ -62,6 +66,7 @@ impl FileContext {
             file_dir,
             config,
             install: None,
+            routing: Arc::default(),
         }
     }
 
@@ -70,6 +75,12 @@ impl FileContext {
     /// saying so by omission instead of threading a `None`.
     pub fn with_install(mut self, install: Option<Arc<AnsibleInstall>>) -> Self {
         self.install = install;
+        self
+    }
+
+    /// Share a cache's routing-table memo, so every context it builds parses each table once.
+    pub fn with_routing(mut self, routing: Arc<crate::cache::RoutingTables>) -> Self {
+        self.routing = routing;
         self
     }
 

@@ -2,7 +2,7 @@
 //! still navigable, the way pyright indexes site-packages.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct AnsibleInstall {
@@ -22,6 +22,56 @@ pub struct AnsibleInstall {
     /// only place this runs, and it used to be unmeasured — T-084.
     pub source: Source,
     pub detect_ms: f64,
+    /// Core's own `config/ansible_builtin_runtime.yml`, parsed at detection.
+    ///
+    /// A field rather than a lazy per-call parse (T-201 box 6): this table lives inside
+    /// site-packages, so it cannot change while the server runs, and detection already
+    /// happens once on a blocking task. It used to be parsed on the first bare-name miss —
+    /// on the message pump, in the middle of a request.
+    pub builtin_routing: RoutingTable,
+}
+
+/// A `plugin_routing` table — core's `ansible_builtin_runtime.yml` or a collection's
+/// `meta/runtime.yml`, both the same shape.
+///
+/// Only `redirect` is read. `deprecation`, `tombstone` and `action_plugin` live in the same
+/// records and are T-064's; this is a struct rather than a bare map so that ticket adds fields
+/// instead of reshaping every caller.
+#[derive(Debug, Clone, Default)]
+pub struct RoutingTable {
+    redirects: HashMap<String, String>,
+}
+
+impl RoutingTable {
+    /// Parse `plugin_routing.modules.<name>.redirect` out of a table's text.
+    ///
+    /// Pure, so it is testable without a file: the I/O and the memo are the caller's.
+    /// Anything unparseable is an empty table — a routing file we cannot read redirects
+    /// nothing, which is the same answer as a file that redirects nothing.
+    pub fn parse(text: &str) -> Self {
+        let doc = crate::parse::Document::new(text.to_string());
+        let modules = doc.parse().and_then(|nodes| {
+            nodes
+                .first()
+                .and_then(|n| n.get("plugin_routing").and_then(|n| n.get("modules")).cloned())
+        });
+        let mut redirects = HashMap::new();
+        if let Some(modules) = modules {
+            for (k, v) in modules.entries() {
+                if let (Some(name), Some(to)) =
+                    (k.as_str(), v.get("redirect").and_then(|r| r.as_str()))
+                {
+                    redirects.insert(name.to_string(), to.to_string());
+                }
+            }
+        }
+        Self { redirects }
+    }
+
+    /// Where `name` was moved to, if this table says so.
+    pub fn redirect(&self, name: &str) -> Option<&str> {
+        self.redirects.get(name).map(String::as_str)
+    }
 }
 
 /// An ansible-core release, ordered. Pre-release suffixes (`2.22.0.dev0`, `2.19.0rc1`) are
@@ -223,6 +273,14 @@ impl AnsibleInstall {
         } else {
             Self::from_version_command().unwrap_or(fast)
         };
+        // Read here, on the one blocking task that is allowed to do I/O, rather than on the
+        // first bare-name miss — which happened on the message pump (T-201 box 6).
+        if let Some(pkg) = install.package_dir.as_ref() {
+            let table = pkg.join("config/ansible_builtin_runtime.yml");
+            if let Ok(text) = std::fs::read_to_string(&table) {
+                install.builtin_routing = RoutingTable::parse(&text);
+            }
+        }
         install.detect_ms = started.elapsed().as_secs_f64() * 1e3;
         install
     }
@@ -388,44 +446,8 @@ impl AnsibleInstall {
     /// last-ditch step (`loader.py:956-959`) after every path is searched.
     /// Deprecations and tombstones stay T-064.
     pub fn builtin_module_redirect(&self, name: &str) -> Option<String> {
-        let pkg = self.package_dir.as_ref()?;
-        module_redirect(&pkg.join("config/ansible_builtin_runtime.yml"), name)
+        self.builtin_routing.redirect(name).map(str::to_string)
     }
-}
-
-/// `plugin_routing.modules.<name>.redirect` from a routing table — core's or a
-/// collection's `meta/runtime.yml`, both the same shape. Each file is parsed once per
-/// process and cached, keyed by path.
-pub fn module_redirect(table: &Path, name: &str) -> Option<String> {
-    use std::collections::HashMap;
-    static TABLES: OnceLock<std::sync::Mutex<HashMap<PathBuf, HashMap<String, String>>>> =
-        OnceLock::new();
-    let tables = TABLES.get_or_init(Default::default);
-    let mut tables = tables.lock().ok()?;
-    if !tables.contains_key(table) {
-        let mut map = HashMap::new();
-        if let Ok(text) = std::fs::read_to_string(table) {
-            let doc = crate::parse::Document::new(text);
-            let modules = doc.parse().and_then(|nodes| {
-                nodes.first().and_then(|n| {
-                    n.get("plugin_routing")
-                        .and_then(|n| n.get("modules"))
-                        .cloned()
-                })
-            });
-            if let Some(modules) = modules {
-                for (k, v) in modules.entries() {
-                    if let (Some(name), Some(to)) =
-                        (k.as_str(), v.get("redirect").and_then(|r| r.as_str()))
-                    {
-                        map.insert(name.to_string(), to.to_string());
-                    }
-                }
-            }
-        }
-        tables.insert(table.to_path_buf(), map);
-    }
-    tables.get(table)?.get(name).cloned()
 }
 
 /// First `name` on PATH, with symlinks resolved.
@@ -552,6 +574,93 @@ mod tests {
             Source::Override,
             "a dir with no modules/ is not an install and must not be taken as one"
         );
+    }
+
+    /// `RoutingTable::parse` had no test of any kind before T-201 box 6 — the parse was
+    /// buried in a function that did its own I/O behind a process global, so nothing could
+    /// reach it without a real file and a real install.
+    #[test]
+    fn a_routing_table_reads_redirects_and_survives_junk() {
+        let t = RoutingTable::parse(
+            "plugin_routing:
+  modules:
+    docker:
+      redirect: community.docker.docker
+",
+        );
+        assert_eq!(t.redirect("docker"), Some("community.docker.docker"));
+        assert_eq!(t.redirect("absent"), None, "a name with no record redirects nowhere");
+
+        // Records that are not redirects are ignored rather than misread. T-064 adds these;
+        // until then a deprecation must not come back as a redirect target.
+        let dep = RoutingTable::parse(
+            "plugin_routing:
+  modules:
+    old:
+      deprecation:
+        warning_text: go away
+",
+        );
+        assert_eq!(dep.redirect("old"), None, "a deprecation is not a redirect");
+
+        // Every shape of "this file says nothing" ends empty rather than panicking.
+        for junk in ["", "not: a routing table
+", "plugin_routing:
+", "[[[", "plugin_routing:
+  modules:
+"] {
+            assert_eq!(RoutingTable::parse(junk).redirect("x"), None, "{junk:?}");
+        }
+    }
+
+    /// The builtin table is a field on the install now, so the lookup is a lookup.
+    #[test]
+    fn the_builtin_redirect_reads_the_table_detection_parsed() {
+        let mut i = AnsibleInstall::default();
+        assert_eq!(i.builtin_module_redirect("docker"), None, "control: nothing parsed yet");
+        i.builtin_routing = RoutingTable::parse(
+            "plugin_routing:
+  modules:
+    docker:
+      redirect: community.docker.docker
+",
+        );
+        assert_eq!(
+            i.builtin_module_redirect("docker"),
+            Some("community.docker.docker".to_string())
+        );
+    }
+
+    /// Detection reads core's table into that field, so no request path ever parses it.
+    #[test]
+    fn detection_parses_the_builtin_routing_table() {
+        let root = crate::testing::tree(
+            "install-builtin-routing",
+            &[
+                ("venv/ansible/modules/ping.py", ""),
+                (
+                    "venv/ansible/config/ansible_builtin_runtime.yml",
+                    "plugin_routing:
+  modules:
+    docker:
+      redirect: community.docker.docker
+",
+                ),
+            ],
+        );
+        let i = AnsibleInstall::detect(Some(root.join("venv/ansible")));
+        assert_eq!(
+            i.builtin_module_redirect("docker"),
+            Some("community.docker.docker".to_string()),
+            "detection must load the table, source={:?}",
+            i.source
+        );
+
+        // Control: an install with no table at all leaves the field empty rather than
+        // inheriting whatever a previous detection found — the process-global failure mode.
+        let bare = crate::testing::tree("install-no-routing", &[("venv/ansible/modules/ping.py", "")]);
+        let none = AnsibleInstall::detect(Some(bare.join("venv/ansible")));
+        assert_eq!(none.builtin_module_redirect("docker"), None);
     }
 
     #[test]

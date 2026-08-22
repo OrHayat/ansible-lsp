@@ -74,6 +74,9 @@ pub struct Stats {
     pub reads: usize,
     pub contexts: usize,
     pub configs: usize,
+    /// Routing tables parsed. One per collection `meta/runtime.yml` a pass actually consults;
+    /// a count above the number of distinct tables means the memo is not being shared.
+    pub routing: usize,
     /// Definitions handed back to callers, summed — the irreducible part, since every file
     /// still materialises its own view of every variable it can see.
     pub defs: usize,
@@ -101,6 +104,9 @@ impl AtomicStats {
             reads: self.reads.load(Ordering::Relaxed),
             contexts: self.contexts.load(Ordering::Relaxed),
             configs: self.configs.load(Ordering::Relaxed),
+            // Filled by `ScanCache::stats`, which owns the memo this counts.
+            routing: 0,
+
             defs: self.defs.load(Ordering::Relaxed),
         }
     }
@@ -262,7 +268,60 @@ pub struct ScanCache {
     /// The Ansible install every [`FileContext`] this cache builds is given (T-201 box 4).
     /// `None` until startup has detected one — a missing answer, never a wrong one.
     install: Option<Arc<crate::install::AnsibleInstall>>,
+    /// Collections' own `meta/runtime.yml` tables, parsed once per cache (T-201 box 6).
+    ///
+    /// Per *cache*, not per process, and that is the point: these files can live in the
+    /// workspace (`<project_root>/collections/ansible_collections/…`), so a process-lifetime
+    /// memo meant an edited routing table did nothing until the server restarted — measured.
+    /// Dying with the cache is what makes an edit take effect.
+    routing: Arc<RoutingTables>,
     stats: AtomicStats,
+}
+
+/// Collection routing tables, parsed once each and keyed by path.
+///
+/// Reads go through the [`Fs`] seam, so an open buffer is seen and the read is counted. The
+/// old process-global version used `std::fs` directly — probed through the door and read
+/// through the window, since the one caller already held an `Fs` and used it for `is_file` on
+/// the line before.
+#[derive(Debug, Default)]
+pub struct RoutingTables {
+    tables: Mutex<HashMap<PathBuf, Arc<crate::install::RoutingTable>>>,
+    /// Tables actually parsed. The memo is otherwise invisible — the cache already shares the
+    /// *read* (`ScanCache::read` goes through `source`'s memo), so removing the parse memo
+    /// changes no answer and no test could tell. This counter is what makes it observable.
+    parsed: AtomicUsize,
+}
+
+impl RoutingTables {
+    /// The parsed table at `path`, reading it through `fs` on first ask.
+    ///
+    /// An unreadable file caches as an empty table on purpose: a missing `meta/runtime.yml` is
+    /// the common case, and re-probing it for every unresolved module in a scan is waste. The
+    /// negative entry dies with the cache, which is what the process-global one never did.
+    /// The parsed table at `path`, reading it through `fs` on first ask.
+    pub fn get(&self, path: &Path, fs: &dyn Fs) -> Arc<crate::install::RoutingTable> {
+        if let Ok(map) = self.tables.lock() {
+            if let Some(hit) = map.get(path) {
+                return hit.clone();
+            }
+        }
+        let parsed = Arc::new(
+            fs.read(path)
+                .map(|t| crate::install::RoutingTable::parse(&t))
+                .unwrap_or_default(),
+        );
+        self.parsed.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut map) = self.tables.lock() {
+            map.insert(path.to_path_buf(), parsed.clone());
+        }
+        parsed
+    }
+
+    /// How many tables this memo has parsed.
+    pub fn parsed(&self) -> usize {
+        self.parsed.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for ScanCache {
@@ -288,6 +347,7 @@ impl ScanCache {
             env: EnvMap::from_process(),
             inventory_override: Vec::new(),
             install: None,
+            routing: Arc::default(),
             stats: AtomicStats::default(),
         }
     }
@@ -321,7 +381,7 @@ impl ScanCache {
     }
 
     pub fn stats(&self) -> Stats {
-        self.stats.snapshot()
+        Stats { routing: self.routing.parsed(), ..self.stats.snapshot() }
     }
 
     /// Resolve the parent — memoized, so a shared prefix is walked once for the whole scan —
@@ -406,7 +466,8 @@ impl ScanCache {
         let (ctx, computed) = self.contexts.get_or_init(&dir, || {
             Arc::new(
                 FileContext::discover_with(file, self, |root| self.config(root))
-                    .with_install(self.install.clone()),
+                    .with_install(self.install.clone())
+                    .with_routing(self.routing.clone()),
             )
         });
         if computed {
@@ -613,6 +674,84 @@ impl Fs for ScanCache {
 
 #[cfg(test)]
 mod tests {
+
+    /// T-201 box 6: the routing memo a cache owns reaches every context it builds, so two
+    /// files in one pass share one parse of a collection's table.
+    ///
+    /// Same shape as the install test below, and for the same reason: this handoff is a single
+    /// `.with_routing` line, and nothing else in the workspace crosses it.
+    #[test]
+    fn the_routing_memo_is_shared_by_every_context_a_cache_builds() {
+        let cache = ScanCache::new(crate::testing::MemFs::new(&[
+            ("/p/a/play.yml", ""),
+            ("/p/b/play.yml", ""),
+        ]));
+        let a = cache.context(Path::new("/p/a/play.yml"));
+        let b = cache.context(Path::new("/p/b/play.yml"));
+        assert!(
+            Arc::ptr_eq(&a.routing, &b.routing),
+            "contexts from one cache must share one routing memo"
+        );
+
+        // Control: contexts from *different* caches must not share, or a stale table would
+        // outlive the pass that read it — the bug this box fixed.
+        let other = ScanCache::new(crate::testing::MemFs::new(&[("/p/a/play.yml", "")]));
+        assert!(
+            !Arc::ptr_eq(&a.routing, &other.context(Path::new("/p/a/play.yml")).routing),
+            "a second cache must start with its own memo"
+        );
+    }
+
+    /// The memo parses each table once, which is the only thing it buys.
+    ///
+    /// Worth stating plainly: removing the memo entirely changes **no answer**, because
+    /// `ScanCache::read` already shares the read through `source`'s memo. So no behavioural
+    /// test can see it, and an earlier version of the staleness test in `resolve.rs` only
+    /// looked like it did. This counts.
+    #[test]
+    fn a_routing_table_is_parsed_once_per_cache() {
+        let fs = crate::testing::MemFs::new(&[(
+            "/p/coll/meta/runtime.yml",
+            "plugin_routing:
+  modules:
+    relay:
+      redirect: t.d.relay
+",
+        )]);
+        let tables = RoutingTables::default();
+        let path = Path::new("/p/coll/meta/runtime.yml");
+        assert_eq!(tables.parsed(), 0, "control: nothing parsed before the first ask");
+
+        for _ in 0..5 {
+            assert_eq!(tables.get(path, &fs).redirect("relay"), Some("t.d.relay"));
+        }
+        assert_eq!(tables.parsed(), 1, "five asks, one parse");
+
+        // A different table is a different parse; the memo is keyed, not a single slot.
+        assert_eq!(tables.get(Path::new("/p/other.yml"), &fs).redirect("relay"), None);
+        assert_eq!(tables.parsed(), 2);
+    }
+
+    /// The memo reads through the `Fs` seam, so a fake filesystem can drive it — which the
+    /// process-global version could not, and is why `module_redirect` had no test.
+    #[test]
+    fn the_routing_memo_reads_through_the_fs_seam() {
+        let fs = crate::testing::MemFs::new(&[(
+            "/p/coll/meta/runtime.yml",
+            "plugin_routing:
+  modules:
+    relay:
+      redirect: t.d.relay
+",
+        )]);
+        let tables = RoutingTables::default();
+        assert_eq!(
+            tables.get(Path::new("/p/coll/meta/runtime.yml"), &fs).redirect("relay"),
+            Some("t.d.relay")
+        );
+        // A file the seam cannot read is an empty table, not a panic and not a stale answer.
+        assert_eq!(tables.get(Path::new("/p/nope.yml"), &fs).redirect("relay"), None);
+    }
 
     /// T-201 box 4: the install a cache is given reaches every context it builds.
     ///

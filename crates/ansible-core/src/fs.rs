@@ -389,9 +389,18 @@ mod tests {
     /// is what makes "one door" a property of the crate rather than a habit.
     #[test]
     fn no_filesystem_call_bypasses_the_seam() {
-        // `install.rs` is exempt on purpose: it describes the *machine's* Ansible
-        // installation, not workspace state. It is detected once behind a `OnceLock` and
-        // caches its own routing tables, so there is no per-scan `Fs` to hand it.
+        // `install.rs` is exempt on purpose: detection describes the *machine's* Ansible
+        // installation, not workspace state, and it runs once on a blocking task before any
+        // scan exists — there is no `Fs` to hand it.
+        //
+        // That justification used to be stretched to cover reading a *collection's*
+        // `meta/runtime.yml`, and every clause of it was false there: such a table can live at
+        // `<project_root>/collections/ansible_collections/…`, so it is workspace state the
+        // user edits; the caller already held an `Fs` and used it for `is_file` on the line
+        // before; and the "cached behind a `OnceLock`" clause described globals T-201 removed.
+        // The cost was measured, not theorised: an edited routing table did nothing until the
+        // server restarted. Collection tables now go through `cache::RoutingTables`, which
+        // reads via this seam.
         //
         // `testing.rs` builds fixture trees on disk, which is the same exemption the
         // `#[cfg(test)]` split below grants every other file's tests — it needs naming here

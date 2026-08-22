@@ -702,7 +702,7 @@ fn collection_module_redirect(
         .iter()
         .map(|r| r.join(ns).join(coll).join("meta/runtime.yml"))
         .find(|p| fs.is_file(p))
-        .and_then(|p| crate::install::module_redirect(&p, module))
+        .and_then(|p| ctx.routing.get(&p, fs).redirect(module).map(str::to_string))
 }
 
 /// Role name -> its directory. Handles plain names and 3-part FQCNs.
@@ -1402,6 +1402,85 @@ mod tests {
             res.targets[0].ends_with("demo/charlie/plugins/modules/pulse.sh"),
             "got {:?}",
             res.targets
+        );
+    }
+
+    /// T-201 box 6: an edited collection routing table takes effect, and is still parsed
+    /// once per cache.
+    ///
+    /// Measured before the fix: it did not. The table was memoised in a process-global keyed
+    /// by path with no invalidation, so editing
+    /// `<project_root>/collections/ansible_collections/…/meta/runtime.yml` — a file the user
+    /// owns and edits — changed nothing until the server restarted.
+    ///
+    /// Both halves are asserted on purpose. "A new cache sees the edit" alone would also pass
+    /// if the memo were deleted outright, which is not what the ticket asks for; the stale
+    /// read through the *same* cache is what shows the memo still exists.
+    #[test]
+    fn an_edited_collection_routing_table_takes_effect_but_is_cached_within_one_pass() {
+        let root = crate::testing::project(
+            "t201-routing-edit",
+            "[defaults]
+",
+            &[
+                (
+                    "collections/ansible_collections/t/c/meta/runtime.yml",
+                    "plugin_routing:
+  modules:
+    relay:
+      redirect: t.d.relay
+",
+                ),
+                ("collections/ansible_collections/t/d/plugins/modules/relay.py", ""),
+                ("collections/ansible_collections/t/e/plugins/modules/relay.py", ""),
+                ("play.yml", ""),
+            ],
+        );
+        let file = root.join("play.yml");
+        let table = root.join("collections/ansible_collections/t/c/meta/runtime.yml");
+
+        let through = |cache: &crate::cache::ScanCache| -> String {
+            let doc = Document::new("- t.c.relay:
+    x: 1
+".to_string());
+            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
+            let ctx = cache.context(&file);
+            let res = super::resolve_in(&r, &ctx, cache);
+            res.targets
+                .first()
+                .map(|p| crate::posix_display(p))
+                .unwrap_or_else(|| format!("UNRESOLVED({:?})", res.status))
+        };
+
+        let first_pass = crate::cache::ScanCache::default();
+        assert!(through(&first_pass).ends_with("t/d/plugins/modules/relay.py"), "control");
+
+        std::fs::write(
+            &table,
+            "plugin_routing:
+  modules:
+    relay:
+      redirect: t.e.relay
+",
+        )
+        .unwrap();
+
+        // Same cache: still the old answer, for the length of one pass. Note what this does
+        // *not* prove — `ScanCache::read` already shares the read through `source`'s memo, so
+        // this holds even with the routing parse memo deleted. Measured: that mutation left
+        // this assertion green. What the parse memo buys is counted in
+        // `a_routing_table_is_parsed_once_per_cache` instead.
+        assert!(
+            through(&first_pass).ends_with("t/d/plugins/modules/relay.py"),
+            "one pass gives one answer"
+        );
+
+        // A later request builds a new cache, and that one must see the edit.
+        let second_pass = crate::cache::ScanCache::default();
+        assert!(
+            through(&second_pass).ends_with("t/e/plugins/modules/relay.py"),
+            "a new cache must read the edited table, got {}",
+            through(&second_pass)
         );
     }
 
