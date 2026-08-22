@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | L    | —          |
+| done   | bug  | P1       | L    | —          |
 
 ## Symptom
 

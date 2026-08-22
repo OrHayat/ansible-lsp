@@ -99,8 +99,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
-| T-201 | **bug** · [Process globals make one test's settings another test's answer](open/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | L    | —          |
-| T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | T-201      |
+| T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | ~~T-201~~      |
 
 ### P2 — coverage and usability
 
@@ -312,6 +311,7 @@ T-021 is now unblocked on that side.
 | T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](closed/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | done     |
 | T-199 | **bug** · [Hover and go-to-definition read the saved file, so an unsaved buffer gets a wrong value and a wrong line](closed/T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md) | done     |
 | T-194 | [The scan reports templated paths as unresolved that the editor navigates](closed/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | done     |
+| T-201 | **bug** · [Process globals make one test's settings another test's answer](closed/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | done     |
 
 ## Settled — don't re-derive these
 
