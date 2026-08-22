@@ -7,7 +7,7 @@ use md::{Md, Prose};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use ansible_core::cache::ScanCache;
 use ansible_core::config::DuplicateDictKey;
@@ -101,7 +101,7 @@ impl State {
         // A changed inventory changes what every file can see, so nothing computed under
         // the old one may survive. Wholesale, not per-file: the setting is not a file edit
         // and has no dependency edge to walk back from.
-        if let Ok(mut c) = var_cache().lock() {
+        if let Ok(mut c) = self.var_cache.lock() {
             c.epoch = c.epoch.wrapping_add(1);
             c.entries.clear();
             c.deps.clear();
@@ -196,11 +196,6 @@ struct VarCache {
     epoch: u64,
 }
 
-fn var_cache() -> &'static Mutex<VarCache> {
-    static C: OnceLock<Mutex<VarCache>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(VarCache::default()))
-}
-
 fn canon(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
@@ -212,12 +207,14 @@ fn cached_definitions(
     nodes: &[Node],
     open: &OpenDocs,
     inv: &[PathBuf],
+    cache: &Mutex<VarCache>,
 ) -> Arc<Vec<vars::Located>> {
     cached_definitions_in(
         path,
         nodes,
         &ScanCache::new(OverlayFs(open.clone())).with_inventory(inv.to_vec()),
         inv,
+        cache,
     )
 }
 
@@ -257,12 +254,6 @@ impl OpenDocs {
         }
     }
 
-    /// One open file, for tests. The key goes through [`canon`] because [`Self::text_of`]
-    /// looks up that way — a raw fixture path would silently never match.
-    #[cfg(test)]
-    fn with(path: &Path, text: &str) -> Self {
-        Self(HashMap::from([(canon(path), text.to_string())]))
-    }
 }
 
 /// [`StdFs`] with the open buffers layered over it, so the *definitions* — which are built
@@ -305,9 +296,10 @@ fn cached_definitions_in(
     nodes: &[Node],
     scan: &ScanCache,
     inv: &[PathBuf],
+    cache: &Mutex<VarCache>,
 ) -> Arc<Vec<vars::Located>> {
     let key = (canon(path), inventory_key(inv));
-    let epoch = match var_cache().lock() {
+    let epoch = match cache.lock() {
         Ok(c) => {
             if let Some(hit) = c.entries.get(&key) {
                 return hit.clone();
@@ -318,7 +310,7 @@ fn cached_definitions_in(
     };
     let (result, deps) = vars::definitions_with_deps_in(path, nodes, scan);
     let arc = Arc::new(result);
-    if let Ok(mut cache) = var_cache().lock() {
+    if let Ok(mut cache) = cache.lock() {
         // An invalidation landed while we computed — this result may predate the edit.
         // Return it uncached; the next call recomputes from current content.
         if cache.epoch == epoch {
@@ -335,9 +327,9 @@ fn cached_definitions_in(
 
 /// Drop every cache entry that read `file` (via the reverse map), plus one keyed by `file`
 /// itself — so editing a playbook OR any file it includes recomputes precisely.
-fn invalidate_var_cache(file: &Path) {
+fn invalidate_var_cache(slot: &Mutex<VarCache>, file: &Path) {
     let f = canon(file);
-    let Ok(mut cache) = var_cache().lock() else {
+    let Ok(mut cache) = slot.lock() else {
         return;
     };
     cache.epoch = cache.epoch.wrapping_add(1);
@@ -383,6 +375,21 @@ struct State {
     startup_note: Mutex<String>,
     /// True while a workspace scan runs — a second trigger during one would double-publish.
     scanning: AtomicBool,
+    /// The variable-index cache (T-055), owned rather than process-global (T-201).
+    ///
+    /// Every reader reaches it through this `Arc<State>`, including the detached workspace
+    /// scan, so it is still one cache shared by every request in a server — what changed is
+    /// that a *second* server, or a second test, no longer shares it. It was the least
+    /// dangerous of the three globals (keyed by path, so a stale read is a recompute, not a
+    /// wrong answer) and the last to move.
+    var_cache: Mutex<VarCache>,
+    /// The workspace scan `initialized` starts.
+    ///
+    /// Held rather than discarded. A bare `tokio::spawn` drops the handle, and with it both
+    /// the task's panic — a scan that dies takes every diagnostic with it and says nothing —
+    /// and any way to know it ran. `shutdown` has somewhere to `abort()` from now, and a test
+    /// has something exact to await instead of polling for an effect.
+    scan_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 struct Backend {
@@ -481,7 +488,7 @@ impl State {
     /// isn't a real path, or doesn't parse.
     fn analyze(&self, uri: &Url) -> Option<Analysis> {
         let text = self.text_of(uri)?;
-        Backend::analyze_text_in(text, &uri.to_file_path().ok()?, &self.open_docs())
+        Backend::analyze_text_in(text, &uri.to_file_path().ok()?, &self.open_docs(), &self.var_cache)
     }
 
     fn track(&self, uri: &Url, diagnostics: &[Diagnostic]) {
@@ -646,7 +653,10 @@ impl Backend {
     /// analyses a file on disk, where "nothing is open" is the truth rather than a default.
     #[cfg(test)]
     fn analyze_text(text: String, path: &Path) -> Option<Analysis> {
-        Self::analyze_text_in(text, path, &OpenDocs::default())
+        // Its own cache, not a shared one: "no editor behind this" is the truth for these
+        // callers, and a cache per call is what keeps one test's index out of the next
+        // test's answer — the whole point of T-201.
+        Self::analyze_text_in(text, path, &OpenDocs::default(), &Mutex::new(VarCache::default()))
     }
 
     /// [`analyze_text`] against the editor's open buffers (T-199) — the variable index this
@@ -655,13 +665,19 @@ impl Backend {
     /// The `ScanCache` here stays disk-backed on purpose: it answers "what does the tree look
     /// like", which an unsaved edit to a file's *contents* does not change. Only the variable
     /// index, which `cached_definitions` builds behind its own overlay, reads text for values.
-    fn analyze_text_in(text: String, path: &Path, open: &OpenDocs) -> Option<Analysis> {
+    fn analyze_text_in(
+        text: String,
+        path: &Path,
+        open: &OpenDocs,
+        cache: &Mutex<VarCache>,
+    ) -> Option<Analysis> {
         Self::analyze_text_measured(
             text,
             path,
             &mut ScanTimings::default(),
             &ScanCache::default(),
             open,
+            cache,
         )
     }
 
@@ -674,6 +690,7 @@ impl Backend {
         t: &mut ScanTimings,
         scan: &ScanCache,
         open: &OpenDocs,
+        cache: &Mutex<VarCache>,
     ) -> Option<Analysis> {
         use std::time::Instant;
         let s = Instant::now();
@@ -695,7 +712,7 @@ impl Backend {
         // called `with_inventory`, so passing anything else would change what the scan reads.
         // It also means the scan and the hover no longer share a cache entry for one file —
         // under the old path-only key whichever ran first decided whether the setting applied.
-        let defs = cached_definitions_in(path, &nodes, scan, &[]);
+        let defs = cached_definitions_in(path, &nodes, scan, &[], cache);
         let literals = vars::known_literals_in(&defs, path, &doc.text, scan);
         t.var_index += s.elapsed();
 
@@ -750,7 +767,7 @@ impl Backend {
             // One snapshot for this publish: the coverage walk and the unknown-host walk must
             // answer from the same inventory, or two diagnostics on one file disagree (rule 3).
             let inv = self.state.inventory_setting();
-            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes, &inv));
+            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes, &inv, &self.state.var_cache));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
             let cache = ScanCache::default().with_inventory(inv.clone());
             diagnostics.extend(Self::unknown_host_diagnostics(&a, &path, &cache));
@@ -1106,8 +1123,9 @@ impl Backend {
         path: &Path,
         nodes: &[Node],
         inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
     ) -> Vec<Diagnostic> {
-        let defs = cached_definitions(path, nodes, &a.open, inv);
+        let defs = cached_definitions(path, nodes, &a.open, inv, cache);
         let mut out = Vec::new();
         for u in vars::uses(nodes) {
             if u.guard.is_empty() {
@@ -1234,9 +1252,31 @@ impl Backend {
     }
 
     /// Tell the client which inventory is in effect and how it was chosen, so the status bar
-    /// can show it. `source` is what the user needs to reason about a surprise: "setting"
-    /// means they picked it, anything else means we followed Ansible's own ladder.
+    /// can show it.
+    ///
+    /// Delivery only — every decision is in [`inventory_status`](Self::inventory_status), the
+    /// same split `unparseable_diagnostic`/`_for` and `diagnostics_of`/`_with` already use. It
+    /// is what makes the answer testable: the payload is a value a test can assert on, where a
+    /// notification is only observable by holding and draining the client socket. What stays
+    /// untested here is the two lines that hand that value to `client`.
     async fn publish_inventory(state: &Arc<State>, client: &Client) {
+        let status = Self::inventory_status(state);
+        client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "ansible-lsp inventory: source={} resolved={} declined={} candidates={}",
+                    status["source"], status["resolved"], status["declined"], status["candidates"]
+                ),
+            )
+            .await;
+        let _ = client.send_notification::<InventoryStatus>(status).await;
+    }
+
+    /// Which inventory is in effect and how it was chosen — the whole of the status bar's
+    /// answer, as a value. `source` is what the user needs to reason about a surprise:
+    /// "setting" means they picked it, anything else means we followed Ansible's own ladder.
+    fn inventory_status(state: &Arc<State>) -> serde_json::Value {
         let configured = state.inventory_setting();
         let root = state.roots.lock().ok().and_then(|r| r.first().cloned());
         // Which rung of Ansible's ladder actually answered. `config.rs` collapses the env
@@ -1313,25 +1353,15 @@ impl Backend {
             })
             .unwrap_or_default();
         let candidates = Self::inventory_candidates(root.as_deref());
-        client
-            .log_message(
-                MessageType::INFO,
-                format!(
-                    "ansible-lsp inventory: source={source} resolved={resolved:?} declined={declined:?} candidates={candidates:?}"
-                ),
-            )
-            .await;
-        let _ = client
-            .send_notification::<InventoryStatus>(serde_json::json!({
-                "source": source,
-                "resolved": resolved,
-                "declined": declined,
-                "autoSource": auto_source,
-                "autoResolved": auto_resolved,
-                "configFile": config_file,
-                "candidates": candidates,
-            }))
-            .await;
+        serde_json::json!({
+            "source": source,
+            "resolved": resolved,
+            "declined": declined,
+            "autoSource": auto_source,
+            "autoResolved": auto_resolved,
+            "configFile": config_file,
+            "candidates": candidates,
+        })
     }
 
     /// What the picker offers: inventory files anywhere in the workspace, and the
@@ -1525,7 +1555,7 @@ impl Backend {
                 set.spawn_blocking(move || {
                     let mut ft = ScanTimings::default();
                     let text = std::fs::read_to_string(&path).ok()?;
-                    let a = Self::analyze_text_measured(text, &path, &mut ft, &sc, &open)?;
+                    let a = Self::analyze_text_measured(text, &path, &mut ft, &sc, &open, &st.var_cache)?;
                     ft.files = 1;
                     let mut diagnostics = Self::diagnostics_of(&a);
                     diagnostics.extend(st.mutated_condition_diagnostics(&a));
@@ -1626,8 +1656,13 @@ impl Backend {
         // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
         if let Ok(path) = p.uri.to_file_path() {
             let nodes = &a.nodes;
-            let all =
-                cached_definitions(&path, nodes, &self.state.open_docs(), &self.state.inventory_setting());
+            let all = cached_definitions(
+                &path,
+                nodes,
+                &self.state.open_docs(),
+                &self.state.inventory_setting(),
+                &self.state.var_cache,
+            );
             for u in vars::uses(nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
                 // so it's computed per use rather than once per name.
@@ -1662,11 +1697,12 @@ impl Backend {
         path: &Path,
         open: &OpenDocs,
         inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
     ) -> Option<Vec<Location>> {
         let Some(reference) = Self::reference_at(doc, nodes, pos) else {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
-            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv)
+            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache)
                 // Or on the host half of a `hostvars['web01']` read (T-171).
                 .or_else(|| Self::host_key_defs_at(doc, pos, path));
         };
@@ -1726,13 +1762,14 @@ impl Backend {
         uri: &Url,
         open: &OpenDocs,
         inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
     ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
-        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv)
+        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
             .cloned()
@@ -1758,12 +1795,13 @@ impl Backend {
         path: &Path,
         open: &OpenDocs,
         inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
     ) -> Option<(String, Range)> {
         let idents = template_idents(&r.value);
         if idents.is_empty() {
             return None;
         }
-        let defs = cached_definitions(path, nodes, open, inv);
+        let defs = cached_definitions(path, nodes, open, inv, cache);
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
@@ -1839,6 +1877,7 @@ impl Backend {
         path: &Path,
         open: &OpenDocs,
         inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
     ) -> Option<(String, Range)> {
         // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
         // ones, so asking it first and falling back to a second, complementary scan walked
@@ -1849,7 +1888,7 @@ impl Backend {
         if condition::is_injected(&use_.name) {
             return Self::injected_var_hover_at(doc, &use_, AnsibleInstall::detected());
         }
-        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv)
+        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
@@ -2530,6 +2569,7 @@ fn hover_at(
     settings: Settings,
     open: &OpenDocs,
     inv: &[PathBuf],
+    cache: &Mutex<VarCache>,
 ) -> Option<(String, Range)> {
     let ctx = FileContext::discover(path);
     let range = |s: Span| {
@@ -2567,11 +2607,11 @@ fn hover_at(
         // Resolve just this reference. A templated path gets the substitution hover
         // (what the `{{ }}` expands to and where those values are defined); a literal
         // one gets the resolved target and the candidates tried, winner marked.
-        let defs = cached_definitions(path, nodes, open, inv);
+        let defs = cached_definitions(path, nodes, open, inv, cache);
         let literals = vars::known_literals(&defs, path, &doc.text);
         let res = resolve::resolve_with(r, &ctx, &literals);
         if r.templated {
-            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv) {
+            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache) {
                 return Some(hit);
             }
         }
@@ -2615,7 +2655,7 @@ fn hover_at(
     }
 
     // Variable hover: where the variable under the cursor is defined, and its value.
-    Backend::variable_hover_at(doc, nodes, byte, path, open, inv)
+    Backend::variable_hover_at(doc, nodes, byte, path, open, inv, cache)
 }
 
 #[tower_lsp::async_trait]
@@ -2692,7 +2732,10 @@ impl LanguageServer for Backend {
             .await;
         // Detached (T-075): the message pump must go back to servicing hover/goto while
         // startup work runs. Everything it touches lives behind `Arc<State>`.
-        tokio::spawn(Self::startup(self.state.clone(), self.client.clone()));
+        let task = tokio::spawn(Self::startup(self.state.clone(), self.client.clone()));
+        if let Ok(mut slot) = self.state.scan_task.lock() {
+            *slot = Some(task);
+        }
     }
 
     async fn did_change_configuration(&self, p: DidChangeConfigurationParams) {
@@ -2742,7 +2785,17 @@ impl LanguageServer for Backend {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let inv = self.state.inventory_setting();
         Ok(
-            hover_at(&doc, &nodes, &path, byte, settings, &self.state.open_docs(), &inv).map(
+            hover_at(
+                &doc,
+                &nodes,
+                &path,
+                byte,
+                settings,
+                &self.state.open_docs(),
+                &inv,
+                &self.state.var_cache,
+            )
+            .map(
                 |(value, range)| Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -2757,7 +2810,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
         let uri = p.text_document.uri;
         if let Ok(path) = uri.to_file_path() {
-            invalidate_var_cache(&path);
+            invalidate_var_cache(&self.state.var_cache, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), p.text_document.text);
@@ -2774,7 +2827,7 @@ impl LanguageServer for Backend {
         // This file changed — drop cached variable results that read it (and any that
         // include it), so the next analyse recomputes with the new content.
         if let Ok(path) = uri.to_file_path() {
-            invalidate_var_cache(&path);
+            invalidate_var_cache(&self.state.var_cache, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), change.text);
@@ -2785,7 +2838,7 @@ impl LanguageServer for Backend {
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
         if let Ok(path) = p.text_document.uri.to_file_path() {
             // The buffer is gone, so every later answer must come from disk again.
-            invalidate_var_cache(&path);
+            invalidate_var_cache(&self.state.var_cache, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.remove(&p.text_document.uri);
@@ -2824,6 +2877,7 @@ impl LanguageServer for Backend {
                 &path,
                 &self.state.open_docs(),
                 &self.state.inventory_setting(),
+                &self.state.var_cache,
             )
                 .map(GotoDefinitionResponse::Array),
         )
@@ -2932,6 +2986,8 @@ async fn main() {
             inventory: Mutex::new(Vec::new()),
             startup_note: Mutex::new(String::new()),
             scanning: AtomicBool::new(false),
+            var_cache: Mutex::new(VarCache::default()),
+            scan_task: Mutex::new(None),
         }),
     })
     .custom_method("ansible/references", Backend::resolved_references)
@@ -2948,6 +3004,13 @@ mod tests {
     /// it is what separates them from a test that deliberately supplies a buffer.
     fn no_buffers() -> super::OpenDocs {
         super::OpenDocs::default()
+    }
+
+    /// A variable cache with nothing in it — the honest state for a test that owns no server
+    /// (T-201). A test that needs two answers to share one cache (because the *point* is what
+    /// the cache does between them) binds one of these and passes it to both calls.
+    fn no_cache() -> std::sync::Mutex<super::VarCache> {
+        std::sync::Mutex::new(super::VarCache::default())
     }
 
     /// The whole hover path, on a synthetic install — cursor in a document to rendered
@@ -4954,7 +5017,7 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text.clone());
         let nodes = doc.parse().unwrap();
         let byte = text.find("{{ shared_endpoint }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
             .expect("hover expected");
         assert!(md.contains("vars_files"), "provenance label in: {md}");
         assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
@@ -4976,7 +5039,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("demo fixture");
         let a = super::Backend::analyze_text(text, &path).unwrap();
         let undefined: Vec<String> =
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[])
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -5007,7 +5070,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
 
         let byte = text.find("{{ pod_namespace }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
             .expect("hover on an add_host-defined variable");
         assert!(md.contains("add_host"), "provenance label in: {md}");
         // The value, which is why the definition's span points at it rather than at the
@@ -5023,6 +5086,7 @@ mod tests {
             &path,
             &no_buffers(),
                         &[],
+                            &no_cache(),
             )
         .expect("jump from an add_host-defined variable");
         assert_eq!(locs.len(), 1, "{locs:?}");
@@ -5039,7 +5103,7 @@ mod tests {
         // hover working at all: the consumed parameter beside it defines nothing, so
         // neither consumer may answer for it.
         let consumed = text.find("{{ name }}").unwrap() + 3;
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[], &no_cache()).is_none());
         let (line, character) = doc.byte_to_lsp(consumed);
         assert!(super::Backend::definition_at(
             &doc,
@@ -5049,6 +5113,7 @@ mod tests {
             &path
         , &no_buffers(),
                 &[],
+                            &no_cache(),
             )
         .is_none());
     }
@@ -5105,7 +5170,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let hover_at_last = |name: &str| {
             let byte = text.rfind(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[]).map(|h| h.0)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache()).map(|h| h.0)
         };
 
         // Used inside its own entry: in scope, so the definition is offered.
@@ -5119,7 +5184,7 @@ mod tests {
 
         // ...and that warning names the real problem instead of "never defined".
         let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
-        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[])
+        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
             .into_iter()
             .map(|d| d.message)
             .collect();
@@ -5151,14 +5216,14 @@ mod tests {
         // is defined in three and its value depends on group membership we cannot know.
         {
             let byte = at("'web01'].web01_ib_ip");
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
                 .expect("no hover on the host_vars read")
                 .0;
             assert!(md.contains("10.0.0.1"), "hover shows the value: {md}");
             let (line, character) = doc.byte_to_lsp(byte);
             let pos = tower_lsp::lsp_types::Position { line, character };
             assert!(
-                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[]).is_some(),
+                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache()).is_some(),
                 "no jump target on the host_vars read"
             );
         }
@@ -5166,10 +5231,10 @@ mod tests {
         // INVISIBLE: a play var. Hover declines and go-to-definition declines, because
         // offering the play var would point at a value this read can never produce.
         let byte = at("'web01'].play_scoped");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache()).is_none());
         let (line, character) = doc.byte_to_lsp(byte);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache()).is_none());
 
         // ...and the warning takes over on exactly the two BAD rows, naming the source it
         // found rather than claiming the variable was never defined.
@@ -5179,7 +5244,7 @@ mod tests {
         // unsound while inventory is unparsed: a name in play `vars:` AND in inventory
         // reads fine through hostvars, measured. So the demo's BAD rows are BAD about
         // *Ansible*, and we stay quiet about them until T-062.
-        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[]);
+        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache());
         let msgs: Vec<String> = ds.into_iter().map(|d| d.message).collect();
         assert!(msgs.is_empty(), "no claim about a hostvars read: {msgs:?}");
         // The control that keeps that silence meaningful: the same check is alive in this
@@ -5190,11 +5255,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes, &[]).len(),
+            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes, &[], &no_cache()).len(),
             1
         );
         let inv = at("'web01'].infiniband_ip");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[], &no_cache()).is_none());
 
         // T-171, the other half of the same line: the HOST key. `host_vars/web01.yml` is a
         // deterministic path — the filename is the host name — so this resolves without an
@@ -5205,7 +5270,7 @@ mod tests {
         let key = text.find("hostvars['web01']").unwrap() + "hostvars['".len() + 1;
         let (line, character) = doc.byte_to_lsp(key);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[])
+        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache())
             .expect("host key jumps");
         assert_eq!(locs.len(), 1);
         assert!(
@@ -5252,7 +5317,7 @@ mod tests {
         // branch is last in the chain and must not shadow it.
         let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[]).expect("var jumps");
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache()).expect("var jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
 
         for m in &msgs {
@@ -5292,12 +5357,12 @@ mod tests {
         let nested_key = key_on("nested_map:");
 
         for (byte, what) in [(set_fact_key, "set_fact"), (set_stats_key, "set_stats data")] {
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
                 .unwrap_or_else(|| panic!("no hover on the {what} key"))
                 .0;
             assert!(md.contains("my_result"), "{what} hover shows the play var: {md}");
 
-            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[])
+            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[], &no_cache())
                 .unwrap_or_else(|| panic!("no jump target on the {what} key"));
             // Jumps to the play var it reads, not to the key it sits in.
             assert_eq!(locs.len(), 1, "{what}: {locs:?}");
@@ -5311,8 +5376,8 @@ mod tests {
 
         // The boundary row: nested in a fact's value the braces are data, so both views
         // stay silent rather than claiming a name Ansible keeps literal.
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[]).is_none());
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[], &no_cache()).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[], &no_cache()).is_none());
     }
 
     #[test]
@@ -5326,7 +5391,7 @@ mod tests {
 
         let hover = |name: &str| {
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
                 .expect("hover expected")
                 .0
         };
@@ -5350,7 +5415,7 @@ mod tests {
         for depth in 0..=5usize {
             let name = format!("chain_depth{depth}");
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
             // One nested "dependency of" line per hop.
@@ -5370,7 +5435,7 @@ mod tests {
 
         // include_vars through the chain: mechanism on the def line, route underneath.
         let byte = text.find("{{ chain_included }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache())
             .expect("hover expected");
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
@@ -5430,6 +5495,8 @@ mod tests {
             mutations: std::sync::Mutex::new(std::collections::HashMap::new()),
             settings: std::sync::Mutex::new(Default::default()),
             inventory: std::sync::Mutex::new(Vec::new()),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
             startup_note: std::sync::Mutex::new(String::new()),
             scanning: std::sync::atomic::AtomicBool::new(false),
         };
@@ -5465,9 +5532,9 @@ mod tests {
 
         // Setting it bumps the cache epoch, because a changed inventory changes what every
         // file can see and nothing computed under the old one may survive.
-        let before = super::var_cache().lock().unwrap().epoch;
+        let before = state.var_cache.lock().unwrap().epoch;
         state.set_inventory(&serde_json::json!({"inventory": ["x.ini"]}));
-        let after = super::var_cache().lock().unwrap().epoch;
+        let after = state.var_cache.lock().unwrap().epoch;
         assert_ne!(before, after, "a changed inventory must invalidate wholesale");
 
         state.set_inventory(&serde_json::json!({}));
@@ -5499,7 +5566,7 @@ mod tests {
         assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
 
         let (md, range) =
-            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[]).expect("hover");
+            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[], &no_cache()).expect("hover");
         assert!(md.contains("prod.yml"), "the target it reached: {md}");
         assert!(md.contains("Substituting"), "the section header: {md}");
         assert!(md.contains("env"), "the variable substituted: {md}");
@@ -5513,7 +5580,7 @@ mod tests {
         if let Some(pr) = plain {
             let pres = ansible_core::resolve::resolve_with(pr, &ctx, &Default::default());
             assert!(
-                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[]).is_none(),
+                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache()).is_none(),
                 "a literal path has nothing to substitute"
             );
         }
@@ -5527,7 +5594,7 @@ mod tests {
         let refs2 = ansible_core::references::extract(&n2);
         let r2 = &refs2[0];
         let res2 = ansible_core::resolve::resolve_with(r2, &ctx, &Default::default());
-        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache()).is_none());
     }
 
     /// T-029 box 4: a resolved module hovers one line of provenance — collection and
@@ -5799,7 +5866,7 @@ mod tests {
         for hints in [true, false] {
             let settings = Settings { hints, ..Settings::default() };
             let hover = |byte: usize| {
-                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[])
+                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[], &no_cache())
                     .unwrap_or_else(|| panic!("hover expected at {byte} (hints={hints})"))
                     .0
             };
@@ -5836,13 +5903,13 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let settings = Settings { hints: true, ..Settings::default() };
 
-        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[])
+        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache())
             .expect("module hover expected")
             .0;
         assert!(md.contains("ansible.legacy"), "provenance, not the condition, in: {md}");
 
         // And the condition is still reachable — on its keyword.
-        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[])
+        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache())
             .expect("when hover expected")
             .0;
         assert!(plain(&kw).contains("when:"), "condition on its keyword in: {kw}");
@@ -6012,7 +6079,7 @@ mod tests {
             let nodes = doc.parse().expect("fixture parses");
             let needle = format!("vars/{{{{ {name} }}}}.yml");
             let byte = PLAY.find(&needle).expect("fixture carries the path") + 1;
-            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[])
+            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache())
                 .map(|h| h.0)
                 .unwrap_or_default()
         };
@@ -6081,60 +6148,139 @@ mod tests {
         )
     }
 
-    /// The buffer as `did_open` / `did_change` leave it, plus the invalidation they perform:
-    /// `var_cache` is keyed by path alone, so a result computed against disk would otherwise
-    /// be handed back to a request that carries buffers.
-    fn t199_buffer(file: &std::path::Path, text: &str) -> super::OpenDocs {
-        super::invalidate_var_cache(file);
-        super::OpenDocs::with(file, text)
+    /// A live server over one fixture project, driven through the real notification handlers.
+    ///
+    /// The earlier version of these tests called a helper that did `invalidate_var_cache` and
+    /// built an `OpenDocs` by hand — i.e. it performed `did_open`/`did_change`'s work itself.
+    /// Measured: deleting the invalidation from all three handlers left the whole suite green,
+    /// so T-199's actual fix was pinned by nothing. Driving the handlers is the difference
+    /// between testing the server and testing a helper that imitates it.
+    struct T199Server {
+        service: tower_lsp::LspService<super::Backend>,
+        root: std::path::PathBuf,
     }
 
-    fn t199_use_position(doc: &super::Document) -> (usize, tower_lsp::lsp_types::Position) {
-        let byte = T199_PLAY.find("{{ shared_port }}").expect("fixture carries the use") + 3;
-        let (l, c) = doc.byte_to_lsp(byte);
-        (byte, tower_lsp::lsp_types::Position::new(l, c))
-    }
+    impl T199Server {
+        fn new(name: &str) -> Self {
+            let root = t199_project(name);
+            let state = scan_state(&root);
+            Self { service: lsp_service(state), root }
+        }
 
-    fn t199_hover(root: &std::path::Path, open: &super::OpenDocs) -> String {
-        let play = root.join("play.yml");
-        let doc = super::Document::new(T199_PLAY.to_string());
-        let nodes = doc.parse().expect("fixture parses");
-        let (byte, _) = t199_use_position(&doc);
-        super::Backend::variable_hover_at(&doc, &nodes, byte, &play, open, &[])
-            .map(|h| h.0)
-            .expect("the use has a reachable definition")
-    }
+        fn backend(&self) -> &super::Backend {
+            self.service.inner()
+        }
 
-    fn t199_definition(
-        root: &std::path::Path,
-        open: &super::OpenDocs,
-    ) -> tower_lsp::lsp_types::Location {
-        let play = root.join("play.yml");
-        let uri = tower_lsp::lsp_types::Url::from_file_path(&play).unwrap();
-        let doc = super::Document::new(T199_PLAY.to_string());
-        let nodes = doc.parse().expect("fixture parses");
-        let (_, pos) = t199_use_position(&doc);
-        let mut locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &play, open, &[])
-            .expect("the use jumps somewhere");
-        assert_eq!(locs.len(), 1, "one definition, so one target");
-        locs.pop().unwrap()
+        fn uri(&self, rel: &str) -> tower_lsp::lsp_types::Url {
+            tower_lsp::lsp_types::Url::from_file_path(self.root.join(rel)).unwrap()
+        }
+
+        /// `textDocument/didOpen`, as the editor sends it.
+        async fn open(&self, rel: &str, text: &str) {
+            use tower_lsp::LanguageServer;
+            self.backend()
+                .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentItem {
+                        uri: self.uri(rel),
+                        language_id: "ansible".into(),
+                        version: 1,
+                        text: text.to_string(),
+                    },
+                })
+                .await;
+        }
+
+        /// `textDocument/didChange` with FULL sync — an unsaved edit. This is the notification
+        /// whose invalidation the three tests below actually depend on.
+        async fn change(&self, rel: &str, text: &str) {
+            use tower_lsp::LanguageServer;
+            self.backend()
+                .did_change(tower_lsp::lsp_types::DidChangeTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::VersionedTextDocumentIdentifier {
+                        uri: self.uri(rel),
+                        version: 2,
+                    },
+                    content_changes: vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                        range: None,
+                        range_length: None,
+                        text: text.to_string(),
+                    }],
+                })
+                .await;
+        }
+
+        fn use_position(&self) -> tower_lsp::lsp_types::Position {
+            let doc = super::Document::new(T199_PLAY.to_string());
+            let byte = T199_PLAY.find("{{ shared_port }}").expect("fixture carries the use") + 3;
+            let (l, c) = doc.byte_to_lsp(byte);
+            tower_lsp::lsp_types::Position::new(l, c)
+        }
+
+        /// `textDocument/hover` on the cross-file use, through the handler.
+        async fn hover(&self) -> String {
+            use tower_lsp::LanguageServer;
+            let p = tower_lsp::lsp_types::HoverParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier {
+                        uri: self.uri("play.yml"),
+                    },
+                    position: self.use_position(),
+                },
+                work_done_progress_params: Default::default(),
+            };
+            match self.backend().hover(p).await.expect("hover does not error") {
+                Some(h) => match h.contents {
+                    tower_lsp::lsp_types::HoverContents::Markup(m) => m.value,
+                    other => panic!("unexpected hover shape: {other:?}"),
+                },
+                None => String::new(),
+            }
+        }
+
+        /// `textDocument/definition` on the same use, through the handler.
+        async fn definition(&self) -> tower_lsp::lsp_types::Location {
+            use tower_lsp::LanguageServer;
+            let p = tower_lsp::lsp_types::GotoDefinitionParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier {
+                        uri: self.uri("play.yml"),
+                    },
+                    position: self.use_position(),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            };
+            match self.backend().goto_definition(p).await.expect("definition does not error") {
+                Some(tower_lsp::lsp_types::GotoDefinitionResponse::Scalar(l)) => l,
+                Some(tower_lsp::lsp_types::GotoDefinitionResponse::Array(mut v)) => {
+                    assert_eq!(v.len(), 1, "the use has one effective definition");
+                    v.remove(0)
+                }
+                other => panic!("expected a definition, got {other:?}"),
+            }
+        }
     }
 
     /// T-199, consumer 1 of 2 (rule 3): the hover states a *value*, so reading disk while the
     /// screen shows something else is a confident wrong number.
-    #[test]
-    fn hover_of_a_cross_file_use_reads_the_open_buffer_not_the_saved_file() {
-        let root = t199_project("t199-hover");
-        let x = root.join("vars/x.yml");
+    #[tokio::test]
+    async fn hover_of_a_cross_file_use_reads_the_open_buffer_not_the_saved_file() {
+        let s = T199Server::new("t199-hover");
+        s.open("play.yml", T199_PLAY).await;
 
-        // Control, run first with nothing open: disk is the only text there is, and the
-        // answer must still come from it. Without this the assertions below would also pass
-        // on a build that read a buffer unconditionally — including for files nobody opened.
-        let saved = t199_hover(&root, &no_buffers());
+        // Control, with `vars/x.yml` never opened: disk is the only text there is, and the
+        // answer must come from it. Without this the assertions below would also pass on a
+        // build that read a buffer unconditionally — including for files nobody opened.
+        let saved = s.hover().await;
         assert!(saved.contains("= `8080`"), "a closed file answers from disk:\n{saved}");
         assert!(saved.contains("x.yml:1"), "and from its line on disk:\n{saved}");
 
-        let dirty = t199_hover(&root, &t199_buffer(&x, T199_DIRTY));
+        // Now open it and edit it without saving — through the real notifications, so the
+        // invalidation is the server's rather than the test's.
+        s.open("vars/x.yml", T199_SAVED).await;
+        s.change("vars/x.yml", T199_DIRTY).await;
+
+        let dirty = s.hover().await;
         assert!(dirty.contains("= `9999`"), "hover must state what is on screen:\n{dirty}");
         assert!(!dirty.contains("8080"), "and never the saved value:\n{dirty}");
         assert!(dirty.contains("x.yml:11"), "sourced to the buffer's line:\n{dirty}");
@@ -6143,19 +6289,22 @@ mod tests {
     /// T-199, consumer 2 of 2: go-to-definition returns a *range*, which the editor applies
     /// to the text it is drawing. Computed against disk and applied to a dirty buffer, the
     /// two disagree by however far the unsaved edit shifted the definition.
-    #[test]
-    fn go_to_definition_returns_a_range_valid_against_the_open_buffer() {
-        let root = t199_project("t199-goto");
-        let x = root.join("vars/x.yml");
+    #[tokio::test]
+    async fn go_to_definition_returns_a_range_valid_against_the_open_buffer() {
+        let s = T199Server::new("t199-goto");
+        s.open("play.yml", T199_PLAY).await;
 
-        let saved = t199_definition(&root, &no_buffers());
+        let saved = s.definition().await;
         assert_eq!(
             saved.range.start.line, 0,
             "control: with nothing open the definition is on disk line 0"
         );
 
-        let dirty = t199_definition(&root, &t199_buffer(&x, T199_DIRTY));
-        assert_eq!(dirty.uri, tower_lsp::lsp_types::Url::from_file_path(&x).unwrap());
+        s.open("vars/x.yml", T199_SAVED).await;
+        s.change("vars/x.yml", T199_DIRTY).await;
+
+        let dirty = s.definition().await;
+        assert_eq!(dirty.uri, s.uri("vars/x.yml"));
         assert_eq!(
             dirty.range.start.line, 10,
             "the editor draws the buffer, so the range has to be the buffer's"
@@ -6166,21 +6315,19 @@ mod tests {
     /// carries the same text as disk, so both consumers must answer identically to the
     /// closed case. This is what stops "prefer the buffer" from becoming a second code path
     /// with its own answers.
-    #[test]
-    fn an_open_but_unedited_buffer_answers_exactly_like_the_saved_file() {
-        let root = t199_project("t199-clean");
-        let x = root.join("vars/x.yml");
+    #[tokio::test]
+    async fn an_open_but_unedited_buffer_answers_exactly_like_the_saved_file() {
+        let s = T199Server::new("t199-clean");
+        s.open("play.yml", T199_PLAY).await;
 
-        let closed_hover = t199_hover(&root, &no_buffers());
-        let closed_def = t199_definition(&root, &no_buffers());
+        let closed_hover = s.hover().await;
+        let closed_def = s.definition().await;
 
-        let open = t199_buffer(&x, T199_SAVED);
-        assert_eq!(
-            t199_hover(&root, &open),
-            closed_hover,
-            "hover unchanged by an unedited buffer"
-        );
-        assert_eq!(t199_definition(&root, &open), closed_def, "and so is the jump target");
+        // Opened, and left exactly as it is on disk.
+        s.open("vars/x.yml", T199_SAVED).await;
+
+        assert_eq!(s.hover().await, closed_hover, "hover unchanged by an unedited buffer");
+        assert_eq!(s.definition().await, closed_def, "and so is the jump target");
     }
 
     // ---- T-201: the inventory setting is a per-request value, not a process slot ---------
@@ -6216,6 +6363,8 @@ mod tests {
             inventory: Default::default(),
             startup_note: Default::default(),
             scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
         };
         state.set_inventory(&serde_json::json!({ "inventory": [inv] }));
         state
@@ -6224,12 +6373,16 @@ mod tests {
     /// The templated-path hover, which substitutes `{{ control }}` from the inventory the
     /// request was given. Chosen because it *names its source*, so a wrong answer is visible
     /// as a wrong file rather than only as a wrong number.
-    fn t201_hover(root: &std::path::Path, inv: &[std::path::PathBuf]) -> String {
+    fn t201_hover(
+        root: &std::path::Path,
+        inv: &[std::path::PathBuf],
+        cache: &std::sync::Mutex<super::VarCache>,
+    ) -> String {
         let path = root.join("play.yml");
         let doc = super::Document::new(T201_PLAY.to_string());
         let nodes = doc.parse().expect("fixture parses");
         let byte = T201_PLAY.find("vars/{{ control }}.yml").expect("fixture carries the path") + 1;
-        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv)
+        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv, cache)
             .map(|h| h.0)
             .unwrap_or_default()
     }
@@ -6245,14 +6398,17 @@ mod tests {
         let root = t201_project("t201-each-request");
         let a = t201_state(&root, "inv_a.ini");
         let b = t201_state(&root, "inv_b.ini");
+        // One cache for both requests. That is the case worth pinning: keyed by path alone it
+        // handed request B the answer it had already computed for request A.
+        let cache = no_cache();
 
-        let from_a = t201_hover(&root, &a.inventory_setting());
+        let from_a = t201_hover(&root, &a.inventory_setting(), &cache);
         assert!(
             from_a.contains("`control` = `11`") && from_a.contains("inv_a.ini"),
             "request A must answer from inv_a.ini:\n{from_a}"
         );
 
-        let from_b = t201_hover(&root, &b.inventory_setting());
+        let from_b = t201_hover(&root, &b.inventory_setting(), &cache);
         assert!(
             from_b.contains("`control` = `22`") && from_b.contains("inv_b.ini"),
             "request B must answer from inv_b.ini:\n{from_b}"
@@ -6277,7 +6433,7 @@ mod tests {
         let b = t201_state(&root, "inv_b.ini");
         let _ = b.inventory_setting();
 
-        let from_a = t201_hover(&root, &snapshot);
+        let from_a = t201_hover(&root, &snapshot, &no_cache());
         assert!(
             from_a.contains("`control` = `11`") && from_a.contains("inv_a.ini"),
             "the in-flight request keeps its own inventory:\n{from_a}"
@@ -6299,5 +6455,498 @@ mod tests {
         // nothing configured must.
         let none = t201_state(&root, "");
         assert!(none.inventory_setting().is_empty());
+    }
+
+    // ---- T-201 box (3): the scan writes into the server's cache, not one of its own -------
+    //
+    // The only test here that needs a real `Client`. There is no public constructor for one —
+    // the closure passed to `LspService::new` is the sole source, which is what `main` uses —
+    // so standing a service up is the only way to reach `scan_workspace` at all.
+    //
+    // The socket is dropped rather than drained. `Client`'s send is
+    // `if tx.send(req).await.is_err() { return Err(ExitedError(())) }` (tower-lsp 0.20,
+    // `service/client.rs:549`), so with the receiver gone every publish fails instantly and is
+    // swallowed. Holding the socket without polling it is what would deadlock — the channel is
+    // `mpsc::channel(1)` — so dropping it is deliberate, not laziness.
+    //
+    // The cache is the observable, not the notifications: this pins the one line
+    // (`&st.var_cache` at the spawn) that makes the scan share the server's index instead of
+    // building a private one. Nothing else in the suite can see that line.
+
+    fn lsp_service(state: std::sync::Arc<super::State>) -> tower_lsp::LspService<super::Backend> {
+        let (service, _socket) =
+            tower_lsp::LspService::new(move |client| super::Backend { client, state });
+        service
+    }
+
+    fn scan_state(root: &std::path::Path) -> std::sync::Arc<super::State> {
+        std::sync::Arc::new(super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn the_workspace_scan_fills_the_servers_variable_cache() {
+        let root = ansible_core::testing::project(
+            "t201-scan-cache",
+            "[defaults]\n",
+            &[(
+                "play.yml",
+                "- hosts: all\n  vars:\n    scanned: 1\n  tasks:\n    - debug: {msg: \"{{ scanned }}\"}\n",
+            )],
+        );
+        let state = scan_state(&root);
+
+        // Control: an empty cache before the scan. Without it, "the cache has entries" would
+        // also pass on a build where something else had already filled it.
+        assert!(
+            state.var_cache.lock().unwrap().entries.is_empty(),
+            "nothing is cached before the scan runs"
+        );
+
+        let service = lsp_service(state.clone());
+        super::Backend::scan_workspace(state.clone(), service.inner().client.clone()).await;
+
+        let cached = state.var_cache.lock().unwrap();
+        assert!(
+            !cached.entries.is_empty(),
+            "the scan must fill the server's cache — an empty one means it built its own"
+        );
+        assert!(
+            cached.entries.keys().any(|(p, _)| p.ends_with("play.yml")),
+            "and the entry is for the file it scanned: {:?}",
+            cached.entries.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // ---- the lifecycle and notification handlers ----------------------------------------
+    //
+    // Every test above this point enters *below* the handler: it calls `set_inventory`,
+    // `hover_at`, `analyze_text` directly. That proves the machinery works and says nothing
+    // about whether the server ever calls it. Measured by mutation: seven wiring lines in
+    // `initialize`, `did_change_configuration`, `did_close` and `publish_diagnostics` could be
+    // deleted with the whole suite still green.
+    //
+    // These drive the handlers through the `Client` harness. Each one names the mutation it
+    // exists to catch, because that is the only thing separating it from a decoration.
+
+    /// A server on an empty fixture, for handler tests that need no project on disk.
+    fn handler_server(name: &str) -> (tower_lsp::LspService<super::Backend>, std::path::PathBuf) {
+        let root = ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[("inv.ini", "[web]\nnode1\n"), ("play.yml", "- hosts: all\n")],
+        );
+        // Empty roots on purpose: recording them is `initialize`'s job, and a fixture that
+        // pre-fills them would make that assertion vacuous.
+        let state = std::sync::Arc::new(super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(Vec::new()),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
+        });
+        (lsp_service(state), root)
+    }
+
+    fn init_params(root: &std::path::Path, opts: serde_json::Value) -> tower_lsp::lsp_types::InitializeParams {
+        let mut p = tower_lsp::lsp_types::InitializeParams::default();
+        p.workspace_folders = Some(vec![tower_lsp::lsp_types::WorkspaceFolder {
+            uri: tower_lsp::lsp_types::Url::from_file_path(root).unwrap(),
+            name: "fixture".into(),
+        }]);
+        p.initialization_options = Some(opts);
+        p
+    }
+
+    /// Catches: `initialize` records no workspace roots.
+    ///
+    /// This is the one that matters most. Roots are what a relative `ansibleLsp.inventory`
+    /// resolves against — with none recorded, nothing resolves, no inventory is read, and every
+    /// inventory-derived variable silently disappears. That is T-201's failure one layer up.
+    #[tokio::test]
+    async fn initialize_records_the_workspace_folders_and_the_inventory_setting() {
+        use tower_lsp::LanguageServer;
+        let (service, root) = handler_server("t201-init-roots");
+        let b = service.inner();
+
+        // Control: nothing recorded before initialize runs.
+        assert!(b.state.roots.lock().unwrap().is_empty(), "no roots before initialize");
+        assert!(b.state.inventory.lock().unwrap().is_empty(), "no inventory before initialize");
+
+        let opts = serde_json::json!({ "inventory": ["inv.ini"] });
+        b.initialize(init_params(&root, opts)).await.expect("initialize succeeds");
+
+        assert_eq!(
+            *b.state.roots.lock().unwrap(),
+            vec![root.clone()],
+            "the folder the client sent must be recorded"
+        );
+        assert_eq!(
+            *b.state.inventory.lock().unwrap(),
+            vec![std::path::PathBuf::from("inv.ini")],
+            "and initializationOptions must reach set_inventory"
+        );
+        // And the two together resolve, which is the thing either half being dropped breaks.
+        assert_eq!(b.state.inventory_setting(), vec![root.join("inv.ini")]);
+    }
+
+    /// Catches: `did_change_configuration` ignores the new settings.
+    ///
+    /// Changing your inventory in settings and having the server keep answering from the old
+    /// one is a silent wrong answer, not a missing feature.
+    #[tokio::test]
+    async fn did_change_configuration_applies_the_new_settings() {
+        use tower_lsp::LanguageServer;
+        let (service, root) = handler_server("t201-didchangeconfig");
+        let b = service.inner();
+        b.initialize(init_params(&root, serde_json::json!({ "inventory": ["inv.ini"] })))
+            .await
+            .expect("initialize succeeds");
+        assert_eq!(b.state.inventory_setting(), vec![root.join("inv.ini")]);
+
+        b.did_change_configuration(tower_lsp::lsp_types::DidChangeConfigurationParams {
+            settings: serde_json::json!({
+                "inventory": ["other.ini"],
+                "inlayHints": { "enabled": false },
+            }),
+        })
+        .await;
+
+        assert_eq!(
+            b.state.inventory_setting(),
+            vec![root.join("other.ini")],
+            "the new inventory must take effect"
+        );
+        assert!(
+            !b.state.settings.lock().unwrap().hints,
+            "and so must the rest of the settings blob"
+        );
+    }
+
+    /// Catches: `did_close` leaves the buffer in the map.
+    ///
+    /// A closed file whose buffer survives means every later answer comes from text the editor
+    /// is no longer showing — the T-199 bug with the sign flipped.
+    #[tokio::test]
+    async fn did_close_forgets_the_buffer() {
+        use tower_lsp::LanguageServer;
+        let (service, root) = handler_server("t201-didclose");
+        let b = service.inner();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(root.join("play.yml")).unwrap();
+
+        b.did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+            text_document: tower_lsp::lsp_types::TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "ansible".into(),
+                version: 1,
+                text: "- hosts: all\n".into(),
+            },
+        })
+        .await;
+        assert!(b.state.text_of(&uri).is_some(), "control: the buffer is open");
+
+        b.did_close(tower_lsp::lsp_types::DidCloseTextDocumentParams {
+            text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+        })
+        .await;
+        assert!(b.state.text_of(&uri).is_none(), "the buffer is gone after did_close");
+    }
+
+    /// Catches: `publish_diagnostics` stops tracking what it published.
+    ///
+    /// `flagged` is what the scan subtracts from to clear diagnostics that have become clean
+    /// (`scan_workspace`, the `stale.difference(&still_flagged)` loop). If publishing stops
+    /// recording, a warning that has been fixed never gets cleared from the editor.
+    #[tokio::test]
+    async fn publishing_diagnostics_records_which_files_are_flagged() {
+        use tower_lsp::LanguageServer;
+        let root = ansible_core::testing::project(
+            "t201-flagged",
+            "[defaults]\n",
+            &[("play.yml", "- hosts: all\n  tasks:\n    - debug: {msg: x}\n      loop_control:\n        label: y\n")],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state);
+        let b = service.inner();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(root.join("play.yml")).unwrap();
+
+        assert!(b.state.flagged.lock().unwrap().is_empty(), "control: nothing flagged yet");
+
+        b.did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+            text_document: tower_lsp::lsp_types::TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "ansible".into(),
+                version: 1,
+                text: std::fs::read_to_string(root.join("play.yml")).unwrap(),
+            },
+        })
+        .await;
+
+        // `loop_control:` with no `loop:` is dead config (T-155), so this file has a
+        // diagnostic and must be recorded as flagged.
+        assert!(
+            b.state.flagged.lock().unwrap().contains(&uri),
+            "a file that published diagnostics must be tracked as flagged"
+        );
+    }
+
+    /// The status bar's answer, asserted as a value rather than as a notification.
+    ///
+    /// T-062's whole argument is that a tool which picks an inventory silently reproduces the
+    /// ambiguity it exists to solve — so "which one won, and why" is a claim the tool makes on
+    /// screen, and an unpinned claim is how a wrong one survives. Before the
+    /// `publish_inventory`/`inventory_status` split there was no way to assert it without
+    /// draining the client socket, and nothing did.
+    #[tokio::test]
+    async fn the_status_bar_names_the_setting_over_the_config_and_says_which_config_it_read() {
+        use tower_lsp::LanguageServer;
+        let root = ansible_core::testing::project(
+            "t201-status",
+            "[defaults]\ninventory = from_cfg.ini\n",
+            &[
+                ("from_cfg.ini", "[web]\nnode1\n"),
+                ("from_setting.ini", "[web]\nnode2\n"),
+                ("play.yml", "- hosts: all\n"),
+            ],
+        );
+        let state = std::sync::Arc::new(super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(Vec::new()),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
+        });
+        let service = lsp_service(state.clone());
+        let b = service.inner();
+
+        // Control: with nothing configured the tool must credit `ansible.cfg`, not itself.
+        b.initialize(init_params(&root, serde_json::json!({}))).await.expect("initialize");
+        let auto = super::Backend::inventory_status(&state);
+        assert_eq!(auto["source"], "ansible.cfg", "unconfigured, the cfg wins: {auto}");
+        assert_eq!(
+            auto["resolved"],
+            serde_json::json!(["from_cfg.ini"]),
+            "and it resolves to the cfg's file: {auto}"
+        );
+
+        // Now the user states their `-i`. It is the top rung, so it must beat the cfg — and
+        // the control above is what makes this assertion mean something rather than restating
+        // the fixture.
+        b.did_change_configuration(tower_lsp::lsp_types::DidChangeConfigurationParams {
+            settings: serde_json::json!({ "inventory": ["from_setting.ini"] }),
+        })
+        .await;
+
+        let chosen = super::Backend::inventory_status(&state);
+        assert_eq!(chosen["source"], "ansibleLsp.inventory", "the setting wins: {chosen}");
+        assert_eq!(
+            chosen["resolved"],
+            serde_json::json!(["from_setting.ini"]),
+            "and it is the file actually read: {chosen}"
+        );
+        // The cfg is still named, because "what you would get without the setting" is the
+        // other half of the ambiguity the status bar exists to remove.
+        assert_eq!(
+            chosen["autoResolved"],
+            serde_json::json!(["from_cfg.ini"]),
+            "what a plain ansible-playbook would read is still reported: {chosen}"
+        );
+        assert_eq!(
+            chosen["configFile"], "ansible.cfg",
+            "and which cfg was read is named, not just that one was: {chosen}"
+        );
+    }
+
+    // ---- reading what the server actually sent ------------------------------------------
+    //
+    // `publish_inventory` and `publish_diagnostics` return nothing: the outbound notification
+    // *is* the result. Every test above asserts on the value that goes into one, which leaves
+    // the handing-over unpinned — delete the `publish_inventory` call from
+    // `did_change_configuration` and the status bar silently goes stale, suite green.
+    //
+    // Draining deterministically, with no sleep and no timeout: the collector runs on its own
+    // task and its stream ends when the last `Client` is dropped, which happens when the
+    // service is. So `drop(service)` is the signal, not elapsed time — a timeout-based drain
+    // would be a flaky test inside a ticket about flaky tests.
+
+    /// Route a real `initialize` request through the service.
+    ///
+    /// Not the same as calling `Backend::initialize` directly: the *service layer* is what
+    /// records the server as initialized (`service/layers.rs:73`), and until it does,
+    /// `Client::send_notification` silently drops everything (`service/client.rs:441`). A test
+    /// that skips this sees an empty message list and reads it as "the server sent nothing".
+    async fn initialize_through_service(
+        service: &mut tower_lsp::LspService<super::Backend>,
+        root: &std::path::Path,
+    ) {
+        use tower::{Service, ServiceExt};
+        let req = tower_lsp::jsonrpc::Request::build("initialize")
+            .params(serde_json::json!({
+                "capabilities": {},
+                "workspaceFolders": [{
+                    "uri": tower_lsp::lsp_types::Url::from_file_path(root).unwrap(),
+                    "name": "fixture",
+                }],
+            }))
+            .id(1)
+            .finish();
+        service
+            .ready()
+            .await
+            .expect("service is ready")
+            .call(req)
+            .await
+            .expect("initialize is routed");
+    }
+
+    /// A project whose `ansible.cfg` names an inventory, plus a state rooted at it.
+    fn sent_fixture(name: &str) -> (std::sync::Arc<super::State>, std::path::PathBuf) {
+        let root = ansible_core::testing::project(
+            name,
+            "[defaults]\ninventory = inv.ini\n",
+            &[("inv.ini", "[web]\nnode1\n"), ("play.yml", "- hosts: all\n")],
+        );
+        let state = std::sync::Arc::new(super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(vec![root.clone()]),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
+        });
+        (state, root)
+    }
+
+    /// Catches: `did_change_configuration` does not re-publish the inventory.
+    ///
+    /// T-062's argument is that a silently-chosen inventory reproduces the ambiguity the tool
+    /// exists to remove. A status bar still showing the *previous* inventory after the user
+    /// changes the setting is that same lie, one step later.
+    #[tokio::test]
+    async fn changing_the_settings_re_publishes_the_inventory_to_the_client() {
+        use futures::StreamExt;
+        use tower_lsp::LanguageServer;
+
+        let (state, root) = sent_fixture("t201-republish");
+        let (mut service, socket) =
+            tower_lsp::LspService::new(move |client| super::Backend { client, state });
+        let drain =
+            tokio::spawn(async move { socket.map(|r| r.method().to_string()).collect::<Vec<_>>().await });
+        initialize_through_service(&mut service, &root).await;
+
+        service
+            .inner()
+            .did_change_configuration(tower_lsp::lsp_types::DidChangeConfigurationParams {
+                settings: serde_json::json!({ "inventory": ["inv.ini"] }),
+            })
+            .await;
+
+        drop(service); // closes the channel, so the collect below terminates
+        let sent = drain.await.expect("the drain task does not panic");
+
+        assert!(
+            sent.iter().any(|m| m == "ansible/inventory"),
+            "the settings change must reach the status bar: {sent:?}"
+        );
+    }
+
+    /// Catches: `publish_diagnostics` never sends.
+    ///
+    /// The counterpart to the test above — `did_open` computes diagnostics and hands them to
+    /// the client, and nothing else in the suite watches the handing-over.
+    #[tokio::test]
+    async fn opening_a_file_publishes_its_diagnostics_to_the_client() {
+        use futures::StreamExt;
+        use tower_lsp::LanguageServer;
+
+        let (state, root) = sent_fixture("t201-publishdiag");
+        let (mut service, socket) =
+            tower_lsp::LspService::new(move |client| super::Backend { client, state });
+        let drain =
+            tokio::spawn(async move { socket.map(|r| r.method().to_string()).collect::<Vec<_>>().await });
+        initialize_through_service(&mut service, &root).await;
+
+        service
+            .inner()
+            .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentItem {
+                    uri: tower_lsp::lsp_types::Url::from_file_path(root.join("play.yml")).unwrap(),
+                    language_id: "ansible".into(),
+                    version: 1,
+                    text: "- hosts: all\n".into(),
+                },
+            })
+            .await;
+
+        drop(service);
+        let sent = drain.await.expect("the drain task does not panic");
+
+        assert!(
+            sent.iter().any(|m| m == "textDocument/publishDiagnostics"),
+            "opening a file must publish its diagnostics: {sent:?}"
+        );
+    }
+
+    /// Catches: `initialized` never starts the scan.
+    ///
+    /// `initialized` spawns and returns, so there is nothing to observe at the moment it
+    /// finishes — which is why this line survived every earlier mutation. The handle is the
+    /// fix: awaiting it returns exactly when the scan is done, with no sleep and no polling
+    /// for an effect that may not have happened yet.
+    #[tokio::test]
+    async fn initialized_starts_the_workspace_scan() {
+        use tower_lsp::LanguageServer;
+
+        let root = ansible_core::testing::project(
+            "t201-initialized-scan",
+            "[defaults]\n",
+            &[("play.yml", "- hosts: all\n  vars:\n    scanned: 1\n")],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let b = service.inner();
+
+        // Control: the scan has not run, so nothing is cached and no task exists.
+        assert!(state.var_cache.lock().unwrap().entries.is_empty(), "nothing scanned yet");
+        assert!(state.scan_task.lock().unwrap().is_none(), "and no scan task yet");
+
+        b.initialized(tower_lsp::lsp_types::InitializedParams {}).await;
+
+        let task = state
+            .scan_task
+            .lock()
+            .unwrap()
+            .take()
+            .expect("initialized must start the workspace scan");
+        task.await.expect("the scan task runs to completion without panicking");
+
+        assert!(
+            !state.var_cache.lock().unwrap().entries.is_empty(),
+            "and the scan it started must have indexed the workspace"
+        );
     }
 }

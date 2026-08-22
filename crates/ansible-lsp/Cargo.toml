@@ -13,3 +13,11 @@ serde_json = "1.0.151"
 
 [dev-dependencies]
 ansible-core = { path = "../ansible-core", features = ["test-fixtures"] }
+# For `StreamExt` on tower-lsp's `ClientSocket`, so a test can read the notifications the
+# server sent. Already in the tree via tower-lsp; declared here to use it directly.
+futures = "0.3"
+# For `ServiceExt::ready`, so a test can route a real `initialize` request through the
+# service. That is what marks the server initialized — `Client::send_notification` suppresses
+# every notification until it is (tower-lsp `service/client.rs:441`, state set in
+# `service/layers.rs:73`), so a test that calls the handler directly sees nothing sent.
+tower = "0.4"
