@@ -93,3 +93,57 @@
     - name: Same file, shorthand spelling
       ansible.builtin.debug:
         msg: "{{ shared_endpoint }}"
+
+# ---------------------------------------------------------------------------------------
+# Shapes that are FATAL, not merely unhelpful. Every row below was run against
+# ansible-core 2.21.2 and killed the play before its first task — unlike the missing files
+# above, which the play survives. That is the whole distinction this section exists to
+# show: a miss is a warning, these are errors.
+#
+# `vars_files` takes a string or a list of strings, checked after templating
+# (vars/manager.py:348-353). Anything else dies naming the Python type it got.
+- name: vars_files demo — entries that cannot name a file
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    # GOOD: the control for this play — an ordinary entry that resolves.
+    - vars/shared.yml
+
+    # BAD (invalid-vars-files-entry): a `-` with nothing after it is `type 'NoneType'`.
+    # The squiggle sits on the dash, which is the only text the mistake has.
+    -
+
+    # BAD (invalid-vars-files-entry): `type 'dict'`. This is the include_vars options
+    # form, and vars_files has no equivalent — no dir:, no file:, no regex.
+    - dir: vars
+
+    # BAD (invalid-vars-files-entry): `type 'list'`. One level of nesting is the
+    # first-match group above; a second level is not a filename.
+    - - - vars/shared.yml
+
+    # BAD (invalid-vars-files-entry): a bad alternative inside an otherwise fine group is
+    # still fatal — measured, the good sibling does not rescue it.
+    - -
+      - vars/shared.yml
+
+  tasks:
+    - name: Placeholder
+      ansible.builtin.debug:
+        msg: ok
+
+# ---------------------------------------------------------------------------------------
+# A directory is its own fault, with its own rule id: the lookup DID find something, tried
+# to read it, and died on [Errno 21]. Distinct from a missing file in the one way that
+# matters — a missing file is skipped and the play runs, a directory stops it.
+- name: vars_files demo — an entry that lands on a directory
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    # BAD (vars-files-directory): `vars` is probed as vars/vars (absent), then as the
+    # demo's own vars/ directory, which exists and is not a file.
+    - vars
+
+  tasks:
+    - name: Placeholder
+      ansible.builtin.debug:
+        msg: ok

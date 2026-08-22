@@ -24,6 +24,7 @@ pub mod static_fields;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod testing;
 pub mod vars;
+pub mod vars_files;
 pub mod workspace;
 
 /// A path rendered the way Ansible would print it: POSIX separators.

@@ -100,6 +100,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | ~~T-201~~      |
+| T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 
 ### P2 — coverage and usability
 
@@ -123,7 +124,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | ~~T-076~~ |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
-| T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](open/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | S    | —    |
 | T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | ~~T-062~~ |
 | T-109 | [Keyword value enums](open/T-109-keyword-value-enums.md) | S    | ~~T-107~~ |
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
@@ -312,6 +312,7 @@ T-021 is now unblocked on that side.
 | T-199 | **bug** · [Hover and go-to-definition read the saved file, so an unsaved buffer gets a wrong value and a wrong line](closed/T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md) | done     |
 | T-194 | [The scan reports templated paths as unresolved that the editor navigates](closed/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | done     |
 | T-201 | **bug** · [Process globals make one test's settings another test's answer](closed/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | done     |
+| T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](closed/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | done     |
 
 ## Settled — don't re-derive these
 

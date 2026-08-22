@@ -67,6 +67,10 @@ pub struct Play {
     /// `vars_files:` entries, one per written entry — a nested list stays one entry
     /// with several first-match alternatives.
     pub vars_files: Vec<VarsFilesEntry>,
+    /// `vars_files:` items that can never name a file, kept rather than dropped so the
+    /// rule can report them (T-087). Recorded here, at the one place that already decides
+    /// what a valid entry is, so the diagnostic and the navigation cannot disagree.
+    pub invalid_vars_files: Vec<InvalidVarsFilesEntry>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this play.
@@ -83,6 +87,30 @@ pub struct VarsFilesEntry {
     /// clamped to the last alternative's end (libyaml's block-sequence end mark can spill
     /// past the last item).
     pub span: Span,
+}
+
+/// Why a `vars_files:` item can never name a file. Each arm is the type ansible-core
+/// names in the error it dies with — live-verified on 2.21.2, one play per arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidVarsFilesKind {
+    /// A `-` with nothing after it, at either level: `type 'NoneType'`.
+    Null,
+    /// A mapping item, `- dir: x` — the `include_vars` options form, which this keyword
+    /// has no equivalent of: `type 'dict'`.
+    Mapping,
+    /// A list inside the one level of nesting Ansible allows: `type 'list'`. An *empty*
+    /// nested list is not this — measured, `- []` runs — so it is dropped, not recorded.
+    Nested,
+}
+
+/// One `vars_files:` item that fails ansible-core's post-template type gate
+/// (`vars/manager.py:348-353`), killing the play before its first task.
+#[derive(Debug, Clone)]
+pub struct InvalidVarsFilesEntry {
+    /// The offending item. A [`InvalidVarsFilesKind::Null`] span is empty and sits where
+    /// the value would have been — a caller rendering it wants to widen onto the `-`.
+    pub span: Span,
+    pub kind: InvalidVarsFilesKind,
 }
 
 #[derive(Debug, Clone)]
@@ -348,26 +376,57 @@ fn loop_items_of(node: &Node) -> Vec<String> {
     out
 }
 
-/// `vars_files:` entries. A bare scalar value is Ansible's one-element-list shorthand.
-/// Only scalars and one level of nesting are kept: anything deeper, or a non-scalar
-/// alternative, fails ansible-core's post-template `isinstance(str)` gate at runtime —
-/// it can never name a file, so it is no reference (a future ERROR-rule candidate).
-fn vars_files_of(value: &Node) -> Vec<VarsFilesEntry> {
+/// `vars_files:` entries, plus the items that can never be one. A bare scalar value is
+/// Ansible's one-element-list shorthand.
+///
+/// Only scalars and one level of nesting can name a file: anything deeper, or a non-scalar
+/// alternative, fails ansible-core's post-template `isinstance(str)` gate at runtime. Those
+/// are returned separately rather than discarded — they are no reference, but they are a
+/// diagnostic (T-087), and deciding that twice in two places is how the two come to
+/// disagree.
+///
+/// Two shapes look fatal and are not, both measured on 2.21.2: a null `vars_files:` key
+/// and an empty nested list (`- []`) each let the play run, so neither is recorded.
+fn vars_files_of(value: &Node) -> (Vec<VarsFilesEntry>, Vec<InvalidVarsFilesEntry>) {
     fn scalar(n: &Node) -> Option<(String, Span)> {
         match n {
-            // An empty scalar is a null `vars_files:` key or a `-` with nothing after
-            // it — no path to reference.
+            // `Scalar { value: "" }` is an explicitly empty string (`- ''`), not a missing
+            // one — a `-` with no value parses as `Node::Null`. It passes the type gate and
+            // then resolves to the search dir itself, so it is the directory fault, not
+            // this one, and it is left to the resolver.
             Node::Scalar { value, span } if !value.is_empty() => Some((value.clone(), *span)),
             _ => None,
         }
     }
-    fn entry(n: &Node) -> Option<VarsFilesEntry> {
+    /// The gate rejects the same two shapes at both levels; only a nested *list* differs,
+    /// since one level of nesting is legal and two is not.
+    fn invalid(n: &Node, nested_is_fatal: bool) -> Option<InvalidVarsFilesKind> {
+        match n {
+            Node::Null { .. } => Some(InvalidVarsFilesKind::Null),
+            Node::Mapping { .. } => Some(InvalidVarsFilesKind::Mapping),
+            // `- []` has nothing in it to fail the gate, and runs.
+            Node::Sequence { items, .. } if nested_is_fatal && !items.is_empty() => {
+                Some(InvalidVarsFilesKind::Nested)
+            }
+            _ => None,
+        }
+    }
+    fn entry(n: &Node, bad: &mut Vec<InvalidVarsFilesEntry>) -> Option<VarsFilesEntry> {
+        if let Some(kind) = invalid(n, false) {
+            bad.push(InvalidVarsFilesEntry { span: n.span(), kind });
+            return None;
+        }
         match n {
             Node::Scalar { .. } => {
                 let (v, s) = scalar(n)?;
                 Some(VarsFilesEntry { alternatives: vec![(v, s)], span: s })
             }
             Node::Sequence { items, span } => {
+                for item in items {
+                    if let Some(kind) = invalid(item, true) {
+                        bad.push(InvalidVarsFilesEntry { span: item.span(), kind });
+                    }
+                }
                 let alternatives: Vec<_> = items.iter().filter_map(scalar).collect();
                 let end = alternatives.last()?.1.end;
                 Some(VarsFilesEntry {
@@ -378,11 +437,16 @@ fn vars_files_of(value: &Node) -> Vec<VarsFilesEntry> {
             _ => None,
         }
     }
-    match value {
-        Node::Sequence { items, .. } => items.iter().filter_map(entry).collect(),
-        Node::Scalar { .. } => entry(value).into_iter().collect(),
+    let mut bad = Vec::new();
+    let good = match value {
+        Node::Sequence { items, .. } => {
+            items.iter().filter_map(|n| entry(n, &mut bad)).collect()
+        }
+        Node::Scalar { .. } => entry(value, &mut bad).into_iter().collect(),
+        // A null `vars_files:` key runs — measured. Nothing to report.
         _ => Vec::new(),
-    }
+    };
+    (good, bad)
 }
 
 /// The `name: value` bindings under a node's `vars:` mapping.
@@ -475,6 +539,8 @@ fn build_play(node: &Node) -> Play {
         "post_tasks",
         "handlers",
     ];
+    let vars_files_split =
+        node.get("vars_files").map(vars_files_of).unwrap_or_default();
     Play {
         span: node.span(),
         name: name_of(node),
@@ -485,7 +551,8 @@ fn build_play(node: &Node) -> Play {
         post_tasks: stmts("post_tasks", false),
         handlers: stmts("handlers", true),
         vars: vars_of(node),
-        vars_files: node.get("vars_files").map(vars_files_of).unwrap_or_default(),
+        vars_files: vars_files_split.0,
+        invalid_vars_files: vars_files_split.1,
         directives: collect_directives(node, |k| {
             keywords::is_play_directive(k) && !STRUCTURAL.contains(&k)
         }),
@@ -1197,3 +1264,4 @@ mod tests {
         }
     }
 }
+

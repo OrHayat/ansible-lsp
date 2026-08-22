@@ -34,6 +34,13 @@ pub struct Resolution {
     /// debuggable from the message alone.
     pub candidates: Vec<PathBuf>,
     pub skip_reason: Option<SkipReason>,
+    /// A `vars_files:` entry whose lookup stops at a **directory**. Ansible opens the
+    /// first candidate that exists and reading a directory is `[Errno 21]`, fatal to the
+    /// play — measured on 2.21.2, including the two cases that look like they should fall
+    /// through and do not: a later candidate that *is* a file, and a later alternative in
+    /// a first-match group. Set only for [`ReferenceKind::VarsFiles`]; every other kind
+    /// reaches its target by a different loader and is not measured here (T-087).
+    pub directory: Option<PathBuf>,
 }
 
 impl Resolution {
@@ -43,6 +50,7 @@ impl Resolution {
             targets: Vec::new(),
             candidates: Vec::new(),
             skip_reason: Some(reason),
+            directory: None,
         }
     }
 
@@ -55,14 +63,32 @@ impl Resolution {
                 targets: vec![p],
                 candidates,
                 skip_reason: None,
+                directory: None,
             },
             None => Self {
                 status: Status::Missing,
                 targets: Vec::new(),
                 candidates,
                 skip_reason: None,
+                directory: None,
             },
         }
+    }
+}
+
+/// A `vars_files:` entry whose lookup stops at a directory (T-087). Its own id, not
+/// `missing-file`: that rule's whole message is that ansible silently skips and the play
+/// runs on, and here the play does not start at all. Two opposite claims must not share
+/// one `# noqa`.
+pub const VARS_FILES_DIRECTORY_RULE_ID: &str = "vars-files-directory";
+
+/// Diagnostic rule id given what the reference actually resolved to. Prefer this over
+/// [`rule_id`] wherever the [`Resolution`] is in hand — the directory verdict is a fact
+/// about the lookup, not about how the reference was written.
+pub fn rule_id_for(r: &Reference, res: &Resolution) -> &'static str {
+    match res.directory {
+        Some(_) => VARS_FILES_DIRECTORY_RULE_ID,
+        None => rule_id(r),
     }
 }
 
@@ -370,6 +396,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                     targets: Vec::new(),
                     candidates: Vec::new(),
                     skip_reason: None,
+                    directory: None,
                 }
             }
             _ => return Resolution::skipped(SkipReason::Templated),
@@ -384,6 +411,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
             targets,
             candidates: Vec::new(),
             skip_reason: Some(SkipReason::Templated),
+            directory: None,
         };
     }
 
@@ -449,7 +477,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
         }
 
         ReferenceKind::VarsFiles => {
-            let res = if substituted {
+            let mut res = if substituted {
                 // An expansion is a complete path — the vars/ prepend does not apply.
                 Resolution::from_candidates(
                     unique(values.iter().map(|v| normalise(Path::new(v)))),
@@ -458,10 +486,24 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
             } else {
                 Resolution::from_candidates(vars_files_candidates(&r.value, &ctx.file_dir), fs)
             };
-            match (res.status, r.grouped) {
-                (Status::Missing, true) => Resolution {
+            // `from_candidates` takes the first candidate that is a *file*; ansible takes
+            // the first that *exists*. The two differ only when a directory sits earlier
+            // in the search order, and there ansible dies rather than reading on — so the
+            // file it skipped past must not be offered as the target either.
+            if let Some(dir) = res.candidates.iter().find(|p| fs.exists(p)) {
+                if fs.is_dir(dir) {
+                    res.directory = Some(dir.clone());
+                    res.status = Status::Missing;
+                    res.targets.clear();
+                }
+            }
+            match (res.status, r.grouped, res.directory.is_some()) {
+                // A missing alternative is the construct working; a directory one is
+                // fatal, so it keeps its own verdict instead of deferring to the group.
+                (Status::Missing, true, false) => Resolution {
                     status: Status::Skipped,
                     skip_reason: Some(SkipReason::GroupAlternative),
+                    directory: None,
                     ..res
                 },
                 _ => res,
@@ -490,6 +532,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                     targets: l.files,
                     candidates: l.dir.into_iter().collect(),
                     skip_reason: None,
+                    directory: None,
                 },
                 // Provably absent at the role path; at runtime the value decays to
                 // cwd-relative, which no static verdict can cover.
@@ -498,6 +541,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                     targets: Vec::new(),
                     candidates: ctx.role_dir.iter().map(|d| d.join(&relative)).collect(),
                     skip_reason: None,
+                    directory: None,
                 },
                 include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
                     Resolution {
@@ -510,6 +554,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                             .into_iter()
                             .collect(),
                         skip_reason: None,
+                        directory: None,
                     }
                 }
             }
@@ -533,6 +578,7 @@ pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 targets: Vec::new(),
                 candidates: ctx.roles_roots().iter().map(|d| d.join(&r.value)).collect(),
                 skip_reason: None,
+                directory: None,
             },
         },
 
@@ -683,6 +729,7 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                     targets: Vec::new(),
                     candidates: trail,
                     skip_reason: Some(SkipReason::NotInWorkspace),
+                    directory: None,
                 }
             }
         }
@@ -757,6 +804,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
                 targets: vec![p],
                 candidates: unique(tried.into_iter()),
                 skip_reason: None,
+                directory: None,
             };
         }
     }
@@ -768,6 +816,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
         targets: Vec::new(),
         candidates: unique(tried.into_iter()),
         skip_reason: None,
+        directory: None,
     }
 }
 
@@ -1079,6 +1128,91 @@ mod tests {
         assert_eq!(
             res.candidates,
             vec![PathBuf::from("/p/vars/x.yml"), PathBuf::from("/p/x.yml")]
+        );
+    }
+
+    /// T-087, live-verified on 2.21.2: an entry that lands on a directory is `[Errno 21]`
+    /// and the play dies. It is not a miss — a miss is silently skipped — so it must not
+    /// be reported as one.
+    #[test]
+    fn vars_files_directory_candidate_is_fatal_not_a_miss() {
+        // `/p/vars/thing` is a directory, because a proper prefix of a key is one.
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/vars/thing/inner.yml", "a: 1
+"),
+            ("/p/site.yml", ""),
+        ]);
+        let out = mem_src("/p/site.yml", "- hosts: all
+  vars_files: [thing]
+", &fs);
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Missing);
+        assert_eq!(res.directory, Some(PathBuf::from("/p/vars/thing")));
+
+        // The control: an entry that hits nothing at all is an ordinary miss, and the two
+        // must stay distinguishable — they get different messages and different severities.
+        let out = mem_src("/p/site.yml", "- hosts: all
+  vars_files: [nope.yml]
+", &fs);
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.status, Status::Missing);
+        assert_eq!(res.directory, None);
+    }
+
+    /// The case that makes this a resolver change and not just a message: ansible opens
+    /// the first candidate that EXISTS, so a directory in `vars/` kills the entry even
+    /// though a real file sits behind it in the search order. Measured — the play failed
+    /// on the directory and never read `/p/thing`.
+    #[test]
+    fn vars_files_directory_shadows_a_later_file_candidate() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/vars/thing/inner.yml", "a: 1
+"),
+            ("/p/thing", "who: file
+"),
+            ("/p/site.yml", ""),
+        ]);
+        let out = mem_src("/p/site.yml", "- hosts: all
+  vars_files: [thing]
+", &fs);
+        let res = first(&out, ReferenceKind::VarsFiles);
+        assert_eq!(res.directory, Some(PathBuf::from("/p/vars/thing")));
+        assert_eq!(res.status, Status::Missing);
+        assert!(
+            res.targets.is_empty(),
+            "the shadowed file must not be offered as a target: {:?}",
+            res.targets
+        );
+    }
+
+    /// A missing alternative in a first-match group is the construct working as designed,
+    /// so it defers to the group. A directory one is fatal — measured, it fails instead of
+    /// falling through to the sibling that exists — so it keeps its own verdict.
+    #[test]
+    fn vars_files_directory_alternative_does_not_defer_to_its_group() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/vars/adir/inner.yml", "a: 1
+"),
+            ("/p/vars/real.yml", "a: 2
+"),
+            ("/p/site.yml", ""),
+        ]);
+        let src = "- hosts: all
+  vars_files:
+    - - adir
+      - vars/real.yml
+";
+        let out = mem_src("/p/site.yml", src, &fs);
+        let dir = out
+            .iter()
+            .map(|(_, res)| res)
+            .find(|res| res.directory.is_some())
+            .expect("the directory alternative is resolved, not dropped");
+        assert_eq!(dir.status, Status::Missing);
+        assert_ne!(
+            dir.skip_reason,
+            Some(SkipReason::GroupAlternative),
+            "a fatal alternative must not be excused as a merely-absent one"
         );
     }
 

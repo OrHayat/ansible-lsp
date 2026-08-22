@@ -30,7 +30,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 ## Children
 
 - [ ] T-028 — `notify:` -> handler resolution
-- [ ] T-087 — Invalid vars_files entry: provably fatal at runtime, silent in the editor
+- [x] T-087 — Invalid vars_files entry: provably fatal at runtime, silent in the editor
 - [ ] T-089 — Indexed access into static list vars: no element support, out-of-bounds unflagged
 - [x] T-100 — Unknown key in a roles: entry silently becomes a variable
 - [x] T-101 — Dynamic includes reject keywords imports accept
@@ -46,6 +46,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-196 — missing-handler: warn where the handler set is provably closed
 - [ ] T-197 — A notify resolved only by a later dynamic include_role is fatal on order alone
 - [ ] T-198 — A handler with a templated name and no listen: can never be notified
+- [ ] T-205 — A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens
 
 ## Done when
 

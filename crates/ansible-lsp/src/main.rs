@@ -19,10 +19,11 @@ use ansible_core::attributes;
 use ansible_core::complex_key;
 use ansible_core::condition;
 use ansible_core::mutation;
+use ansible_core::vars_files;
 use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
-use ansible_core::resolve::{self, rule_id, Resolution, SkipReason, Status};
+use ansible_core::resolve::{self, rule_id_for, Resolution, SkipReason, Status};
 use ansible_core::static_fields;
 use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
@@ -988,12 +989,17 @@ impl Backend {
             .filter(|(r, _)| {
                 r.kind != ReferenceKind::ImportPlaybook || r.playbook_entry
             })
-            .filter(|(r, _)| !a.doc.is_suppressed(r.span.start, rule_id(r)))
+            .filter(|(r, res)| !a.doc.is_suppressed(r.span.start, rule_id_for(r, res)))
             .map(|(r, res)| Diagnostic {
                 range: range_of(r.span),
-                severity: Some(DiagnosticSeverity::WARNING),
+                // A miss is a warning because the play still runs; a directory stops it
+                // before its first task, which is the unparseable-file tier.
+                severity: Some(match res.directory {
+                    Some(_) => DiagnosticSeverity::ERROR,
+                    None => DiagnosticSeverity::WARNING,
+                }),
                 source: Some("ansible-lsp".into()),
-                code: Some(NumberOrString::String(rule_id(r).into())),
+                code: Some(NumberOrString::String(rule_id_for(r, res).into())),
                 message: message_for(r, res, &a.ctx),
                 ..Default::default()
             });
@@ -1127,12 +1133,32 @@ impl Backend {
             })
             .collect();
 
+        // T-087: a `vars_files:` item that can never name a file. Read from the AST, which
+        // already decided which items are entries, so the diagnostic and the navigation
+        // cannot disagree about the same line. Always an error — the play never starts.
+        let bad_vars_files: Vec<Diagnostic> = vars_files::problems(
+            &ansible_core::ast::build(&a.nodes),
+            &a.doc.text,
+        )
+        .into_iter()
+        .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+        .map(|p| Diagnostic {
+            range: range_of(p.span),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String(p.rule.into())),
+            message: p.message,
+            ..Default::default()
+        })
+        .collect();
+
         missing
             .chain(broken)
             .chain(invalid)
             .chain(misplaced)
             .chain(literal)
             .chain(unloadable)
+            .chain(bad_vars_files)
             .chain(bad_targets)
             .collect()
     }
@@ -2197,6 +2223,30 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
         .map(|c| format!("  {}", shorten(c, ctx)))
         .collect::<Vec<_>>()
         .join("\n");
+    // A directory is the opposite case and must be said first: the lookup found
+    // something, tried to read it, and `[Errno 21]` killed the play. Live-verified on
+    // 2.21.2 — including that a later candidate which IS a file does not rescue it, which
+    // is why the shadowed path is named rather than offered (T-087).
+    if let Some(dir) = &res.directory {
+        let shadowed = res
+            .candidates
+            .iter()
+            .skip_while(|c| *c != dir)
+            .skip(1)
+            .find(|c| c.is_file())
+            .map(|c| {
+                format!(
+                    " `{}` is a file and comes later in the search order, but Ansible                      stops at the first candidate that exists, so it is never read.",
+                    shorten(c, ctx)
+                )
+            })
+            .unwrap_or_default();
+        return format!(
+            "`{}` resolves to a directory, `{}`. Ansible opens it and fails with              `[Errno 21] Is a directory`, so the play does not start — this is not a              missing file, which would be skipped silently.{shadowed} Name a file inside              it, or use `include_vars:`, which is the keyword that loads a directory.",
+            r.value,
+            shorten(dir, ctx)
+        );
+    }
     // Ansible (2.x) silently skips a missing vars_files file — the play runs, the
     // variables are just never set — so these must not claim the play would fail.
     if let Some(alts) = &r.vars_files_group {
@@ -3303,6 +3353,151 @@ mod tests {
             !missing.iter().any(|d| d.message.contains("site-local")),
             "a satisfied group stays silent"
         );
+    }
+
+    /// T-087, rule 4: the demo's fatal rows are labelled with the type ansible-core dies
+    /// with, and a label is a claim. Every one of them is pinned here, including that they
+    /// are ERRORs — the whole point of the section is that these do not merely warn.
+    #[test]
+    fn vars_files_demo_flags_every_shape_that_cannot_name_a_file() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let bad: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-vars-files-entry")
+            })
+            .collect();
+        assert_eq!(bad.len(), 4, "exactly the four labelled rows: {bad:#?}");
+        for d in &bad {
+            assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR), "{}", d.message);
+            assert!(d.message.contains("play fails to start"), "{}", d.message);
+        }
+        let types = |t: &str| bad.iter().filter(|d| d.message.contains(t)).count();
+        // Two NoneType rows: the bare `-`, and the null alternative inside a group.
+        assert_eq!(types("'NoneType'"), 2, "{bad:#?}");
+        assert_eq!(types("'dict'"), 1, "{bad:#?}");
+        assert_eq!(types("'list'"), 1, "{bad:#?}");
+
+        // A null item has no text of its own, so its range must still cover something —
+        // a zero-width squiggle is one nobody sees.
+        let lines: Vec<&str> = text.lines().collect();
+        for d in &bad {
+            assert!(
+                d.range.end > d.range.start,
+                "empty range on {:?}",
+                lines.get(d.range.start.line as usize)
+            );
+        }
+    }
+
+    /// T-087: the directory row is its own rule and its own severity, and its message says
+    /// the opposite of the missing-file one four plays above it. Both claims live in this
+    /// same file, so this is where they must not contradict each other.
+    #[test]
+    fn vars_files_demo_directory_entry_is_fatal_not_a_miss() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/vars_files_demo.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let dir: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "vars-files-directory")
+            })
+            .collect();
+        assert_eq!(dir.len(), 1, "one labelled directory row: {dir:#?}");
+        assert_eq!(dir[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(dir[0].message.contains("Errno 21"), "{}", dir[0].message);
+        assert!(dir[0].message.contains("does not start"), "{}", dir[0].message);
+        assert!(
+            !dir[0].message.contains("silently skips"),
+            "the miss wording must not appear on the fatal case: {}",
+            dir[0].message
+        );
+    }
+
+    /// The false-positive gate for both rules: `vars_files` is written all over the demo
+    /// tree and every other use of it is legal.
+    #[test]
+    fn every_other_demo_file_is_free_of_vars_files_entry_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "vars_files_demo.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == "invalid-vars-files-entry" || s == "vars-files-directory")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-010: each rule answers to its own id and not to the other's — they describe
+    /// opposite runtime behaviour, so one `# noqa` must not silence both.
+    #[test]
+    fn noqa_suppresses_each_vars_files_rule_by_its_own_id() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let ids = |text: &str| -> Vec<String> {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter_map(|d| match &d.code {
+                    Some(NumberOrString::String(s))
+                        if s == "invalid-vars-files-entry" || s == "vars-files-directory" =>
+                    {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let shape = "- hosts: all
+  vars_files:
+    - dir: vars
+";
+        assert_eq!(ids(shape), ["invalid-vars-files-entry"]);
+        assert!(ids("- hosts: all
+  vars_files:
+    - dir: vars  # noqa: invalid-vars-files-entry
+")
+            .is_empty());
+        // The other rule's id does not reach it.
+        assert_eq!(
+            ids("- hosts: all
+  vars_files:
+    - dir: vars  # noqa: vars-files-directory
+"),
+            ["invalid-vars-files-entry"]
+        );
+
+        let dirs = "- hosts: all
+  vars_files:
+    - vars
+";
+        assert_eq!(ids(dirs), ["vars-files-directory"]);
+        assert!(ids("- hosts: all
+  vars_files:
+    - vars  # noqa: vars-files-directory
+")
+            .is_empty());
     }
 
     /// T-117. The detected core version decides how loudly a strictness fault is reported,

@@ -19,6 +19,7 @@ and each miss is recorded separately because there was no single place to record
 | T-110 row 17 | `hosts: 42` | `hosts: "42"` | `placement.rs`, "no scalar style" |
 | T-110 row 28 | `tags: 42` | `tags: "42"` | `tags_checks` |
 | T-110 row 30 | `tags: [7]` | `tags: ["7"]` | blocked entirely — see below |
+| [[T-205]] | `vars_files: [5]` | `vars_files: ["5"]` | the only one that **speaks falsely** today rather than staying quiet |
 
 Row 30's int half is the one that turned a nuisance into a ticket. An int tag is declared legal
 by `listof=(str, int)`, runs clean, **cannot be selected by `--tags`**, and crashes both
