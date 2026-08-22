@@ -580,7 +580,8 @@ or it is proven to hold no request state and the proof is written at the site.
 - [x] **(6)** `module_redirect::TABLES` is gone - **done**, and it was not a pure cache. It
       was holding stale answers for *workspace* files; split by lifetime, builtin table onto
       `AnsibleInstall` and collection tables onto `ScanCache`
-- [ ] **(7)** `splitter::ESCAPES` is gone - see the open question below before doing this one
+- [x] **(7)** `splitter::ESCAPES` - **decided, and it stays.** The open question below is
+      settled with a measurement rather than an argument, and the reasoning lives at the site
 - [x] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
       fail on the pre-fix binary - **0/30**, against 2/30 before
 - [ ] the widened-window probe from the Symptom is re-run and now passes, since that is the
@@ -593,13 +594,39 @@ or it is proven to hold no request state and the proof is written at the site.
       ticket records why it stays a scratchpad probe - an uncommitted probe with no assertion
       is a test that cannot fail
 
-### Open question on (7), to settle before doing it
+### (7) settled: `ESCAPES` stays, and here is the number
 
-`ESCAPES` is a `LazyLock<Regex>` with no writer and one reader. It cannot carry state between
-requests, so eliminating it buys no isolation; it costs a regex compile on every
-`decode_escapes` call, which runs per double-quoted inventory value. Two honest ways to close
-box (7): compile it once into a value threaded to the reader (real work, no benefit), or
-record at the site that it is a constant and why that is not the hazard this ticket is about.
-The second is probably right - but it is a decision, not an omission, so it goes in writing.
-The same argument is available for (4) and (6) and is *not* as strong there: both are seeded
-from configuration, and (5) is already demonstrably lying about reload.
+The guess above was right, and it is measured now rather than argued. Release build:
+
+| | per call |
+| - | -------- |
+| `Regex::new(ESCAPE_PATTERN)` | 91.4 us |
+| `decode_escapes` using the cached one | 210 ns |
+
+Compiling per call is **435x** the cost of using it, on a path that runs per free-form module
+argument. Threading a compiled `Regex` down instead does not remove the global, it *relocates*
+it - something must own a value outliving one call, and the natural owner is `ScanCache`, which
+turns 91 us into a per-*request* cost for no correctness gain.
+
+The distinction that decides it: every other global this ticket removed held a value that
+**varied** - the inventory setting, the detected install, parsed workspace files. `ESCAPES`
+holds the compiled form of a `const`. No writer, no varying input, the same answer for every
+caller in every server. There is no state here to leak between requests, which is the hazard
+T-201 is about. The `LazyLock` is not a cache in any interesting sense either: `Regex::new`
+allocates and parses, so it cannot run in a `static` initialiser, and lazy construction is the
+only way to compile a regex once for a process.
+
+One option *would* genuinely remove it - drop the regex and scan by hand. Weighed and declined.
+The matching is trivial (flat alternation, no backtracking, fixed-width counts); the
+**non**-matching is not, and that is the half a rewrite gets wrong. An escaped backslash
+followed by `n` must come out as a backslash and a letter rather than as a newline; a truncated
+hex escape and an unclosed `N{` form must pass through whole rather than half-consumed; a
+surrogate must fall back to its literal text. Those are pinned either way now, by
+`an_escape_that_does_not_match_is_left_exactly_as_written` - and writing that test caught a
+wrong expectation of mine about a two-hex-digit escape before any code was touched.
+
+While settling this, the pattern's provenance went into the source, which it did not have. It
+is `_ESCAPE_SEQUENCE_RE` from `ansible/parsing/splitter.py:30-39` (2.21.2), whose own comment
+credits a 2010 Stack Overflow answer - so ours is a transcription of a transcription. The
+upstream text now sits beside it as a named `ESCAPE_PATTERN` const, in upstream's order, so the
+two stay diffable.
