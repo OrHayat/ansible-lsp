@@ -202,12 +202,64 @@ fn quote_state(token: &str, mut quote_char: Option<char>) -> Option<char> {
     quote_char
 }
 
-static ESCAPES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\N\{[^}]+\}|\\[\\'"abfnrtv]"#,
-    )
-    .unwrap()
-});
+/// `_ESCAPE_SEQUENCE_RE`, transcribed from `ansible/parsing/splitter.py:30-39` (2.21.2):
+///
+/// ```text
+/// _HEXCHAR = '[a-fA-F0-9]'
+/// _ESCAPE_SEQUENCE_RE = re.compile(r"""
+///     ( \\U{0}           # 8-digit hex escapes
+///     | \\u{1}           # 4-digit hex escapes
+///     | \\x{2}           # 2-digit hex escapes
+///     | \\N\{{[^}}]+\}}  # Unicode characters by name
+///     | \\[\\'"abfnrtv]  # Single-character escapes
+///     )""".format(_HEXCHAR * 8, _HEXCHAR * 4, _HEXCHAR * 2), re.UNICODE | re.VERBOSE)
+/// ```
+///
+/// Upstream's own comment credits it to [rspeer's 2010 answer][so] — so this is a
+/// transcription of a transcription, and the alternatives are kept in upstream's order to
+/// stay diffable against it. The `{0}/{1}/{2}` interpolation is expanded (`_HEXCHAR * 8`
+/// becomes `[0-9a-fA-F]{8}`) and it is one line because Rust has no `re.VERBOSE`.
+///
+/// [so]: http://stackoverflow.com/questions/4020539/process-escape-sequences-in-a-string-in-python
+///
+/// Named rather than inlined into the `LazyLock` so that what the pattern *is* stays separable
+/// from how it is cached, and so a test can compile it without retyping it — a retyped regex
+/// is a fixture that proves itself.
+const ESCAPE_PATTERN: &str =
+    r#"\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\N\{[^}]+\}|\\[\\'"abfnrtv]"#;
+
+/// Stays a `static`, deliberately — T-201 box 7, decided rather than skipped.
+///
+/// T-201 removed every other process global in this workspace because each held a value that
+/// *varied*: the editor's inventory setting, the detected install, parsed workspace files.
+/// This one holds the compiled form of a `const`. It has no writer, no varying input, and
+/// gives every caller in every server the same answer, so there is no state here to leak
+/// between requests — which is the hazard that ticket was about.
+///
+/// Removing it costs and buys nothing, measured rather than assumed (release build):
+///
+/// | | per call |
+/// | - | -------- |
+/// | `Regex::new(ESCAPE_PATTERN)` | 91.4 µs |
+/// | `decode_escapes` using this | 210 ns |
+///
+/// So compiling per call is **435×** the cost of using it, on a path that runs per free-form
+/// module argument. Threading a compiled `Regex` down instead does not remove the global, it
+/// relocates it: something must still own a value that outlives one call, and the natural
+/// owner is `ScanCache` — which turns the 91 µs into a per-*request* cost for no correctness
+/// gain.
+///
+/// The `LazyLock` is not a cache in any interesting sense. `Regex::new` allocates and parses,
+/// so it cannot run in a `static` initialiser; lazy construction is the only way to have one
+/// compiled regex for the process.
+///
+/// The one option that would genuinely remove it is dropping the regex and scanning by hand.
+/// Weighed and declined: the matching is trivial, but the *non*-matching is not — `\\n` must
+/// come out as a backslash and a letter, `\x4` and `\N{unclosed` must pass through whole, and
+/// a surrogate must fall back to its literal text. Those are pinned by
+/// `an_escape_that_does_not_match_is_left_exactly_as_written`, and they are what a rewrite
+/// would have to reproduce for no benefit beyond deleting this word.
+static ESCAPES: LazyLock<Regex> = LazyLock::new(|| Regex::new(ESCAPE_PATTERN).unwrap());
 
 /// Python `unicode-escape` over the sequences Ansible's regex matches. `\N{...}` (Unicode
 /// names) is passed through untouched — supporting it means shipping the name table, and
@@ -243,6 +295,34 @@ fn decode_escapes(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The escapes that must survive untouched, which is the half a hand-written scanner
+    /// would get wrong (T-201 box 7 weighed replacing the regex and decided against it).
+    ///
+    /// `\\n` is the trap: the regex matches `\\` as the single-character escape and leaves the
+    /// `n` as a letter, so the result is a backslash followed by `n` — *not* a newline. The
+    /// rest are sequences that fail to match and are passed through whole rather than
+    /// half-consumed.
+    #[test]
+    fn an_escape_that_does_not_match_is_left_exactly_as_written() {
+        // A real escape still decodes, or the assertions below would pass on a build that
+        // decoded nothing at all.
+        assert_eq!(decode_escapes(r"a\nb"), "a\nb");
+
+        for (input, want) in [
+            (r"a\\nb", "a\\nb"),          // escaped backslash, then a literal `n`
+            (r"a\x4bc", "a\x4bc"),        // exactly two hex digits are taken; `c` is text
+            (r"a\x4", r"a\x4"),           // too few hex digits: untouched
+            (r"a\N{unclosed", r"a\N{unclosed"), // no closing brace: untouched
+            (r"a\q", r"a\q"),             // not an escape at all
+            (r"a\", r"a\"),               // trailing backslash
+        ] {
+            assert_eq!(decode_escapes(input), want, "{input:?}");
+        }
+    }
+
+
+
     use super::*;
 
     fn kv(s: &str) -> ParsedKv {
