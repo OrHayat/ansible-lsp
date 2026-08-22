@@ -8,7 +8,7 @@ use ansible_core::mutation;
 use ansible_core::vars;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
-use ansible_core::resolve::{resolve_in, rule_id, SkipReason, Status};
+use ansible_core::resolve::{resolve_with_in, rule_id, SkipReason, Status};
 use ansible_core::workspace::yaml_files;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -103,8 +103,26 @@ fn main() {
             }
         }
 
+        // Variable values that are statically knowable, so a `{{ var }}` in a path names the
+        // same target the editor navigates to (T-194). Without these the scan asked a strictly
+        // worse question than `main.rs` did about the same reference, and printed the answer
+        // under `TEMPLATED, MATCHES NOTHING` while Cmd+click opened the file.
+        //
+        // Built only when this file actually carries a templated reference: it walks every
+        // variable source reaching `path`, and most files have nothing to substitute into. The
+        // walk is the same one `undefined_uses_in` runs below, through the same cache, so on a
+        // file that needs both it is a hit rather than a second traversal.
+        let literals = if refs.iter().any(|r| r.templated) {
+            let defs = vars::definitions_with_deps_in(path, &nodes, &cache).0;
+            vars::known_literals_in(&defs, path, &doc.text, &cache)
+        } else {
+            std::collections::HashMap::new()
+        };
+
         for r in refs {
-            let res = resolve_in(&r, &ctx, &cache);
+            // Substitution is navigation only: `resolve_with` stamps `SkipReason::Templated`
+            // and turns Missing into Skipped, so a computed path can never fail the gate.
+            let res = resolve_with_in(&r, &ctx, &literals, &cache);
 
             // The cross-file condition check.
             if let Some((conds, span)) = r.propagated_condition() {

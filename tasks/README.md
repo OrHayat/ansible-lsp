@@ -163,7 +163,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
 | T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
-| T-194 | [The scan reports templated paths as unresolved that the editor navigates](open/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | S    | —    |
 | T-195 | [Validate rules against public corpora, not one codebase](open/T-195-validate-rules-against-public-corpora-not-one-codebase.md) | M    | —    |
 | T-197 | [A notify resolved only by a later dynamic include_role is fatal on order alone](open/T-197-a-notify-resolved-only-by-a-later-dynamic-include-role-is-fa.md) | M    | T-196 |
 | T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
@@ -308,6 +307,7 @@ T-021 is now unblocked on that side.
 | T-186 | **bug** · [A dotted path in a when: condition is labelled with its root variable, which says something false](closed/T-186-a-dotted-path-in-a-when-condition-is-labelled-with-its-root.md) | done     |
 | T-178 | **bug** · [An inventory source's ansible_group_priority is indexed as a variable, and it is not one](closed/T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md) | done     |
 | T-199 | **bug** · [Hover and go-to-definition read the saved file, so an unsaved buffer gets a wrong value and a wrong line](closed/T-199-hover-and-go-to-definition-read-the-saved-file-so-an-unsaved.md) | done     |
+| T-194 | [The scan reports templated paths as unresolved that the editor navigates](closed/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | done     |
 
 ## Settled — don't re-derive these
 

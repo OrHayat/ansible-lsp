@@ -430,3 +430,111 @@ fn the_config_header_names_which_file_was_used() {
     let (_, text) = scan(&bare);
     assert!(text.contains("no project root"), "says so rather than inventing one:\n{text}");
 }
+
+// ---- T-194: the scan and the editor answer the same question ---------------------------
+
+/// The lines under a named section heading, up to the blank line that ends it. Returned
+/// rather than searched for as a substring because "does this string appear in the report"
+/// cannot tell a path listed under `TEMPLATED, MATCHES NOTHING` from the same path listed
+/// under `MISSING FILES`, and this rule is about which of the two a reference lands in.
+fn section(text: &str, heading: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.starts_with(heading) {
+            inside = true;
+            continue;
+        }
+        if inside {
+            if line.trim().is_empty() {
+                break;
+            }
+            out.push(line.trim().to_string());
+        }
+    }
+    out
+}
+
+/// One row of the `kind resolved missing skipped` table, as three numbers.
+fn kind_row(text: &str, kind: &str) -> [usize; 3] {
+    let line = text
+        .lines()
+        .find(|l| l.split_whitespace().next() == Some(kind))
+        .unwrap_or_else(|| panic!("the report has a `{kind}` row:\n{text}"));
+    let n: Vec<usize> =
+        line.split_whitespace().skip(1).filter_map(|f| f.parse().ok()).collect();
+    [n[0], n[1], n[2]]
+}
+
+/// T-194: a templated path whose variable is a plain literal is *knowable*, and the editor
+/// navigates it — `main.rs` calls `resolve_with_in` with `vars::known_literals_in`. The scan
+/// calls `resolve_in`, which takes no literals, so it printed the same reference under
+/// `TEMPLATED, MATCHES NOTHING`. One question, two consumers, two answers: rule 3.
+///
+/// The second include is the control. It has no literal anywhere, so it must *stay* in that
+/// section — otherwise this test would pass just as well against a scan that stopped
+/// reporting templated paths at all, which is the failure mode rule 2 is about.
+#[test]
+fn the_scan_substitutes_a_known_literal_into_a_templated_path() {
+    let d = tree("ansible-lsp-scan-known-literal");
+    write(&d, "roles/r/defaults/main.yml", "chosen_task: chosen.yml\n");
+    write(
+        &d,
+        "roles/r/tasks/chosen.yml",
+        "- ansible.builtin.debug:\n    msg: picked\n",
+    );
+    // In `tasks/main.yml` rather than a file beside it, so the role itself resolves from
+    // `play.yml` — a role with no default entry point is `missing`, and that fault would
+    // land in the same report as the one being measured.
+    write(
+        &d,
+        "roles/r/tasks/main.yml",
+        "- ansible.builtin.include_tasks: \"{{ chosen_task }}\"\n\
+         - ansible.builtin.include_tasks: \"{{ never_defined_anywhere }}.yml\"\n",
+    );
+    write(&d, "play.yml", "- hosts: all\n  roles:\n    - r\n");
+
+    let (ok, text) = scan(&d);
+
+    // A substituted path is navigable, never warned about: `resolve_with` stamps
+    // `SkipReason::Templated` and turns Missing into Skipped. The gate cannot move.
+    assert!(ok, "substituting a literal must not fail the CI gate:\n{text}");
+    assert!(!text.contains("MISSING FILES"), "and must not invent a missing file:\n{text}");
+
+    let empty_glob = section(&text, "TEMPLATED, MATCHES NOTHING");
+    assert!(
+        empty_glob.iter().any(|l| l.contains("never_defined_anywhere")),
+        "control: a variable with no literal is still unknowable:\n{text}"
+    );
+    assert!(
+        !empty_glob.iter().any(|l| l.contains("chosen_task")),
+        "the literal is in the role's own defaults, so the path is knowable — the editor \
+         navigates it and the scan must not call it unmatched:\n{text}"
+    );
+
+    let [resolved, _, _] = kind_row(&text, "include_tasks");
+    assert_eq!(resolved, 1, "and it counts as resolved, not skipped:\n{text}");
+}
+
+/// Rule 4: `demo/include_vars_demo.yml` labels its `"vars/{{ env }}.yml"` row
+/// "Templated but knowable — navigates to vars/prod.yml". That label is a claim about the
+/// tool, and nothing pinned it — the scan answered `Skipped` for the same reference while
+/// the comment said it resolves.
+///
+/// Pinned on the counts table because a skipped `include_vars` is not printed line by line.
+/// The neighbouring row is the control: `"vars/{{ region }}.yml"` has no definition anywhere
+/// (the demo's own `UNDEFINED VARIABLES` list names `region`), so exactly one of the two
+/// moves.
+#[test]
+fn the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too() {
+    let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+    let (_, text) = scan(&demo);
+
+    let [resolved, _, skipped] = kind_row(&text, "include_vars");
+    assert_eq!(
+        skipped, 1,
+        "only `vars/{{{{ region }}}}` is unknowable; `vars/{{{{ env }}}}` has env: prod \
+         one file away:\n{text}"
+    );
+    assert_eq!(resolved, 4, "so the knowable one joins the three literal paths:\n{text}");
+}
