@@ -3003,11 +3003,6 @@ mod tests {
         assert!(!defs.iter().any(|x| x.name == "beside_the_host_file"));
     }
 
-    /// T-062 end to end: an inventory named by `ansible.cfg` reaches the variable index of
-    /// a playbook beside it. Asserted through `definitions` rather than the parsers, because
-    /// the parsers passing proves nothing about the wiring — deleting the call site left
-    /// every other test in this file green.
-    #[test]
     /// The wiring half of T-178. `definitions` is what hover and go-to-definition read, and
     /// the readers being right is not the same as the index being right — the comment in
     /// `a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not` records this
@@ -3053,6 +3048,11 @@ mod tests {
         assert_eq!(hits[0].source, VarSource::Inventory);
     }
 
+    /// T-062 end to end: an inventory named by `ansible.cfg` reaches the variable index of
+    /// a playbook beside it. Asserted through `definitions` rather than the parsers, because
+    /// the parsers passing proves nothing about the wiring — deleting the call site left
+    /// every other test in this file green.
+    #[test]
     fn a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not() {
         let d = std::env::temp_dir().join("ansible-lsp-t062-wiring");
         let _ = std::fs::remove_dir_all(&d);
