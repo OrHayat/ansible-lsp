@@ -96,9 +96,6 @@ impl State {
             })
             .unwrap_or_default();
         if let Ok(mut slot) = self.inventory.lock() {
-            *slot = paths.clone();
-        }
-        if let Ok(mut slot) = INVENTORY_SETTING.lock() {
             *slot = paths;
         }
         // A changed inventory changes what every file can see, so nothing computed under
@@ -169,11 +166,30 @@ impl tower_lsp::lsp_types::notification::Notification for InventoryStatus {
 // vars, group_vars…) and is called from several per-keystroke paths. Cache each file's
 // result together with the set of files it read, and keep a reverse map file -> dependents,
 // so an edit invalidates exactly the entries that read the changed file — and nothing else.
+/// A cache entry is identified by the file **and** the inventory it was computed under
+/// (T-201). Keying by path alone was invisible while the setting lived in a process global —
+/// there was only ever one inventory in flight, and changing it cleared the whole cache. Once
+/// the setting travels with the request that stops being true: two requests can legitimately
+/// carry different inventories, and a path-only key hands the second the first one's answer.
+type VarKey = (PathBuf, u64);
+
+/// A stable digest of the resolved `ansibleLsp.inventory` paths, for [`VarKey`]. Empty (the
+/// unconfigured case) must hash to something, and does — it is a key like any other.
+fn inventory_key(inv: &[PathBuf]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    inv.len().hash(&mut h);
+    for p in inv {
+        p.hash(&mut h);
+    }
+    h.finish()
+}
+
 #[derive(Default)]
 struct VarCache {
-    entries: HashMap<PathBuf, Arc<Vec<vars::Located>>>,
-    deps: HashMap<PathBuf, HashSet<PathBuf>>,
-    reverse: HashMap<PathBuf, HashSet<PathBuf>>,
+    entries: HashMap<VarKey, Arc<Vec<vars::Located>>>,
+    deps: HashMap<VarKey, HashSet<PathBuf>>,
+    reverse: HashMap<PathBuf, HashSet<VarKey>>,
     /// Bumped by every invalidation. The scan (detached since T-075) computes entries from
     /// disk while edits arrive; an entry whose compute straddled an invalidation must not
     /// be inserted, or a result read from pre-edit content outlives the edit.
@@ -191,37 +207,20 @@ fn canon(p: &Path) -> PathBuf {
 
 /// Cached `vars::definitions`. On a miss, compute it and record its dependency files in the
 /// reverse map so later invalidation is precise.
-fn cached_definitions(path: &Path, nodes: &[Node], open: &OpenDocs) -> Arc<Vec<vars::Located>> {
+fn cached_definitions(
+    path: &Path,
+    nodes: &[Node],
+    open: &OpenDocs,
+    inv: &[PathBuf],
+) -> Arc<Vec<vars::Located>> {
     cached_definitions_in(
         path,
         nodes,
-        &ScanCache::new(OverlayFs(open.clone())).with_inventory(inventory_setting()),
+        &ScanCache::new(OverlayFs(open.clone())).with_inventory(inv.to_vec()),
+        inv,
     )
 }
 
-/// The `ansibleLsp.inventory` paths, workspace-resolved. A free function because the walk is
-/// reached from several places that hold no `Backend`; the value lives in one `OnceLock`-style
-/// slot the server writes whenever settings arrive.
-fn inventory_setting() -> Vec<PathBuf> {
-    let raw = INVENTORY_SETTING.lock().map(|v| v.clone()).unwrap_or_default();
-    if raw.is_empty() {
-        return raw;
-    }
-    let root = WORKSPACE_ROOT.lock().ok().and_then(|r| r.clone());
-    raw.into_iter()
-        .map(|p| match (&root, p.is_absolute()) {
-            (Some(r), false) => r.join(p),
-            _ => p,
-        })
-        .collect()
-}
-
-/// The first workspace folder, for resolving a relative `ansibleLsp.inventory`. A separate
-/// slot from `State::roots` because [`inventory_setting`] is reached from free functions
-/// that hold no `State`.
-static WORKSPACE_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-static INVENTORY_SETTING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// The editor's unsaved buffers, as a read-only snapshot keyed by canonical path (T-199).
 ///
@@ -305,8 +304,9 @@ fn cached_definitions_in(
     path: &Path,
     nodes: &[Node],
     scan: &ScanCache,
+    inv: &[PathBuf],
 ) -> Arc<Vec<vars::Located>> {
-    let key = canon(path);
+    let key = (canon(path), inventory_key(inv));
     let epoch = match var_cache().lock() {
         Ok(c) => {
             if let Some(hit) = c.entries.get(&key) {
@@ -325,6 +325,7 @@ fn cached_definitions_in(
             for f in &deps {
                 cache.reverse.entry(f.clone()).or_default().insert(key.clone());
             }
+
             cache.deps.insert(key.clone(), deps);
             cache.entries.insert(key, arc.clone());
         }
@@ -340,8 +341,10 @@ fn invalidate_var_cache(file: &Path) {
         return;
     };
     cache.epoch = cache.epoch.wrapping_add(1);
-    let mut keys: HashSet<PathBuf> = cache.reverse.get(&f).cloned().unwrap_or_default();
-    keys.insert(f);
+    let mut keys: HashSet<VarKey> = cache.reverse.get(&f).cloned().unwrap_or_default();
+    // Every inventory this file was computed under, not just one: the key carries an
+    // inventory digest now, so "the entry for this file" is a set.
+    keys.extend(cache.entries.keys().filter(|(p, _)| *p == f).cloned());
     for key in keys {
         if let Some(dep_set) = cache.deps.remove(&key) {
             for d in dep_set {
@@ -436,6 +439,33 @@ impl State {
     /// map is a handful of entries, so rebuilding it per request is not worth caching.
     /// A `Url` with no file path (`untitled:`) contributes nothing — there is no path for
     /// another file's reference to name.
+    /// The `ansibleLsp.inventory` paths, workspace-resolved — a snapshot of the setting as
+    /// it stands now, for one request to carry (T-201).
+    ///
+    /// This used to be a free function over two process globals, and that is the bug: a
+    /// request-scoped setting in a slot anyone can write. One test wrote `["x.ini"]` and any
+    /// test running in that window resolved its fixture's `ansible.cfg` against a file that
+    /// does not exist, so no inventory was read at all and every inventory-derived variable
+    /// silently vanished. Both halves were already fields here — `inventory` and `roots` —
+    /// so the globals were shadow copies kept only because the readers were free functions.
+    ///
+    /// Resolution is deliberately unchanged: a relative path still joins to `roots.first()`.
+    /// That rule is wrong in a multi-root window (T-202, measured) and changing it here would
+    /// mix a behaviour fix into a de-globalising one.
+    fn inventory_setting(&self) -> Vec<PathBuf> {
+        let raw = self.inventory.lock().map(|v| v.clone()).unwrap_or_default();
+        if raw.is_empty() {
+            return raw;
+        }
+        let root = self.roots.lock().ok().and_then(|r| r.first().cloned());
+        raw.into_iter()
+            .map(|p| match (&root, p.is_absolute()) {
+                (Some(r), false) => r.join(p),
+                _ => p,
+            })
+            .collect()
+    }
+
     fn open_docs(&self) -> OpenDocs {
         let Ok(docs) = self.docs.lock() else {
             return OpenDocs::default();
@@ -479,7 +509,7 @@ impl State {
             return Vec::new();
         };
         let inventory = uri.to_file_path().ok().is_some_and(|p| {
-            Self::is_inventory_source(&p, &ScanCache::default().with_inventory(inventory_setting()))
+            Self::is_inventory_source(&p, &ScanCache::default().with_inventory(self.inventory_setting()))
         });
         Self::unparseable_diagnostic_for(text, inventory)
     }
@@ -661,7 +691,11 @@ impl Backend {
         // Variable values that are statically knowable, so a `{{ var }}` in a path can be
         // navigated to its real target (T-056). Navigation only — resolve_with never warns.
         let s = Instant::now();
-        let defs = cached_definitions_in(path, &nodes, scan);
+        // `&[]`, not the editor's setting: this path builds its own `ScanCache` and never
+        // called `with_inventory`, so passing anything else would change what the scan reads.
+        // It also means the scan and the hover no longer share a cache entry for one file —
+        // under the old path-only key whichever ran first decided whether the setting applied.
+        let defs = cached_definitions_in(path, &nodes, scan, &[]);
         let literals = vars::known_literals_in(&defs, path, &doc.text, scan);
         t.var_index += s.elapsed();
 
@@ -713,9 +747,12 @@ impl Backend {
         diagnostics.extend(Self::duplicate_key_diagnostics(&a));
         diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
         if let Ok(path) = uri.to_file_path() {
-            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes));
+            // One snapshot for this publish: the coverage walk and the unknown-host walk must
+            // answer from the same inventory, or two diagnostics on one file disagree (rule 3).
+            let inv = self.state.inventory_setting();
+            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes, &inv));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
-            let cache = ScanCache::default().with_inventory(inventory_setting());
+            let cache = ScanCache::default().with_inventory(inv.clone());
             diagnostics.extend(Self::unknown_host_diagnostics(&a, &path, &cache));
         }
         self.state.track(uri, &diagnostics);
@@ -1064,8 +1101,13 @@ impl Backend {
     /// uncovered case. Only fires when there IS a definition (a coverage gap, not "never
     /// defined") and only within the use's own condition vocabulary, so it can't false-warn
     /// on conditions it can't relate. Suppressible with `# noqa: var-uncovered-when`.
-    fn variable_coverage_diagnostics(a: &Analysis, path: &Path, nodes: &[Node]) -> Vec<Diagnostic> {
-        let defs = cached_definitions(path, nodes, &a.open);
+    fn variable_coverage_diagnostics(
+        a: &Analysis,
+        path: &Path,
+        nodes: &[Node],
+        inv: &[PathBuf],
+    ) -> Vec<Diagnostic> {
+        let defs = cached_definitions(path, nodes, &a.open, inv);
         let mut out = Vec::new();
         for u in vars::uses(nodes) {
             if u.guard.is_empty() {
@@ -1195,7 +1237,7 @@ impl Backend {
     /// can show it. `source` is what the user needs to reason about a surprise: "setting"
     /// means they picked it, anything else means we followed Ansible's own ladder.
     async fn publish_inventory(state: &Arc<State>, client: &Client) {
-        let configured = inventory_setting();
+        let configured = state.inventory_setting();
         let root = state.roots.lock().ok().and_then(|r| r.first().cloned());
         // Which rung of Ansible's ladder actually answered. `config.rs` collapses the env
         // var and the file into one field — correct for reading, but the user needs to know
@@ -1584,7 +1626,8 @@ impl Backend {
         // repaint; it's debounced and depth-capped, and can be cached if it ever lags.
         if let Ok(path) = p.uri.to_file_path() {
             let nodes = &a.nodes;
-            let all = cached_definitions(&path, nodes, &self.state.open_docs());
+            let all =
+                cached_definitions(&path, nodes, &self.state.open_docs(), &self.state.inventory_setting());
             for u in vars::uses(nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
                 // so it's computed per use rather than once per name.
@@ -1618,11 +1661,12 @@ impl Backend {
         uri: &Url,
         path: &Path,
         open: &OpenDocs,
+        inv: &[PathBuf],
     ) -> Option<Vec<Location>> {
         let Some(reference) = Self::reference_at(doc, nodes, pos) else {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
-            return Self::variable_defs_at(doc, nodes, pos, uri, open)
+            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv)
                 // Or on the host half of a `hostvars['web01']` read (T-171).
                 .or_else(|| Self::host_key_defs_at(doc, pos, path));
         };
@@ -1681,13 +1725,14 @@ impl Backend {
         pos: Position,
         uri: &Url,
         open: &OpenDocs,
+        inv: &[PathBuf],
     ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let use_ = vars::uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
-        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open)
+        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
             .cloned()
@@ -1712,12 +1757,13 @@ impl Backend {
         res: &Resolution,
         path: &Path,
         open: &OpenDocs,
+        inv: &[PathBuf],
     ) -> Option<(String, Range)> {
         let idents = template_idents(&r.value);
         if idents.is_empty() {
             return None;
         }
-        let defs = cached_definitions(path, nodes, open);
+        let defs = cached_definitions(path, nodes, open, inv);
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
@@ -1792,6 +1838,7 @@ impl Backend {
         byte: usize,
         path: &Path,
         open: &OpenDocs,
+        inv: &[PathBuf],
     ) -> Option<(String, Range)> {
         // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
         // ones, so asking it first and falling back to a second, complementary scan walked
@@ -1802,7 +1849,7 @@ impl Backend {
         if condition::is_injected(&use_.name) {
             return Self::injected_var_hover_at(doc, &use_, AnsibleInstall::detected());
         }
-        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open)
+        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
@@ -2482,6 +2529,7 @@ fn hover_at(
     byte: usize,
     settings: Settings,
     open: &OpenDocs,
+    inv: &[PathBuf],
 ) -> Option<(String, Range)> {
     let ctx = FileContext::discover(path);
     let range = |s: Span| {
@@ -2519,11 +2567,11 @@ fn hover_at(
         // Resolve just this reference. A templated path gets the substitution hover
         // (what the `{{ }}` expands to and where those values are defined); a literal
         // one gets the resolved target and the candidates tried, winner marked.
-        let defs = cached_definitions(path, nodes, open);
+        let defs = cached_definitions(path, nodes, open, inv);
         let literals = vars::known_literals(&defs, path, &doc.text);
         let res = resolve::resolve_with(r, &ctx, &literals);
         if r.templated {
-            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open) {
+            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv) {
                 return Some(hit);
             }
         }
@@ -2567,7 +2615,7 @@ fn hover_at(
     }
 
     // Variable hover: where the variable under the cursor is defined, and its value.
-    Backend::variable_hover_at(doc, nodes, byte, path, open)
+    Backend::variable_hover_at(doc, nodes, byte, path, open, inv)
 }
 
 #[tower_lsp::async_trait]
@@ -2582,10 +2630,6 @@ impl LanguageServer for Backend {
                 if let Some(uri) = p.root_uri.and_then(|u| u.to_file_path().ok()) {
                     roots.push(uri);
                 }
-            }
-            // What a relative `ansibleLsp.inventory` is relative to (T-062).
-            if let Ok(mut r) = WORKSPACE_ROOT.lock() {
-                *r = roots.first().cloned();
             }
         }
 
@@ -2696,14 +2740,17 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let byte = doc.lsp_to_byte(pos.line, pos.character);
+        let inv = self.state.inventory_setting();
         Ok(
-            hover_at(&doc, &nodes, &path, byte, settings, &self.state.open_docs()).map(|(value, range)| Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: Some(range),
-            }),
+            hover_at(&doc, &nodes, &path, byte, settings, &self.state.open_docs(), &inv).map(
+                |(value, range)| Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: Some(range),
+                },
+            ),
         )
     }
 
@@ -2769,7 +2816,15 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         Ok(
-            Self::definition_at(&doc, &nodes, pos, &uri, &path, &self.state.open_docs())
+            Self::definition_at(
+                &doc,
+                &nodes,
+                pos,
+                &uri,
+                &path,
+                &self.state.open_docs(),
+                &self.state.inventory_setting(),
+            )
                 .map(GotoDefinitionResponse::Array),
         )
     }
@@ -4899,7 +4954,7 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text.clone());
         let nodes = doc.parse().unwrap();
         let byte = text.find("{{ shared_endpoint }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
             .expect("hover expected");
         assert!(md.contains("vars_files"), "provenance label in: {md}");
         assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
@@ -4921,7 +4976,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("demo fixture");
         let a = super::Backend::analyze_text(text, &path).unwrap();
         let undefined: Vec<String> =
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes)
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[])
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -4952,7 +5007,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
 
         let byte = text.find("{{ pod_namespace }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
             .expect("hover on an add_host-defined variable");
         assert!(md.contains("add_host"), "provenance label in: {md}");
         // The value, which is why the definition's span points at it rather than at the
@@ -4967,7 +5022,8 @@ mod tests {
             &uri,
             &path,
             &no_buffers(),
-        )
+                        &[],
+            )
         .expect("jump from an add_host-defined variable");
         assert_eq!(locs.len(), 1, "{locs:?}");
         let defining_line = text
@@ -4983,7 +5039,7 @@ mod tests {
         // hover working at all: the consumed parameter beside it defines nothing, so
         // neither consumer may answer for it.
         let consumed = text.find("{{ name }}").unwrap() + 3;
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[]).is_none());
         let (line, character) = doc.byte_to_lsp(consumed);
         assert!(super::Backend::definition_at(
             &doc,
@@ -4991,7 +5047,9 @@ mod tests {
             tower_lsp::lsp_types::Position { line, character },
             &uri,
             &path
-        , &no_buffers())
+        , &no_buffers(),
+                &[],
+            )
         .is_none());
     }
 
@@ -5047,7 +5105,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let hover_at_last = |name: &str| {
             let byte = text.rfind(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers()).map(|h| h.0)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[]).map(|h| h.0)
         };
 
         // Used inside its own entry: in scope, so the definition is offered.
@@ -5061,7 +5119,7 @@ mod tests {
 
         // ...and that warning names the real problem instead of "never defined".
         let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
-        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes)
+        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[])
             .into_iter()
             .map(|d| d.message)
             .collect();
@@ -5093,14 +5151,14 @@ mod tests {
         // is defined in three and its value depends on group membership we cannot know.
         {
             let byte = at("'web01'].web01_ib_ip");
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
                 .expect("no hover on the host_vars read")
                 .0;
             assert!(md.contains("10.0.0.1"), "hover shows the value: {md}");
             let (line, character) = doc.byte_to_lsp(byte);
             let pos = tower_lsp::lsp_types::Position { line, character };
             assert!(
-                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers()).is_some(),
+                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[]).is_some(),
                 "no jump target on the host_vars read"
             );
         }
@@ -5108,10 +5166,10 @@ mod tests {
         // INVISIBLE: a play var. Hover declines and go-to-definition declines, because
         // offering the play var would point at a value this read can never produce.
         let byte = at("'web01'].play_scoped");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[]).is_none());
         let (line, character) = doc.byte_to_lsp(byte);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers()).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[]).is_none());
 
         // ...and the warning takes over on exactly the two BAD rows, naming the source it
         // found rather than claiming the variable was never defined.
@@ -5121,7 +5179,7 @@ mod tests {
         // unsound while inventory is unparsed: a name in play `vars:` AND in inventory
         // reads fine through hostvars, measured. So the demo's BAD rows are BAD about
         // *Ansible*, and we stay quiet about them until T-062.
-        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes);
+        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[]);
         let msgs: Vec<String> = ds.into_iter().map(|d| d.message).collect();
         assert!(msgs.is_empty(), "no claim about a hostvars read: {msgs:?}");
         // The control that keeps that silence meaningful: the same check is alive in this
@@ -5132,11 +5190,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes).len(),
+            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes, &[]).len(),
             1
         );
         let inv = at("'web01'].infiniband_ip");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[]).is_none());
 
         // T-171, the other half of the same line: the HOST key. `host_vars/web01.yml` is a
         // deterministic path — the filename is the host name — so this resolves without an
@@ -5147,7 +5205,7 @@ mod tests {
         let key = text.find("hostvars['web01']").unwrap() + "hostvars['".len() + 1;
         let (line, character) = doc.byte_to_lsp(key);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers())
+        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[])
             .expect("host key jumps");
         assert_eq!(locs.len(), 1);
         assert!(
@@ -5194,7 +5252,7 @@ mod tests {
         // branch is last in the chain and must not shadow it.
         let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers()).expect("var jumps");
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[]).expect("var jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
 
         for m in &msgs {
@@ -5234,12 +5292,12 @@ mod tests {
         let nested_key = key_on("nested_map:");
 
         for (byte, what) in [(set_fact_key, "set_fact"), (set_stats_key, "set_stats data")] {
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
                 .unwrap_or_else(|| panic!("no hover on the {what} key"))
                 .0;
             assert!(md.contains("my_result"), "{what} hover shows the play var: {md}");
 
-            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers())
+            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[])
                 .unwrap_or_else(|| panic!("no jump target on the {what} key"));
             // Jumps to the play var it reads, not to the key it sits in.
             assert_eq!(locs.len(), 1, "{what}: {locs:?}");
@@ -5253,8 +5311,8 @@ mod tests {
 
         // The boundary row: nested in a fact's value the braces are data, so both views
         // stay silent rather than claiming a name Ansible keeps literal.
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers()).is_none());
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers()).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[]).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[]).is_none());
     }
 
     #[test]
@@ -5268,7 +5326,7 @@ mod tests {
 
         let hover = |name: &str| {
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
                 .expect("hover expected")
                 .0
         };
@@ -5292,7 +5350,7 @@ mod tests {
         for depth in 0..=5usize {
             let name = format!("chain_depth{depth}");
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
             // One nested "dependency of" line per hop.
@@ -5312,7 +5370,7 @@ mod tests {
 
         // include_vars through the chain: mechanism on the def line, route underneath.
         let byte = text.find("{{ chain_included }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers())
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[])
             .expect("hover expected");
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
@@ -5441,7 +5499,7 @@ mod tests {
         assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
 
         let (md, range) =
-            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers()).expect("hover");
+            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[]).expect("hover");
         assert!(md.contains("prod.yml"), "the target it reached: {md}");
         assert!(md.contains("Substituting"), "the section header: {md}");
         assert!(md.contains("env"), "the variable substituted: {md}");
@@ -5455,7 +5513,7 @@ mod tests {
         if let Some(pr) = plain {
             let pres = ansible_core::resolve::resolve_with(pr, &ctx, &Default::default());
             assert!(
-                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers()).is_none(),
+                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[]).is_none(),
                 "a literal path has nothing to substitute"
             );
         }
@@ -5469,7 +5527,7 @@ mod tests {
         let refs2 = ansible_core::references::extract(&n2);
         let r2 = &refs2[0];
         let res2 = ansible_core::resolve::resolve_with(r2, &ctx, &Default::default());
-        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers()).is_none());
+        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[]).is_none());
     }
 
     /// T-029 box 4: a resolved module hovers one line of provenance — collection and
@@ -5741,7 +5799,7 @@ mod tests {
         for hints in [true, false] {
             let settings = Settings { hints, ..Settings::default() };
             let hover = |byte: usize| {
-                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers())
+                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[])
                     .unwrap_or_else(|| panic!("hover expected at {byte} (hints={hints})"))
                     .0
             };
@@ -5778,13 +5836,13 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let settings = Settings { hints: true, ..Settings::default() };
 
-        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers())
+        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[])
             .expect("module hover expected")
             .0;
         assert!(md.contains("ansible.legacy"), "provenance, not the condition, in: {md}");
 
         // And the condition is still reachable — on its keyword.
-        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers())
+        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[])
             .expect("when hover expected")
             .0;
         assert!(plain(&kw).contains("when:"), "condition on its keyword in: {kw}");
@@ -5954,7 +6012,7 @@ mod tests {
             let nodes = doc.parse().expect("fixture parses");
             let needle = format!("vars/{{{{ {name} }}}}.yml");
             let byte = PLAY.find(&needle).expect("fixture carries the path") + 1;
-            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers())
+            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[])
                 .map(|h| h.0)
                 .unwrap_or_default()
         };
@@ -6042,7 +6100,7 @@ mod tests {
         let doc = super::Document::new(T199_PLAY.to_string());
         let nodes = doc.parse().expect("fixture parses");
         let (byte, _) = t199_use_position(&doc);
-        super::Backend::variable_hover_at(&doc, &nodes, byte, &play, open)
+        super::Backend::variable_hover_at(&doc, &nodes, byte, &play, open, &[])
             .map(|h| h.0)
             .expect("the use has a reachable definition")
     }
@@ -6056,7 +6114,7 @@ mod tests {
         let doc = super::Document::new(T199_PLAY.to_string());
         let nodes = doc.parse().expect("fixture parses");
         let (_, pos) = t199_use_position(&doc);
-        let mut locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &play, open)
+        let mut locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &play, open, &[])
             .expect("the use jumps somewhere");
         assert_eq!(locs.len(), 1, "one definition, so one target");
         locs.pop().unwrap()
@@ -6123,5 +6181,123 @@ mod tests {
             "hover unchanged by an unedited buffer"
         );
         assert_eq!(t199_definition(&root, &open), closed_def, "and so is the jump target");
+    }
+
+    // ---- T-201: the inventory setting is a per-request value, not a process slot ---------
+    //
+    // One project, two inventory files. The *only* thing that differs between the two
+    // requests below is which one `ansibleLsp.inventory` names, so a difference in the answer
+    // can only have come from the setting.
+
+    const T201_PLAY: &str = "- hosts: all\n  vars_files:\n    - \"vars/{{ control }}.yml\"\n";
+
+    fn t201_project(name: &str) -> std::path::PathBuf {
+        ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                ("inv_a.ini", "[web]\nnode1 control=11\n"),
+                ("inv_b.ini", "[web]\nnode1 control=22\n"),
+                ("vars/11.yml", "x: 1\n"),
+                ("vars/22.yml", "x: 1\n"),
+                ("play.yml", T201_PLAY),
+            ],
+        )
+    }
+
+    /// A `State` carrying one workspace root and one `ansibleLsp.inventory` value.
+    fn t201_state(root: &std::path::Path, inv: &str) -> super::State {
+        let state = super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+        };
+        state.set_inventory(&serde_json::json!({ "inventory": [inv] }));
+        state
+    }
+
+    /// The templated-path hover, which substitutes `{{ control }}` from the inventory the
+    /// request was given. Chosen because it *names its source*, so a wrong answer is visible
+    /// as a wrong file rather than only as a wrong number.
+    fn t201_hover(root: &std::path::Path, inv: &[std::path::PathBuf]) -> String {
+        let path = root.join("play.yml");
+        let doc = super::Document::new(T201_PLAY.to_string());
+        let nodes = doc.parse().expect("fixture parses");
+        let byte = T201_PLAY.find("vars/{{ control }}.yml").expect("fixture carries the path") + 1;
+        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv)
+            .map(|h| h.0)
+            .unwrap_or_default()
+    }
+
+    /// Each request answers from the inventory *it* was given.
+    ///
+    /// The control is that the two answers differ. An assertion that only checked "A says 11"
+    /// would also pass if the setting were ignored entirely and both requests fell through to
+    /// the fixture's `ansible.cfg`, which names no inventory at all — that case substitutes
+    /// nothing, so both `contains` checks would fail rather than pass empty.
+    #[test]
+    fn each_request_answers_from_the_inventory_it_was_given() {
+        let root = t201_project("t201-each-request");
+        let a = t201_state(&root, "inv_a.ini");
+        let b = t201_state(&root, "inv_b.ini");
+
+        let from_a = t201_hover(&root, &a.inventory_setting());
+        assert!(
+            from_a.contains("`control` = `11`") && from_a.contains("inv_a.ini"),
+            "request A must answer from inv_a.ini:\n{from_a}"
+        );
+
+        let from_b = t201_hover(&root, &b.inventory_setting());
+        assert!(
+            from_b.contains("`control` = `22`") && from_b.contains("inv_b.ini"),
+            "request B must answer from inv_b.ini:\n{from_b}"
+        );
+    }
+
+    /// The bug itself: a *later* writer must not change an answer already in flight.
+    ///
+    /// This is the shape that made `group_priority_substitutes_…` fail intermittently — one
+    /// test wrote the global while another was reading through it. Here the write happens
+    /// between snapshot and use, which is the same window made deterministic.
+    #[test]
+    fn a_later_writer_cannot_change_a_snapshot_already_taken() {
+        let root = t201_project("t201-later-writer");
+        let a = t201_state(&root, "inv_a.ini");
+
+        // Request A takes its snapshot...
+        let snapshot = a.inventory_setting();
+
+        // ...and only then does a second request set a different inventory. Under the process
+        // global this write landed in the slot request A was about to read.
+        let b = t201_state(&root, "inv_b.ini");
+        let _ = b.inventory_setting();
+
+        let from_a = t201_hover(&root, &snapshot);
+        assert!(
+            from_a.contains("`control` = `11`") && from_a.contains("inv_a.ini"),
+            "the in-flight request keeps its own inventory:\n{from_a}"
+        );
+    }
+
+    /// Setting an inventory on one `State` must not reach another. The globals were shadow
+    /// copies of these two fields, so this is the invariant that used to be violated.
+    #[test]
+    fn one_states_inventory_setting_is_invisible_to_another() {
+        let root = t201_project("t201-invisible");
+        let a = t201_state(&root, "inv_a.ini");
+        let b = t201_state(&root, "inv_b.ini");
+
+        assert_eq!(a.inventory_setting(), vec![root.join("inv_a.ini")]);
+        assert_eq!(b.inventory_setting(), vec![root.join("inv_b.ini")]);
+
+        // And a third with no setting at all falls through to the config, as an editor with
+        // nothing configured must.
+        let none = t201_state(&root, "");
+        assert!(none.inventory_setting().is_empty());
     }
 }
