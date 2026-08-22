@@ -182,7 +182,10 @@ impl FileContext {
                 .map(|r| r.join("collections/ansible_collections")),
         );
         // Collections you installed rather than wrote — still worth navigating into.
-        for r in &AnsibleInstall::detect().collection_roots {
+        // `detected`, not a detection: this runs on every hover and jump, and starting the
+        // ~300 ms probe here is the freeze T-084 measured. Before startup has detected, an
+        // installed collection simply is not offered yet.
+        for r in AnsibleInstall::detected().iter().flat_map(|i| &i.collection_roots) {
             push_unique(&mut dirs, Some(r.clone()));
         }
         dirs

@@ -626,14 +626,17 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                         candidates.extend(found);
                     }
                 }
-                if let Some(pkg) = &AnsibleInstall::detect().package_dir {
+                if let Some(pkg) = AnsibleInstall::detected().and_then(|i| i.package_dir.as_ref()) {
                     let file = format!("{bare}.py");
                     candidates.push(pkg.join("modules").join(&file));
                     candidates.push(pkg.join("plugins/action").join(&file));
                 }
                 let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
-                    .then(|| AnsibleInstall::detect().builtin_module_redirect(bare))
+                    .then(|| {
+                        AnsibleInstall::detected()
+                            .and_then(|i| i.builtin_module_redirect(bare))
+                    })
                     .flatten();
                 (res, redirect)
             }
@@ -653,7 +656,9 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 }
                 // ansible.builtin lives in the ansible package, not a collection tree.
                 if (ns, coll) == ("ansible", "builtin") {
-                    if let Some(p) = AnsibleInstall::detect().builtin_module(module) {
+                    if let Some(p) =
+                        AnsibleInstall::detected().and_then(|i| i.builtin_module(module))
+                    {
                         candidates.insert(0, p);
                     }
                 }
@@ -1279,7 +1284,7 @@ mod tests {
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
         assert!(res.targets[0].ends_with("demo/library/ping.py"), "got {:?}", res.targets);
 
-        if AnsibleInstall::detect().package_dir.is_none() {
+        if AnsibleInstall::init(None).package_dir.is_none() {
             return; // no install: the remaining shapes can't resolve on this machine
         }
 
@@ -2310,7 +2315,7 @@ mod tests {
     /// the test would then prove the fixture rather than the resolver.
     #[test]
     fn builtin_modules_resolve_into_the_installed_ansible() {
-        if AnsibleInstall::detect().package_dir.is_none() {
+        if AnsibleInstall::init(None).package_dir.is_none() {
             return; // ansible not on PATH
         }
         let root = crate::testing::project("builtin-modules", "", &[("playbooks/site.yml", "")]);
@@ -2327,7 +2332,7 @@ mod tests {
     /// install alone, for the reason given just above.
     #[test]
     fn installed_collection_modules_resolve() {
-        if AnsibleInstall::detect().collection_roots.is_empty() {
+        if AnsibleInstall::init(None).collection_roots.is_empty() {
             return;
         }
         let root =

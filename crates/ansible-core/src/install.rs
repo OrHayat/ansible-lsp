@@ -193,36 +193,42 @@ impl Source {
 }
 
 static DETECTED: OnceLock<AnsibleInstall> = OnceLock::new();
-/// Explicit `ansible` package dir from the client's `ansibleLsp.ansiblePath` setting, seeded
-/// before the first `detect()`. Config-driven, so it's per-project and live on reload.
-static OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
-
-/// Seed the package-dir override from config. Must run before the first `detect()`; a later
-/// call is ignored, since detection is cached for the process.
-pub fn set_package_dir_override(dir: PathBuf) {
-    let _ = OVERRIDE.set(dir);
-}
 
 impl AnsibleInstall {
-    /// Detected once per process by shelling out to `ansible --version` (~300 ms).
-    pub fn detect() -> &'static Self {
-        DETECTED.get_or_init(Self::run)
+    /// Run detection, once, from the one place that is allowed to pay for it.
+    ///
+    /// `override_dir` is the client's `ansibleLsp.ansiblePath` — an argument rather than the
+    /// process slot it used to be (T-201 box 5). The slot could not be read back, so nothing
+    /// could test that the setting arrived, and `OnceLock::set` dropped a second write in
+    /// silence while its own doc promised the value was "live on reload".
+    ///
+    /// There is deliberately no `detect()` any more. It was `get_or_init`, so *any* caller
+    /// could start detection — and four of them were on request paths (`resolve_module`,
+    /// `FileContext::collection_roots`), which is the 3.6 s freeze on the message pump that
+    /// T-084 measured and that [`detected`](Self::detected)'s own doc forbids. Now a request
+    /// path can only ask what is already known.
+    ///
+    /// Still `OnceLock`, so a second call is ignored: a changed `ansiblePath` needs a restart.
+    /// That is the honest version of what the old code did by accident — see T-201 box (4),
+    /// which is what would make it genuinely reloadable.
+    pub fn init(override_dir: Option<PathBuf>) -> &'static Self {
+        DETECTED.get_or_init(|| Self::run(override_dir))
     }
 
-    /// The result if detection has already run — never starting it. Anything on a request path
-    /// must use this: [`detect`](Self::detect) is `get_or_init`, so the first caller pays the
-    /// whole cost, and on the message pump that is the 3.6 s freeze T-084 measured.
+    /// The result if detection has already run — never starting it. `None` means startup has
+    /// not got there yet, and a caller must answer without the install rather than wait: this
+    /// is a request path's only accessor.
     pub fn detected() -> Option<&'static Self> {
         DETECTED.get()
     }
 
-    fn run() -> Self {
+    fn run(override_dir: Option<PathBuf>) -> Self {
         // Fast path: derive everything from the filesystem. `ansible --version` is
         // authoritative but costs seconds of Python startup when cold (3.6 s measured, T-084)
         // — and on Windows it crashes outright (Ansible's control node isn't supported
         // there), so once the filesystem has found the package we must NOT fall through to it.
         let started = std::time::Instant::now();
-        let fast = Self::from_filesystem();
+        let fast = Self::from_filesystem(override_dir);
         let mut install = if fast.package_dir.is_some() {
             fast
         } else {
@@ -234,14 +240,14 @@ impl AnsibleInstall {
 
     /// Locate the ansible package by resolving the `ansible` executable, plus the
     /// standard collection directories. No subprocess.
-    fn from_filesystem() -> Self {
+    fn from_filesystem(override_dir: Option<PathBuf>) -> Self {
         let mut install = Self::default();
 
         // Explicit override from the `ansibleLsp.ansiblePath` setting: point straight at the
         // `ansible` package dir. The escape hatch for installs the walk-up can't find — uv/pipx
         // (the exe is a shim outside the venv), and Windows, where `ansible --version` crashes
         // so there's no fallback.
-        if let Some(pkg) = OVERRIDE.get().cloned() {
+        if let Some(pkg) = override_dir {
             if pkg.join("modules").is_dir() {
                 let bundled = pkg.with_file_name("ansible_collections");
                 if bundled.is_dir() {
@@ -522,9 +528,46 @@ fn find_site_packages(prefix: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// The `ansibleLsp.ansiblePath` override is honoured, and says so in `source`.
+    ///
+    /// Against `run` rather than `init`: `init` memoises into the process-wide `DETECTED`, so
+    /// a test that called it would decide the answer for every other test in this binary —
+    /// the hazard T-201 exists to remove. `run` takes the override as an argument, which is
+    /// the whole point of box (5); before it, this could not be written at all.
+    #[test]
+    fn an_explicit_package_dir_beats_detection_and_is_labelled_as_the_override() {
+        let root = crate::testing::tree(
+            "install-override",
+            &[
+                ("venv/ansible/modules/ping.py", ""),
+                ("venv/ansible_collections/ns/coll/meta/runtime.yml", ""),
+            ],
+        );
+        let pkg = root.join("venv/ansible");
+
+        let i = AnsibleInstall::run(Some(pkg.clone()));
+        assert_eq!(i.package_dir.as_ref(), Some(&pkg), "the override must be used as-is");
+        assert_eq!(i.source, Source::Override, "and be labelled as the override, not a walk-up");
+        assert!(
+            i.collection_roots.contains(&root.join("venv/ansible_collections")),
+            "its sibling collections come with it: {:?}",
+            i.collection_roots
+        );
+
+        // The control: a directory that is not a package must be refused, or "override" would
+        // just mean "whatever string the client sent". Detection falls back, so the source is
+        // anything but Override.
+        let bogus = AnsibleInstall::run(Some(root.join("venv/nope")));
+        assert_ne!(
+            bogus.source,
+            Source::Override,
+            "a dir with no modules/ is not an install and must not be taken as one"
+        );
+    }
+
     #[test]
     fn finds_the_local_ansible_install() {
-        let i = AnsibleInstall::detect();
+        let i = AnsibleInstall::init(None);
         if i.package_dir.is_none() {
             return; // ansible not on PATH
         }

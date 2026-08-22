@@ -383,6 +383,11 @@ struct State {
     /// dangerous of the three globals (keyed by path, so a stale read is a recompute, not a
     /// wrong answer) and the last to move.
     var_cache: Mutex<VarCache>,
+    /// The client's `ansibleLsp.ansiblePath` — which Ansible to index, when several exist or
+    /// none is on PATH. Held here rather than pushed into a slot inside `ansible-core`
+    /// (T-201 box 5): `initialize` records it, `startup` hands it to
+    /// [`AnsibleInstall::init`], and nothing on a request path can reach it.
+    ansible_path: Mutex<Option<PathBuf>>,
     /// The workspace scan `initialized` starts.
     ///
     /// Held rather than discarded. A bare `tokio::spawn` drops the handle, and with it both
@@ -471,6 +476,11 @@ impl State {
                 _ => p,
             })
             .collect()
+    }
+
+    /// The `ansibleLsp.ansiblePath` setting, if the client sent one.
+    fn ansible_path(&self) -> Option<PathBuf> {
+        self.ansible_path.lock().ok().and_then(|p| p.clone())
     }
 
     fn open_docs(&self) -> OpenDocs {
@@ -1205,8 +1215,11 @@ impl Backend {
     /// T-075's scan fix left behind, and one the scan's own metrics never counted. Detect
     /// still goes first: the scan's module resolution wants the install anyway.
     async fn startup(state: Arc<State>, client: Client) {
-        let install = tokio::task::spawn_blocking(|| {
-            ansible_core::install::AnsibleInstall::detect().clone()
+        // Read before the move: the setting lives on `state`, and the blocking task must not
+        // borrow it.
+        let ansible_path = state.ansible_path();
+        let install = tokio::task::spawn_blocking(move || {
+            ansible_core::install::AnsibleInstall::init(ansible_path).clone()
         })
         .await
         .unwrap_or_default();
@@ -2217,9 +2230,8 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
         // No collection tree: the builtin package, or a pre-collections legacy `library/`
         // dir — `ansible.legacy` is Ansible's own name for that namespace.
         None => {
-            let builtin = ansible_core::install::AnsibleInstall::detect()
-                .package_dir
-                .as_ref()
+            let builtin = ansible_core::install::AnsibleInstall::detected()
+                .and_then(|i| i.package_dir.as_ref())
                 .is_some_and(|d| won.starts_with(d));
             if builtin {
                 ("ansible.builtin".into(), "the Ansible install")
@@ -2682,14 +2694,15 @@ impl LanguageServer for Backend {
                     *s = Settings::from_json(opts);
                 }
                 self.state.set_inventory(opts);
-                // Which Ansible to index, when several exist or none is on PATH. Read here,
-                // before the first `detect()` in `initialized`, so the setting wins.
-                if let Some(path) = opts
-                    .get("ansiblePath")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
-                    ansible_core::install::set_package_dir_override(PathBuf::from(path));
+                // Which Ansible to index, when several exist or none is on PATH. Recorded
+                // here and handed to `AnsibleInstall::init` by `startup`, which is the only
+                // place detection runs.
+                if let Ok(mut slot) = self.state.ansible_path.lock() {
+                    *slot = opts
+                        .get("ansiblePath")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(PathBuf::from);
                 }
                 opts.to_string()
             }
@@ -2988,6 +3001,7 @@ async fn main() {
             scanning: AtomicBool::new(false),
             var_cache: Mutex::new(VarCache::default()),
             scan_task: Mutex::new(None),
+            ansible_path: Mutex::new(None),
         }),
     })
     .custom_method("ansible/references", Backend::resolved_references)
@@ -5497,6 +5511,7 @@ mod tests {
             inventory: std::sync::Mutex::new(Vec::new()),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
             startup_note: std::sync::Mutex::new(String::new()),
             scanning: std::sync::atomic::AtomicBool::new(false),
         };
@@ -5602,7 +5617,7 @@ mod tests {
     /// twin in core, so the documentation-only caveat must appear.
     #[test]
     fn hover_shows_module_provenance_not_paths() {
-        if ansible_core::install::AnsibleInstall::detect().package_dir.is_none() {
+        if ansible_core::install::AnsibleInstall::init(None).package_dir.is_none() {
             return; // ansible not on PATH
         }
         let path = std::path::Path::new("../../demo/tasks/modules.yml")
@@ -6365,6 +6380,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
         };
         state.set_inventory(&serde_json::json!({ "inventory": [inv] }));
         state
@@ -6491,6 +6507,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
         })
     }
 
@@ -6559,6 +6576,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
         });
         (lsp_service(state), root)
     }
@@ -6735,6 +6753,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
         });
         let service = lsp_service(state.clone());
         let b = service.inner();
@@ -6837,6 +6856,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            ansible_path: Default::default(),
         });
         (state, root)
     }
@@ -6948,5 +6968,59 @@ mod tests {
             !state.var_cache.lock().unwrap().entries.is_empty(),
             "and the scan it started must have indexed the workspace"
         );
+    }
+
+    /// Catches: `initialize` ignores `ansiblePath`.
+    ///
+    /// The last of the ten wiring mutations to be pinned, and it needed T-201 box (5) first:
+    /// the setting used to be written into `install::OVERRIDE`, a `pub(crate)` `OnceLock` with
+    /// no getter, so nothing could read back whether it had arrived. Now it is recorded on
+    /// `State` and handed to `AnsibleInstall::init` by `startup`.
+    ///
+    /// Asserted at `State`, not at the install: `init` is `OnceLock`-backed and process-wide,
+    /// so a test that actually ran detection would decide the answer for every other test in
+    /// the binary — which is the very hazard this ticket exists to remove. What is checked is
+    /// the half that was missing, that the setting reaches the value `startup` reads.
+    #[tokio::test]
+    async fn initialize_records_the_ansible_path_setting() {
+        use tower_lsp::LanguageServer;
+        let (service, root) = handler_server("t201-ansiblepath");
+        let b = service.inner();
+
+        assert!(b.state.ansible_path().is_none(), "control: nothing recorded before initialize");
+
+        let pkg = root.join("venv/lib/site-packages/ansible");
+        b.initialize(init_params(
+            &root,
+            serde_json::json!({ "ansiblePath": pkg.to_string_lossy() }),
+        ))
+        .await
+        .expect("initialize succeeds");
+
+        assert_eq!(
+            b.state.ansible_path(),
+            Some(pkg),
+            "the ansiblePath setting must reach the value startup hands to AnsibleInstall::init"
+        );
+    }
+
+    /// Blank and whitespace-only spellings mean "not set", not "index the workspace root".
+    /// The same filtering `ansibleLsp.inventory` does, for the same reason: an empty path
+    /// resolves to a directory that is not an Ansible install, and detection would silently
+    /// fall through to the PATH walk-up with no way to tell the two apart.
+    #[tokio::test]
+    async fn a_blank_ansible_path_is_no_setting_at_all() {
+        use tower_lsp::LanguageServer;
+        for blank in [serde_json::json!(""), serde_json::json!("   "), serde_json::json!(null)] {
+            let (service, root) = handler_server("t201-ansiblepath-blank");
+            let b = service.inner();
+            b.initialize(init_params(&root, serde_json::json!({ "ansiblePath": blank })))
+                .await
+                .expect("initialize succeeds");
+            assert!(
+                b.state.ansible_path().is_none(),
+                "{blank} should leave the setting unset"
+            );
+        }
     }
 }
