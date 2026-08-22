@@ -224,6 +224,7 @@ T-021 is now unblocked on that side.
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
 | T-193 | [A looped task's register has no module keys, only results](open/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | S    | —          |
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
+| T-204 | [An Ansible upgrade mid-session is invisible until restart](open/T-204-an-ansible-upgrade-mid-session-is-invisible-until-restart.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
