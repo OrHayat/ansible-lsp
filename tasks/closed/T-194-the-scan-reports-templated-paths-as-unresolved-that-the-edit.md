@@ -129,12 +129,47 @@ The walk barely grew, which is why:
 ```
 
 **+29 edges, +0.6%**, and one extra file read in total. T-179's failure mode does not repeat
-here. (On `demo/` the same measurement gave +458 edges, +54%, and ~+5ms — see below. The
-mechanism behind that gap is *not* settled: the first hypothesis, that unmemoized truncated
-walks in `contribution_in` were the cost, was tested against a cyclic vs acyclic fixture and
-came back +1 edge for both. The remaining candidate is `undefined_uses_in`'s early return for
-non-playbook files, since `include_tasks` lives in task files — unverified, and it is a
-question about `demo/`, not about whether this change is safe on a real tree.)
+here. On `demo/` the same measurement gave +458 edges, +54% — see below, and the gap is
+explained in the next section.
+
+### Why `demo/` costs 54% and the corpus 0.6%
+
+Settled by instrumenting the branch, after two wrong answers reasoned from the code. **Neither
+tree gets a cache hit**: every file reaching the literals walk was a cold miss, 6 of 6 on
+`demo/` and 28 of 28 on the corpus. The earlier "the corpus is free because the walk is already
+cached" was wrong.
+
+Two measured factors:
+
+**1. The walk is the size of *that file's* variable graph, not the repo's.** Edges added per
+file:
+
+| `demo/` | edges | corpus | edges |
+| ------- | ----- | ------ | ----- |
+| a play that reaches most of the tree | 240 | the two largest | 2 |
+| another of the same shape | 226 | every other one | 1 |
+| the multi-templated task file | 94 | | |
+| the remaining three | 1–2 | | |
+
+`demo/`'s templated references sit in kitchen-sink demonstration files that deliberately reach
+nearly everything. Real ones sit in role task files, which reach that role's own
+`defaults/`+`vars/` and stop. ~94 edges per file against ~1.
+
+**2. A truncated walk is never memoized** (`vars.rs:1305`), so `undefined_uses_in` re-pays
+instead of hitting. `demo/` reports **9 uncached**, the corpus **0**. The arithmetic agrees: the
+literals walks cost 564 edges measured, but the net delta is +458, so only 106 were absorbed —
+had those large walks memoized, ~466 would have been.
+
+`undefined_uses_in` also returns early unless the file is a playbook (`vars.rs:785`), so on a
+task file there is no second caller to absorb the cost at all.
+
+**The probe lesson, which is the part worth keeping.** The truncation hypothesis was tested
+first against a three-file cyclic-vs-acyclic fixture, came back +1 edge for both, and was
+recorded as refuted. It was not: the fixture was too small to truncate at the root, so it could
+not produce the effect it was built to detect. A rule 2 failure inside a probe written to
+honour rule 2 — and the null reading sent two further hypotheses out before instrumenting
+settled it. Reading a null result as a refutation requires first showing the setup could have
+produced the positive.
 
 ### The 9 that remain, and why none of them is this fix's gap
 
@@ -186,9 +221,9 @@ of it:
 
 **+5ms, ~9%** — but the samples ranged 54–59 and 58–62, so on a tree this small that is barely
 outside the noise and must not be carried over to a real repo. Reads did not move (137 both
-ways; the cache had those files), so the cost is **graph edges**, up 54%. Edges grow with
-include/role depth, not file count — which is why this number was never allowed to stand in
-for the corpus measurement above, and the corpus turned out to behave nothing like it.
+ways; the cache had those files), so the cost is **graph edges**, up 54%. That number was
+never allowed to stand in for the corpus measurement above, and the corpus turned out to
+behave nothing like it — see "Why `demo/` costs 54% and the corpus 0.6%".
 
 **`TEMPLATED, MATCHES NOTHING` is 6 before and 6 after.** Not a null result being explained
 away: that section is filtered to `IncludeTasks | ImportTasks`, and demo's six are three

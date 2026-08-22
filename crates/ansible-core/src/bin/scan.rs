@@ -108,10 +108,20 @@ fn main() {
         // worse question than `main.rs` did about the same reference, and printed the answer
         // under `TEMPLATED, MATCHES NOTHING` while Cmd+click opened the file.
         //
-        // Built only when this file actually carries a templated reference: it walks every
-        // variable source reaching `path`, and most files have nothing to substitute into. The
-        // walk is the same one `undefined_uses_in` runs below, through the same cache, so on a
-        // file that needs both it is a hit rather than a second traversal.
+        // Built only when this file actually carries a templated reference, because the cost
+        // is one walk of every variable source reaching `path` — and that is the size of *this
+        // file's* graph, not of the repo. Measured: ~1 edge from a role task file, which
+        // reaches its own role's `defaults/`+`vars/` and little else, against 94-240 from a
+        // file that pulls in most of a tree. A real repo puts templated includes in the former
+        // (whole-corpus cost: +29 edges, +0.6%, no measurable runtime change), `demo/` in the
+        // latter (+458 edges, +54%).
+        //
+        // `undefined_uses_in` below walks the same graph, but do not count on it to absorb this:
+        // it returns early unless the file is a playbook (`vars.rs:785`), and a walk that
+        // truncates on a cycle is never memoized (`vars.rs:1305`), so on those files this is a
+        // second traversal rather than a hit. Both were measured — every file reaching here was
+        // a cold miss on both trees, and `demo/` re-pays 9 truncated walks where the corpus
+        // re-pays none.
         let literals = if refs.iter().any(|r| r.templated) {
             let defs = vars::definitions_with_deps_in(path, &nodes, &cache).0;
             vars::known_literals_in(&defs, path, &doc.text, &cache)
