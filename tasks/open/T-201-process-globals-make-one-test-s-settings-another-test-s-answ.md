@@ -339,6 +339,76 @@ Two things went wrong while writing this and both are worth keeping:
   green suite proved nothing; the mutations did.
 
 
+## Box (5), and the rule the code was already breaking
+
+`OVERRIDE` could not be removed on its own terms: its only job was seeding `from_filesystem`,
+which ran inside `DETECTED.get_or_init(...)`. Passing the override to `detect()` instead would
+have kept "whoever calls first decides, silently" - the same bug in a different spelling. What
+made it separable from (4) was noticing that `detect()` should not have existed at all.
+
+`detected()`'s own doc says:
+
+> Anything on a request path must use this: `detect` is `get_or_init`, so the first caller pays
+> the whole cost, and on the message pump that is the 3.6 s freeze T-084 measured.
+
+**Four callers were breaking that rule**: `resolve_module` (`resolve.rs:629`, `:636`, `:656`),
+which every hover, jump and diagnostic goes through, and `FileContext::collection_roots`
+(`workspace.rs:185`). Masked because `startup` normally wins the race - a request arriving
+first paid the 3.6 s on the pump.
+
+So the shape is:
+
+```rust
+pub fn init(override_dir: Option<PathBuf>) -> &'static Self   // one caller: startup
+pub fn detected() -> Option<&'static Self>                    // everyone else
+```
+
+`detect()` is gone, so no request path can start detection by accident, and the four callers
+above now answer without the install rather than blocking. `DETECTED` stays - that is (4) -
+but it is written from exactly one place instead of by whoever gets there first.
+
+### What is pinned, and the half that is not
+
+`initialize_records_the_ansible_path_setting` and `a_blank_ansible_path_is_no_setting_at_all`
+cover the recording; `an_explicit_package_dir_beats_detection_and_is_labelled_as_the_override`
+(in `install.rs`) covers detection honouring it, asserted against `run` rather than `init` so
+no test writes the process-wide `DETECTED`. Its control is a directory with no `modules/`,
+which must *not* come back as `Source::Override`.
+
+The handoff itself - `let ansible_path = state.ansible_path();` in `startup` - is **not**
+pinned. Replacing it with `None` leaves the suite green. Observing it means observing what
+`init` received, and that needs detection to stop being a process singleton: **box (4)**.
+
+### A dormant test, found by a compiler warning
+
+Chasing an unrelated warning in `ansible-core` turned up this in `8bd16ed` (2026-08-20):
+
+```
+3010  #[test]                                  <- T-062's attribute
+3011  /// The wiring half of T-178...          <- a different test inserted between
+3019  #[test]
+3020  fn group_priority_reaches_the_index...   <- received both
+3056  fn a_configured_inventory_reaches_..._does_not()   <- received none
+```
+
+The T-178 test landed *inside* the T-062 test's header, so T-062's `#[test]` bound to the
+wrong function and `a_configured_inventory_reaches_the_index_and_a_dynamic_one_does_not`
+stopped being a test for two days. Verified by `git show` of that commit and its parent, not
+inferred from a blame date. It was never `#[ignore]`d - it compiled as an ordinary unused
+function, which is why the only symptom was a `dead_code` warning.
+
+Its own doc records what it is for: *"the parsers passing proves nothing about the wiring -
+deleting the call site left every other test in this file green."* A test written to catch a
+silently deleted call site was itself silently deleted.
+
+Reattached, and proven able to fail: emptying the inventory-sources loop (`vars.rs:1220`)
+takes it red with two others. It passes on current code, so nothing was hiding behind it.
+
+**The lesson for this ticket:** zero compiler warnings is worth treating as a check, not
+cosmetics. `dead_code` on a test function means the test is not running, and nothing else in
+the workflow says so - the suite reports a smaller number and looks green.
+
+
 ## Done when
 
 One box per global. The bar is the same for each: the value either travels with the caller,
@@ -357,9 +427,10 @@ or it is proven to hold no request state and the proof is written at the site.
       carries the inventory. `ansible-lsp` has **no process globals left**
 - [ ] **(4)** `install::DETECTED` is gone - the detected install is a value owned by `State`
       and passed to its 13 call sites across `resolve.rs`, `workspace.rs` and `main.rs`
-- [ ] **(5)** `install::OVERRIDE` is gone, folded into (4) as an input to detection rather than
-      a slot - and the `did_change_configuration` reload it currently drops silently either
-      works or is documented as not working
+- [x] **(5)** `install::OVERRIDE` is gone - **done**, and *without* (4). It became an argument
+      to `AnsibleInstall::init`, and the path it carries now lives on `State::ansible_path`.
+      The reload is settled the second way the box allowed: a changed `ansiblePath` needs a
+      restart, said in the doc rather than dropped in silence by `OnceLock::set`
 - [ ] **(6)** `module_redirect::TABLES` is gone - it moves onto `ScanCache`, which is already
       the per-request memo (`cache.rs`, `Map` fields) for exactly this kind of parse
 - [ ] **(7)** `splitter::ESCAPES` is gone - see the open question below before doing this one
