@@ -99,6 +99,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
+| T-201 | **bug** · [Process globals make one test's settings another test's answer](open/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | L    | —          |
+| T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | T-201      |
 
 ### P2 — coverage and usability
 
@@ -167,7 +169,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-197 | [A notify resolved only by a later dynamic include_role is fatal on order alone](open/T-197-a-notify-resolved-only-by-a-later-dynamic-include-role-is-fa.md) | M    | T-196 |
 | T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
-| T-201 | **bug** · [Process globals make one test's settings another test's answer](open/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

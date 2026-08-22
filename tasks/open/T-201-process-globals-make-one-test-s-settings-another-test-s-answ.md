@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | M    | —          |
+| open   | bug  | P1       | L    | —          |
 
 ## Symptom
 
@@ -31,6 +31,64 @@ shown is that a **request-scoped setting lives in process-global state**, which 
 shape as [[T-199]] — a value that should travel with the caller instead being read from a slot
 anyone can write. Whether a multi-root workspace already gets the wrong answer from this is
 the first thing the work should measure, and the ticket's priority should follow that answer.
+
+### Measured: a multi-root workspace does get a wrong answer
+
+Box 1 is answered, and the answer is yes. Probe: two workspace folders, each with its own
+`inv.ini` defining `control` to a different value, a relative `ansibleLsp.inventory:
+["inv.ini"]`, and the templated-path hover asked about `vars/{{ control }}.yml` in each
+folder.
+
+| `WORKSPACE_ROOT` | file asked about | hover says | sourced to |
+| ---------------- | ---------------- | ---------- | ---------- |
+| folder A | A/play.yml | `control` = `11` | A/inv.ini |
+| folder A | **B/play.yml** | **`control` = `11`** | **A/inv.ini** |
+| folder B | B/play.yml | `control` = `22` | B/inv.ini |
+| folder B | **A/play.yml** | **`control` = `22`** | **B/inv.ini** |
+
+Row 2 is a wrong value *and* a clickable link into the wrong folder. Rows 3 and 4 are the
+control: the answer flips with the root, so the probe could have come back unchanged — a
+fixture whose inventory was never read at all would have shown no substitution in any row —
+and it did not.
+
+`WORKSPACE_ROOT` is `roots.first()` (`main.rs:2588`), so in a window with more than one
+folder every relative inventory path resolves against folder #1 for files in *all* of them.
+
+**This raises the priority to P1** — the board's P1 is "the tool lies", and this is a wrong
+value with a wrong source link, not a flake.
+
+**The wrong answer is split out to [[T-202]].** Removing the globals does not fix it: threading
+`roots.first()` cleanly to every caller gives folder B folder A's inventory just as wrongly.
+That needs a *resolution rule* — which root a relative path belongs to — which is a design
+decision with its own tests and demo. T-201 stays what it is: the globals go, so that a
+per-file answer has something to travel in. T-202 depends on it.
+
+
+### A reproducer that does not need luck
+
+Building the multi-root probe produced a better handle on this bug than the sleep-widened
+window. The probe (`scratchpad/t201_multiroot_probe.rs`) writes `INVENTORY_SETTING` and
+`WORKSPACE_ROOT` to set up its two folders. Measured, `cargo test -p ansible-lsp`, 10 runs
+each:
+
+| probe | victim fails | mechanism |
+| ----- | ------------ | --------- |
+| absent | **0/10** | - |
+| present, restores the globals at the end | **6/10** | the race, on a window widened by the probe's own I/O - matches the 7/10 the `sleep(300ms)` experiment gave |
+| present, does **not** restore | **10/10** | not a race at all: the globals stay set for every test that runs afterwards |
+| probe + victim alone, probe not restoring | **10/10** | same |
+
+The two mechanisms are worth keeping apart. The 6/10 row is the bug in the Symptom - a
+window one writer opens and another reads through. The 10/10 rows are a *leak*: a test that
+never restores what it wrote poisons the rest of the process permanently. Same hazard, and
+only the second is deterministic.
+
+The 10/10 pair is therefore the reproducer to use while fixing this: it needs no repetition
+and no timing, and after the fix the probe's writes cannot reach the victim at all because
+there will be nothing process-wide to write. It is also why the probe is **not** committed to
+the suite - a test that writes a global is the thing this ticket exists to remove, so it stays
+in `scratchpad/` until [[T-202]] can promote it against a fixed design.
+
 
 ## Cause
 
@@ -89,26 +147,134 @@ caller.
 
 Open questions the work has to settle rather than assume:
 
-- **Does a multi-root workspace get a wrong answer today?** Measure it first. If yes this is a
-  user-visible bug and the priority rises; if no, this is isolation work that also removes a
-  documented hazard.
-- **Does the var cache follow?** It is global for a reason — a cross-file index shared by every
+- ~~**Does a multi-root workspace get a wrong answer today?**~~ Measured above: **yes**.
+  Priority raised to P1, and the wrong answer itself is [[T-202]].
+- **Does the var cache follow?** It is global for a reason - a cross-file index shared by every
   request. Removing it is a different, larger change, and it may be right to leave it and say
   why at the site.
 - **Or serialize instead?** A test-only mutex around the writer would stop the flake for a
   fraction of the cost and change nothing about the design. That is the cheap option and it
-  should be priced honestly against the real one, not dismissed — but it leaves the hazard,
-  and the hazard is what this ticket is about.
+  should be priced honestly against the real one, not dismissed - but it leaves the hazard,
+  and the hazard is what this ticket is about. There is a stronger precedent than a mutex in
+  this repo: `crates/ansible-core/tests/process_env_snapshot.rs` isolates a process-mutating
+  test by giving it its own **integration binary** - cargo runs each one in its own process -
+  with the reasoning written at the top of the file.
+
+## Every global in the process
+
+Enumerated by grepping `\bstatic\b` across `ansible-lsp` and `ansible-core` - `src/`,
+`tests/` and `examples/`, lifetimes filtered out. Seven, and no others; there is no
+`set_var` or `set_current_dir` anywhere in `src/`, so the environment is read-only there.
+Statics inside dependencies (tokio, tower-lsp, regex) are not ours and are out of scope.
+
+| # | Global | Site | Written by | Can one caller change another's answer? |
+| - | ------ | ---- | ---------- | --------------------------------------- |
+| 1 | `INVENTORY_SETTING` | `main.rs:224` | `set_inventory`, from `initialize` `:2600`, `did_change_configuration` `:2658`, 2 tests | **Yes** - it decides which inventory is read. This is the flake and [[T-202]] both |
+| 2 | `WORKSPACE_ROOT` | `main.rs:222` | `initialize` `:2587` only | Not in tests (they build `State` directly and never call `initialize`, so it stays `None`); in production it is the multi-root wrong answer |
+| 3 | `VarCache` `OnceLock` | `main.rs:184` | `set_inventory` `:107`, `invalidate_var_cache` `:339` | Staleness only - keyed by canonical path, so a bad read is a recompute |
+| 4 | `install::DETECTED` | `install.rs:195` | `detect()` `get_or_init`, 13 call sites | Process-scoped by nature - the installed Ansible does not vary per request |
+| 5 | `install::OVERRIDE` | `install.rs:198` | `set_package_dir_override`, from `initialize` `:2608` | `OnceLock::set` - a second write is **silently dropped**, so its doc's "per-project and live on reload" is a claim the type forbids |
+| 6 | `module_redirect::TABLES` | `install.rs:406` | memoised parse, keyed by path | Pure cache |
+| 7 | `splitter::ESCAPES` | `splitter.rs:205` | `LazyLock<Regex>`, one reader (`decode_escapes` `:216`) | No - a compiled constant with no writer |
+
+Note that 1 and 2 are **shadow copies of fields `State` already has** - `State::inventory`
+(`:377`) and `State::roots` (`:364`). They exist only because `inventory_setting()` is a free
+function on a path that holds no `State`, which is precisely the situation [[T-199]] solved
+for open buffers.
+
+## What doing (1) turned up: the cache key was hiding the same bug
+
+The de-globalising is mechanical - `inventory_setting()` became a method on `State`, which
+already owned both halves, and the value is passed to the six readers alongside the `OpenDocs`
+that [[T-199]] threads on the same route. The part that was not mechanical:
+
+**The var cache was keyed by path alone.** With the setting global there was only ever one
+inventory in flight and `set_inventory` cleared the cache wholesale on change, so a path-only
+key was safe by accident. The moment the value travels with the request, two requests can
+legitimately carry different inventories - and the second one was handed the first one's
+answer. The first version of `each_request_answers_from_the_inventory_it_was_given` failed on
+exactly this: request B asked with `inv_b.ini` and got `control` = `11` sourced to
+`inv_a.ini`.
+
+Fixed by keying entries on `(canon(path), inventory_key(inv))`. Two consequences worth having
+in writing:
+
+- `invalidate_var_cache` now drops **every** inventory's entry for a file, not one, since
+  "the entry for this file" became a set.
+- `analyze_text_measured` (`:664`) builds its own `ScanCache` and never called
+  `with_inventory`, so it passes `&[]` and now keys separately from the hover path. Under the
+  old path-only key those two shared an entry, which means **whichever ran first decided
+  whether the setting applied at all** - a latent inconsistency of the rule-3 kind that was
+  invisible until the key made the two answers distinguishable. Behaviour on each path is
+  unchanged; they simply no longer overwrite each other.
+
+### Verification
+
+- `cargo test --workspace`: all nine targets green (`ansible-lsp` 95 -> 98).
+- `cargo test -p ansible-lsp` **30 runs, 0 failures**. The victim,
+  `group_priority_substitutes_a_path_from_a_host_position_and_never_from_a_group`, no longer
+  has a slot for another test to write.
+- Rule 5, three breaks, each confirmed present in the file before drawing a conclusion:
+
+  | break | expected | got |
+  | ----- | -------- | --- |
+  | `cached_definitions` ignores the `inv` it was handed | the two hover tests fail, the value test does not | 2 failed, 1 passed |
+  | the cache key stops distinguishing inventories | only the two-request test fails | 1 failed, 2 passed |
+  | `inventory_setting` ignores the `State` it was called on | all three fail | 3 failed |
+
+- The multi-root bug is confirmed **unchanged** ([[T-202]] re-run after the fix: folder B's
+  file still answers `11` from folder A's `inv.ini`). That is the intended outcome - this was
+  a de-globalising change, not a behaviour change.
+
+One thing went wrong in the writing and is worth recording, because it is this ticket's own
+bug in miniature: the three new tests first shared one `testing::project` name. `tree()` says
+in its doc that a name must be unique per test or they race, and they did - one of them failed
+only when run alongside the others, and passed alone.
+
 
 ## Done when
 
-- [ ] the multi-root question is measured and the answer recorded here, with the priority
-      adjusted to match — this decides whether the rest is a bug fix or a cleanup
-- [ ] `inventory_setting()` and `WORKSPACE_ROOT` are gone as globals, and every one of the
-      sites in the table above takes the value from its caller
+One box per global. The bar is the same for each: the value either travels with the caller,
+or it is proven to hold no request state and the proof is written at the site.
+
+- [x] the multi-root question is measured and the answer recorded here, with the priority
+      adjusted to match - **done: yes, wrong answer; P1; the fix is [[T-202]]**
+- [x] **(1)** `INVENTORY_SETTING` is gone, and all four readers (`:198` `cached_definitions`,
+      `:482`, `:718`, `:1198`) take the value from their caller - **done**, see below
+- [x] **(2)** `WORKSPACE_ROOT` is gone - **done**. It fell out with (1): `inventory_setting`
+      is now a method on `State`, which already holds `roots`. The resolution rule is
+      deliberately still `roots.first()`; [[T-202]] owns changing it and now has the whole
+      `Vec` in scope at the one place that reads it
+- [ ] **(3)** the `VarCache` `OnceLock` is gone - it hangs off `State`, whose `Arc` every
+      writer (`:2713`/`:2730`/`:2741`) and reader already holds. **Partly done**: its *key*
+      now carries the inventory (see below), which was forced by (1). The slot itself is
+      still global
+- [ ] **(4)** `install::DETECTED` is gone - the detected install is a value owned by `State`
+      and passed to its 13 call sites across `resolve.rs`, `workspace.rs` and `main.rs`
+- [ ] **(5)** `install::OVERRIDE` is gone, folded into (4) as an input to detection rather than
+      a slot - and the `did_change_configuration` reload it currently drops silently either
+      works or is documented as not working
+- [ ] **(6)** `module_redirect::TABLES` is gone - it moves onto `ScanCache`, which is already
+      the per-request memo (`cache.rs`, `Map` fields) for exactly this kind of parse
+- [ ] **(7)** `splitter::ESCAPES` is gone - see the open question below before doing this one
 - [ ] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
-      fail on the pre-fix binary — the flake is the measurement, so the count is the evidence
+      fail on the pre-fix binary - the flake is the measurement, so the count is the evidence
 - [ ] the widened-window probe from the Symptom is re-run and now passes, since that is the
       version of the race that reproduces reliably
-- [ ] a test per consumer of the moved value (rule 3), not one test for the change
-- [ ] whatever is decided about the var cache is written down at the site, not just done
+- [ ] a test per consumer of each moved value (rule 3), not one test per global
+- [ ] the 10/10 pair reproducer above is re-run after the fix and the victim passes, with the
+      probe's writes shown to be unreachable rather than merely no longer colliding
+- [ ] `scratchpad/t201_multiroot_probe.rs` is promoted into the suite by [[T-202]], or the
+      ticket records why it stays a scratchpad probe - an uncommitted probe with no assertion
+      is a test that cannot fail
+
+### Open question on (7), to settle before doing it
+
+`ESCAPES` is a `LazyLock<Regex>` with no writer and one reader. It cannot carry state between
+requests, so eliminating it buys no isolation; it costs a regex compile on every
+`decode_escapes` call, which runs per double-quoted inventory value. Two honest ways to close
+box (7): compile it once into a value threaded to the reader (real work, no benefit), or
+record at the site that it is a constant and why that is not the hazard this ticket is about.
+The second is probably right - but it is a decision, not an omission, so it goes in writing.
+The same argument is available for (4) and (6) and is *not* as strong there: both are seeded
+from configuration, and (5) is already demonstrably lying about reload.
