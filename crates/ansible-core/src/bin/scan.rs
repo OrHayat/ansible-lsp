@@ -8,7 +8,7 @@ use ansible_core::mutation;
 use ansible_core::vars;
 use ansible_core::parse::Document;
 use ansible_core::references::{extract, ReferenceKind};
-use ansible_core::resolve::{resolve_with_in, rule_id, SkipReason, Status};
+use ansible_core::resolve::{rule_id, Resolver, SkipReason, Status};
 use ansible_core::workspace::yaml_files;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -80,7 +80,9 @@ fn main() {
             .entry(ctx.project_root.clone())
             .or_insert_with(|| (ctx.config.config_file.clone(), 0))
             .1 += 1;
-        let mut refs = extract(&nodes);
+        let extracted = extract(&nodes);
+        let in_playbook = extracted.in_playbook;
+        let mut refs = extracted.refs;
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
         }
@@ -132,7 +134,13 @@ fn main() {
         for r in refs {
             // Substitution is navigation only: `resolve_with` stamps `SkipReason::Templated`
             // and turns Missing into Skipped, so a computed path can never fail the gate.
-            let res = resolve_with_in(&r, &ctx, &literals, &cache);
+            let res = Resolver {
+                fs: &cache,
+                literals: Some(&literals),
+                in_playbook,
+                ..Default::default()
+            }
+            .resolve(&r, &ctx);
 
             // The cross-file condition check.
             if let Some((conds, span)) = r.propagated_condition() {

@@ -1516,7 +1516,7 @@ mod tests {
         use crate::parse::Document;
         let doc = Document::new("- include_tasks: a.yml\n  when: false\n".to_string());
         let nodes = doc.parse().unwrap();
-        let refs = crate::references::extract(&nodes);
+        let refs = crate::references::extract(&nodes).refs;
         assert_eq!(refs[0].conditions, vec!["false".to_string()]);
         assert_eq!(classify_all(&refs[0].conditions), Verdict::Never);
     }

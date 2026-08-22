@@ -203,7 +203,6 @@ T-021 is now unblocked on that side.
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
-| T-135 | [Four resolve entry points are a cartesian product of two optional axes](open/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | S    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | S    | —          |
 | T-148 | [Audit how ansible-core validates meta/runtime.yml, then mirror it](open/T-148-audit-how-ansible-core-validates-meta-runtime-yml-then-mirro.md) | M    | —          |
 | T-149 | [Validate meta/argument_specs.yml itself, not just call sites](open/T-149-validate-meta-argument-specs-yml-itself-not-just-call-sites.md) | M    | —          |
@@ -313,6 +312,7 @@ T-021 is now unblocked on that side.
 | T-194 | [The scan reports templated paths as unresolved that the editor navigates](closed/T-194-the-scan-reports-templated-paths-as-unresolved-that-the-edit.md) | done     |
 | T-201 | **bug** · [Process globals make one test's settings another test's answer](closed/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | done     |
 | T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](closed/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | done     |
+| T-135 | [Four resolve entry points are a cartesian product of two optional axes](closed/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -1036,7 +1036,8 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                     let mctx = walk.cache.context(&meta);
                     for dep in references::meta_dependencies(&mnodes) {
                         let start = out.defs.len();
-                        for target in resolve::resolve_in(&dep, &mctx, walk.cache).targets {
+                        let resolver = resolve::Resolver { fs: walk.cache, ..Default::default() };
+                        for target in resolver.resolve(&dep, &mctx).targets {
                             let files = role_task_files(&target, walk);
                             for f in files.iter() {
                                 collect_disk(f, out, walk);
@@ -1234,7 +1235,13 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // Follow includes and roles so set_fact/register/vars in those files count too. The
     // enclosing-role rule above then also picks up each reached role's defaults/vars.
     {
-        for r in references::extract(nodes) {
+        let extracted = references::extract(nodes);
+        let resolver = resolve::Resolver {
+            fs: walk.cache,
+            in_playbook: extracted.in_playbook,
+            ..Default::default()
+        };
+        for r in extracted.refs {
             if !matches!(
                 r.kind,
                 ReferenceKind::Role
@@ -1245,7 +1252,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             ) {
                 continue;
             }
-            let resolved = resolve::resolve_in(&r, &ctx, walk.cache);
+            let resolved = resolver.resolve(&r, &ctx);
             // A templated edge is a hole in the reachable set: whatever `{{ kind }}.yml`
             // turns out to be may call `add_host`, so the created hosts stop being
             // enumerable here (T-179). Not permanent — a value set derived from a

@@ -741,14 +741,24 @@ impl Backend {
         t.var_index += s.elapsed();
 
         let s = Instant::now();
-        let mut extracted = references::extract(&nodes);
+        let extracted = references::extract(&nodes);
+        // One resolver for the file: `in_playbook` is a property of this file, not of any
+        // one reference in it, and every field is a reference or a word so building it
+        // costs no allocation (T-135).
+        let resolver = resolve::Resolver {
+            fs: scan,
+            literals: Some(&literals),
+            in_playbook: extracted.in_playbook,
+            ..Default::default()
+        };
+        let mut extracted = extracted.refs;
         if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
             extracted.extend(references::meta_dependencies(&nodes));
         }
         let refs: Vec<(Reference, Resolution)> = extracted
             .into_iter()
             .map(|r| {
-                let res = resolve::resolve_with_in(&r, &ctx, &literals, scan);
+                let res = resolver.resolve(&r, &ctx);
                 (r, res)
             })
             .collect();
@@ -1755,7 +1765,7 @@ impl Backend {
         cache: &Mutex<VarCache>,
         install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<Vec<Location>> {
-        let Some(reference) = Self::reference_at(doc, nodes, pos) else {
+        let Some((reference, in_playbook)) = Self::reference_at(doc, nodes, pos) else {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
             return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache, install)
@@ -1763,7 +1773,8 @@ impl Backend {
                 .or_else(|| Self::host_key_defs_at(doc, pos, path));
         };
         let ctx = FileContext::discover(path).with_install(install.cloned());
-        let res = resolve::resolve(&reference, &ctx);
+        let res = resolve::Resolver { in_playbook, ..Default::default() }
+            .resolve(&reference, &ctx);
         if res.status != Status::Resolved {
             return None;
         }
@@ -1771,11 +1782,22 @@ impl Backend {
         (!locations.is_empty()).then_some(locations)
     }
 
-    fn reference_at(doc: &Document, nodes: &[Node], pos: Position) -> Option<Reference> {
+    /// The reference under the cursor, and whether its file is a playbook — the resolver
+    /// needs the second to know what `{{ playbook_dir }}` means, and it is a fact about the
+    /// file that no single reference carries any more (T-135).
+    fn reference_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+    ) -> Option<(Reference, bool)> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
-        references::extract(nodes)
+        let extracted = references::extract(nodes);
+        let in_playbook = extracted.in_playbook;
+        extracted
+            .refs
             .into_iter()
             .find(|r| r.span.start <= byte && byte <= r.span.end)
+            .map(|r| (r, in_playbook))
     }
 
     /// T-171: the *host* half of `hostvars['web01'].x`. `host_vars/web01.yml` beside the
@@ -2666,7 +2688,9 @@ fn hover_at(
     // The reference under the cursor, extracted but not yet resolved. Resolving every
     // reference in the file to answer a hover on one is the cost this path avoids:
     // only the hovered reference is resolved, and only if a branch below needs it.
-    let mut refs = references::extract(nodes);
+    let extracted = references::extract(nodes);
+    let in_playbook = extracted.in_playbook;
+    let mut refs = extracted.refs;
     if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
         refs.extend(references::meta_dependencies(nodes));
     }
@@ -2694,7 +2718,8 @@ fn hover_at(
         // one gets the resolved target and the candidates tried, winner marked.
         let defs = cached_definitions(path, nodes, open, inv, cache, install);
         let literals = vars::known_literals(&defs, path, &doc.text);
-        let res = resolve::resolve_with(r, &ctx, &literals);
+        let res = resolve::Resolver { literals: Some(&literals), in_playbook, ..Default::default() }
+            .resolve(r, &ctx);
         if r.templated {
             if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache, install) {
                 return Some(hit);
@@ -5693,10 +5718,11 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text);
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let hover = |value: &str| {
             let r = refs.iter().find(|r| r.value == value).expect("ref in demo");
-            let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+            let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
             super::reference_hover(r, &res, &ctx, false).map(crate::Md::render)
         };
 
@@ -5799,9 +5825,10 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text.to_string());
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&play);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value.contains("{{ env }}")).expect("the templated ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
 
         let (md, range) =
@@ -5817,7 +5844,8 @@ mod tests {
         // Nothing to substitute means no hover, rather than an empty box.
         let plain = refs.iter().find(|r| !r.value.contains("{{"));
         if let Some(pr) = plain {
-            let pres = ansible_core::resolve::resolve_with(pr, &ctx, &Default::default());
+            let pres = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(pr, &ctx);
             assert!(
                 super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache(), None).is_none(),
                 "a literal path has nothing to substitute"
@@ -5830,9 +5858,10 @@ mod tests {
         std::fs::write(&play, t2).unwrap();
         let d2 = ansible_core::parse::Document::new(t2.to_string());
         let n2 = d2.parse().unwrap();
-        let refs2 = ansible_core::references::extract(&n2);
+        let refs2 = ansible_core::references::extract(&n2).refs;
         let r2 = &refs2[0];
-        let res2 = ansible_core::resolve::resolve_with(r2, &ctx, &Default::default());
+        let res2 = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r2, &ctx);
         assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache(), None).is_none());
     }
 
@@ -5851,12 +5880,13 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text);
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs
             .iter()
             .find(|r| r.value == "ansible.builtin.debug")
             .expect("ref in demo");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         if res.status != ansible_core::resolve::Status::Resolved {
             return; // install detected but builtins not resolvable in this layout
         }
@@ -5898,9 +5928,10 @@ mod tests {
         );
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "stage_files").expect("bare ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
@@ -5921,9 +5952,10 @@ mod tests {
         );
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "demo.charlie.beacon").expect("module ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
@@ -5977,9 +6009,10 @@ mod tests {
         ));
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == module).expect("module ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         super::reference_hover(r, &res, &ctx, false)
             .expect("hover expected")
             .render()
@@ -6062,7 +6095,7 @@ mod tests {
             );
             let doc = ansible_core::parse::Document::new(src);
             let nodes = doc.parse().expect("fixture parses");
-            let refs = ansible_core::references::extract(&nodes);
+            let refs = ansible_core::references::extract(&nodes).refs;
             let r = refs
                 .iter()
                 .find(|r| !r.conditions.is_empty())
@@ -6166,9 +6199,10 @@ mod tests {
         );
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "purge_cache").expect("bare ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         assert!(md.contains("runs on the target host"), "target label in: {md}");
         assert!(!md.contains("action plugin"), "no phantom action plugin in: {md}");
@@ -6184,9 +6218,10 @@ mod tests {
         let doc = ansible_core::parse::Document::new("- deploy_report:\n    summary: x\n".into());
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "deploy_report").expect("bare ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
@@ -6205,9 +6240,10 @@ mod tests {
         );
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "ping").expect("bare ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         assert_eq!(res.status, ansible_core::resolve::Status::Resolved);
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         assert!(plain(&md).contains("ansible.legacy"), "legacy label in: {md}");
@@ -6226,9 +6262,10 @@ mod tests {
         );
         let nodes = doc.parse().unwrap();
         let ctx = ansible_core::workspace::FileContext::discover(&path);
-        let refs = ansible_core::references::extract(&nodes);
+        let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "docker_container").expect("bare ref");
-        let res = ansible_core::resolve::resolve_with(r, &ctx, &Default::default());
+        let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
+            .resolve(r, &ctx);
         if res.status != ansible_core::resolve::Status::Resolved {
             return; // community.docker not installed here — nothing to mark
         }

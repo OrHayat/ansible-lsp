@@ -87,11 +87,6 @@ pub struct Reference {
     /// before anything else, because at parse time it is one of only two sources Ansible
     /// can read (the other, `-e`, is invisible to us) — T-095.
     pub entry_vars: Vec<(String, String)>,
-    /// This reference is written in a playbook file, not a task/handler file. It decides
-    /// what `{{ playbook_dir }}` is: in a playbook it is that file's own directory,
-    /// exactly; elsewhere it is the invoking playbook's, which the file cannot know
-    /// (T-137).
-    pub in_playbook: bool,
     /// A genuine playbook-level `import_playbook:` entry, not the same key written inside a
     /// task list. Ansible loads only the first as a playbook; the second is read as a module
     /// name and fails on its parameters (T-110 row `ip`), so its target is never opened and
@@ -137,7 +132,6 @@ impl Reference {
             when_propagates: false,
             apply_when: Vec::new(),
             apply_when_span: None,
-            in_playbook: false,
             playbook_entry: false,
         }
     }
@@ -163,29 +157,37 @@ pub fn meta_dependencies(nodes: &[Node]) -> Vec<Reference> {
     out
 }
 
+/// What [`extract`] found: the references, plus the one fact about the **file** that the
+/// resolver needs and a lone reference cannot carry.
+pub struct Extracted {
+    pub refs: Vec<Reference>,
+    /// The file is a playbook, not a task/handler file. It decides what
+    /// `{{ playbook_dir }}` is: in a playbook it is that file's own directory, exactly;
+    /// elsewhere it is the invoking playbook's, which the file cannot know (T-137).
+    ///
+    /// It lived on every [`Reference`] until T-135 — N identical bools per file — because
+    /// the resolver's unit of work was one reference and there was nowhere else to put it.
+    /// It now rides [`crate::resolve::Resolver`], built once per file.
+    pub in_playbook: bool,
+}
+
 /// Every cross-file reference in a parsed file. Walks the semantic model
 /// ([`crate::ast`]) rather than the raw tree, so a task's module and its `when:`/`loop:`
 /// context are read from structure instead of re-detected key by key.
-pub fn extract(nodes: &[Node]) -> Vec<Reference> {
-    let mut out = Vec::new();
-    // Which of the two shapes the file is decides what `{{ playbook_dir }}` means for
-    // everything in it, so it is stamped once here rather than threaded through every
-    // constructor below. T-095.
+pub fn extract(nodes: &[Node]) -> Extracted {
+    let mut refs = Vec::new();
     let in_playbook = match ast::build(nodes) {
         Ast::Playbook(items) => {
-            items.iter().for_each(|it| play_item(it, &mut out));
+            items.iter().for_each(|it| play_item(it, &mut refs));
             true
         }
         Ast::Tasks(stmts) => {
-            stmts.iter().for_each(|s| stmt(s, &mut out));
+            stmts.iter().for_each(|s| stmt(s, &mut refs));
             false
         }
         Ast::Other => false,
     };
-    for r in &mut out {
-        r.in_playbook = in_playbook;
-    }
-    out
+    Extracted { refs, in_playbook }
 }
 
 fn play_item(item: &PlayItem, out: &mut Vec<Reference>) {
@@ -423,7 +425,7 @@ mod tests {
 
     fn refs(src: &str) -> Vec<Reference> {
         let doc = Document::new(src.to_string());
-        extract(&doc.parse().expect("valid yaml"))
+        extract(&doc.parse().expect("valid yaml")).refs
     }
 
     fn of(src: &str, kind: ReferenceKind) -> Vec<Reference> {
@@ -513,7 +515,7 @@ mod tests {
         let suppressed = |src: &str| {
             let doc = crate::parse::Document::new(src.to_string());
             let nodes = doc.parse().expect("valid yaml");
-            let r = extract(&nodes);
+            let r = extract(&nodes).refs;
             let hit = r
                 .iter()
                 .find_map(|r| r.propagated_condition())
@@ -549,7 +551,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("demo fixture");
         let doc = crate::parse::Document::new(text.clone());
         let nodes = doc.parse().expect("fixture must parse");
-        let propagating: Vec<String> = extract(&nodes)
+        let propagating: Vec<String> = extract(&nodes).refs
             .iter()
             .filter_map(|r| r.propagated_condition().map(|(_, s)| s))
             .map(|s| text[..s.start].lines().count().to_string())
@@ -564,13 +566,13 @@ mod tests {
 
         // The two GOOD rows are dynamic includes carrying the same condition against the
         // same target. If either ever starts propagating, the rule has lost its boundary.
-        let good = extract(&nodes)
+        let good = extract(&nodes).refs
             .into_iter()
             .filter(|r| r.kind == ReferenceKind::IncludeTasks && r.apply_when.is_empty())
             .count();
         assert_eq!(good, 1, "the plain include_tasks GOOD row");
         assert!(
-            extract(&nodes)
+            extract(&nodes).refs
                 .iter()
                 .filter(|r| r.kind == ReferenceKind::IncludeTasks && r.apply_when.is_empty())
                 .all(|r| r.propagated_condition().is_none()),

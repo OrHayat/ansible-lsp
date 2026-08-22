@@ -467,7 +467,7 @@ fn kind_row(text: &str, kind: &str) -> [usize; 3] {
 }
 
 /// T-194: a templated path whose variable is a plain literal is *knowable*, and the editor
-/// navigates it — `main.rs` calls `resolve_with_in` with `vars::known_literals_in`. The scan
+/// navigates it — `main.rs` builds a `Resolver` with `vars::known_literals_in`. The scan
 /// calls `resolve_in`, which takes no literals, so it printed the same reference under
 /// `TEMPLATED, MATCHES NOTHING`. One question, two consumers, two answers: rule 3.
 ///

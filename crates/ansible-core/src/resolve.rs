@@ -205,49 +205,80 @@ fn expand_magic(value: &str, ctx: &FileContext, in_playbook: bool) -> (Vec<Strin
     (out, still_templated, substituted)
 }
 
-/// Like [`resolve`], but first substitutes `{{ var }}` tokens with a variable's known-literal
-/// value (T-056), so a path like `{{ env }}.yml` becomes navigable when `env` is knowable.
-/// Navigation only: the result is marked templated so it is NEVER warned about — a variable
-/// can be overridden at runtime by `-e`, so a "missing" here would be a false certainty.
-pub fn resolve_with(
-    r: &Reference,
-    ctx: &FileContext,
-    literals: &HashMap<String, Vec<String>>,
-) -> Resolution {
-    resolve_with_in(r, ctx, literals, &StdFs)
+/// Everything the resolver needs beyond the reference and its file, so that a new input
+/// costs a **field** rather than another entry point.
+///
+/// It used to be four exported functions — `resolve`, `resolve_in`, `resolve_with`,
+/// `resolve_with_in` — one per combination of two optional inputs. Two axes, `2² = 4`, and
+/// the names had run out of room: `_with` meant literals and `_in` meant fs, which nothing
+/// about them said. A third input would have meant eight, which is why [`RoleExts`] was
+/// never threaded through and why `in_playbook` was copied onto every [`Reference`] in a
+/// file instead of being stored once (T-135).
+///
+/// Cheap to build and cheap to copy: every field is a reference or a word, so an LSP
+/// request path can construct one per call without allocating.
+#[derive(Clone, Copy)]
+pub struct Resolver<'a> {
+    pub fs: &'a dyn Fs,
+    /// Known-literal variable values, so `{{ env }}.yml` is navigable when `env` is
+    /// knowable (T-056). `None` disables substitution entirely — it is navigation only,
+    /// and the result is always marked templated so it is never warned about, because a
+    /// variable can be overridden at runtime by `-e`.
+    pub literals: Option<&'a HashMap<String, Vec<String>>>,
+    pub exts: RoleExts,
+    /// The file being resolved is a playbook, so `{{ playbook_dir }}` is `ctx.file_dir`
+    /// exactly. A property of the **file**, which is why it does not belong on a single
+    /// [`Reference`] (T-095), and why T-137 can widen it without touching every one.
+    pub in_playbook: bool,
 }
 
-/// [`resolve_with`] against a caller-supplied filesystem, so a scan can memoize the probes
-/// (T-085).
-pub fn resolve_with_in(
-    r: &Reference,
-    ctx: &FileContext,
-    literals: &HashMap<String, Vec<String>>,
-    fs: &dyn Fs,
-) -> Resolution {
-    // A group's value is the joined alternatives list, not a path — substitution would
-    // build nonsense candidates from it. The group resolver handles templating itself.
-    if r.value.contains("{{") && r.vars_files_group.is_none() {
-        if let Some(bases) = path_bases(r.kind, ctx) {
-            let subs = substitute_literals(&r.value, literals);
-            if !subs.is_empty() {
-                let mut cands = Vec::new();
-                for v in &subs {
-                    for b in &bases {
-                        cands.push(normalise(&b.join(v)));
-                    }
-                }
-                let mut res = Resolution::from_candidates(unique(cands.into_iter()), fs);
-                // Offer, don't assert: navigable, but never a warning.
-                res.skip_reason = Some(SkipReason::Templated);
-                if res.status == Status::Missing {
-                    res.status = Status::Skipped;
-                }
-                return res;
-            }
+impl Default for Resolver<'static> {
+    fn default() -> Self {
+        // `&StdFs` const-promotes to `'static`, so this needs no lazy static.
+        Self { fs: &StdFs, literals: None, exts: RoleExts::default(), in_playbook: false }
+    }
+}
+
+impl<'a> Resolver<'a> {
+    /// Resolve one reference against its file.
+    pub fn resolve(&self, r: &Reference, ctx: &FileContext) -> Resolution {
+        match self.literals {
+            Some(literals) => self.substituting(r, ctx, literals),
+            None => self.plain(r, ctx),
         }
     }
-    resolve_in(r, ctx, fs)
+
+    fn substituting(
+        &self,
+        r: &Reference,
+        ctx: &FileContext,
+        literals: &HashMap<String, Vec<String>>,
+    ) -> Resolution {
+        let fs = self.fs;
+        // A group's value is the joined alternatives list, not a path — substitution would
+        // build nonsense candidates from it. The group resolver handles templating itself.
+        if r.value.contains("{{") && r.vars_files_group.is_none() {
+            if let Some(bases) = path_bases(r.kind, ctx) {
+                let subs = substitute_literals(&r.value, literals);
+                if !subs.is_empty() {
+                    let mut cands = Vec::new();
+                    for v in &subs {
+                        for b in &bases {
+                            cands.push(normalise(&b.join(v)));
+                        }
+                    }
+                    let mut res = Resolution::from_candidates(unique(cands.into_iter()), fs);
+                    // Offer, don't assert: navigable, but never a warning.
+                    res.skip_reason = Some(SkipReason::Templated);
+                    if res.status == Status::Missing {
+                        res.status = Status::Skipped;
+                    }
+                    return res;
+                }
+            }
+        }
+        self.plain(r, ctx)
+    }
 }
 
 /// The task search path for one reference.
@@ -267,9 +298,9 @@ pub fn resolve_with_in(
 ///
 /// `file_dir` is kept even when it equals `project_root`: they are one deduped entry for a
 /// playbook at the repo root, and dropping it would remove the file's own directory.
-fn task_bases(r: &Reference, ctx: &FileContext) -> Vec<PathBuf> {
+fn task_bases(in_playbook: bool, ctx: &FileContext) -> Vec<PathBuf> {
     let mut dirs = ctx.task_search_dirs();
-    if r.in_playbook {
+    if in_playbook {
         dirs.retain(|d| *d == ctx.file_dir || Some(d.as_path()) != ctx.project_root.as_deref());
     }
     dirs
@@ -341,256 +372,255 @@ fn substitute_literals(value: &str, literals: &HashMap<String, Vec<String>>) -> 
     results
 }
 
-pub fn resolve(r: &Reference, ctx: &FileContext) -> Resolution {
-    resolve_in(r, ctx, &StdFs)
-}
+impl<'a> Resolver<'a> {
+    /// One reference, no substitution. Role search alone re-probes the same name against
+    /// the same roots once per consuming file, so `self.fs` being a memoizing filesystem
+    /// is most of T-085's win.
+    fn plain(&self, r: &Reference, ctx: &FileContext) -> Resolution {
+        let fs = self.fs;
+        // A first-match `vars_files` list resolves as a unit: first alternative that exists
+        // wins, and only the group — never a member — can be Missing.
+        if let Some(alts) = &r.vars_files_group {
+            return resolve_vars_files_group(alts, ctx, fs);
+        }
 
-/// [`resolve`] against a caller-supplied filesystem. Role search alone re-probes the same
-/// name against the same roots once per consuming file, so a memoizing `fs` is most of
-/// T-085's win.
-pub fn resolve_in(r: &Reference, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
-    // A first-match `vars_files` list resolves as a unit: first alternative that exists
-    // wins, and only the group — never a member — can be Missing.
-    if let Some(alts) = &r.vars_files_group {
-        return resolve_vars_files_group(alts, ctx, fs);
-    }
+        // A templated target is only knowable at runtime. Offer every file the pattern
+        // could reach, but never warn — an untrustworthy warning is worse than none.
 
-    // A templated target is only knowable at runtime. Offer every file the pattern
-    // could reach, but never warn — an untrustworthy warning is worse than none.
-
-    // A `vars:` on an `import_playbook` entry is not a runtime unknown: it is a literal in
-    // this file, and one of exactly two sources Ansible can read when it expands the import
-    // at parse time (`playbook_include.py:71` — `self.vars` before the merge). Substituting
-    // it first is what lets the one spelling that provably works resolve like any other
-    // path, instead of being warned about. T-095.
-    let value = if r.entry_vars.is_empty() {
-        r.value.clone()
-    } else {
-        let literals: HashMap<String, Vec<String>> = r
-            .entry_vars
-            .iter()
-            .map(|(k, v)| (k.clone(), vec![v.clone()]))
-            .collect();
-        substitute_literals(&r.value, &literals)
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| r.value.clone())
-    };
-
-    // `{{ role_path }}` and friends are known here, so substitute before deciding this
-    // is unknowable. A value that becomes fully literal is then resolved — and diagnosed
-    // — like any other path.
-    let (values, templated, substituted) = expand_magic(&value, ctx, r.in_playbook);
-
-    if templated {
-        let bases = match r.kind {
-            ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => task_bases(r, ctx),
-            ReferenceKind::VarsFiles => vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()],
-            // A non-magic variable survived, so only `-e` or a `vars:` on this line can
-            // supply it — neither is on disk, and globbing would offer files Ansible
-            // cannot reach. It stays a warning, but for the real reason: the playbook
-            // can't be syntax-checked standalone. Live-verified, T-095.
-            ReferenceKind::ImportPlaybook => {
-                return Resolution {
-                    status: Status::Missing,
-                    targets: Vec::new(),
-                    candidates: Vec::new(),
-                    skip_reason: None,
-                    directory: None,
-                }
-            }
-            _ => return Resolution::skipped(SkipReason::Templated),
+        // A `vars:` on an `import_playbook` entry is not a runtime unknown: it is a literal in
+        // this file, and one of exactly two sources Ansible can read when it expands the import
+        // at parse time (`playbook_include.py:71` — `self.vars` before the merge). Substituting
+        // it first is what lets the one spelling that provably works resolve like any other
+        // path, instead of being warned about. T-095.
+        let value = if r.entry_vars.is_empty() {
+            r.value.clone()
+        } else {
+            let literals: HashMap<String, Vec<String>> = r
+                .entry_vars
+                .iter()
+                .map(|(k, v)| (k.clone(), vec![v.clone()]))
+                .collect();
+            substitute_literals(&r.value, &literals)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| r.value.clone())
         };
-        let targets = crate::glob::candidates_in(&bases, &value, fs);
-        return Resolution {
-            status: if targets.is_empty() {
-                Status::Skipped
-            } else {
-                Status::Resolved
-            },
-            targets,
-            candidates: Vec::new(),
-            skip_reason: Some(SkipReason::Templated),
-            directory: None,
-        };
-    }
 
-    match r.kind {
-        ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => {
-            // An expansion is already anchored at the directory it named, so the search
-            // path does not apply to it.
-            if substituted {
-                return Resolution::from_candidates(
-                    unique(values.iter().map(|v| normalise(Path::new(v)))),
-                    fs,
-                );
-            }
-            Resolution::from_candidates(
-                unique(
-                    task_bases(r, ctx)
-                        .iter()
-                        .map(|b| normalise(&b.join(&r.value))),
-                ),
-                fs,
-            )
-        }
+        // `{{ role_path }}` and friends are known here, so substitute before deciding this
+        // is unknowable. A value that becomes fully literal is then resolved — and diagnosed
+        // — like any other path.
+        let (values, templated, substituted) = expand_magic(&value, ctx, self.in_playbook);
 
-        // Relative to the importing playbook, then the project root. No role or
-        // collection paths apply at play level.
-        ReferenceKind::ImportPlaybook => {
-            // `{{ playbook_dir }}/x.yml` expands to complete paths, so the search bases
-            // must not be joined onto them — the same rule the task kinds follow. Without
-            // this the expansion was silently dropped and the braces were joined onto
-            // `file_dir`, so the one templated form Ansible resolves at parse time was
-            // reported missing (T-095).
-            if substituted {
-                return Resolution::from_candidates(
-                    unique(values.iter().map(|v| normalise(Path::new(v)))),
-                    fs,
-                );
-            }
-            Resolution::from_candidates(
-                unique(
-                    [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
-                        .into_iter()
-                        .flatten()
-                        .map(|b| normalise(&b.join(&value))),
-                ),
-                fs,
-            )
-        }
-
-        // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
-        // project root — the places Ansible looks for a vars file.
-        ReferenceKind::IncludeVars => {
-            let mut bases = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
-            if let Some(role) = &ctx.role_dir {
-                bases.push(role.join("vars"));
-            }
-            if let Some(root) = &ctx.project_root {
-                bases.push(root.clone());
-            }
-            Resolution::from_candidates(
-                unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
-                fs,
-            )
-        }
-
-        ReferenceKind::VarsFiles => {
-            let mut res = if substituted {
-                // An expansion is a complete path — the vars/ prepend does not apply.
-                Resolution::from_candidates(
-                    unique(values.iter().map(|v| normalise(Path::new(v)))),
-                    fs,
-                )
-            } else {
-                Resolution::from_candidates(vars_files_candidates(&r.value, &ctx.file_dir), fs)
-            };
-            // `from_candidates` takes the first candidate that is a *file*; ansible takes
-            // the first that *exists*. The two differ only when a directory sits earlier
-            // in the search order, and there ansible dies rather than reading on — so the
-            // file it skipped past must not be offered as the target either.
-            if let Some(dir) = res.candidates.iter().find(|p| fs.exists(p)) {
-                if fs.is_dir(dir) {
-                    res.directory = Some(dir.clone());
-                    res.status = Status::Missing;
-                    res.targets.clear();
-                }
-            }
-            match (res.status, r.grouped, res.directory.is_some()) {
-                // A missing alternative is the construct working; a directory one is
-                // fatal, so it keeps its own verdict instead of deferring to the group.
-                (Status::Missing, true, false) => Resolution {
-                    status: Status::Skipped,
-                    skip_reason: Some(SkipReason::GroupAlternative),
-                    directory: None,
-                    ..res
-                },
-                _ => res,
-            }
-        }
-
-        // The dir form runs the ported action-plugin semantics: one computed root
-        // (`_set_root_dir`), then the walk with the module's own filters. Targets are the
-        // files the directory loads — an editor can't open a directory — while `status`
-        // stays the directory's verdict, so an empty (legal) dir still resolves.
-        ReferenceKind::IncludeVarsDir => {
-            let params = match &r.include_vars {
-                Some(p) => (**p).clone(),
-                None => include_vars::Params {
-                    dir: Some(r.value.clone()),
-                    ..include_vars::Params::default()
-                },
-            };
-            let ictx = include_vars::Ctx {
-                role_path: ctx.role_dir.as_deref(),
-                task_dir: &ctx.file_dir,
-            };
-            match include_vars::load(&params, &ictx, fs) {
-                include_vars::Outcome::Loaded(l) => Resolution {
-                    status: Status::Resolved,
-                    targets: l.files,
-                    candidates: l.dir.into_iter().collect(),
-                    skip_reason: None,
-                    directory: None,
-                },
-                // Provably absent at the role path; at runtime the value decays to
-                // cwd-relative, which no static verdict can cover.
-                include_vars::Outcome::CwdFallback { relative } => Resolution {
-                    status: Status::Missing,
-                    targets: Vec::new(),
-                    candidates: ctx.role_dir.iter().map(|d| d.join(&relative)).collect(),
-                    skip_reason: None,
-                    directory: None,
-                },
-                include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
-                    Resolution {
+        if templated {
+            let bases = match r.kind {
+                ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => task_bases(self.in_playbook, ctx),
+                ReferenceKind::VarsFiles => vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()],
+                // A non-magic variable survived, so only `-e` or a `vars:` on this line can
+                // supply it — neither is on disk, and globbing would offer files Ansible
+                // cannot reach. It stays a warning, but for the real reason: the playbook
+                // can't be syntax-checked standalone. Live-verified, T-095.
+                ReferenceKind::ImportPlaybook => {
+                    return Resolution {
                         status: Status::Missing,
                         targets: Vec::new(),
-                        candidates: params
-                            .dir
-                            .as_deref()
-                            .and_then(|d| include_vars::dir_root(d, &ictx, fs))
-                            .into_iter()
-                            .collect(),
+                        candidates: Vec::new(),
                         skip_reason: None,
                         directory: None,
                     }
                 }
-            }
+                _ => return Resolution::skipped(SkipReason::Templated),
+            };
+            let targets = crate::glob::candidates_in(&bases, &value, fs);
+            return Resolution {
+                status: if targets.is_empty() {
+                    Status::Skipped
+                } else {
+                    Status::Resolved
+                },
+                targets,
+                candidates: Vec::new(),
+                skip_reason: Some(SkipReason::Templated),
+                directory: None,
+            };
         }
 
-        ReferenceKind::Role => match role_dir(&r.value, ctx, fs) {
-            Some(dir) => {
-                let probe = RoleExts::default().candidates(&dir.join("tasks"), "main", false);
-                let res = Resolution::from_candidates(probe, fs);
-                // `roles/cib-batch` has only begin/commit/abort.yml and no main.yml —
-                // legal, because every caller passes tasks_from. Warning here would
-                // fire on 16 working references in this repo alone.
-                match (res.status, r.has_tasks_from) {
-                    (Status::Missing, true) => Resolution::skipped(SkipReason::NotInWorkspace),
+        match r.kind {
+            ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => {
+                // An expansion is already anchored at the directory it named, so the search
+                // path does not apply to it.
+                if substituted {
+                    return Resolution::from_candidates(
+                        unique(values.iter().map(|v| normalise(Path::new(v)))),
+                        fs,
+                    );
+                }
+                Resolution::from_candidates(
+                    unique(
+                        task_bases(self.in_playbook, ctx)
+                            .iter()
+                            .map(|b| normalise(&b.join(&r.value))),
+                    ),
+                    fs,
+                )
+            }
+
+            // Relative to the importing playbook, then the project root. No role or
+            // collection paths apply at play level.
+            ReferenceKind::ImportPlaybook => {
+                // `{{ playbook_dir }}/x.yml` expands to complete paths, so the search bases
+                // must not be joined onto them — the same rule the task kinds follow. Without
+                // this the expansion was silently dropped and the braces were joined onto
+                // `file_dir`, so the one templated form Ansible resolves at parse time was
+                // reported missing (T-095).
+                if substituted {
+                    return Resolution::from_candidates(
+                        unique(values.iter().map(|v| normalise(Path::new(v)))),
+                        fs,
+                    );
+                }
+                Resolution::from_candidates(
+                    unique(
+                        [Some(ctx.file_dir.clone()), ctx.project_root.clone()]
+                            .into_iter()
+                            .flatten()
+                            .map(|b| normalise(&b.join(&value))),
+                    ),
+                    fs,
+                )
+            }
+
+            // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
+            // project root — the places Ansible looks for a vars file.
+            ReferenceKind::IncludeVars => {
+                let mut bases = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
+                if let Some(role) = &ctx.role_dir {
+                    bases.push(role.join("vars"));
+                }
+                if let Some(root) = &ctx.project_root {
+                    bases.push(root.clone());
+                }
+                Resolution::from_candidates(
+                    unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
+                    fs,
+                )
+            }
+
+            ReferenceKind::VarsFiles => {
+                let mut res = if substituted {
+                    // An expansion is a complete path — the vars/ prepend does not apply.
+                    Resolution::from_candidates(
+                        unique(values.iter().map(|v| normalise(Path::new(v)))),
+                        fs,
+                    )
+                } else {
+                    Resolution::from_candidates(vars_files_candidates(&r.value, &ctx.file_dir), fs)
+                };
+                // `from_candidates` takes the first candidate that is a *file*; ansible takes
+                // the first that *exists*. The two differ only when a directory sits earlier
+                // in the search order, and there ansible dies rather than reading on — so the
+                // file it skipped past must not be offered as the target either.
+                if let Some(dir) = res.candidates.iter().find(|p| fs.exists(p)) {
+                    if fs.is_dir(dir) {
+                        res.directory = Some(dir.clone());
+                        res.status = Status::Missing;
+                        res.targets.clear();
+                    }
+                }
+                match (res.status, r.grouped, res.directory.is_some()) {
+                    // A missing alternative is the construct working; a directory one is
+                    // fatal, so it keeps its own verdict instead of deferring to the group.
+                    (Status::Missing, true, false) => Resolution {
+                        status: Status::Skipped,
+                        skip_reason: Some(SkipReason::GroupAlternative),
+                        directory: None,
+                        ..res
+                    },
                     _ => res,
                 }
             }
-            // The role name itself resolved to nothing: that IS worth reporting.
-            None => Resolution {
-                status: Status::Missing,
-                targets: Vec::new(),
-                candidates: ctx.roles_roots().iter().map(|d| d.join(&r.value)).collect(),
-                skip_reason: None,
-                directory: None,
+
+            // The dir form runs the ported action-plugin semantics: one computed root
+            // (`_set_root_dir`), then the walk with the module's own filters. Targets are the
+            // files the directory loads — an editor can't open a directory — while `status`
+            // stays the directory's verdict, so an empty (legal) dir still resolves.
+            ReferenceKind::IncludeVarsDir => {
+                let params = match &r.include_vars {
+                    Some(p) => (**p).clone(),
+                    None => include_vars::Params {
+                        dir: Some(r.value.clone()),
+                        ..include_vars::Params::default()
+                    },
+                };
+                let ictx = include_vars::Ctx {
+                    role_path: ctx.role_dir.as_deref(),
+                    task_dir: &ctx.file_dir,
+                };
+                match include_vars::load(&params, &ictx, fs) {
+                    include_vars::Outcome::Loaded(l) => Resolution {
+                        status: Status::Resolved,
+                        targets: l.files,
+                        candidates: l.dir.into_iter().collect(),
+                        skip_reason: None,
+                        directory: None,
+                    },
+                    // Provably absent at the role path; at runtime the value decays to
+                    // cwd-relative, which no static verdict can cover.
+                    include_vars::Outcome::CwdFallback { relative } => Resolution {
+                        status: Status::Missing,
+                        targets: Vec::new(),
+                        candidates: ctx.role_dir.iter().map(|d| d.join(&relative)).collect(),
+                        skip_reason: None,
+                        directory: None,
+                    },
+                    include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
+                        Resolution {
+                            status: Status::Missing,
+                            targets: Vec::new(),
+                            candidates: params
+                                .dir
+                                .as_deref()
+                                .and_then(|d| include_vars::dir_root(d, &ictx, fs))
+                                .into_iter()
+                                .collect(),
+                            skip_reason: None,
+                            directory: None,
+                        }
+                    }
+                }
+            }
+
+            ReferenceKind::Role => match role_dir(&r.value, ctx, fs) {
+                Some(dir) => {
+                    let probe = self.exts.candidates(&dir.join("tasks"), "main", false);
+                    let res = Resolution::from_candidates(probe, fs);
+                    // `roles/cib-batch` has only begin/commit/abort.yml and no main.yml —
+                    // legal, because every caller passes tasks_from. Warning here would
+                    // fire on 16 working references in this repo alone.
+                    match (res.status, r.has_tasks_from) {
+                        (Status::Missing, true) => Resolution::skipped(SkipReason::NotInWorkspace),
+                        _ => res,
+                    }
+                }
+                // The role name itself resolved to nothing: that IS worth reporting.
+                None => Resolution {
+                    status: Status::Missing,
+                    targets: Vec::new(),
+                    candidates: ctx.roles_roots().iter().map(|d| d.join(&r.value)).collect(),
+                    skip_reason: None,
+                    directory: None,
+                },
             },
-        },
 
-        ReferenceKind::TasksFrom => {
-            let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx, fs)) else {
-                return Resolution::skipped(SkipReason::NotInWorkspace);
-            };
-            let probe = RoleExts::default().candidates(&role.join("tasks"), &r.value, true);
-            Resolution::from_candidates(probe, fs)
+            ReferenceKind::TasksFrom => {
+                let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx, fs)) else {
+                    return Resolution::skipped(SkipReason::NotInWorkspace);
+                };
+                let probe = self.exts.candidates(&role.join("tasks"), &r.value, true);
+                Resolution::from_candidates(probe, fs)
+            }
+
+            ReferenceKind::Module => resolve_module(&r.value, ctx, fs),
         }
-
-        ReferenceKind::Module => resolve_module(&r.value, ctx, fs),
     }
 }
 
@@ -849,7 +879,7 @@ pub fn vars_files_candidates(entry: &str, file_dir: &Path) -> Vec<PathBuf> {
 /// extension elsewhere cannot change what a role loads. There is no config key for this
 /// and there should be no way to reach one from here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RoleExts(&'static [&'static str]);
+pub struct RoleExts(&'static [&'static str]);
 
 impl Default for RoleExts {
     fn default() -> Self {
@@ -941,10 +971,13 @@ mod tests {
         let doc = Document::new(src.to_string());
         let ctx = FileContext::discover(file)
             .with_install(Some(std::sync::Arc::new(AnsibleInstall::detect(None))));
-        extract(&doc.parse().unwrap())
+        let extracted = extract(&doc.parse().unwrap());
+        let resolver = Resolver { in_playbook: extracted.in_playbook, ..Default::default() };
+        extracted
+            .refs
             .into_iter()
             .map(|r| {
-                let res = resolve(&r, &ctx);
+                let res = resolver.resolve(&r, &ctx);
                 (r, res)
             })
             .collect()
@@ -978,10 +1011,14 @@ mod tests {
         let ctx = FileContext::discover_with(file, fs, |root| {
             crate::config::AnsibleConfig::builder(root).fs(fs).env(&crate::config::EnvMap::empty()).load()
         });
-        extract(&doc.parse().unwrap())
+        let extracted = extract(&doc.parse().unwrap());
+        let resolver =
+            super::Resolver { fs, in_playbook: extracted.in_playbook, ..Default::default() };
+        extracted
+            .refs
             .into_iter()
             .map(|r| {
-                let res = super::resolve_in(&r, &ctx, fs);
+                let res = resolver.resolve(&r, &ctx);
                 (r, res)
             })
             .collect()
@@ -1397,12 +1434,13 @@ mod tests {
         let ctx = FileContext::discover_with(file, &fs, |root| {
             crate::config::AnsibleConfig::builder(root).fs(&fs).env(&crate::config::EnvMap::empty()).load()
         });
-        let r = extract(&doc.parse().unwrap())
+        let r = extract(&doc.parse().unwrap()).refs
             .into_iter()
             .find(|r| r.kind == ReferenceKind::VarsFiles)
             .unwrap();
         let literals = HashMap::from([("env".to_string(), vec!["prod".to_string()])]);
-        let res = resolve_with_in(&r, &ctx, &literals, &fs);
+        let res = Resolver { fs: &fs, literals: Some(&literals), ..Default::default() }
+            .resolve(&r, &ctx);
         assert_eq!(res.status, Status::Resolved);
         assert_eq!(res.skip_reason, Some(SkipReason::Templated), "navigation only");
         assert_eq!(res.targets, vec![PathBuf::from("/p/vars/prod.yml")]);
@@ -1577,9 +1615,9 @@ mod tests {
             let doc = Document::new("- t.c.relay:
     x: 1
 ".to_string());
-            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
+            let r = extract(&doc.parse().unwrap()).refs.into_iter().next().unwrap();
             let ctx = cache.context(&file);
-            let res = super::resolve_in(&r, &ctx, cache);
+            let res = super::Resolver { fs: cache, ..Default::default() }.resolve(&r, &ctx);
             res.targets
                 .first()
                 .map(|p| crate::posix_display(p))
@@ -1656,7 +1694,7 @@ mod tests {
         let nodes = Document::new("- include_vars: \"{{ env }}.yml\"\n".to_string())
             .parse()
             .unwrap();
-        let refs = extract(&nodes);
+        let refs = extract(&nodes).refs;
         let r = refs
             .iter()
             .find(|r| r.kind == ReferenceKind::IncludeVars)
@@ -1664,14 +1702,14 @@ mod tests {
 
         let mut lit = HashMap::new();
         lit.insert("env".to_string(), vec!["prod".to_string()]);
-        let res = resolve_with_in(r, &ctx, &lit, &fs);
+        let res = Resolver { fs: &fs, literals: Some(&lit), ..Default::default() }.resolve(r, &ctx);
         assert_eq!(res.status, Status::Resolved);
         assert!(res.targets.iter().any(|t| t.ends_with("prod.yml")));
         // Navigation only — never a warning.
         assert_eq!(res.skip_reason, Some(SkipReason::Templated));
 
         // Without the literal it falls back to templated handling: no false "missing".
-        let res2 = resolve_with(r, &ctx, &HashMap::new());
+        let res2 = Resolver { literals: Some(&HashMap::new()), ..Default::default() }.resolve(r, &ctx);
         assert_ne!(res2.status, Status::Missing);
     }
 
@@ -2430,6 +2468,75 @@ mod tests {
         }
     }
 
+    /// T-135's payoff, and the box T-091 could not tick. The extension list rides the
+    /// resolver now, so the pre-T-091 behaviour is reachable through the **public entry
+    /// point** instead of only by calling `candidates` directly. Same fixture, same
+    /// reference, one field apart: `data.json` resolves under the default list and does
+    /// not under the old one.
+    ///
+    /// Before this, threading `exts` through would have meant four more exported
+    /// functions, so it went in as a value with a `Default` that nothing outside
+    /// `resolve_ref` could reach — complete coverage, split across two tests.
+    #[test]
+    fn the_role_extension_list_is_drivable_through_the_entry_point() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/roles/r/tasks/data.json", ""),
+            ("/p/site.yml", ""),
+        ]);
+        let file = Path::new("/p/site.yml");
+        let doc = Document::new(
+            "- hosts: all
+  tasks:
+    - include_role: { name: r, tasks_from: data }
+"
+                .to_string(),
+        );
+        let ctx = FileContext::discover_with(file, &fs, |root| {
+            crate::config::AnsibleConfig::builder(root)
+                .fs(&fs)
+                .env(&crate::config::EnvMap::empty())
+                .load()
+        });
+        let extracted = extract(&doc.parse().unwrap());
+        let r = extracted
+            .refs
+            .iter()
+            .find(|r| r.kind == ReferenceKind::TasksFrom)
+            .expect("the tasks_from reference");
+        let under = |exts| {
+            super::Resolver { fs: &fs, exts, in_playbook: extracted.in_playbook, ..Default::default() }
+                .resolve(r, &ctx)
+        };
+
+        assert_eq!(
+            under(RoleExts::default()).targets,
+            vec![PathBuf::from("/p/roles/r/tasks/data.json")],
+            "the default list reaches .json"
+        );
+        // The control: the only difference is the field.
+        assert_eq!(
+            under(RoleExts(&[".yml", ".yaml"])).status,
+            Status::Missing,
+            "the pre-T-091 list must not reach data.json"
+        );
+    }
+
+    /// T-135 box 5: the resolver is built per request on the LSP hover and
+    /// go-to-definition paths, so it must cost nothing to build. Every field is a
+    /// reference or a word — `Copy`, no owned data, nothing to allocate.
+    #[test]
+    fn the_resolver_is_free_to_build() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<super::Resolver<'_>>();
+        // Two fat pointers, an Option<&_>, and a bool. A regression here means someone
+        // gave it an owned field, which is an allocation on every hover.
+        assert!(
+            std::mem::size_of::<super::Resolver<'_>>() <= 6 * std::mem::size_of::<usize>(),
+            "Resolver grew to {} bytes",
+            std::mem::size_of::<super::Resolver<'_>>()
+        );
+    }
+
     /// T-091: role files carry `.yml`, `.yaml`, `.json` or no extension at all, and
     /// which end of that list the extensionless form sits on flips with `*_from`
     /// (`role/__init__.py:421-431`). One tree pins both ends, and pins that the loser
@@ -2579,8 +2686,8 @@ mod tests {
             let doc = Document::new(src.to_string());
             let ctx = FileContext::discover(&file)
                 .with_install(install.map(std::sync::Arc::new));
-            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
-            resolve(&r, &ctx)
+            let r = extract(&doc.parse().unwrap()).refs.into_iter().next().unwrap();
+            Resolver::default().resolve(&r, &ctx)
         };
 
         let res = resolve_against(Some(install.clone()));
@@ -2599,8 +2706,8 @@ mod tests {
 ".to_string());
             let ctx = FileContext::discover(&file)
                 .with_install(Some(std::sync::Arc::new(install.clone())));
-            let r = extract(&doc.parse().unwrap()).into_iter().next().unwrap();
-            resolve(&r, &ctx)
+            let r = extract(&doc.parse().unwrap()).refs.into_iter().next().unwrap();
+            Resolver::default().resolve(&r, &ctx)
         };
         assert_eq!(bare.status, Status::Resolved, "bare name, tried {:#?}", bare.candidates);
         assert!(
@@ -2666,8 +2773,8 @@ mod ambiguity {
             .join("tests/fixtures/ambiguous/roles/amb/tasks/sub/inner.yml");
         let doc = Document::new("- include_tasks: dup.yml\n".to_string());
         let ctx = FileContext::discover(&from);
-        let refs = extract(&doc.parse().unwrap());
-        let res = resolve(&refs[0], &ctx);
+        let refs = extract(&doc.parse().unwrap()).refs;
+        let res = Resolver::default().resolve(&refs[0], &ctx);
 
         assert_eq!(res.status, Status::Resolved);
         assert!(
@@ -2727,7 +2834,7 @@ mod perf {
         println!("parse:        {:?}", t.elapsed());
 
         let t = Instant::now();
-        let refs = extract(&nodes);
+        let refs = extract(&nodes).refs;
         println!("extract:      {:?}  ({} refs)", t.elapsed(), refs.len());
 
         let t = Instant::now();
@@ -2740,7 +2847,7 @@ mod perf {
 
         let t = Instant::now();
         for r in &refs {
-            let _ = resolve(r, &ctx);
+            let _ = Resolver::default().resolve(r, &ctx);
         }
         println!("resolve all:  {:?}", t.elapsed());
 

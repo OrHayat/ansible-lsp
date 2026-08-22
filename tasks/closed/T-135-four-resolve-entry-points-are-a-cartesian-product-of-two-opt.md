@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P3       | S    | —          |
+| done   | task | P3       | S    | —          |
 
 ## Problem
 
@@ -60,6 +60,12 @@ absurd duplicated per reference.
 
 Both cleanups are part of this ticket's payoff, not follow-ups.
 
+**A third instance, on the other side of the function (T-087).** Adding one field to
+`Resolution` — the *output* struct — meant editing 13 struct literals in `resolve.rs`, because
+it is built by hand everywhere instead of through a constructor. Not this ticket's job and not
+a blocker for it, but the same shape: the file's structs make additive changes cost a sweep,
+at both ends.
+
 ## Approach
 
 A params struct, so an axis costs a field instead of a function:
@@ -92,29 +98,67 @@ when a scan is passing its memo. Three of the four entry points get deleted; `Ro
 an end-to-end test seam it doesn't have today (T-091 covers it at unit level plus two
 end-to-end tests on the default, which is complete but split).
 
-Edit surface, counted rather than estimated — 19 production call sites:
+Edit surface — **12 production call sites**, recounted 2026-08-22:
 
-| Where | Sites |
-| ----- | ----- |
-| `ansible-lsp/src/main.rs` | 12 — hover, go-to-definition, diagnostics |
-| `ansible-core/src/vars.rs` | 2 |
-| `mutation.rs`, `bin/scan.rs` | 2 |
-| `resolve.rs` internal | 3 (plus the 4 definitions collapsing into 1) |
+| Where | Production | In a `mod tests` |
+| ----- | ---------- | ---------------- |
+| `ansible-lsp/src/main.rs` | 3 (lines 751, 1766, 2697) | 12 |
+| `ansible-core/src/vars.rs` | 2 | — |
+| `ansible-core/src/bin/scan.rs` | 2 | — |
+| `ansible-core/src/mutation.rs` | 1 | — |
+| `ansible-core/tests/scan_cli.rs` | 1 | — |
+| `resolve.rs` internal | 3 (lines 217, 250, 345) | 14 |
 
-The 16 calls in `resolve.rs`'s test module nearly all go through the local `resolve_src` /
-`resolve_in` helpers, so they collapse into editing those two.
+An earlier revision of this ticket said "19 production call sites" and put 12 of them in
+`main.rs`, described as "hover, go-to-definition, diagnostics". That was wrong and it
+mattered: those 12 are in `main.rs`'s **test module**, and main.rs has 3 production calls.
+The figure is restated with its date because it is the input to the size estimate, and it
+rotted once already.
 
-The only part needing thought is `main.rs`: those 12 are on request-handling paths and some
-already hold a `ScanCache` they hand over as `fs`, so the struct must stay cheap to build per
-request — by-reference fields, no clone of the literals map.
+The 14 calls in `resolve.rs`'s test module nearly all go through the local `resolve_src` /
+`resolve_in` helpers, so they collapse into editing those two. The 12 in `main.rs`'s tests
+are direct and get rewritten one by one.
+
+`main.rs`'s three production calls are still the part needing thought — they are on
+request-handling paths and some already hold a `ScanCache` they hand over as `fs`, so the
+struct must stay cheap to build per request: by-reference fields, no clone of the literals
+map. Three sites to check, not twelve.
 
 Its own commit, not riding along with whatever motivates it. A pure API reshape that touches
 the LSP crate should be reviewable as one thing.
 
+## Outcome
+
+`Resolver<'a>` as sketched, with `Default for Resolver<'static>` — `&StdFs` const-promotes,
+so no lazy static was needed. Call sites read `Resolver::default().resolve(&r, &ctx)` or
+`Resolver { fs: &cache, literals: Some(&lits), ..Default::default() }`.
+
+`extract` now returns `Extracted { refs, in_playbook }`. That is what let `in_playbook` come
+off `Reference`: the flag is a fact about the **file**, and until there was a per-file struct
+to hold it there was nowhere to put it but on all N references.
+
+The three tests that exercise `{{ playbook_dir }}` failed the moment the flag moved, which is
+the check working — `resolve_src` and `mem_src` were dropping it. Both helpers now thread it
+the way production does, so the end-to-end path is the one under test rather than a
+`Default` that happens to agree.
+
+**Clippy is unchanged at 12 warnings**, compared against `HEAD` in a scratch worktree rather
+than from memory. None is in code this touched.
+
 ## Done when
 
-- [ ] one public entry point; `resolve_in` / `resolve_with` / `resolve_with_in` are gone
-- [ ] a new optional input costs a field, not a function
-- [ ] `RoleExts` is reachable end-to-end from a test, without a hand-revert
-- [ ] `in_playbook` is off `Reference` and on the params struct, set once per file
-- [ ] no per-request allocation added on the LSP paths
+- [x] one public entry point; `resolve_in` / `resolve_with` / `resolve_with_in` are gone —
+      `resolve.rs` now exports exactly one `resolve`, the method on `Resolver`
+- [x] a new optional input costs a field, not a function
+- [x] `RoleExts` is reachable end-to-end from a test, without a hand-revert —
+      `the_role_extension_list_is_drivable_through_the_entry_point` resolves `data.json`
+      under the default list and not under the pre-T-091 one, same fixture and reference,
+      one field apart. Seen red by pointing the `TasksFrom` arm back at
+      `RoleExts::default()`; the first attempt at that break did not compile, so it was not
+      a break until it did
+- [x] `in_playbook` is off `Reference` and on the params struct, set once per file — one
+      `Resolver` per file in `analyze_text_measured`, `mutation.rs`, `vars.rs` and the scan
+- [x] no per-request allocation added on the LSP paths — `the_resolver_is_free_to_build`
+      asserts `Copy` and a size ceiling, so a future owned field fails a test instead of
+      quietly costing an allocation per hover. `Reference` also lost a `bool`, so the
+      per-file reference vector is smaller than before

@@ -59,7 +59,11 @@ fn walk_file(
     let ctx = FileContext::discover_with(path, fs, |root| {
         AnsibleConfig::builder(root).fs(fs).env(env).load()
     });
-    for r in references::extract(&nodes) {
+    let extracted = references::extract(&nodes);
+    // Built once per file: `in_playbook` is a fact about this file, not about any one
+    // reference in it (T-135).
+    let resolver = resolve::Resolver { fs, in_playbook: extracted.in_playbook, ..Default::default() };
+    for r in extracted.refs {
         if !matches!(
             r.kind,
             ReferenceKind::Role
@@ -70,7 +74,7 @@ fn walk_file(
         ) {
             continue;
         }
-        for target in resolve::resolve_in(&r, &ctx, fs).targets {
+        for target in resolver.resolve(&r, &ctx).targets {
             if r.kind == ReferenceKind::Role {
                 // A role contributes every task file it has, not just main.yml —
                 // `tasks_from` reaches the others and they set facts too.
