@@ -169,6 +169,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-197 | [A notify resolved only by a later dynamic include_role is fatal on order alone](open/T-197-a-notify-resolved-only-by-a-later-dynamic-include-role-is-fa.md) | M    | T-196 |
 | T-198 | [A handler with a templated name and no listen: can never be notified](open/T-198-a-handler-with-a-templated-name-and-no-listen-can-never-be-n.md) | S    | T-028 |
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
+| T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
