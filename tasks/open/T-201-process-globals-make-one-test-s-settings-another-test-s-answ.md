@@ -614,9 +614,10 @@ or it is proven to hold no request state and the proof is written at the site.
       (1), (2) and (3); see the coverage section below
 - [x] the 10/10 pair reproducer is re-run after the fix and the victim passes - and the
       probe's writes are unreachable by construction: there is no process-wide slot to write
-- [ ] `scratchpad/t201_multiroot_probe.rs` is promoted into the suite by [[T-202]], or the
-      ticket records why it stays a scratchpad probe - an uncommitted probe with no assertion
-      is a test that cannot fail
+- [x] the multi-root probe is promoted into the suite - it is now
+      `each_workspace_folder_answers_from_its_own_inventory` in `main.rs`, `#[ignore]`d with
+      its reason and handed to [[T-202]]; the scratchpad file is deleted, since a printing
+      script and a committed assertion are the same evidence and only one can go red
 
 ### (7) settled: `ESCAPES` stays, and here is the number
 

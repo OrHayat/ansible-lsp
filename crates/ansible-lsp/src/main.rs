@@ -7057,4 +7057,76 @@ mod tests {
             );
         }
     }
+
+    /// A multi-root window must answer each folder from *its own* inventory (T-202).
+    ///
+    /// Ignored because it asserts the answer we want, not the one we give. `inventory_setting`
+    /// resolves a relative `ansibleLsp.inventory` against `roots.first()`, so today a file in
+    /// folder B is answered from folder A's `inv.ini` — a wrong value **and** a source link
+    /// into the wrong project. Measured, and unchanged by T-201, which moved the value off a
+    /// process global without touching the rule.
+    ///
+    /// Written now rather than with the fix so T-202 has the shape to work against and can be
+    /// judged by un-ignoring it. It covers only the case T-202 has already decided: a file
+    /// under exactly one root. The nested case — folder B *inside* folder A, which VS Code
+    /// allows — is deliberately absent, because the rule for it is still open and a test
+    /// asserting a guess would be worse than no test.
+    ///
+    /// Un-ignore this when T-202 lands. If it needs editing to pass, the rule changed and the
+    /// ticket should say why.
+    #[tokio::test]
+    #[ignore = "asserts the multi-root answer we do not give yet — T-202"]
+    async fn each_workspace_folder_answers_from_its_own_inventory() {
+        let mk = |name: &str, val: &str| {
+            ansible_core::testing::project(
+                name,
+                "[defaults]\n",
+                &[
+                    ("inv.ini", &format!("[web]\nnode1 control={val}\n")),
+                    ("vars/11.yml", "x: 1\n"),
+                    ("vars/22.yml", "x: 1\n"),
+                    ("play.yml", T201_PLAY),
+                ],
+            )
+        };
+        let a = mk("t202-folder-a", "11");
+        let b = mk("t202-folder-b", "22");
+
+        // One window holding both folders, in the order the client sent them, with a single
+        // window-scoped relative setting — the shape `ansibleLsp.inventory` actually has.
+        let state = std::sync::Arc::new(super::State {
+            docs: Default::default(),
+            roots: std::sync::Mutex::new(vec![a.clone(), b.clone()]),
+            flagged: Default::default(),
+            mutations: Default::default(),
+            settings: Default::default(),
+            inventory: Default::default(),
+            startup_note: Default::default(),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            var_cache: no_cache(),
+            scan_task: Default::default(),
+            ansible_path: Default::default(),
+            install: Default::default(),
+        });
+        state.set_inventory(&serde_json::json!({ "inventory": ["inv.ini"] }));
+
+        // Folder A is `roots.first()`, so this one already passes today. It is the control:
+        // without it, "B is wrong" could equally mean no inventory was read at all.
+        let from_a = t201_hover(&a, &state.inventory_setting(), &no_cache());
+        assert!(
+            from_a.contains("`control` = `11`") && from_a.contains("t202-folder-a"),
+            "folder A answers from its own inventory:\n{from_a}"
+        );
+
+        // The bug: folder B is answered from folder A.
+        let from_b = t201_hover(&b, &state.inventory_setting(), &no_cache());
+        assert!(
+            from_b.contains("`control` = `22`"),
+            "folder B must answer from its own inventory, not folder A's:\n{from_b}"
+        );
+        assert!(
+            from_b.contains("t202-folder-b"),
+            "and the source link must point inside folder B:\n{from_b}"
+        );
+    }
 }

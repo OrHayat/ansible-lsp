@@ -89,15 +89,35 @@ invisible is only half a fix.
 
 ## How to test it
 
-`scratchpad/t202_multiroot_probe.rs` is this ticket's harness. Since [[T-201]] landed it
-writes nothing process-wide - it builds a `State` per folder order and calls
-`inventory_setting()` - so it is safe to run inside the suite. It still *prints* rather than
-asserts, which is the only reason it is not committed: the assertions cannot be written until
-this ticket decides what the right answer is. Re-run after T-201: folder B's file still
-answers `11` from folder A's `inv.ini`, unchanged.
+**The failing test already exists.** `each_workspace_folder_answers_from_its_own_inventory`
+(`main.rs`, at the end of the test module) asserts the answer this ticket owes and is
+`#[ignore]`d with the reason, following the same convention as the two `role_path` tests
+waiting on T-067/T-068. The scratchpad probe it replaced is deleted - a printing script and a
+committed assertion are the same evidence, and only one of them can go red.
 
-It reuses `T201_PLAY` and `t201_hover` from the T-201 tests in `main.rs`, so promoting it
-costs no new fixture.
+Run it with:
+
+```
+cargo test -p ansible-lsp -- tests::each_workspace_folder_answers_from_its_own_inventory --exact --ignored
+```
+
+It fails today at the folder-B assertion, showing `control` = `11` sourced to
+**folder A's** `inv.ini`. The folder-A assertion above it passes, and is the control: without
+it, "B is wrong" would read the same as "no inventory was read at all".
+
+What it covers, and what it does not:
+
+- **covered** - two sibling folders, one window-scoped relative `ansibleLsp.inventory`, each
+  folder's file expected to answer from its own `inv.ini`, with the source link checked as well
+  as the value. A wrong link into another project is half the harm here.
+- **not covered, on purpose** - the nested case (folder B *inside* folder A). The rule for it is
+  still open below, and a test asserting a guess would be worse than no test. Add it once the
+  rule is decided, in the same shape.
+- **not covered** - the other three consumers of `inventory_setting()` in the table below. This
+  test goes through the templated-path hover only. Rule 3 wants one per consumer.
+
+**Un-ignore it as the first step of the fix.** If it needs editing to pass, the rule changed
+and this ticket should say why.
 
 Per rule 3, a test **per consumer**, not one for the rule. `inventory_setting()` feeds four
 sites, and each answers a different user-visible question:
@@ -140,8 +160,11 @@ that was decided against and an absent demo that was forgotten look identical la
 - [ ] a relative `ansibleLsp.inventory` resolves against the workspace folder containing the
       file, with `roots.first()` kept only as the no-containing-root fallback
 - [ ] a resolved path that does not exist falls back rather than silently reading no inventory
-- [ ] `scratchpad/t202_multiroot_probe.rs` is promoted from printing to asserting and moves
-      into `main.rs`
+- [x] the harness is a committed, `#[ignore]`d test rather than a printing probe -
+      `each_workspace_folder_answers_from_its_own_inventory`, seen to fail for the documented
+      reason
+- [ ] that test is un-ignored and passes, and the nested-root case is added to it once the
+      rule below is decided
 - [ ] a two-root test per consumer of `inventory_setting()` - all four sites in the table
       above, each with the reversed-root-order control
 - [ ] the status-bar question is answered: either `publish_inventory` reports per folder, or
