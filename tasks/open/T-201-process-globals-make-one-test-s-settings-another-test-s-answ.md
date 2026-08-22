@@ -475,6 +475,86 @@ balloon a change that already crosses both crates, and the right time is when th
 would otherwise be added.
 
 
+## Box (6) was not a pure cache - it was a wrong answer
+
+The table at line 177 of this ticket calls `module_redirect::TABLES` a "pure cache". That was
+read off the code and it was wrong. Measured, on a fixture with a collection routing table
+under `<project_root>/collections/ansible_collections/`:
+
+| | resolves to |
+| - | ---------- |
+| before edit | `t/d/.../relay.py` |
+| after editing the table on disk to say `t.e` | **still `t/d`** |
+| control: a fresh project whose table says `t.e` from the start | `t/e` |
+
+The control resolves the new content, so the staleness is the memo and not the fixture.
+**Editing a collection's `meta/runtime.yml` in your own repo and saving it changed nothing
+until the server restarted.** The unsaved case is strictly weaker - `std::fs::read_to_string`
+cannot see a buffer that never reached disk - so one fix covers both.
+
+Three further properties, found by reading rather than measurement: the memo negative-caches
+(a missing or unparseable file inserts an empty map, remembered for the process), keys on the
+raw path without canonicalising, and answers "no redirect" for the rest of the process if a
+thread panics while holding its mutex.
+
+### Split by lifetime, rather than moving one memo
+
+The two tables that went through this function have nothing in common but their shape:
+
+| table | lives | changes while the server runs |
+| ----- | ----- | ----------------------------- |
+| `config/ansible_builtin_runtime.yml` | inside site-packages | no |
+| a collection's `meta/runtime.yml` | can be `<project_root>/collections/ansible_collections/…` | **yes** |
+
+So each went where its lifetime is. The builtin table is parsed once **inside detection** and
+kept on `AnsibleInstall` - which box (4) already made a value that travels on `FileContext`.
+That also moves the parse off the request path: it used to happen on the first bare-name miss,
+which is on the message pump, the thing T-084 exists about. Collection tables are memoised on
+`ScanCache` (`cache::RoutingTables`, carried to contexts exactly as the install is) and read
+**through the `Fs` seam**, so an open buffer is seen and the entry dies with the pass.
+
+`RoutingTable` is a named type rather than the old `HashMap<String, String>`, so [[T-064]] adds
+`deprecation`/`tombstone`/`action_plugin` fields instead of reshaping every caller. Those
+records are still not parsed here - they are T-064's.
+
+### The `Fs` exemption was covering something it never described
+
+`fs.rs`'s `EXEMPT` list carries `install.rs` with this reason:
+
+> it describes the *machine's* Ansible installation, not workspace state. It is detected once
+> behind a `OnceLock` and caches its own routing tables, so there is no per-scan `Fs` to hand it.
+
+Every clause was false for the collection read: the table is workspace state; the `OnceLock`
+clause described globals boxes (4) and (5) removed; and `collection_module_redirect` **already
+held an `Fs`** and called `fs.is_file(p)` on the line before reading the same path with
+`std::fs`. Probed through the door, read through the window. The comment now says what the
+exemption actually covers, with the measured cost written next to it.
+
+### A test that looked like it pinned the memo and did not
+
+The staleness test first asserted "within one pass the table is parsed once". That assertion
+holds with the parse memo **deleted**, because `ScanCache::read` already shares the read
+through `source`'s `Flight` memo - so removing the memo changes no answer, and no behavioural
+test can see it. Caught by rule 5: the mutation left it green.
+
+The memo is now counted instead (`RoutingTables::parsed`, surfaced on `Stats::routing` beside
+`contexts` and `configs`), and `a_routing_table_is_parsed_once_per_cache` asserts five asks give
+one parse. The behavioural test's comment now says what it does and does not prove.
+
+### Coverage
+
+`module_redirect` had **no direct test at all** before this - the parse was behind a function
+that did its own I/O through a global, so nothing could reach it without a real file and a real
+install. Five now, each verified red on its own mutation: the cache -> context handoff, the
+memo storing, detection parsing the builtin table, the parse reading `redirect` records, and
+the read going through the seam.
+
+Not to be mistaken for cover: `bare_module_names_resolve_in_the_loaders_order` is install-gated
+*and* its assertion is a `match` whose other arm accepts `NotInWorkspace`, so it passes whether
+or not a redirect fired; `hover_marks_the_split_table_redirect` returns early unless the module
+already resolved. Both are [[T-203]]'s subject.
+
+
 ## Done when
 
 One box per global. The bar is the same for each: the value either travels with the caller,
@@ -497,8 +577,9 @@ or it is proven to hold no request state and the proof is written at the site.
       to `AnsibleInstall::init`, and the path it carries now lives on `State::ansible_path`.
       The reload is settled the second way the box allowed: a changed `ansiblePath` needs a
       restart, said in the doc rather than dropped in silence by `OnceLock::set`
-- [ ] **(6)** `module_redirect::TABLES` is gone - it moves onto `ScanCache`, which is already
-      the per-request memo (`cache.rs`, `Map` fields) for exactly this kind of parse
+- [x] **(6)** `module_redirect::TABLES` is gone - **done**, and it was not a pure cache. It
+      was holding stale answers for *workspace* files; split by lifetime, builtin table onto
+      `AnsibleInstall` and collection tables onto `ScanCache`
 - [ ] **(7)** `splitter::ESCAPES` is gone - see the open question below before doing this one
 - [x] `cargo test -p ansible-lsp` run 30 times with zero failures, having first been seen to
       fail on the pre-fix binary - **0/30**, against 2/30 before
