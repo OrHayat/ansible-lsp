@@ -5759,6 +5759,55 @@ mod tests {
         assert!(plain(&md).contains("dependency of chain-a"), "missing outer hop:\n{md}");
     }
 
+    /// T-208 through the surface it is visible on. The same name, hovered either side of the
+    /// include that re-loads it: above, only the auto-loaded role var has happened; below,
+    /// both levels have and the include is the one in effect.
+    ///
+    /// Before T-208 both positions rendered the lower pane — `include_vars ← effective` — so
+    /// the top half is the assertion that fails without the fix.
+    #[test]
+    fn hover_above_the_include_does_not_claim_the_include_has_run() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-hover");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/ad/vars")).unwrap();
+        std::fs::create_dir_all(d.join("roles/ad/tasks")).unwrap();
+        std::fs::write(d.join("roles/ad/vars/main.yml"), "thing: X\n").unwrap();
+        let path = d.join("roles/ad/tasks/main.yml");
+        let text = concat!(
+            "- debug: {msg: \"above {{ thing }}\"}\n",
+            "- include_vars: main.yml\n",
+            "- debug: {msg: \"below {{ thing }}\"}\n",
+        )
+        .to_string();
+        std::fs::write(&path, &text).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let at = |label: &str| {
+            let byte = text.find(&format!("{label} {{{{ thing }}}}")).unwrap() + label.len() + 4;
+            plain(
+                &super::Backend::variable_hover_at(
+                    &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+                )
+                .expect("hover answers")
+                .0,
+            )
+        };
+
+        let above = at("above");
+        assert!(above.contains("role var"), "the level that has loaded:\n{above}");
+        assert!(
+            !above.contains("include_vars"),
+            "the include is below this use and has not run:\n{above}"
+        );
+        assert!(!above.contains("2 definitions"), "one level applies here:\n{above}");
+
+        let below = at("below");
+        assert!(below.contains("2 definitions"), "both, once the include has run:\n{below}");
+        let inc = below.find("include_vars").expect("the effective level");
+        let role = below.find("role var").expect("and the one it outranks");
+        assert!(inc < role, "include_vars leads below the include:\n{below}");
+    }
+
     /// T-207, the hover consumer — and the assertion that separates the fix that landed from
     /// the one that was rejected. Collapsing to the winning level would render a single row
     /// reading `include_vars`, with nothing saying the file is auto-loaded as well; the whole

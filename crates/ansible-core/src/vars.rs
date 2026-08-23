@@ -601,6 +601,15 @@ pub struct Located {
     pub via: Vec<(PathBuf, Span)>,
     /// See [`VarDef::scope`].
     pub scope: Option<Span>,
+    /// The point in the run this definition starts applying, as (file, byte offset) of the
+    /// task that loads it — set for `include_vars` only (T-208).
+    ///
+    /// `set_fact`/`register` need no such field: their `file`/`span` already *are* the task,
+    /// so [`ordered_before`](Located::ordered_before) compares those directly. An
+    /// `include_vars` definition's `file`/`span` point into the **loaded vars file** instead,
+    /// which is a different file from the use and carries no information about when the
+    /// include ran — so without this the ordering test could not fire at all.
+    pub after: Option<(PathBuf, usize)>,
 }
 
 impl Located {
@@ -617,6 +626,12 @@ impl Located {
     /// The run-order half of [`in_effect_at`], split out so the use-aware pair below can
     /// reuse it without re-deriving the scope test.
     fn ordered_before(&self, use_file: &Path, use_pos: usize) -> bool {
+        // Loaded partway through the run by a task we recorded the position of. Same
+        // across-files rule as below: if the loading task is in another file we cannot order
+        // the two, so the definition is kept rather than guessed away.
+        if let Some((at_file, at_pos)) = &self.after {
+            return at_file != use_file || *at_pos < use_pos;
+        }
         match self.source {
             VarSource::SetFact | VarSource::Register => {
                 self.file != use_file || self.span.start < use_pos
@@ -980,6 +995,20 @@ fn contribution_in(path: &Path, nodes: &[Node], cache: &ScanCache) -> Contributi
 /// one Ansible actually executes, so its provenance is the one to keep (see the
 /// meta-dependency block in [`collect`]). Keys borrow rather than clone — this runs over
 /// every definition every file can see, which is the one part memoization can't remove.
+/// Record which task loaded the definitions added since `start`, so [`Located::ordered_before`]
+/// can tell a use above the include from one below it (T-208).
+///
+/// Only definitions with no site yet are stamped: a file included by an `include_vars` cannot
+/// itself hold tasks, but a nested contribution that already carries an inner site keeps it,
+/// since the inner load is the later of the two.
+fn stamp_include_site(out: &mut Contribution, start: usize, site: &(PathBuf, usize)) {
+    for d in &mut out.defs[start..] {
+        if d.after.is_none() {
+            d.after = Some(site.clone());
+        }
+    }
+}
+
 /// Drop a definition already collected — a shared subtree reached twice contributes the same
 /// names twice, once per route.
 ///
@@ -1028,6 +1057,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             source: d.source,
             span: d.span,
             file: path.to_path_buf(),
+            after: None,
             condition: d.condition.clone(),
             via: Vec::new(),
             scope: d.scope,
@@ -1183,6 +1213,11 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         }
         let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));
         let Some(params) = include_vars::params_from_args(&a.args) else { return };
+        // Where the run reaches this load (T-208). Stamped on whatever the read below adds,
+        // the way `via` is stamped on a dependency's contribution — the loaded file's own
+        // spans say nothing about when the include ran.
+        let start = out.defs.len();
+        let site = (path.to_path_buf(), t.span.start);
         // The dir form runs the ported plugin semantics — one computed root, the real
         // filters — and indexes exactly the files Ansible would load, in load order.
         let dir = params.dir.clone().or_else(|| {
@@ -1206,6 +1241,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                     }
                 }
             }
+            stamp_include_site(out, start, &site);
             return;
         }
         let file = match &a.args {
@@ -1220,6 +1256,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
                 }
             }
         }
+        stamp_include_site(out, start, &site);
     });
 
     // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
@@ -1527,6 +1564,7 @@ fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
             source: VarSource::Inventory,
             span: v.span,
             file: file.to_path_buf(),
+            after: None,
             condition: None,
             via: Vec::new(),
             // An inventory applies wherever it is loaded; which *hosts* it reaches is the
@@ -1564,6 +1602,7 @@ fn read_var_file(
                         source,
                         span: v.span(),
                         file: file.to_path_buf(),
+                        after: None,
                         condition: condition.clone(),
                         via: Vec::new(),
                         // A whole vars file is in scope wherever it is loaded.
@@ -3288,6 +3327,7 @@ mod tests {
             source: src,
             span: Span { start, end: start + 1 },
             file: PathBuf::from("f.yml"),
+            after: None,
             condition: None,
             via: Vec::new(),
             scope: None,
@@ -3309,6 +3349,7 @@ mod tests {
             source: VarSource::SetFact,
             span: Span { start: 100, end: 110 },
             file: file.to_path_buf(),
+            after: None,
             condition: None,
             via: Vec::new(),
             scope: None,
@@ -3466,6 +3507,92 @@ mod tests {
                 .map(|d| d.source),
             Some(VarSource::IncludeVars)
         );
+    }
+
+    /// T-208: `include_vars` loads at a point in the run, so a use above it cannot see what
+    /// it defines and a use below it can. The pair is the claim — either half alone passes
+    /// under a rule that always answers the same way.
+    #[test]
+    fn an_include_vars_definition_reaches_uses_below_it_and_not_above() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-order");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/late.yml", "late_key: 1\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  tasks:\n    - debug: {msg: above}\n    - include_vars: vars/late.yml\n    - debug: {msg: below}\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let def = defs.iter().find(|x| x.name == "late_key").expect("indexed");
+        let above = src.find("msg: above").unwrap();
+        let below = src.find("msg: below").unwrap();
+        assert!(!def.in_effect_at(&play, above), "the include has not run at the earlier use");
+        assert!(def.in_effect_at(&play, below), "and has at the later one");
+    }
+
+    /// T-208's other control: ordering is for "what does this read *here*", never for "is
+    /// this name ever set". `undefined_uses` filters on `reaches`, which is scope-only — a
+    /// name loaded by a later `include_vars` is defined, just not yet, and reporting it
+    /// undefined would be the false positive rule 3's corollary exists to prevent.
+    #[test]
+    fn a_name_loaded_by_a_later_include_vars_is_not_undefined() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-undef");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/late.yml", "late_key: 1\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  tasks:\n    - debug: {msg: \"{{ late_key }}\"}\n    - include_vars: vars/late.yml\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let flagged: Vec<String> =
+            undefined_uses(&play, &nodes, src).into_iter().map(|u| u.name).collect();
+        assert!(!flagged.contains(&"late_key".to_string()), "not undefined, just later: {flagged:?}");
+    }
+
+    /// T-208's conservative arm: an include in another file cannot be ordered against this
+    /// use, so the definition is kept rather than guessed away. Dropping it would invent
+    /// "undefined" for every variable a parent play loads before including this file.
+    #[test]
+    fn an_include_vars_definition_from_another_file_is_kept() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-crossfile");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/late.yml", "late_key: 1\n");
+        write(&d, "inner.yml", "- debug: {msg: \"{{ late_key }}\"}\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  tasks:\n    - include_vars: vars/late.yml\n    - include_tasks: inner.yml\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let def = definitions(&play, &nodes)
+            .into_iter()
+            .find(|x| x.name == "late_key")
+            .expect("indexed");
+        // Offset 0 of a different file: no ordering is possible, so it must still apply.
+        assert!(def.in_effect_at(&d.join("inner.yml"), 0), "cross-file stays conservative");
+    }
+
+    /// The control this fix must not break: sources that bind before any task runs apply
+    /// everywhere in the file, including at offset 0. If ordering leaked to these, every
+    /// play var would stop applying to the tasks above its own `vars:` block.
+    #[test]
+    fn sources_that_bind_before_the_run_are_never_ordered() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-unordered");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/early.yml", "from_file: 1\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  vars_files: [vars/early.yml]\n  vars:\n    play_var: 2\n  tasks:\n    - debug: {msg: t}\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        for name in ["from_file", "play_var"] {
+            let def = defs.iter().find(|x| x.name == name).unwrap_or_else(|| panic!("{name}"));
+            assert!(def.in_effect_at(&play, 0), "{name} ({:?}) binds before the run", def.source);
+        }
     }
 
     /// T-207's second pair, measured on 2.21.3 the same way: a `vars_files:` entry re-read by

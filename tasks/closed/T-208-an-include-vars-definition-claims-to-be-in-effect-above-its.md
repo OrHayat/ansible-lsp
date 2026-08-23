@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | M    | —          |
+| done   | bug  | P2       | M    | —          |
 
 ## Symptom
 
@@ -73,14 +73,28 @@ correctly unordered today, and a change to this function must not start ordering
 
 ## Done when
 
-- [ ] a use above an `include_vars` does not see what it defines; a use below it does — both
+- [x] a use above an `include_vars` does not see what it defines; a use below it does — both
       asserted in one file, since the pair is the claim
-- [ ] the same asserted through hover, which is where it is visible
-- [ ] a use in a *different* file from the include still sees it — the conservative arm, kept
-- [ ] `vars_files`, role `vars/` and play `vars:` still apply everywhere in the file, asserted,
-      so this fix cannot start ordering things that bind before the run
-- [ ] `undefined_uses` is unchanged — it uses `reaches`, and a name defined by a later
-      `include_vars` must still not be reported undefined
-- [ ] seen red before the fix
+      (`an_include_vars_definition_reaches_uses_below_it_and_not_above`)
+- [x] the same asserted through hover, which is where it is visible — above shows one level and
+      never says `include_vars`; below shows both with the include leading
+- [x] a use in a *different* file from the include still sees it — the conservative arm, kept
+- [x] `vars_files`, role `vars/` and play `vars:` still apply everywhere in the file, asserted at
+      offset 0, so this fix cannot start ordering things that bind before the run
+- [x] `undefined_uses` is unchanged — a name used above its `include_vars` is still not reported
+      undefined, because that filter runs on `reaches` and never on run order
+- [x] seen red before the fix — the two ordering tests failed with the rule removed; all three
+      controls stayed green, which is what a control is for
+
+## What landed
+
+`Located::after` — the (file, offset) of the task that loads the definition, set for
+`include_vars` only and stamped the way `via` already is, on whatever the read added.
+`ordered_before` checks it first and keeps the same across-files rule the `set_fact` arm uses.
+
+The field exists because the obvious fix could not work: an `include_vars` definition's own
+`file`/`span` are inside the **loaded vars file**, so there was no position to order against.
+That is written on the field rather than only here, since it is the reason the field is not
+redundant with `span`.
 
 **Turned up by:** reviewing [[T-207]], which made it reachable in the re-include case.

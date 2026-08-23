@@ -84,8 +84,9 @@ Nobody has run that.
       `#[ignore]` attribute deleted — it did, unchanged
 - [x] hover on such a name names the level that is in effect — **for a use below the include**.
       Above it, hover now names `include_vars` where only the lower level has loaded. Split to
-      [[T-208]] rather than left ticked: the cause is `ordered_before`, which has no include-site
-      position to order against, and is a different defect from the collapse this ticket fixed
+      [[T-208]] rather than left ticked: the cause is `ordered_before`, which had no include-site
+      position to order against, and is a different defect from the collapse this ticket fixed.
+      T-208 is now closed, so hover names the effective level at every position
 - [x] the deliberate first-route-wins behaviour still holds, asserted — two routes to one load
       carry the same `source`, so they still collapse.
       `the_same_file_included_twice_is_still_one_definition` pins it directly and
