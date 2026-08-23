@@ -5,3 +5,17 @@
 # sitting right beside this file. A role's vars/ dir is searched first.
 - name: Load extra vars from this role's vars/ dir
   ansible.builtin.include_vars: settings.yml
+
+# GOOD (T-207): this re-loads vars/main.yml, which Ansible already loaded for the role. Hover
+# `chain_c_tuning` below: TWO definitions, one file. `include_vars` (18) leads and is marked
+# effective; `role var` (15) sits under it, saying why the file was in scope at all.
+#
+# The re-load is not free — 18 outranks block vars (16) and task vars (17), so a caller's
+# override stops working. That is what T-184 will hint about; today the hover is the only
+# place it shows.
+- name: Re-load this role's own vars (redundant, and it raises their precedence)
+  ansible.builtin.include_vars: main.yml
+
+- name: Read the twice-loaded value
+  ansible.builtin.debug:
+    msg: "tuning {{ chain_c_tuning }}"

@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Refs         | Depends on |
 | ------ | -------- | ---- | ------------ | ---------- |
-| open   | P2       | S    | T-051, T-146, T-207 | ~~T-206~~  |
+| open   | P2       | S    | T-051, T-146, ~~T-207~~ | ~~T-206~~  |
 
 ## Problem
 
@@ -54,11 +54,10 @@ the other half of that sentence and it was false: `include_vars: main.yml` from
 `vars/main.yml` and this rule can key on it as written. The precedence table above re-measured
 clean on 2.21.3.
 
-**One thing this rule cannot say yet.** The index collapses the two loads of that file into a
-single `RoleVars` entry and drops the `IncludeVars` one ([[T-207]]), so the *diagnostic* can be
-written from the reference — which is all the Approach needs — but a message that quotes the
-resulting precedence, or a hover that agrees with it, will be reading the level that is not in
-effect. Keep the message about what the include does, not about what the index shows.
+[[T-207]] is done too, so the index now carries both loads and hover already shows the pair —
+`include_vars` marked effective over `role var`. The hint this ticket adds says in words what
+that stack shows on the token, and the two will not contradict each other. `demo/roles/chain-c`
+carries the fixture.
 
 Message should name the consequence, not the redundancy: the redundancy is harmless, the
 precedence lift is what bites. Something a reader can act on — "role vars are loaded

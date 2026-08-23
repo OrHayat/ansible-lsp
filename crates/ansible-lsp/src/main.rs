@@ -5759,6 +5759,65 @@ mod tests {
         assert!(plain(&md).contains("dependency of chain-a"), "missing outer hop:\n{md}");
     }
 
+    /// T-207, the hover consumer — and the assertion that separates the fix that landed from
+    /// the one that was rejected. Collapsing to the winning level would render a single row
+    /// reading `include_vars`, with nothing saying the file is auto-loaded as well; the whole
+    /// point of the stack is that a reader sees both routes and which one wins.
+    #[test]
+    fn hover_shows_both_levels_of_a_role_that_re_includes_its_own_vars() {
+        let d = std::env::temp_dir().join("ansible-lsp-t207-hover");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/ad/vars")).unwrap();
+        std::fs::create_dir_all(d.join("roles/ad/tasks")).unwrap();
+        std::fs::write(d.join("roles/ad/vars/main.yml"), "thing: FROM_ROLE_VARS\n").unwrap();
+        let path = d.join("roles/ad/tasks/main.yml");
+        let text = "- include_vars: main.yml\n- debug: {msg: \"{{ thing }}\"}\n".to_string();
+        std::fs::write(&path, &text).unwrap();
+
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let byte = text.rfind("{{ thing }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+        )
+        .expect("hover answers");
+        let flat = plain(&md);
+
+        assert!(flat.contains("2 definitions"), "both routes counted:\n{flat}");
+        assert!(flat.contains("include_vars"), "the level in effect:\n{flat}");
+        assert!(flat.contains("role var"), "and why the file is in scope at all:\n{flat}");
+        // Order is the claim: the effective one leads, and it is the include.
+        let inc = flat.find("include_vars").unwrap();
+        let role = flat.find("role var").unwrap();
+        assert!(inc < role, "include_vars must lead the stack:\n{flat}");
+        assert!(flat.contains("effective"), "the winner is marked:\n{flat}");
+    }
+
+    /// T-207, rule 4: `demo/roles/chain-c/tasks/main.yml` claims hovering `chain_c_tuning`
+    /// shows two definitions of one file, `include_vars` leading and marked effective. That
+    /// label is a claim about our own output, so it is asserted rather than trusted.
+    #[test]
+    fn the_demo_role_that_re_includes_its_own_vars_hovers_both_levels() {
+        let path = std::path::Path::new("../../demo/roles/chain-c/tasks/main.yml")
+            .canonicalize()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let byte = text.rfind("{{ chain_c_tuning }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+        )
+        .expect("hover answers for the twice-loaded name");
+        let flat = plain(&md);
+
+        assert!(flat.contains("2 definitions"), "the demo says two:\n{flat}");
+        let inc = flat.find("include_vars").expect("the effective level");
+        let role = flat.find("role var").expect("why the file is in scope");
+        assert!(inc < role, "include_vars leads, as the demo says:\n{flat}");
+        assert!(flat.contains("effective"), "and is marked:\n{flat}");
+    }
+
     /// T-206, rule 4: `demo/roles/chain-c/tasks/main.yml` labels its include **GOOD**, saying
     /// it resolves to `vars/settings.yml` and not to the same-named file beside it. That label
     /// is a claim, so it is asserted here rather than trusted.

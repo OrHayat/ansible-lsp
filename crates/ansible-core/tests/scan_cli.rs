@@ -536,5 +536,7 @@ fn the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too() {
         "only `vars/{{{{ region }}}}` is unknowable; `vars/{{{{ env }}}}` has env: prod \
          one file away:\n{text}"
     );
-    assert_eq!(resolved, 4, "so the knowable one joins the three literal paths:\n{text}");
+    // Four for `include_vars_demo.yml` — three literal paths plus the knowable templated one
+    // — and a fifth for chain-c's re-include of its own `vars/main.yml`, the T-207 fixture.
+    assert_eq!(resolved, 5, "so the knowable one joins the four literal paths:\n{text}");
 }

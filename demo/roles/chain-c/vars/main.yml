@@ -1,0 +1,3 @@
+# The role's default vars entry point. Ansible loads this automatically for chain-c —
+# nothing has to ask for it — at precedence 15.
+chain_c_tuning: "loaded automatically as a role var"

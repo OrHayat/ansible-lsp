@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | M    | —          |
+| done   | bug  | P2       | M    | —          |
 
 ## Symptom
 
@@ -74,19 +74,44 @@ Nobody has run that.
 
 ## Done when
 
-- [ ] a name loaded at two precedence levels is indexed at both, with the effective one
-      identifiable
-- [ ] hover on such a name renders both rows, `include_vars` first and marked `← effective`,
+- [x] a name loaded at two precedence levels is indexed at both, with the effective one
+      identifiable — `source` joins `dedup`'s key; `effective()` already picks by precedence
+      and now has both to choose from
+- [x] hover on such a name renders both rows, `include_vars` first and marked `← effective`,
       with the role-vars row beneath it — the stack is why collapsing was rejected, so it is
       the assertion that proves the right fix landed
-- [ ] `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels` passes with its
-      `#[ignore]` attribute deleted — it already asserts the right answer, so the fix is done
-      when it goes green, and nothing about it needs rewriting
-- [ ] hover on such a name names the level that is in effect
-- [ ] the deliberate first-route-wins behaviour at `vars.rs:1054` still holds, asserted — this
-      fix must not re-open the case that comment is about
-- [ ] the other collapsing combinations measured and either covered or recorded as out of scope
-- [ ] seen red before the fix
+- [x] `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels` passes with its
+      `#[ignore]` attribute deleted — it did, unchanged
+- [x] hover on such a name names the level that is in effect
+- [x] the deliberate first-route-wins behaviour still holds, asserted — two routes to one load
+      carry the same `source`, so they still collapse.
+      `the_same_file_included_twice_is_still_one_definition` pins it directly and
+      `dual_route_via_follows_listed_order_like_ansible_dedup` (T-066) stayed green
+- [x] the other collapsing combinations measured and either covered or recorded as out of scope
+- [x] seen red before the fix
 
-**Turned up by:** [[T-206]]. **Blocks the full answer for:** [[T-184]], which reports exactly
-this precedence lift.
+## The second pair, measured
+
+The ticket asked whether `RoleVars`/`IncludeVars` was the only combination. It is not.
+
+A `vars_files:` entry re-read by `include_vars:` collapses the same way — 14 and 18 — and
+Ansible lifts it the same way. Measured on 2.21.3 with the control that had to come out
+different: without the re-include a task-level `vars:` at 17 wins (`FROM_TASK_VARS`); with it,
+the file wins (`FROM_FILE`). Covered by
+`a_vars_files_entry_re_read_by_include_vars_is_indexed_at_both_levels`.
+
+Nothing about the collapse was ever specific to roles. It was any one file reaching the index
+by two routes at two levels, which is why the fix is on `dedup`'s key rather than anywhere in
+the role or include handling.
+
+## Demo
+
+`demo/roles/chain-c` now carries the shape: a `vars/main.yml` Ansible auto-loads, re-included
+by `tasks/main.yml`, with the claim written out and pinned by
+`the_demo_role_that_re_includes_its_own_vars_hovers_both_levels` (rule 4). Adding it moved the
+scan's resolved `include_vars` count from 4 to 5, which
+`the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too` caught — the count pin doing
+its job. Updated with the reason, not just the number.
+
+**Turned up by:** [[T-206]]. **Unblocks the full answer for:** [[T-184]], which can now quote
+the index without quoting the wrong level.

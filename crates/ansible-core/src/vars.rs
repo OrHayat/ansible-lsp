@@ -980,11 +980,24 @@ fn contribution_in(path: &Path, nodes: &[Node], cache: &ScanCache) -> Contributi
 /// one Ansible actually executes, so its provenance is the one to keep (see the
 /// meta-dependency block in [`collect`]). Keys borrow rather than clone — this runs over
 /// every definition every file can see, which is the one part memoization can't remove.
+/// Drop a definition already collected — a shared subtree reached twice contributes the same
+/// names twice, once per route.
+///
+/// `source` is part of the key (T-207). One file can be loaded at two precedence levels — a
+/// role's `vars/main.yml` re-read by `include_vars:` is 15 *and* 18, and a `vars_files:` entry
+/// re-read the same way is 14 *and* 18 — and both are real: the higher one is what Ansible
+/// resolves against, the lower one is why the file was in scope at all. Keyed without
+/// `source`, the second was dropped and the index kept whichever route ran first, which is the
+/// level **not** in effect.
+///
+/// Two routes to the same load still collapse, because they carry the same `source` — that is
+/// what this function is for, and the first-route-wins rule that goes with it (see the `via`
+/// comment in [`collect`]) is unchanged.
 fn dedup(defs: &mut Vec<Located>) {
     let keep: Vec<bool> = {
-        let mut seen: HashSet<(&str, &Path, usize)> = HashSet::new();
+        let mut seen: HashSet<(&str, &Path, usize, VarSource)> = HashSet::new();
         defs.iter()
-            .map(|d| seen.insert((d.name.as_str(), d.file.as_path(), d.span.start)))
+            .map(|d| seen.insert((d.name.as_str(), d.file.as_path(), d.span.start, d.source)))
             .collect()
     };
     let mut it = keep.into_iter();
@@ -3428,11 +3441,8 @@ mod tests {
     /// task-level `vars:` at 17. `dedup` keys on `(name, file, span)` and ignores `source`,
     /// so the second is dropped and the index keeps the level that is **not** in effect.
     ///
-    /// The lookup is not what collapses this: the test above, naming a vars file that is not
-    /// auto-loaded, indexes `IncludeVars` correctly. Ignored per rule 7 rather than asserting
-    /// today's answer — delete the attribute when T-207 lands.
+    /// Fixed by putting `source` in [`dedup`]'s key.
     #[test]
-    #[ignore = "asserts the two precedence levels we collapse into one today — T-207"]
     fn a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels() {
         let d = std::env::temp_dir().join("ansible-lsp-t207");
         let _ = std::fs::remove_dir_all(&d);
@@ -3450,6 +3460,52 @@ mod tests {
             sources.contains(&VarSource::IncludeVars),
             "the include is the level in effect, and it is missing: {sources:?}"
         );
+        // The one that answers a lookup is the higher of the two.
+        assert_eq!(
+            effective(&defs.iter().filter(|x| x.name == "thing").cloned().collect::<Vec<_>>())
+                .map(|d| d.source),
+            Some(VarSource::IncludeVars)
+        );
+    }
+
+    /// T-207's second pair, measured on 2.21.3 the same way: a `vars_files:` entry re-read by
+    /// `include_vars:` is loaded at 14 and at 18, and 18 beats a task-level `vars:` at 17.
+    /// Nothing about the collapse was specific to roles — it was any one file reaching the
+    /// index by two routes at two levels.
+    #[test]
+    fn a_vars_files_entry_re_read_by_include_vars_is_indexed_at_both_levels() {
+        let d = std::env::temp_dir().join("ansible-lsp-t207-varsfiles");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/shared.yml", "thing: FROM_FILE\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  vars_files: [vars/shared.yml]\n  tasks:\n    - include_vars: vars/shared.yml\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let sources: Vec<_> = defs.iter().filter(|x| x.name == "thing").map(|x| x.source).collect();
+        assert!(sources.contains(&VarSource::VarsFiles), "why the file is in scope: {sources:?}");
+        assert!(sources.contains(&VarSource::IncludeVars), "the level in effect: {sources:?}");
+    }
+
+    /// The behaviour [`dedup`] exists for, and the control for the change above: two routes to
+    /// the *same* load carry the same `source`, so they still collapse to one entry. Without
+    /// this, putting `source` in the key would read as "keep everything".
+    #[test]
+    fn the_same_file_included_twice_is_still_one_definition() {
+        let d = std::env::temp_dir().join("ansible-lsp-t207-twice");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/shared.yml", "thing: 1\n");
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  tasks:\n    - include_vars: vars/shared.yml\n    - include_vars: vars/shared.yml\n";
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let sources: Vec<_> = defs.iter().filter(|x| x.name == "thing").map(|x| x.source).collect();
+        assert_eq!(sources, vec![VarSource::IncludeVars], "one load, one entry");
     }
 
     #[test]
@@ -3741,6 +3797,7 @@ mod parallel_spike {
         }
     }
 }
+
 
 
 
