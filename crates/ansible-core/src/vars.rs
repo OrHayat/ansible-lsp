@@ -998,14 +998,13 @@ fn contribution_in(path: &Path, nodes: &[Node], cache: &ScanCache) -> Contributi
 /// Record which task loaded the definitions added since `start`, so [`Located::ordered_before`]
 /// can tell a use above the include from one below it (T-208).
 ///
-/// Only definitions with no site yet are stamped: a file included by an `include_vars` cannot
-/// itself hold tasks, but a nested contribution that already carries an inner site keeps it,
-/// since the inner load is the later of the two.
+/// Everything in the range is freshly read and unstamped — [`read_var_file`] walks a vars
+/// file's key/value mappings and never recurses into tasks, so an `include_vars` cannot nest
+/// inside one. Checked with an assertion over the whole suite and the demo tree before this
+/// was written as an unconditional overwrite.
 fn stamp_include_site(out: &mut Contribution, start: usize, site: &(PathBuf, usize)) {
     for d in &mut out.defs[start..] {
-        if d.after.is_none() {
-            d.after = Some(site.clone());
-        }
+        d.after = Some(site.clone());
     }
 }
 
@@ -3529,6 +3528,49 @@ mod tests {
         let below = src.find("msg: below").unwrap();
         assert!(!def.in_effect_at(&play, above), "the include has not run at the earlier use");
         assert!(def.in_effect_at(&play, below), "and has at the later one");
+    }
+
+    /// T-208: each `include_vars` is ordered against **its own** task, not against the first
+    /// one in the file — including one nested in a `block:`. A single shared site would pass
+    /// the two-task test above, so this is the one that catches it.
+    #[test]
+    fn each_include_vars_is_ordered_against_its_own_task() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-multi");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "vars/a.yml", "k_a: 1\n");
+        write(&d, "vars/b.yml", "k_b: 1\n");
+        write(&d, "vars/c.yml", "k_c: 1\n");
+        let play = d.join("play.yml");
+        let src = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - include_vars: vars/a.yml\n",
+            "    - debug: {msg: MIDDLE}\n",
+            "    - include_vars: vars/b.yml\n",
+            "    - block:\n",
+            "        - include_vars: vars/c.yml\n",
+        );
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let mid = src.find("MIDDLE").unwrap();
+        let at = |n: &str| {
+            let def = defs.iter().find(|x| x.name == n).unwrap_or_else(|| panic!("{n} missing"));
+            def.in_effect_at(&play, mid)
+        };
+        assert!(at("k_a"), "loaded before this point");
+        assert!(!at("k_b"), "loaded after it");
+        assert!(!at("k_c"), "and so is the one inside the block");
+
+        // Three distinct sites, not one shared: the sites must be strictly increasing, which
+        // is the property a single stamp would break while still passing the checks above.
+        let sites: Vec<usize> = ["k_a", "k_b", "k_c"]
+            .iter()
+            .map(|n| defs.iter().find(|x| x.name == *n).unwrap().after.as_ref().unwrap().1)
+            .collect();
+        assert!(sites[0] < sites[1] && sites[1] < sites[2], "one site per task: {sites:?}");
     }
 
     /// T-208's other control: ordering is for "what does this read *here*", never for "is

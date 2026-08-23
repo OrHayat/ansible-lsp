@@ -86,6 +86,23 @@ correctly unordered today, and a change to this function must not start ordering
 - [x] seen red before the fix — the two ordering tests failed with the rule removed; all three
       controls stayed green, which is what a control is for
 
+## Review findings, after it closed
+
+- **Each include is ordered against its own task**, including one nested in a `block:` —
+  three includes in one file get three strictly-increasing sites. Pinned by
+  `each_include_vars_is_ordered_against_its_own_task`, which fails when every site is
+  collapsed to one; the two-task test alone does not catch that.
+- **A dead guard, and a comment justifying an impossible case.** `stamp_include_site` skipped
+  definitions that already carried a site, with a comment explaining when that would matter.
+  It never fires: [`read_var_file`] walks key/value mappings and never recurses into tasks, so
+  nothing in the range can be pre-stamped. Verified by asserting over the whole suite and the
+  demo tree, then replaced with an unconditional write and the real reason.
+- **Memo-safe**: the site is a property of the file being collected, so a memoized
+  contribution carries the right one no matter which parent reached it.
+- **`Located` derives only `Debug, Clone`** — no `PartialEq`, so the new field cannot change
+  an equality comparison anywhere.
+- Demo tree unchanged: 670 defs, identical diagnostic counts.
+
 ## What landed
 
 `Located::after` — the (file, offset) of the task that loads the definition, set for
