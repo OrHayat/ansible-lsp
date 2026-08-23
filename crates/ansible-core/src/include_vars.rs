@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
-use crate::parse::{Document, Node};
+use crate::parse::{Document, Node, Span};
+use crate::placement::{Problem, Tier};
 use crate::splitter;
 
 /// The module's dir-form and shared inputs, typed. Defaults mirror the plugin's.
@@ -404,8 +405,104 @@ fn read_names(path: &Path, fs: &dyn Fs) -> Result<Vec<String>, Outcome> {
 }
 
 
+/// T-184. A role re-loading its own `vars/main.yml` — the file Ansible already loaded for it.
+pub const REDUNDANT_ROLE_VARS_RULE_ID: &str = "redundant-role-vars-include";
+
+/// The role's auto-loaded vars entry point, re-loaded by a task inside that same role.
+///
+/// `target` is what the reference resolved to; `role_dir` is the role the *including file*
+/// belongs to. Both must be present and they must meet at `<role>/vars/main.yml`, which is the
+/// one file `vars.rs` auto-loads for a role — so this stays in step with what we actually
+/// model rather than with every spelling Ansible would auto-load.
+///
+/// A hint, never a warning: the code is legal, it runs, and an author may want the precedence
+/// lift or a `tags: always` placement deliberately. It is worth saying anyway because both of
+/// its costs are invisible at the call site.
+///
+/// Scoped to the self-referential case on purpose. `include_vars` of another role's vars, or of
+/// any other file, is an ordinary load with nothing provable about it.
+pub fn redundant_self_reload(
+    target: Option<&Path>,
+    role_dir: Option<&Path>,
+    span: Span,
+) -> Option<Problem> {
+    let own = role_dir?.join("vars").join("main.yml");
+    if target? != own {
+        return None;
+    }
+    Some(Problem {
+        span,
+        tier: Tier::Hint,
+        rule: REDUNDANT_ROLE_VARS_RULE_ID,
+        // Both costs, because either alone reads as a style nit. The per-host one is why this
+        // fires without waiting for evidence that somebody overrides the value: measured at
+        // ~5ms per host, it is paid on every run whether or not the lift ever bites.
+        message: "this role's `vars/main.yml` is already loaded automatically, so this \
+                  re-loads it: once per host, and at `include_vars` precedence, which \
+                  outranks the `vars:` of any task or block that would otherwise override \
+                  it. Drop the task unless the precedence lift is deliberate."
+            .to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::path::PathBuf;
+
+    fn hint(target: &str, role: Option<&str>) -> Option<super::Problem> {
+        super::redundant_self_reload(
+            Some(&PathBuf::from(target)),
+            role.map(Path::new),
+            crate::parse::Span { start: 0, end: 1 },
+        )
+    }
+
+    /// The shape found in the wild: a role's first task re-loading its own vars entry point.
+    #[test]
+    fn a_role_reloading_its_own_vars_main_is_hinted() {
+        let p = hint("/p/roles/ad/vars/main.yml", Some("/p/roles/ad")).expect("hinted");
+        assert_eq!(p.tier, super::Tier::Hint, "legal code never warns");
+        assert_eq!(p.rule, super::REDUNDANT_ROLE_VARS_RULE_ID);
+        // The message has to carry both costs; either alone reads as a style nit.
+        assert!(p.message.contains("once per host"), "the unconditional cost: {}", p.message);
+        assert!(p.message.contains("precedence"), "and the trap: {}", p.message);
+    }
+
+    /// Each silence case on its own, per the ticket: one combined assertion would pass with
+    /// three of the four guards missing.
+    #[test]
+    fn another_file_in_the_same_role_is_not_hinted() {
+        assert!(hint("/p/roles/ad/vars/extra.yml", Some("/p/roles/ad")).is_none());
+    }
+
+    #[test]
+    fn another_roles_vars_main_is_not_hinted() {
+        // Resolvable and legal — nothing is provably redundant about loading someone else's.
+        assert!(hint("/p/roles/other/vars/main.yml", Some("/p/roles/ad")).is_none());
+    }
+
+    #[test]
+    fn the_same_path_from_outside_any_role_is_not_hinted() {
+        assert!(hint("/p/roles/ad/vars/main.yml", None).is_none());
+    }
+
+    #[test]
+    fn a_role_file_whose_include_did_not_resolve_is_not_hinted() {
+        assert!(super::redundant_self_reload(
+            None,
+            Some(Path::new("/p/roles/ad")),
+            crate::parse::Span { start: 0, end: 1 }
+        )
+        .is_none());
+    }
+
+    /// A near miss that shares every path component but the last: `vars/main.yaml` is not the
+    /// file we model as auto-loaded, so claiming it is redundant would be a guess.
+    #[test]
+    fn the_yaml_spelling_of_the_entry_point_is_not_hinted() {
+        assert!(hint("/p/roles/ad/vars/main.yaml", Some("/p/roles/ad")).is_none());
+    }
     use super::*;
     use crate::testing::MemFs;
 

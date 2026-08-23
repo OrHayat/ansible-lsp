@@ -6,13 +6,15 @@
 - name: Load extra vars from this role's vars/ dir
   ansible.builtin.include_vars: settings.yml
 
-# GOOD (T-207): this re-loads vars/main.yml, which Ansible already loaded for the role. Hover
-# `chain_c_tuning` below: TWO definitions, one file. `include_vars` (18) leads and is marked
-# effective; `role var` (15) sits under it, saying why the file was in scope at all.
+# HINT (redundant-role-vars-include): this re-loads vars/main.yml, which Ansible already
+# loaded for the role. Legal, and it runs — so a hint, not a warning.
 #
-# The re-load is not free — 18 outranks block vars (16) and task vars (17), so a caller's
-# override stops working. That is what T-184 will hint about; today the hover is the only
-# place it shows.
+# Two costs, both invisible here: it executes once per host (~5ms each, measured), and it
+# lands at include_vars precedence (18), which outranks block vars (16) and task vars (17),
+# so a caller's override silently stops working.
+#
+# GOOD (T-207) on the same line: hover `chain_c_tuning` below and you get TWO definitions of
+# one file — `include_vars` leading and marked effective, `role var` under it.
 - name: Re-load this role's own vars (redundant, and it raises their precedence)
   ansible.builtin.include_vars: main.yml
 

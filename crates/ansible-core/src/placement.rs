@@ -55,6 +55,11 @@ pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
 pub enum Tier {
     Error,
     Warning,
+    /// Legal, working Ansible with a consequence the author probably did not intend. Renders
+    /// as an LSP hint — no squiggle — because a warning on deliberate code is the false-alarm
+    /// training this tool exists to avoid. `condition.rs` has its own copy of this variant;
+    /// the two enums are separate because their `Problem` types are.
+    Hint,
 }
 
 #[derive(Debug, Clone)]

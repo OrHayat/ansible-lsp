@@ -26,7 +26,9 @@ mic key on this Mac).
 | `plays/duplicate_keys_json.yml` | the same mistake in JSON, where Ansible's own check never runs |
 
 Prefixes are consistent: **GOOD** resolves or is analysed, **BAD** is deliberately broken,
-**SILENCED** is suppressed by `# noqa`, **NO HINT** means the tool declines to answer.
+**SILENCED** is suppressed by `# noqa`, **NO HINT** means the tool declines to answer, and
+**HINT** is legal working Ansible the tool remarks on without a squiggle — no fault, just a
+consequence the author may not have intended.
 
 ## What to look for
 

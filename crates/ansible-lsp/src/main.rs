@@ -1014,6 +1014,35 @@ impl Backend {
                 ..Default::default()
             });
 
+        // T-184: a role re-loading its own `vars/main.yml`. Keyed on what the reference
+        // resolved to, so every spelling that reaches that file is covered and no spelling has
+        // to be enumerated here.
+        let redundant_role_vars: Vec<Diagnostic> = a
+            .refs
+            .iter()
+            .filter(|(r, _)| r.kind == ReferenceKind::IncludeVars)
+            .filter_map(|(r, res)| {
+                ansible_core::include_vars::redundant_self_reload(
+                    res.targets.first().map(|p| p.as_path()),
+                    a.ctx.role_dir.as_deref(),
+                    r.span,
+                )
+            })
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(match p.tier {
+                    placement::Tier::Error => DiagnosticSeverity::ERROR,
+                    placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                    placement::Tier::Hint => DiagnosticSeverity::HINT,
+                }),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message.clone(),
+                ..Default::default()
+            })
+            .collect();
+
         // T-110 rows 5 and 23: the file an `import_tasks:`/`include_tasks:` points at is empty,
         // or is not a list of tasks. Anchored on the reference here, since the file at fault
         // may not be open.
@@ -1026,6 +1055,7 @@ impl Backend {
                 severity: Some(match p.tier {
                     placement::Tier::Error => DiagnosticSeverity::ERROR,
                     placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                    placement::Tier::Hint => DiagnosticSeverity::HINT,
                 }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule.into())),
@@ -1101,6 +1131,7 @@ impl Backend {
                 severity: Some(match p.tier {
                     placement::Tier::Error => DiagnosticSeverity::ERROR,
                     placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                    placement::Tier::Hint => DiagnosticSeverity::HINT,
                 }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule.into())),
@@ -1170,6 +1201,7 @@ impl Backend {
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
+            .chain(redundant_role_vars)
             .collect()
     }
 
@@ -5806,6 +5838,122 @@ mod tests {
         let inc = below.find("include_vars").expect("the effective level");
         let role = below.find("role var").expect("and the one it outranks");
         assert!(inc < role, "include_vars leads below the include:\n{below}");
+    }
+
+    fn codes_of(
+        text: &str,
+        path: &std::path::Path,
+    ) -> Vec<(String, Option<tower_lsp::lsp_types::DiagnosticSeverity>)> {
+        use tower_lsp::lsp_types::NumberOrString;
+        let a = super::Backend::analyze_text(text.to_string(), path).expect("analysed");
+        super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter_map(|d| match d.code {
+                Some(NumberOrString::String(c)) => Some((c, d.severity)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn role_tree(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/ad/vars")).unwrap();
+        std::fs::create_dir_all(d.join("roles/ad/tasks")).unwrap();
+        std::fs::create_dir_all(d.join("roles/other/vars")).unwrap();
+        std::fs::write(d.join("roles/ad/vars/main.yml"), "thing: v\n").unwrap();
+        std::fs::write(d.join("roles/ad/vars/extra.yml"), "other: v\n").unwrap();
+        std::fs::write(d.join("roles/other/vars/main.yml"), "far: v\n").unwrap();
+        d
+    }
+
+    /// T-184 end to end: the diagnostic exists, is a HINT, and carries its own id.
+    #[test]
+    fn a_role_reloading_its_own_vars_is_a_hint_not_a_warning() {
+        let d = role_tree("ansible-lsp-t184-fires");
+        let path = d.join("roles/ad/tasks/main.yml");
+        let text = "- include_vars: main.yml\n";
+        std::fs::write(&path, text).unwrap();
+
+        let got = codes_of(text, &path);
+        let hit = got
+            .iter()
+            .find(|(c, _)| c == "redundant-role-vars-include")
+            .unwrap_or_else(|| panic!("not reported: {got:?}"));
+        assert_eq!(
+            hit.1,
+            Some(tower_lsp::lsp_types::DiagnosticSeverity::HINT),
+            "legal code gets no squiggle"
+        );
+    }
+
+    /// Every silence case as its own assertion. One combined test would pass with three of the
+    /// four guards missing, which is the failure mode the ticket names.
+    #[test]
+    fn the_role_vars_hint_stays_silent_where_nothing_is_provable() {
+        let d = role_tree("ansible-lsp-t184-silent");
+        let inside = d.join("roles/ad/tasks/main.yml");
+        let outside = d.join("play.yml");
+        std::fs::write(&outside, "- hosts: all\n").unwrap();
+
+        for (label, text, path) in [
+            ("a different file in the same role", "- include_vars: extra.yml\n", &inside),
+            ("another role's vars/main.yml", "- include_vars: ../../other/vars/main.yml\n", &inside),
+            ("the dir form", "- include_vars: {dir: vars}\n", &inside),
+            ("a file that does not resolve", "- include_vars: nope.yml\n", &inside),
+            ("the same name from outside any role", "- include_vars: main.yml\n", &outside),
+        ] {
+            std::fs::write(path, text).unwrap();
+            let got = codes_of(text, path);
+            assert!(
+                !got.iter().any(|(c, _)| c == "redundant-role-vars-include"),
+                "{label}: should be silent, got {got:?}"
+            );
+        }
+    }
+
+    /// T-010: the rule answers to its own id and to no other.
+    #[test]
+    fn the_role_vars_hint_is_noqa_suppressible_by_its_own_id() {
+        let d = role_tree("ansible-lsp-t184-noqa");
+        let path = d.join("roles/ad/tasks/main.yml");
+        let fires = |text: &str| {
+            std::fs::write(&path, text).unwrap();
+            codes_of(text, &path).iter().any(|(c, _)| c == "redundant-role-vars-include")
+        };
+
+        assert!(fires("- include_vars: main.yml\n"), "control: it fires unsuppressed");
+        assert!(!fires("- include_vars: main.yml  # noqa: redundant-role-vars-include\n"));
+        // Somebody else's id must not silence it, or one suppression would hide two rules.
+        assert!(fires("- include_vars: main.yml  # noqa: missing-file\n"));
+    }
+
+    /// Rule 4: `demo/roles/chain-c/tasks/main.yml` is labelled HINT for this rule. Asserted,
+    /// and paired with a sweep so the rule cannot start firing on demo files that carry no
+    /// such label without a test noticing.
+    #[test]
+    fn the_demo_hint_row_fires_and_no_other_demo_file_does() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let labelled = demo.join("roles/chain-c/tasks/main.yml");
+        let text = std::fs::read_to_string(&labelled).unwrap();
+        assert!(
+            codes_of(&text, &labelled).iter().any(|(c, _)| c == "redundant-role-vars-include"),
+            "the labelled row must actually hint"
+        );
+
+        for f in ansible_core::workspace::yaml_files(&demo) {
+            if f == labelled {
+                continue;
+            }
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            let hit = super::Backend::diagnostics_of(&a).into_iter().any(|d| {
+                matches!(&d.code,
+                    Some(tower_lsp::lsp_types::NumberOrString::String(c))
+                        if c == "redundant-role-vars-include")
+            });
+            assert!(!hit, "unlabelled demo file started hinting: {}", f.display());
+        }
     }
 
     /// T-207, the hover consumer — and the assertion that separates the fix that landed from

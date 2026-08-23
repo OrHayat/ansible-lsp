@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Refs         | Depends on |
 | ------ | -------- | ---- | ------------ | ---------- |
-| open   | P2       | S    | T-051, T-146, ~~T-207~~ | ~~T-206~~  |
+| partly done | P2  | S    | T-051, T-146, ~~T-207~~ | ~~T-206~~  |
 
 ## Problem
 
@@ -91,13 +91,35 @@ the self-referential case is provable.
 
 ## Done when
 
-- [ ] the rule fires on the exact shape above and is silent for `include_vars` of a
+- [x] the rule fires on the exact shape above and is silent for `include_vars` of a
       different file, of another role's `vars/main.yml`, and of the same file from outside a
-      role — each asserted separately, not one combined case
-- [ ] the measurement above is a test in this repo, with the control that produced
-      `FROM_TASK_VARS`, so a future change that stops the lift fails here
-- [ ] `# noqa` suppression works, rule id matched exactly (see T-146 if suppression is
-      centralised by then)
-- [ ] corpus gate: measure before shipping. If it fires more than a handful of times on
-      `~/app/ansible`, each hit is read before the rule lands — a hint that fires on a common
-      idiom is noise, and the bar for adding one is that the reader would change the code
+      role — each asserted separately, not one combined case. Two more silence cases beyond
+      the three named: the dir form, and a target that does not resolve
+- [x] the measurement above is a test in this repo, with the control that produced
+      `FROM_TASK_VARS`, so a future change that stops the lift fails here — the precedence
+      pair is `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels`
+      (T-207), and the per-host cost is recorded in Problem with its control
+- [x] `# noqa` suppression works, rule id matched exactly — including the control that it
+      still fires under an *unrelated* id, so one suppression cannot hide two rules
+- [ ] corpus gate: measure before shipping. **Not done — the tree named above is not on this
+      machine.** What was swept: the demo tree, where it fires exactly once, on the row
+      labelled for it, with a sweep asserting no other demo file fires. That is not the same
+      as a real repo and this box stays open until someone runs it on one.
+
+      Two things to weigh when it is run. The rule is a HINT, so many hits cost less than
+      many warnings would. And a hit is never a false positive — it is an exact path match,
+      so every one is a genuine re-include; the question is only whether the idiom is common
+      enough that saying so on each is noise.
+
+## What landed
+
+`include_vars::redundant_self_reload` — target and `role_dir` in, `Option<Problem>` out, keyed
+on the **resolved** target rather than on any spelling of the path, so `main.yml`,
+`file: main.yml`, and the FQCN forms are all covered without enumerating them.
+
+`placement::Tier` gained `Hint`, which is the "1 more place" that variant now lives (the other
+is `condition.rs`). It maps to `DiagnosticSeverity::HINT` — no squiggle, which is the point.
+
+Demo: `demo/roles/chain-c/tasks/main.yml`, labelled **HINT**. That prefix did not exist in
+`demo/README.md`'s list before this and has been added to it — legal working Ansible the tool
+remarks on without claiming a fault.
