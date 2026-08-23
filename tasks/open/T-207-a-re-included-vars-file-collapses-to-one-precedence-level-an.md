@@ -41,6 +41,23 @@ the wrong file entirely and never reached this collision at all.
 
 ## Fix
 
+**Keep both definitions — do not collapse to the winner.** This was considered and rejected:
+`dedup` could keep the highest-precedence entry instead of the first, which is one comparison
+and fixes "which value is in effect" everywhere. It is the wrong fix.
+
+Hover already renders every definition as a precedence-ordered stack — `defs.sort_by` on
+`source.precedence()` (`main.rs:1981`), `multiple = defs.len() > 1` (`1987`), and a
+`← effective` marker on the first row (`2024`). The stack exists to show a reader what else
+defines the name and which one wins. Collapsing to the winner deletes a row from a list whose
+whole purpose is completeness, and it deletes the row that would carry the marker.
+
+It is also worse than today for [[T-184]]: one row reading `include_vars` gives no hint that
+the file is auto-loaded as well, when "this is loaded twice and your re-include is why" is the
+entire thing worth telling the author. The two-row stack says that on its own, before any
+diagnostic is written.
+
+So the work is the expensive one, and the ticket stays `M`.
+
 Not simply "add `source` to the dedup key" — that changes what every consumer sees, and the
 comment at `vars.rs:1054` records a deliberate reason for keeping the first of two routes to
 the *same* definition (Ansible compiles both and skips the second per host, so the first is the
@@ -59,6 +76,9 @@ Nobody has run that.
 
 - [ ] a name loaded at two precedence levels is indexed at both, with the effective one
       identifiable
+- [ ] hover on such a name renders both rows, `include_vars` first and marked `← effective`,
+      with the role-vars row beneath it — the stack is why collapsing was rejected, so it is
+      the assertion that proves the right fix landed
 - [ ] `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels` passes with its
       `#[ignore]` attribute deleted — it already asserts the right answer, so the fix is done
       when it goes green, and nothing about it needs rewriting
