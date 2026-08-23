@@ -101,7 +101,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | ~~T-201~~      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
-| T-206 | **bug** · [include_vars searches its relative path in the wrong order, in two places](open/T-206-include-vars-searches-its-relative-path-in-the-wrong-order-i.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -169,7 +168,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
-| T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | T-206 |
+| T-207 | **bug** · [A re-included vars file collapses to one precedence level, and the index keeps the one not in effect](open/T-207-a-re-included-vars-file-collapses-to-one-precedence-level-an.md) | M    | —    |
+| T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | ~~T-206~~ |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -314,6 +314,7 @@ T-021 is now unblocked on that side.
 | T-201 | **bug** · [Process globals make one test's settings another test's answer](closed/T-201-process-globals-make-one-test-s-settings-another-test-s-answ.md) | done     |
 | T-087 | [Invalid vars_files entry: provably fatal at runtime, silent in the editor](closed/T-087-invalid-vars-files-entry-provably-fatal-at-runtime-silent-in.md) | done     |
 | T-135 | [Four resolve entry points are a cartesian product of two optional axes](closed/T-135-four-resolve-entry-points-are-a-cartesian-product-of-two-opt.md) | done     |
+| T-206 | **bug** · [include_vars searches its relative path in the wrong order, in two places](closed/T-206-include-vars-searches-its-relative-path-in-the-wrong-order-i.md) | done     |
 
 ## Settled — don't re-derive these
 

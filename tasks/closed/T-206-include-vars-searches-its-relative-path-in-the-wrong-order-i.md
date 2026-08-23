@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | —          |
+| done   | bug  | P1       | M    | T-090 | —          |
 
 ## Symptom
 
@@ -87,18 +87,27 @@ same probe against them, and that is a gap, not a clean bill of health.
 
 ## Done when
 
-- [ ] one candidate-order implementation; `resolve.rs:494` and `vars.rs:1600` both call it and
-      neither carries its own list
-- [ ] all five positions asserted in order, each by deleting the winner and re-resolving, so a
-      single re-ordering cannot pass by accident
-- [ ] `include_vars: main.yml` from `<role>/tasks/main.yml` resolves to `<role>/vars/main.yml`,
+- [x] one candidate-order implementation; `resolve.rs:494` and `vars.rs:1600` both call it and
+      neither carries its own list — `FileContext::include_vars_bases`, beside the other
+      search-path builders in `workspace.rs`
+- [x] all five positions asserted in order, each by deleting the winner and re-resolving, so a
+      single re-ordering cannot pass by accident —
+      `include_vars_searches_role_vars_first_and_a_vars_subdir_before_its_own_dir`
+- [x] `include_vars: main.yml` from `<role>/tasks/main.yml` resolves to `<role>/vars/main.yml`,
       with `<role>/tasks/main.yml` present — the case that has to fail today
-- [ ] the non-role half asserted without a role in the tree, so the `<file_dir>/vars/` before
+- [x] the non-role half asserted without a role in the tree, so the `<file_dir>/vars/` before
       `<file_dir>` fix is pinned independently of the role fix
-- [ ] `<project>/vars/` resolves
-- [ ] a test per consumer, not per rule: go-to-definition target, the indexed `VarSource::IncludeVars`
-      definitions, hover's definition site, and `missing-file` — each asserted separately
-- [ ] seen red before the fix, for the right reason
-- [ ] T-184 unblocked: its rule can key on the resolved target and fire on the shape it names
+- [x] `<project>/vars/` resolves
+- [x] a test per consumer, not per rule: go-to-definition target (the resolver's `targets`),
+      the indexed `VarSource::IncludeVars` definitions, hover's definition site, and
+      `missing-file` — each asserted separately, the last two in `ansible-lsp`
+- [x] seen red before the fix, for the right reason — all six failed under the original order,
+      restored by reversing the edit rather than `git checkout`, and the mutation was checked
+      into the file before believing either result
+- [x] T-184 unblocked: its rule can key on the resolved target and fire on the shape it names
 
-**Blocks:** [[T-184]], whose approach assumes the resolved target is already correct.
+## What this did not fix
+
+The index still collapses a file loaded at two precedence levels into one entry, keeping the
+level that is not in effect. That is [[T-207]], filed with a test asserting today's wrong
+answer. It was invisible until this fix, because the include never reached the collision.

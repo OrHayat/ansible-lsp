@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Refs         | Depends on |
 | ------ | -------- | ---- | ------------ | ---------- |
-| open   | P2       | S    | T-051, T-146 | T-206      |
+| open   | P2       | S    | T-051, T-146, T-207 | ~~T-206~~  |
 
 ## Problem
 
@@ -47,14 +47,18 @@ Fires when: the reference kind is `IncludeVars`, the file is inside a role
 (`ctx.role_dir.is_some()`), and the resolved target is that role's own `vars/main.yml`.
 `FileContext` supplies `role_dir`, so no index, no graph, no new walk.
 
-**Blocked on [[T-206]].** "The resolver already resolves `IncludeVars` targets" was the other
-half of that sentence and it is false for this exact shape: `include_vars: main.yml` from
-`<role>/tasks/main.yml` resolves to **the task file itself**, because the candidate order puts
-`<file_dir>` ahead of `<role>/vars/`. Measured both sides — Ansible 2.21.3 loads
-`<role>/vars/main.yml`, we return `<role>/tasks/main.yml`. Written on top of that, this rule is
-silent on the case it exists for, and its test would only pass on a fixture with no
-`tasks/main.yml`. The precedence table above re-measured clean on 2.21.3, so the behaviour half
-of this ticket stands as written.
+**Unblocked — [[T-206]] is done.** "The resolver already resolves `IncludeVars` targets" was
+the other half of that sentence and it was false: `include_vars: main.yml` from
+`<role>/tasks/main.yml` resolved to the task file itself, because the candidate order put
+`<file_dir>` ahead of `<role>/vars/`. Fixed, so the resolved target is now the role's own
+`vars/main.yml` and this rule can key on it as written. The precedence table above re-measured
+clean on 2.21.3.
+
+**One thing this rule cannot say yet.** The index collapses the two loads of that file into a
+single `RoleVars` entry and drops the `IncludeVars` one ([[T-207]]), so the *diagnostic* can be
+written from the reference — which is all the Approach needs — but a message that quotes the
+resulting precedence, or a hover that agrees with it, will be reading the level that is not in
+effect. Keep the message about what the include does, not about what the index shows.
 
 Message should name the consequence, not the redundancy: the redundancy is harmless, the
 precedence lift is what bites. Something a reader can act on — "role vars are loaded

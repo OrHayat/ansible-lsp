@@ -47,7 +47,7 @@ the same argument applied one layer up.
 - [x] T-018 — `meta/main.yml` dependencies
 - [ ] T-144 — Audit base.yml: every setting that touches what we model, routed to its ticket
 - [x] T-145 — ansible.cfg %-interpolation: values read raw
-- [ ] T-206 — include_vars searches its relative path in the wrong order, in two places
+- [x] T-206 — include_vars searches its relative path in the wrong order, in two places
 
 ## Done when
 

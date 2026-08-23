@@ -100,6 +100,27 @@ impl FileContext {
         dirs
     }
 
+    /// Where a relative `include_vars:` file is looked up, in order (T-206).
+    ///
+    /// Upstream is `_find_needle('vars', src)` -> `path_dwim_relative_stack`, which tries
+    /// `<path>/vars/<src>` before `<path>/<src>` for each entry on the search stack — so the
+    /// `vars/` subdir of a directory always beats the directory itself, and the role comes
+    /// before the file's own dir. Measured on 2.21.3 by putting a copy at all five and
+    /// deleting the winner until the list ran out.
+    ///
+    /// The order matters most where the two collide: a role's `tasks/main.yml` writing
+    /// `include_vars: main.yml` means its own `vars/main.yml`, and searching `<file_dir>`
+    /// first makes the lookup find the including file.
+    pub fn include_vars_bases(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        push_unique(&mut dirs, self.role_dir.as_ref().map(|r| r.join("vars")));
+        push_unique(&mut dirs, Some(self.file_dir.join("vars")));
+        push_unique(&mut dirs, Some(self.file_dir.clone()));
+        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("vars")));
+        push_unique(&mut dirs, self.project_root.clone());
+        dirs
+    }
+
     /// For a file anchored at `handlers/`: the role's `tasks/`, tried after the anchor.
     /// A handler include that misses in `handlers/` legally falls back there —
     /// `path_dwim_relative`'s "look in role's tasks dir w/o dirname"

@@ -5424,6 +5424,59 @@ mod tests {
     /// the same token pointed at the definition, because the scope check lived in one
     /// caller instead of on the definition. Both halves are asserted here so a future
     /// consumer that forgets the rule fails rather than contradicting the other one.
+    /// T-206, the hover consumer. The index and the resolver both feed this, so it is the
+    /// surface where the two disagreeing was visible as a wrong answer rather than a silence.
+    ///
+    /// `tasks/extra.yml` is the decoy the old search order picked.
+    #[test]
+    fn hover_on_a_role_include_vars_name_points_at_the_role_vars_file() {
+        let d = std::env::temp_dir().join("ansible-lsp-t206-hover");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/ad/vars")).unwrap();
+        std::fs::create_dir_all(d.join("roles/ad/tasks")).unwrap();
+        std::fs::write(d.join("roles/ad/vars/extra.yml"), "other: FROM_ROLE_VARS_DIR\n").unwrap();
+        std::fs::write(d.join("roles/ad/tasks/extra.yml"), "- debug: {msg: decoy}\n").unwrap();
+        let path = d.join("roles/ad/tasks/main.yml");
+        let text = "- include_vars: extra.yml\n- debug: {msg: \"{{ other }}\"}\n".to_string();
+        std::fs::write(&path, &text).unwrap();
+
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let byte = text.rfind("{{ other }}").unwrap() + 3;
+        let h = super::Backend::variable_hover_at(
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+        )
+        .expect("hover answers for a name the include defines")
+        .0;
+        assert!(h.contains("include_vars"), "names the source: {h}");
+        assert!(h.contains("FROM_ROLE_VARS_DIR"), "reads the role's vars file: {h}");
+    }
+
+    /// T-206, the `missing-file` consumer. `<project>/vars/` was absent from our candidate
+    /// list altogether, so a vars file that Ansible loads was reported as a missing file —
+    /// the tool contradicting a playbook that runs.
+    #[test]
+    fn include_vars_from_the_project_vars_dir_is_not_reported_missing() {
+        let d = std::env::temp_dir().join("ansible-lsp-t206-missing");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("vars")).unwrap();
+        std::fs::create_dir_all(d.join("plays")).unwrap();
+        // `ansible.cfg` is what makes `d` the project root; without it there is no
+        // project-relative candidate to find and the test would pass for the wrong reason.
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\n").unwrap();
+        std::fs::write(d.join("vars/shared.yml"), "shared_key: 1\n").unwrap();
+        let path = d.join("plays/p.yml");
+        let text = "- hosts: all\n  tasks:\n    - include_vars: shared.yml\n".to_string();
+        std::fs::write(&path, &text).unwrap();
+
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let missing: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(s)) if s == "missing-file"))
+            .collect();
+        assert!(missing.is_empty(), "project vars/ resolves: {missing:#?}");
+    }
+
     #[test]
     fn hover_and_the_undefined_warning_agree_about_entry_scope() {
         let path = std::path::Path::new("../../demo/role_params.yml").canonicalize().unwrap();

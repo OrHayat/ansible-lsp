@@ -1598,14 +1598,10 @@ fn each_task(tree: &Ast, f: &mut impl FnMut(&Task)) {
 /// longer routes through here — it uses [`crate::resolve::vars_files_candidates`], the
 /// ported play-level search order.
 fn resolve_var_path(entry: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
-    let mut cands = vec![ctx.file_dir.join(entry), ctx.file_dir.join("vars").join(entry)];
-    if let Some(role) = &ctx.role_dir {
-        cands.push(role.join("vars").join(entry));
-    }
-    if let Some(root) = &ctx.project_root {
-        cands.push(root.join(entry));
-    }
-    cands.into_iter().find(|p| fs.is_file(p))
+    // Same list the resolver navigates by. Held apart, these two disagreed about which file
+    // an `include_vars:` names, so the index read one file while go-to-definition opened
+    // another (T-206).
+    ctx.include_vars_bases().into_iter().map(|b| b.join(entry)).find(|p| fs.is_file(p))
 }
 
 #[cfg(test)]
@@ -3396,6 +3392,64 @@ mod tests {
         assert_eq!(src("conf_a"), Some(VarSource::IncludeVars)); // dir form
         assert_eq!(src("conf_b"), Some(VarSource::IncludeVars));
         // Templated target is skipped, not guessed.
+    }
+
+    /// T-206, the index consumer. `resolve_var_path` carried its own copy of the search
+    /// order, so the resolver could be fixed and this half still be wrong — which is what
+    /// made the tool contradict itself: go-to-definition opened one file while the index had
+    /// read another.
+    ///
+    /// `tasks/extra.yml` is the decoy. It is a task list, so the old order — which searched
+    /// the file's own dir first — resolved to it and indexed nothing at all.
+    #[test]
+    fn include_vars_of_a_bare_name_in_a_role_indexes_the_role_vars_file() {
+        let d = std::env::temp_dir().join("ansible-lsp-t206-index");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/ad/vars/extra.yml", "other: 1\n");
+        write(&d, "roles/ad/tasks/extra.yml", "- debug: {msg: decoy}\n");
+        let tasks = d.join("roles/ad/tasks/main.yml");
+        let src = "- include_vars: extra.yml\n";
+        write(&d, "roles/ad/tasks/main.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&tasks, &nodes);
+        let other = defs
+            .iter()
+            .find(|x| x.name == "other" && x.source == VarSource::IncludeVars)
+            .expect("indexed from the role's vars file, not the task-dir decoy");
+        assert_eq!(other.file, d.join("roles/ad/vars/extra.yml"));
+    }
+
+    /// A limitation this ticket does **not** fix, pinned so it cannot be mistaken for working.
+    ///
+    /// When the include names the role's *own* `vars/main.yml`, that file is already
+    /// auto-loaded as `RoleVars`, so the same name lands twice at the same span from two
+    /// sources — precedence 15 and 18. [`dedup`] keys on `(name, file, span)` and ignores
+    /// `source`, so the second is dropped and the index keeps the **lower** precedence, which
+    /// is the one that is not in effect. Measured: the control above, naming a vars file that
+    /// is not auto-loaded, does index `IncludeVars` — so the search order is right and the
+    /// collapse is `dedup`'s doing, not the lookup's.
+    ///
+    /// This is the exact fact T-184 exists to report, so it is written down there too.
+    #[test]
+    fn a_reinclude_of_the_roles_own_vars_collapses_into_one_source_today() {
+        let d = std::env::temp_dir().join("ansible-lsp-t206-collapse");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/ad/vars/main.yml", "thing: FROM_ROLE_VARS\n");
+        let tasks = d.join("roles/ad/tasks/main.yml");
+        let src = "- include_vars: main.yml\n";
+        write(&d, "roles/ad/tasks/main.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&tasks, &nodes);
+        let sources: Vec<_> = defs.iter().filter(|x| x.name == "thing").map(|x| x.source).collect();
+        // Asserting today's wrong answer on purpose: when the collapse is fixed this fails
+        // and gets inverted to expect both sources.
+        assert_eq!(sources, vec![VarSource::RoleVars], "T-207 fixed? invert this test");
+        // The file itself is right either way — that half is T-206's fix.
+        assert!(defs.iter().any(|x| x.file == d.join("roles/ad/vars/main.yml")));
     }
 
     #[test]

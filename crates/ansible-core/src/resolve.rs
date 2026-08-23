@@ -489,21 +489,12 @@ impl<'a> Resolver<'a> {
                 )
             }
 
-            // `include_vars` searches the file's dir and `vars/`, the role `vars/`, then the
-            // project root — the places Ansible looks for a vars file.
-            ReferenceKind::IncludeVars => {
-                let mut bases = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
-                if let Some(role) = &ctx.role_dir {
-                    bases.push(role.join("vars"));
-                }
-                if let Some(root) = &ctx.project_root {
-                    bases.push(root.clone());
-                }
-                Resolution::from_candidates(
-                    unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
-                    fs,
-                )
-            }
+            // Order lives on the context, not here — `vars.rs` needs the same list to index
+            // what the include defines, and the two used to carry separate copies of it.
+            ReferenceKind::IncludeVars => Resolution::from_candidates(
+                unique(ctx.include_vars_bases().iter().map(|b| normalise(&b.join(&r.value)))),
+                fs,
+            ),
 
             ReferenceKind::VarsFiles => {
                 let mut res = if substituted {
@@ -1966,6 +1957,82 @@ mod tests {
             res.targets,
             vec![PathBuf::from("/p/playbooks/setup/settings/c.yml")]
         );
+    }
+
+    /// T-206: the five places a relative `include_vars:` file is looked up, in order.
+    ///
+    /// Measured on ansible-core 2.21.3 by putting a copy at every candidate and deleting the
+    /// winner until the list ran out — five separate observations, not one lucky hit. The
+    /// loop reproduces that: after each assertion the winner is removed and the rest are
+    /// re-resolved, so a change that merely permutes the tail still fails. Upstream is
+    /// `_find_needle('vars', src)` -> `path_dwim_relative_stack`, which tries `<path>/vars/`
+    /// before `<path>/` for each entry on the search stack.
+    #[test]
+    fn include_vars_searches_role_vars_first_and_a_vars_subdir_before_its_own_dir() {
+        let file = "/p/roles/ad/tasks/main.yml";
+        let all = [
+            "/p/roles/ad/vars/probe.yml",
+            "/p/roles/ad/tasks/vars/probe.yml",
+            "/p/roles/ad/tasks/probe.yml",
+            "/p/vars/probe.yml",
+            "/p/probe.yml",
+        ];
+        for skip in 0..all.len() {
+            let files: Vec<(&str, &str)> = all[skip..]
+                .iter()
+                .map(|p| (*p, "who: x\n"))
+                // `ansible.cfg` is what makes `/p` the project root, and the last two
+                // candidates are project-relative — without it they cannot be reached.
+                .chain([(file, ""), ("/p/ansible.cfg", "[defaults]\n")])
+                .collect();
+            let fs = crate::testing::MemFs::new(&files);
+            let out = mem_src(file, "- include_vars: probe.yml\n", &fs);
+            let res = first(&out, ReferenceKind::IncludeVars);
+            assert_eq!(
+                res.targets.first().map(|p| crate::posix_display(p)),
+                Some(all[skip].to_string()),
+                "with the {skip} higher candidate(s) removed"
+            );
+        }
+    }
+
+    /// T-206, the shape that produced the bug: a role opening `tasks/main.yml` with
+    /// `include_vars: main.yml` re-loads its own `vars/main.yml`. Ours used to answer with the
+    /// task file, because `<file_dir>` is `<role>/tasks` and the lookup found itself.
+    ///
+    /// The task file must exist for this to mean anything — that is the collision.
+    #[test]
+    fn include_vars_of_a_bare_name_in_a_role_is_the_role_vars_file_not_the_task_file() {
+        let file = "/p/roles/ad/tasks/main.yml";
+        let fs = crate::testing::MemFs::new(&[
+            (file, "- include_vars: main.yml\n"),
+            ("/p/roles/ad/vars/main.yml", "thing: FROM_ROLE_VARS\n"),
+        ]);
+        let out = mem_src(file, "- include_vars: main.yml\n", &fs);
+        let res = first(&out, ReferenceKind::IncludeVars);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from("/p/roles/ad/vars/main.yml")],
+            "the role's vars file, not the task file that includes it"
+        );
+    }
+
+    /// T-206: the `<file_dir>/vars/` before `<file_dir>` half, measured with no role in the
+    /// tree at all. Pinned separately because it is not a role bug — it is wrong for every
+    /// relative `include_vars:` in the workspace, and a fix that only reorders the role entry
+    /// would leave it standing.
+    #[test]
+    fn include_vars_outside_a_role_prefers_the_vars_subdir_over_the_files_own_dir() {
+        let file = "/p/plays/inc.yml";
+        let fs = crate::testing::MemFs::new(&[
+            (file, ""),
+            ("/p/plays/vars/probe.yml", "who: FILEDIR_VARS\n"),
+            ("/p/plays/probe.yml", "who: FILEDIR\n"),
+        ]);
+        let out = mem_src(file, "- include_vars: probe.yml\n", &fs);
+        let res = first(&out, ReferenceKind::IncludeVars);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/plays/vars/probe.yml")]);
     }
 
     /// `inventory_dir` used to borrow the playbook-dir guesses; it is per-host and set by
