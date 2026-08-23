@@ -169,6 +169,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | ~~T-206~~ |
+| T-208 | **bug** · [An include_vars definition claims to be in effect above its own include task](open/T-208-an-include-vars-definition-claims-to-be-in-effect-above-its.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

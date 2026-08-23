@@ -82,7 +82,10 @@ Nobody has run that.
       the assertion that proves the right fix landed
 - [x] `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels` passes with its
       `#[ignore]` attribute deleted — it did, unchanged
-- [x] hover on such a name names the level that is in effect
+- [x] hover on such a name names the level that is in effect — **for a use below the include**.
+      Above it, hover now names `include_vars` where only the lower level has loaded. Split to
+      [[T-208]] rather than left ticked: the cause is `ordered_before`, which has no include-site
+      position to order against, and is a different defect from the collapse this ticket fixed
 - [x] the deliberate first-route-wins behaviour still holds, asserted — two routes to one load
       carry the same `source`, so they still collapse.
       `the_same_file_included_twice_is_still_one_definition` pins it directly and
@@ -113,5 +116,16 @@ scan's resolved `include_vars` count from 4 to 5, which
 `the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too` caught — the count pin doing
 its job. Updated with the reason, not just the number.
 
+## Found by reviewing this ticket after it closed
+
+Keeping both levels means `effective()` now picks the include everywhere in the file — including
+*above* the include task, where it has not run. That is [[T-208]]: `ordered_before` orders only
+`set_fact`/`register`, and cannot order an `include_vars` def because the `Located`'s position is
+in the loaded vars file, not at the include site.
+
+Pre-existing, but this ticket made it reachable in the re-include case, and the summary written
+when this closed claimed hover named the effective level without qualifying it. Measured trade:
+right below the include, wrong above; better on balance, not finished.
+
 **Turned up by:** [[T-206]]. **Unblocks the full answer for:** [[T-184]], which can now quote
-the index without quoting the wrong level.
+the index without quoting the wrong level — for a use below the include. **Follow-up:** [[T-208]].
