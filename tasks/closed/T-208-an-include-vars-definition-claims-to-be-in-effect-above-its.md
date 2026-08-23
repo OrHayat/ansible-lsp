@@ -101,7 +101,21 @@ correctly unordered today, and a change to this function must not start ordering
   contribution carries the right one no matter which parent reached it.
 - **`Located` derives only `Debug, Clone`** — no `PartialEq`, so the new field cannot change
   an equality comparison anywhere.
+- **The dir form was untested.** Every ordering test used the file form, and the two take
+  different branches — the dir form runs the ported plugin walk over a list of files. It is
+  correctly stamped and ordered, but nothing said so until
+  `the_dir_form_is_ordered_against_its_task_too`.
 - Demo tree unchanged: 670 defs, identical diagnostic counts.
+- **Wall clock unchanged.** `var_walk` against the same demo tree, baseline `ea29004` vs
+  current: 9.27/10.03/10.00 ms against 9.59/9.99/9.80 ms — overlapping, no regression from the
+  new field or its `PathBuf` clone per include-sourced def.
+
+  The first attempt at this compared a worktree running its *own* demo tree against the
+  current one, so the input differed from the code and the number meant nothing; the second
+  ran both loops in the same directory and could not have shown a difference at all. Rule 2
+  applies to the commands you verify with. Recorded because "measured, no regression" is only
+  worth anything if the measurement could have said otherwise — and this one is at demo scale
+  (76 files, 670 defs), so it says nothing about a large tree with heavy dir-form includes.
 
 ## What landed
 

@@ -3573,6 +3573,32 @@ mod tests {
         assert!(sites[0] < sites[1] && sites[1] < sites[2], "one site per task: {sites:?}");
     }
 
+    /// T-208 for the **dir** form. Every other ordering test uses the file form, and the two
+    /// take different branches — the dir form runs the ported plugin walk and reads a list of
+    /// files, so a fix applied only to the file branch would leave this one always-in-effect.
+    #[test]
+    fn the_dir_form_is_ordered_against_its_task_too() {
+        let d = std::env::temp_dir().join("ansible-lsp-t208-dir");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "conf/x.yml", "dir_key: 1\n");
+        let play = d.join("play.yml");
+        let src = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - debug: {msg: ABOVE}\n",
+            "    - include_vars: {dir: conf}\n",
+            "    - debug: {msg: BELOW}\n",
+        );
+        write(&d, "play.yml", src);
+
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let def = defs.iter().find(|x| x.name == "dir_key").expect("dir form is indexed");
+        assert!(!def.in_effect_at(&play, src.find("ABOVE").unwrap()), "not before the load");
+        assert!(def.in_effect_at(&play, src.find("BELOW").unwrap()), "and yes after it");
+    }
+
     /// T-208's other control: ordering is for "what does this read *here*", never for "is
     /// this name ever set". `undefined_uses` filters on `reaches`, which is scope-only — a
     /// name loaded by a later `include_vars` is defined, just not yet, and reporting it
