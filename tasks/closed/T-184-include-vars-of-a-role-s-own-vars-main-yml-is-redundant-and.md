@@ -140,6 +140,9 @@ where a reader would change something.
 
 The sweep is now a committed test rather than a one-off:
 `ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp redundant_role_vars_corpus -- --ignored --nocapture`.
+The table above is repeated in that test's doc comment, with a clone line and the control to
+run first — a table only in a closed ticket is not something the next person finds when they
+open the test and wonder what to point it at.
 It prints every hit with file and line, because the gate is "read each one" and a bare count
 cannot tell a common idiom from a rule that has started guessing. Env-gated, so no corpus path
 is ever written into this repo.

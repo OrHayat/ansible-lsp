@@ -5960,6 +5960,29 @@ mod tests {
     ///
     /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp redundant_role_vars_corpus -- --ignored --nocapture`
     ///
+    /// Point it at one tree at a time. The trees the gate was measured against, pinned so the
+    /// result can be reproduced rather than taken on faith — same convention as the `when:`
+    /// corpus in `condition.rs`:
+    ///
+    /// | tree | commit | hits |
+    /// | ------------------------------------------ | --------- | ---- |
+    /// | `kubernetes-sigs/kubespray`                | `46dbdd3` | 0 |
+    /// | `ansible/ansible`                          | `b85437b` | 0 |
+    /// | `ansible-collections/community.general`    | `0bf15b1` | 0 |
+    /// | `debops/debops`                            | `65b66ff` | 0 |
+    /// | `openstack/openstack-ansible`              | `3dcf546` | 0 |
+    /// | `ansible/ansible-examples`                 | `b505865` | 0 |
+    /// | `geerlingguy/ansible-role-mysql`           | `0a0ea6b` | 0 |
+    /// | `sovereign/sovereign`                      | `9fd5ff5` | 0 |
+    ///
+    /// ```text
+    /// git clone --depth 1 https://github.com/kubernetes-sigs/kubespray.git
+    /// ```
+    ///
+    /// **Eight zeros is also what a broken sweep looks like**, so run a control that must come
+    /// out different before believing them: this repo's own `demo/` reports exactly 1, on the
+    /// row labelled for the rule. If that comes back 0, the sweep is broken, not the corpus.
+    ///
     /// Prints every hit with its file and line, because the gate is "read each one" — a bare
     /// count cannot tell a common idiom from a rule that has started guessing. Ignored by
     /// default and env-gated so no corpus path is ever written into this repo.
