@@ -1,8 +1,8 @@
 # T-184 — include_vars of a role's own vars/main.yml is redundant and raises its precedence
 
-| Status | Priority | Size | Refs         | Depends on |
-| ------ | -------- | ---- | ------------ | ---------- |
-| partly done | P2  | S    | T-051, T-146, ~~T-207~~ | ~~T-206~~  |
+| Status | Priority | Size | Refs                    | Depends on |
+| ------ | -------- | ---- | ----------------------- | ---------- |
+| done   | P2       | S    | T-051, T-146, ~~T-207~~ | ~~T-206~~  |
 
 ## Problem
 
@@ -101,15 +101,29 @@ the self-referential case is provable.
       (T-207), and the per-host cost is recorded in Problem with its control
 - [x] `# noqa` suppression works, rule id matched exactly — including the control that it
       still fires under an *unrelated* id, so one suppression cannot hide two rules
-- [ ] corpus gate: measure before shipping. **Not done — the tree named above is not on this
-      machine.** What was swept: the demo tree, where it fires exactly once, on the row
-      labelled for it, with a sweep asserting no other demo file fires. That is not the same
-      as a real repo and this box stays open until someone runs it on one.
+- [x] corpus gate: measured on `~/app/ansible` — **3 hits across the 17 roles that use
+      `include_vars` at all**, and every one read, as the box requires. All three are the same
+      idiom, copy-pasted: `- name: Include role variables` / `include_vars: main.yml` /
+      `tags: [always]`, in roles with a real `vars/main.yml` (937 / 1642 / 2552 bytes). Three
+      true positives, no false ones — which the exact-path match makes structural rather than
+      lucky. Three is a handful, so the rule lands.
 
-      Two things to weigh when it is run. The rule is a HINT, so many hits cost less than
-      many warnings would. And a hit is never a false positive — it is an exact path match,
-      so every one is a genuine re-include; the question is only whether the idiom is common
-      enough that saying so on each is noise.
+      Also swept: the demo tree, where it fires once, on the row labelled for it, with a test
+      asserting no other demo file does.
+
+## `tags: always` on the include buys nothing, so "drop the task" is safe advice
+
+All three wild hits carry `tags: [always]`, which reads like a reason to keep the task — load
+the vars even when a tag filter skips everything else. It is not one. Role `vars/main.yml` is
+bound at role setup, not by a task, so no tag filter can suppress it.
+
+Measured on 2.21.3: a role whose *first* task reads the variable and whose *second* task is the
+`tags: always` include, run with `--tags` selecting only the first. It printed
+`thing=FROM_ROLE_VARS` — the value was already there, before the include executed. The probe
+could have printed `UNDEFINED` and did not.
+
+That settles the wording. The hint tells the reader to drop the task unless the precedence lift
+is deliberate, and this is the check that the advice cannot break a tag-filtered run.
 
 ## What landed
 
