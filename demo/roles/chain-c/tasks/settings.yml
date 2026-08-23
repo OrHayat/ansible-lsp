@@ -1,0 +1,11 @@
+# DECOY (T-206). A bare `include_vars: settings.yml` in this role means
+# `vars/settings.yml` — never this file, even though it sits in the same directory as the
+# task that writes the include. Ansible searches the role's `vars/` dir before the including
+# file's own dir; we had that backwards, so the include landed here and the role's real
+# settings were never read.
+#
+# This file exists to make that collision real. Delete it and the include in main.yml
+# resolves correctly under either order, which is what let the bug survive.
+- name: Never loaded by the include_vars in main.yml
+  ansible.builtin.debug:
+    msg: chain-c decoy task file

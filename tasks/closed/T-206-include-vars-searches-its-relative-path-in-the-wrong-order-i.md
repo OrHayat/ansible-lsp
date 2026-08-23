@@ -105,6 +105,21 @@ same probe against them, and that is a gap, not a clean bill of health.
       restored by reversing the edit rather than `git checkout`, and the mutation was checked
       into the file before believing either result
 - [x] T-184 unblocked: its rule can key on the resolved target and fire on the shape it names
+- [x] a demo fixture carrying the collision, with its label pinned (rule 4) —
+      `demo/roles/chain-c/tasks/settings.yml` is a decoy beside the include that names
+      `vars/settings.yml`, and `the_demo_role_include_vars_resolves_past_its_task_dir_namesake`
+      asserts both that the decoy exists and that the include resolves past it
+
+## The demo had the shape but not the collision
+
+`demo/roles/chain-c/tasks/main.yml` already wrote `include_vars: settings.yml`, and a hover
+test already asserted it named `chain-c/vars/settings.yml`. Both passed throughout, under the
+wrong order as well as the right one, because nothing sat at `chain-c/tasks/settings.yml` for
+the lookup to find first. A fixture that cannot express the fault cannot catch it.
+
+Adding the decoy fixed that test too: it now fails under the old order, having proved nothing
+before. Demo diagnostic counts are unchanged — checked by running the scan against the tree
+with and without the new file.
 
 ## What this did not fix
 

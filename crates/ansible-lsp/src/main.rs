@@ -5759,6 +5759,37 @@ mod tests {
         assert!(plain(&md).contains("dependency of chain-a"), "missing outer hop:\n{md}");
     }
 
+    /// T-206, rule 4: `demo/roles/chain-c/tasks/main.yml` labels its include **GOOD**, saying
+    /// it resolves to `vars/settings.yml` and not to the same-named file beside it. That label
+    /// is a claim, so it is asserted here rather than trusted.
+    ///
+    /// The decoy is checked first. Without it the include resolves correctly under either
+    /// search order, the demo demonstrates nothing, and this test passes while proving
+    /// nothing — which is exactly how the bug survived in the demo tree for as long as it did.
+    #[test]
+    fn the_demo_role_include_vars_resolves_past_its_task_dir_namesake() {
+        let role = std::path::Path::new("../../demo/roles/chain-c").canonicalize().unwrap();
+        assert!(
+            role.join("tasks/settings.yml").is_file(),
+            "the decoy is the whole point of this fixture — restore it, don't delete this test"
+        );
+        assert!(role.join("vars/settings.yml").is_file(), "the file the include really means");
+
+        let path = role.join("tasks/main.yml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let (_, res) = a
+            .refs
+            .iter()
+            .find(|(r, _)| r.kind == ansible_core::references::ReferenceKind::IncludeVars)
+            .expect("the include_vars reference");
+        assert_eq!(
+            res.targets,
+            vec![role.join("vars/settings.yml")],
+            "the role's vars/ dir is searched before the including file's own dir"
+        );
+    }
+
     /// T-029 against the real demo: a templated path whose variables have no known value
     /// still hovers — the glob-matched targets, listed without a winner — and one that
     /// matches nothing says why it goes nowhere instead of staying silent.

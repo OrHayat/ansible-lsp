@@ -1,5 +1,7 @@
 - ansible.builtin.debug:
     msg: "chain-c ran"
 
+# GOOD (T-206): resolves to vars/settings.yml, NOT the same-named tasks/settings.yml
+# sitting right beside this file. A role's vars/ dir is searched first.
 - name: Load extra vars from this role's vars/ dir
   ansible.builtin.include_vars: settings.yml
