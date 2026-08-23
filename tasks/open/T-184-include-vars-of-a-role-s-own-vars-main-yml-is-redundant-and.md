@@ -17,8 +17,28 @@ A role that opens with
 is re-loading the file Ansible **already loaded for it**. Found in the wild: `roles/ad` in
 `~/app/ansible`, first task of `tasks/main.yml`.
 
-It is not merely redundant. `include_vars` sits at a higher precedence than role `vars/`, so
-the re-load silently lifts those values above anything a caller sets at task level.
+It costs on two counts, and the second one was written off as harmless here for a long time.
+
+**1. It runs once per host, and buys nothing.** Measured on 2.21.3, 200 hosts, local
+connection, no fact gathering — the same play with the line and with it deleted:
+
+| | runtime |
+| -------------------------- | -------------------- |
+| with the redundant include | 1.71 / 1.68 / 1.68 s |
+| line deleted               | 0.77 / 0.75 / 0.63 s |
+
+About **1 second, or ~5ms per host**, to re-load a file that is already loaded. The control
+that identifies where it goes: replacing the include with a trivial `debug` costs the same
+(1.62/1.73 s), so it is the per-host *task execution*, not the file read — the loader caches
+the parse. Slower plays dilute the share, never to zero.
+
+**2. It lifts the precedence.** `include_vars` sits above role `vars/`, so the re-load
+silently raises those values above anything a caller sets at task level.
+
+Either one alone justifies the hint, and that matters for the rule's shape: (1) applies
+whether or not anybody overrides the value, so a refinement that only fires when some caller
+*does* override would go quiet on exactly the plays paying the most — a large inventory with
+no override anywhere.
 
 Measured on 2.21.2, one role, one variable, with the include toggled by a flag so the same
 fixture reports both ways:
@@ -42,6 +62,9 @@ probe could not produce the other outcome. Only a plain task-level `vars:` shows
 A hint, never an error, with `# noqa`. Re-including is legal, and someone may want the
 precedence lift or the `tags: always` placement on purpose — the message should say what it
 does, not that it is wrong.
+
+Fire on the shape, not on evidence of harm. The per-host cost is unconditional, so waiting
+for a demonstrable override before speaking would suppress the hint where it is worth most.
 
 Fires when: the reference kind is `IncludeVars`, the file is inside a role
 (`ctx.role_dir.is_some()`), and the resolved target is that role's own `vars/main.yml`.
