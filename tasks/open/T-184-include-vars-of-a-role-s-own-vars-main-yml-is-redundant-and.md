@@ -1,8 +1,8 @@
 # T-184 — include_vars of a role's own vars/main.yml is redundant and raises its precedence
 
-| Status | Priority | Size | Refs |
-| ------ | -------- | ---- | ---- |
-| open   | P2       | S    | T-051, T-146 |
+| Status | Priority | Size | Refs         | Depends on |
+| ------ | -------- | ---- | ------------ | ---------- |
+| open   | P2       | S    | T-051, T-146 | T-206      |
 
 ## Problem
 
@@ -45,8 +45,16 @@ does, not that it is wrong.
 
 Fires when: the reference kind is `IncludeVars`, the file is inside a role
 (`ctx.role_dir.is_some()`), and the resolved target is that role's own `vars/main.yml`.
-Everything needed is already there — `FileContext` supplies `role_dir` and the resolver
-already resolves `IncludeVars` targets — so no index, no graph, no new walk.
+`FileContext` supplies `role_dir`, so no index, no graph, no new walk.
+
+**Blocked on [[T-206]].** "The resolver already resolves `IncludeVars` targets" was the other
+half of that sentence and it is false for this exact shape: `include_vars: main.yml` from
+`<role>/tasks/main.yml` resolves to **the task file itself**, because the candidate order puts
+`<file_dir>` ahead of `<role>/vars/`. Measured both sides — Ansible 2.21.3 loads
+`<role>/vars/main.yml`, we return `<role>/tasks/main.yml`. Written on top of that, this rule is
+silent on the case it exists for, and its test would only pass on a fixture with no
+`tasks/main.yml`. The precedence table above re-measured clean on 2.21.3, so the behaviour half
+of this ticket stands as written.
 
 Message should name the consequence, not the redundancy: the redundancy is harmless, the
 precedence lift is what bites. Something a reader can act on — "role vars are loaded
