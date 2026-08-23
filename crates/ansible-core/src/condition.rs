@@ -2227,20 +2227,32 @@ mod corpus {
         }
     }
 
-    /// A live false positive, pinned so the fix has a test waiting. `item` **is** defined in
-    /// these three: the loop sits on the `include_tasks` that pulls their file in, which
-    /// [`problems`] never sees. Asserting the wrong answer on purpose — when T-139 lands,
-    /// this test fails and gets inverted.
+    /// The rule itself is right; only its input is missing. With the loop flag set — what a
+    /// loop-aware caller would pass — these three come out clean, which is what proves the
+    /// defect is the flag and not the rule. Live, and the half of T-139 that already holds.
     #[test]
-    fn item_from_an_including_loop_is_flagged_today_and_should_not_be() {
+    fn item_from_an_including_loop_is_well_formed_once_the_loop_is_known() {
+        for c in ITEM_FROM_AN_INCLUDING_LOOP {
+            assert!(problems(c, true).is_empty(), "{c} is otherwise well-formed");
+        }
+    }
+
+    /// T-139: `item` **is** defined in these three — the loop sits on the `include_tasks`
+    /// that pulls their file in, which [`problems`] never sees, so we report a false
+    /// positive.
+    ///
+    /// This used to assert the false positive was present, with a comment saying to invert it
+    /// on the fix. That is a green test claiming the wrong answer is correct (rule 7), so it
+    /// now states the answer we owe and is ignored until we give it. The control above keeps
+    /// the half that passes today.
+    #[test]
+    #[ignore = "asserts the loop-aware answer we do not give yet — T-139"]
+    fn item_from_an_including_loop_is_not_flagged() {
         for c in ITEM_FROM_AN_INCLUDING_LOOP {
             assert!(
-                problems(c, false).contains(&Problem::ItemWithoutLoop),
-                "{c}: T-139 fixed? invert this test"
+                !problems(c, false).contains(&Problem::ItemWithoutLoop),
+                "{c}: the including loop defines `item`"
             );
-            // With the flag set — what a loop-aware caller would pass — they come out clean,
-            // so the rule itself is right and only its input is missing.
-            assert!(problems(c, true).is_empty(), "{c} is otherwise well-formed");
         }
     }
 }

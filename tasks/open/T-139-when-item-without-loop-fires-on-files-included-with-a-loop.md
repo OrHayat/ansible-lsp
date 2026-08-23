@@ -62,6 +62,8 @@ missed warning costs nothing, a false one costs trust.
 ## Done when
 
 - [ ] the three corpus cases stop being reported
-- [ ] `condition::corpus::item_from_an_including_loop_is_flagged_today_and_should_not_be` is
-      inverted (it asserts today's wrong answer on purpose, and fails when this is fixed)
+- [ ] `condition::corpus::item_from_an_including_loop_is_not_flagged` passes with its
+      `#[ignore]` deleted. It was `..._is_flagged_today_and_should_not_be`, which asserted the
+      false positive was present; rule 7 replaced it with the correct expectation, ignored.
+      Its live control, `..._is_well_formed_once_the_loop_is_known`, must stay green throughout
 - [ ] a playbook-local `item` with no loop anywhere is still reported

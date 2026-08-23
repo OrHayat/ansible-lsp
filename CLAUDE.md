@@ -133,6 +133,38 @@ not rebuild it on its own.
 first. When a symptom matches known-old behaviour, check the binary's timestamp before the
 code.
 
+## 7. A test asserts what is true, never what we currently do wrong
+
+When a bug is known but not yet fixed, write the assertion for the **correct** answer and
+`#[ignore]` it with the ticket id in the reason. Never write a passing assertion for the
+wrong answer.
+
+> Two conventions were in the tree at once. `resolve.rs:1804` and `main.rs:7394` mark a
+> known gap the honest way — `#[ignore = "asserts the multi-root answer we do not give yet
+> — T-202"]`. `condition.rs:2235` does the opposite: it asserts the false positive is
+> present and comments "when T-139 lands, this test fails and gets inverted."
+
+A passing `assert_eq!(sources, vec![RoleVars])` is a claim that `RoleVars` is right. Anyone
+who greps for how the index behaves finds a green test saying so. The comment above it is
+not part of the assertion and does not travel with it into a diff, a search result, or
+another agent's context — and this repo's whole premise is that a confident wrong answer
+costs more than no answer. That applies to what we tell ourselves in tests, not just to what
+we tell users in diagnostics.
+
+The ignored form fails for the right reason the moment someone fixes it, and closing the
+ticket is deleting one attribute. The inverted form needs a human to notice the comment,
+rewrite the assertion, and get the new expectation right — three chances to get it wrong,
+none of them enforced.
+
+Keep any half that passes today as a live test. `item_from_an_including_loop_is_flagged_today_and_should_not_be`
+bundles a wrong-answer assertion with a genuine control ("with the loop flag set, these come
+out clean"); ignoring the whole function to fix the first half would silently drop the
+second. Split it, don't ignore it wholesale.
+
+Exception, and it is narrow: a test whose subject *is* the current behaviour — a
+characterisation test written to pin something before changing it — is asserting the truth
+about today on purpose. Say so in the name.
+
 ## Ticket and commit conventions
 
 Board mechanics — creating, closing, epics, upstream dossiers — are in

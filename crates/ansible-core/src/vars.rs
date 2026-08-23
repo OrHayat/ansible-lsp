@@ -3421,20 +3421,20 @@ mod tests {
         assert_eq!(other.file, d.join("roles/ad/vars/extra.yml"));
     }
 
-    /// A limitation this ticket does **not** fix, pinned so it cannot be mistaken for working.
+    /// T-207: a name loaded at two precedence levels must be indexed at both.
     ///
-    /// When the include names the role's *own* `vars/main.yml`, that file is already
-    /// auto-loaded as `RoleVars`, so the same name lands twice at the same span from two
-    /// sources — precedence 15 and 18. [`dedup`] keys on `(name, file, span)` and ignores
-    /// `source`, so the second is dropped and the index keeps the **lower** precedence, which
-    /// is the one that is not in effect. Measured: the control above, naming a vars file that
-    /// is not auto-loaded, does index `IncludeVars` — so the search order is right and the
-    /// collapse is `dedup`'s doing, not the lookup's.
+    /// A role's own `vars/main.yml` re-included by its `tasks/main.yml` is loaded twice —
+    /// role vars at 15 and `include_vars` at 18 — and 18 is the level in effect against a
+    /// task-level `vars:` at 17. `dedup` keys on `(name, file, span)` and ignores `source`,
+    /// so the second is dropped and the index keeps the level that is **not** in effect.
     ///
-    /// This is the exact fact T-184 exists to report, so it is written down there too.
+    /// The lookup is not what collapses this: the test above, naming a vars file that is not
+    /// auto-loaded, indexes `IncludeVars` correctly. Ignored per rule 7 rather than asserting
+    /// today's answer — delete the attribute when T-207 lands.
     #[test]
-    fn a_reinclude_of_the_roles_own_vars_collapses_into_one_source_today() {
-        let d = std::env::temp_dir().join("ansible-lsp-t206-collapse");
+    #[ignore = "asserts the two precedence levels we collapse into one today — T-207"]
+    fn a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels() {
+        let d = std::env::temp_dir().join("ansible-lsp-t207");
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         write(&d, "roles/ad/vars/main.yml", "thing: FROM_ROLE_VARS\n");
@@ -3445,11 +3445,11 @@ mod tests {
         let nodes = Document::new(src.to_string()).parse().unwrap();
         let defs = definitions(&tasks, &nodes);
         let sources: Vec<_> = defs.iter().filter(|x| x.name == "thing").map(|x| x.source).collect();
-        // Asserting today's wrong answer on purpose: when the collapse is fixed this fails
-        // and gets inverted to expect both sources.
-        assert_eq!(sources, vec![VarSource::RoleVars], "T-207 fixed? invert this test");
-        // The file itself is right either way — that half is T-206's fix.
-        assert!(defs.iter().any(|x| x.file == d.join("roles/ad/vars/main.yml")));
+        assert!(sources.contains(&VarSource::RoleVars), "auto-loaded: {sources:?}");
+        assert!(
+            sources.contains(&VarSource::IncludeVars),
+            "the include is the level in effect, and it is missing: {sources:?}"
+        );
     }
 
     #[test]

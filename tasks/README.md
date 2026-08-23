@@ -96,11 +96,11 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
-| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | ~~T-201~~      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
+| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 
 ### P2 — coverage and usability
 
@@ -168,8 +168,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
-| T-207 | **bug** · [A re-included vars file collapses to one precedence level, and the index keeps the one not in effect](open/T-207-a-re-included-vars-file-collapses-to-one-precedence-level-an.md) | M    | —    |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](open/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | S    | ~~T-206~~ |
+| T-207 | **bug** · [A re-included vars file collapses to one precedence level, and the index keeps the one not in effect](open/T-207-a-re-included-vars-file-collapses-to-one-precedence-level-an.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

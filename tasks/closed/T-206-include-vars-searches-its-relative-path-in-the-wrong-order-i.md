@@ -124,5 +124,6 @@ with and without the new file.
 ## What this did not fix
 
 The index still collapses a file loaded at two precedence levels into one entry, keeping the
-level that is not in effect. That is [[T-207]], filed with a test asserting today's wrong
-answer. It was invisible until this fix, because the include never reached the collision.
+level that is not in effect. That is [[T-207]], filed with an `#[ignore]`d test asserting the
+answer we owe. It was invisible until this fix, because the include never reached the
+collision.

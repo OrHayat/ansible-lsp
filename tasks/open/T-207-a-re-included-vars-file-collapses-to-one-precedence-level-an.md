@@ -14,8 +14,9 @@ The shape is the one T-184 is about: a role's `tasks/main.yml` opening with
 (precedence 15), once through the include (18) — and the include is what wins against a
 task-level `vars:` at 17. We report only the role-vars one.
 
-Measured, in `a_reinclude_of_the_roles_own_vars_collapses_into_one_source_today`
-(`vars.rs`), which asserts today's wrong answer on purpose so this ticket has a test waiting:
+Measured, in `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels`
+(`vars.rs`) — `#[ignore]`d per rule 7, so it states the answer we owe rather than the one we
+give. Run it with `--ignored` to see the failure:
 
 | definitions of `thing` | source reported |
 | ---------------------- | --------------- |
@@ -58,8 +59,9 @@ Nobody has run that.
 
 - [ ] a name loaded at two precedence levels is indexed at both, with the effective one
       identifiable
-- [ ] `a_reinclude_of_the_roles_own_vars_collapses_into_one_source_today` is inverted, not
-      deleted — it is the pin for this
+- [ ] `a_reinclude_of_the_roles_own_vars_is_indexed_at_both_precedence_levels` passes with its
+      `#[ignore]` attribute deleted — it already asserts the right answer, so the fix is done
+      when it goes green, and nothing about it needs rewriting
 - [ ] hover on such a name names the level that is in effect
 - [ ] the deliberate first-route-wins behaviour at `vars.rs:1054` still holds, asserted — this
       fix must not re-open the case that comment is about
