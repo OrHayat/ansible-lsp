@@ -5956,6 +5956,54 @@ mod tests {
         }
     }
 
+    /// T-184's corpus gate, kept runnable rather than done once and described in a ticket.
+    ///
+    /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp redundant_role_vars_corpus -- --ignored --nocapture`
+    ///
+    /// Prints every hit with its file and line, because the gate is "read each one" — a bare
+    /// count cannot tell a common idiom from a rule that has started guessing. Ignored by
+    /// default and env-gated so no corpus path is ever written into this repo.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp redundant_role_vars_corpus -- --ignored --nocapture"]
+    fn redundant_role_vars_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        if !root.is_dir() {
+            return;
+        }
+        let (mut hits, mut roles, mut files) = (Vec::new(), std::collections::BTreeSet::new(), 0);
+        for f in ansible_core::workspace::yaml_files(&root) {
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            if !t.contains("include_vars") {
+                continue;
+            }
+            files += 1;
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            if let Some(r) = &a.ctx.role_dir {
+                roles.insert(r.clone());
+            }
+            for d in super::Backend::diagnostics_of(&a) {
+                if matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(c))
+                    if c == "redundant-role-vars-include")
+                {
+                    hits.push(format!(
+                        "{}:{}",
+                        f.strip_prefix(&root).unwrap_or(&f).display(),
+                        d.range.start.line + 1
+                    ));
+                }
+            }
+        }
+        println!(
+            "redundant-role-vars-include: {} hit(s); {files} files use include_vars, across {} roles",
+            hits.len(),
+            roles.len()
+        );
+        for h in &hits {
+            println!("  HIT {h}");
+        }
+    }
+
     /// T-207, the hover consumer — and the assertion that separates the fix that landed from
     /// the one that was rejected. Collapsing to the winning level would render a single row
     /// reading `include_vars`, with nothing saying the file is auto-loaded as well; the whole

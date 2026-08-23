@@ -111,6 +111,39 @@ the self-referential case is provable.
       Also swept: the demo tree, where it fires once, on the row labelled for it, with a test
       asserting no other demo file does.
 
+## Corpus v2: eight public trees, zero hits
+
+The gate above ran on one internal repo. Widened to well-known public Ansible, all shallow
+clones pinned so the sweep can be reproduced:
+
+| repo | commit | files using `include_vars` | roles | hits |
+| ------------------------------------- | --------- | --: | --: | --: |
+| `kubernetes-sigs/kubespray`           | `46dbdd3` | 19 | 17 | 0 |
+| `ansible/ansible`                     | `b85437b` | 27 | 18 | 0 |
+| `ansible-collections/community.general` | `0bf15b1` | 18 | 17 | 0 |
+| `debops/debops`                       | `65b66ff` |  8 |  8 | 0 |
+| `openstack/openstack-ansible`         | `3dcf546` |  5 |  2 | 0 |
+| `ansible/ansible-examples`            | `b505865` |  4 |  1 | 0 |
+| `geerlingguy/ansible-role-mysql`      | `0a0ea6b` |  1 |  1 | 0 |
+| `sovereign/sovereign`                 | `9fd5ff5` |  0 |  0 | 0 |
+| **total**                             |           | **82** | **64** | **0** |
+
+**The zeros are only worth anything because the same sweep fires elsewhere** (rule 2 — a probe
+that cannot produce the other answer is not evidence). Two controls, run with the identical
+test: the demo tree reports 1, on the row labelled for it, and `~/app/ansible` reports 3. So
+the sweep works and the zeros are the corpus, not a broken rule.
+
+What that says about the rule: silent on eight well-maintained public codebases, and it catches
+a real anti-pattern that grew inside one internal repo three times by copy-paste. That is the
+shape a hint should have — no noise where the code is already right, and it speaks exactly
+where a reader would change something.
+
+The sweep is now a committed test rather than a one-off:
+`ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp redundant_role_vars_corpus -- --ignored --nocapture`.
+It prints every hit with file and line, because the gate is "read each one" and a bare count
+cannot tell a common idiom from a rule that has started guessing. Env-gated, so no corpus path
+is ever written into this repo.
+
 ## `tags: always` on the include buys nothing, so "drop the task" is safe advice
 
 All three wild hits carry `tags: [always]`, which reads like a reason to keep the task — load
