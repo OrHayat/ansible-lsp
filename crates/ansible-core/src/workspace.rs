@@ -133,6 +133,24 @@ impl FileContext {
         Some(self.role_dir.as_deref()?.join("tasks"))
     }
 
+    /// This file is the role's `meta/main.yml` — the one Ansible loads as `RoleMetadata`
+    /// (`role/__init__.py:265`), not `meta/argument_specs.yml`, which sits in the same
+    /// directory under a different schema (T-149).
+    ///
+    /// One predicate rather than one per caller: both the dependency extractor and T-147's
+    /// key check ask this question, and a file is either RoleMetadata or it isn't.
+    ///
+    /// `_load_role_yaml` hard-codes `.yml .yaml .json` plus extensionless `main`
+    /// (`role/__init__.py:422-428`). Only the first two can reach us — [`yaml_files_in`]
+    /// collects no other extension — so widening this list buys nothing until the walker
+    /// changes too.
+    pub fn is_role_metadata(&self, path: &Path) -> bool {
+        let Some(role) = &self.role_dir else { return false };
+        path.parent().is_some_and(|d| d == role.join("meta"))
+            && path.file_stem().is_some_and(|s| s == "main")
+            && matches!(path.extension().and_then(|e| e.to_str()), Some("yml" | "yaml"))
+    }
+
     /// Directories that contain roles, in search order.
     pub fn roles_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();

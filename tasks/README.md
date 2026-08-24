@@ -145,14 +145,13 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
-| T-147 | [Validate role meta/main.yml against the RoleMetadata set](open/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | S    | —    |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
 | T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](open/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | S    | —    |
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
-| T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | T-147 |
+| T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | ~~T-147~~ |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
@@ -222,6 +221,8 @@ T-021 is now unblocked on that side.
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
 | T-204 | [An Ansible upgrade mid-session is invisible until restart](open/T-204-an-ansible-upgrade-mid-session-is-invisible-until-restart.md) | M    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
+| T-209 | [Model meta/main.yml whole, not just its top-level key names](open/T-209-model-meta-main-yml-whole-not-just-its-top-level-key-names.md) | M    | —          |
+| T-210 | [meta/main.yml accepts 22 keys that do nothing, and we say nothing](open/T-210-meta-main-yml-accepts-22-keys-that-do-nothing-and-we-say-not.md) | M    | T-209      |
 
 ### Downstream — not this repo's code
 
@@ -316,6 +317,7 @@ T-021 is now unblocked on that side.
 | T-207 | **bug** · [A re-included vars file collapses to one precedence level, and the index keeps the one not in effect](closed/T-207-a-re-included-vars-file-collapses-to-one-precedence-level-an.md) | done     |
 | T-208 | **bug** · [An include_vars definition claims to be in effect above its own include task](closed/T-208-an-include-vars-definition-claims-to-be-in-effect-above-its.md) | done     |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](closed/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | done     |
+| T-147 | [Validate role meta/main.yml against the RoleMetadata set](closed/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | done     |
 
 ## Settled — don't re-derive these
 

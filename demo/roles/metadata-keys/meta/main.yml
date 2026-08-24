@@ -1,0 +1,32 @@
+---
+# meta/main.yml loads as RoleMetadata, whose legal set is 27 keys: Base + CollectionSearch
+# + `allow_duplicates dependencies galaxy_info argument_specs`. Anything else is fatal at
+# role load, before a single task runs, and the message names the Python class:
+# `'x' is not a valid attribute for a RoleMetadata`.
+#
+# Measured on core 2.21.3 with `--syntax-check`, one key at a time.
+
+# GOOD — RoleMetadata's own keys.
+galaxy_info:
+  author: demo
+  description: exercises the RoleMetadata key set
+dependencies: []
+
+# GOOD — `become:` arrives through Base. It parses fine here and then does nothing at all,
+# which is exactly why the rule must not flag it: silence on a useless key is still the
+# right answer when Ansible accepts it.
+become: false
+
+# BAD (invalid-attribute): RoleMetadata mixes in no Conditional, so `when:` is fatal here
+# even though it is legal on nearly everything else in Ansible.
+when: ansible_os_family == 'RedHat'
+
+# BAD (invalid-attribute): no Taggable either.
+tags: [demo]
+
+# BAD (invalid-attribute): `author` is a galaxy_info sub-key. One level too high, and the
+# role stops loading.
+author: demo
+
+# SILENCED: `standalone:` is an ansible-lint idiom that ansible-core itself refuses.
+standalone: true # noqa: invalid-attribute

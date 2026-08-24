@@ -43,8 +43,10 @@ sibling epic).
 - [ ] T-109 — Keyword value enums
 - [ ] T-110 — Placement and mutual-exclusion rules
 - [ ] T-111 — module_defaults: shape, the 3-segment rule, and action groups
-- [ ] T-147 — Validate role meta/main.yml against the RoleMetadata set
+- [x] T-147 — Validate role meta/main.yml against the RoleMetadata set
 - [ ] T-159 — Task-level invalid-attribute fires where ansible reports a conflicting action
+- [ ] T-209 — Model meta/main.yml whole, not just its top-level key names
+- [ ] T-210 — meta/main.yml accepts 22 keys that do nothing, and we say nothing
 
 ## Done when
 

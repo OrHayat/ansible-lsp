@@ -19,7 +19,7 @@ checked):
 | ---------------------------------- | ------------------------------------------------ | ---- | --------- | ------ |
 | playbook                           | `FieldAttribute` MRO (`base.py:93-105`)          | yes  | yes       | ~~T-107~~ |
 | tasks / handlers files             | same + include restrictions                      | yes  | yes       | ~~T-107~~ |
-| role `meta/main.yml`               | `RoleMetadata` (`metadata.py:32-41`)             | deps only | no   | T-147  |
+| role `meta/main.yml`               | `RoleMetadata` (`metadata.py:32-41`)             | deps only | top-level keys | ~~T-147~~, T-209 (values), T-210 (the 22 inert keys) |
 | role `meta/argument_specs.yml`     | `arg_spec.py` validator                          | no   | no        | T-041 (call sites), T-149 (the file) |
 | collection `meta/runtime.yml`      | collection loader (unaudited)                    | routing only | no | T-148 |
 | collection `galaxy.yml`            | `galaxy/data/collections_galaxy_meta.yml` — machine-readable, per-key `required`/`type` | no | no | T-151 |

@@ -1,0 +1,6 @@
+---
+# This role exists for its meta/main.yml — see the file next door. The task list is here
+# only so the role is shaped like a role.
+- name: "nothing to see here"
+  ansible.builtin.debug:
+    msg: "see meta/main.yml"

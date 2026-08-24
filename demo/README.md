@@ -85,6 +85,11 @@ if it warned:
   probed first) — Ansible says nothing and neither do we. The file is real and loads fine on
   its own; that it is unreachable *here* is T-023's hint to draw, not a missing-file error.
 - **modules from collections that aren't installed** — a missing dependency, not a typo.
+- **`become:` in a role's `meta/main.yml`** — it is one of the 27 keys `RoleMetadata`
+  accepts, so it parses fine and then does nothing at all. Useless is not invalid, and the
+  three keys next to it in `roles/metadata-keys/meta/main.yml` that Ansible *does* refuse
+  are errors. The same file's `vars/main.yml` and `defaults/main.yml` neighbours are
+  top-level mappings too, and their keys are variable names — never checked against this set.
 - **61% of `when:` conditions** — real boolean logic, unguarded comparisons, unknown filters.
   Guessing would make the analysis untrustworthy.
 

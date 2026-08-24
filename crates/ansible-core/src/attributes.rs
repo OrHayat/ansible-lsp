@@ -72,6 +72,44 @@ pub fn problems(ast: &Ast, invalid_task_attribute_failed: bool) -> Vec<Problem> 
     out
 }
 
+/// Unknown top-level keys in a role's `meta/main.yml`, which loads as `RoleMetadata`
+/// (T-147). Always ERROR: `_validate_attributes` (`base.py:211-220`) raises unconditionally
+/// here, with no `INVALID_TASK_ATTRIBUTE_FAILED` escape, and `RoleMetadata` overrides
+/// neither `preprocess_data` nor `load_data` — so unlike `Play`, which smuggles `user:`
+/// past validation by renaming it first (`play.py:166-174`), the legal set really is the
+/// 27 keys of `fattributes`.
+///
+/// Measured on core 2.21.3, one key at a time, `--syntax-check`: `when` `standalone` `tags`
+/// `author` `frobnicate` each fatal with the message below, `become` and `collections`
+/// clean. Top-level keys only — `dependencies:` entries are RoleInclude-shaped and
+/// `argument_specs:` has its own schema (T-149).
+///
+/// The caller decides *which* file this is; [`crate::workspace::FileContext::is_role_metadata`]
+/// owns that question.
+pub fn role_metadata_problems(nodes: &[Node]) -> Vec<Problem> {
+    // A non-mapping meta/main.yml is a different error entirely — "the 'meta/main.yml' for
+    // role %s is not a dictionary" (`metadata.py:54`) — and reporting unknown keys for it
+    // would name the wrong fault.
+    let Some(Node::Mapping { entries, .. }) = nodes.first() else { return Vec::new() };
+    entries
+        .iter()
+        .filter_map(|(k, _)| {
+            let key = k.as_str()?;
+            if keywords::legal_key(KeyContext::RoleMetadata, key) {
+                return None;
+            }
+            Some(fatal(
+                &UnknownKey {
+                    key: key.to_string(),
+                    key_span: k.span(),
+                    ctx: KeyContext::RoleMetadata,
+                },
+                "RoleMetadata",
+            ))
+        })
+        .collect()
+}
+
 fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
     match s {
         Stmt::Block(b) => {
@@ -300,6 +338,76 @@ mod tests {
             .into_iter()
             .map(|p| (p.tier, p.message))
             .collect()
+    }
+
+    fn meta(src: &str) -> Vec<(Tier, String)> {
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        role_metadata_problems(&nodes).into_iter().map(|p| (p.tier, p.message)).collect()
+    }
+
+    /// T-147, and the measurement it replicates. Each row was run against ansible-core
+    /// 2.21.3 as a one-task role with `roles: [r]`, one key at a time in `meta/main.yml`,
+    /// under `ansible-playbook -i localhost, play.yml --syntax-check`. The strings are the
+    /// ones ansible printed, not a paraphrase — `base.py:219` formats the class from
+    /// `self.__class__.__name__`, which is why it says `RoleMetadata`.
+    ///
+    /// The last two rows are the control, and they are the half that can fail for the right
+    /// reason: a rule that flagged every key would pass the first five on its own. `become:`
+    /// there parses fine and does nothing, and flagging it would be a false positive on
+    /// valid Ansible.
+    #[test]
+    fn role_metadata_keys_match_the_live_ansible_verdicts() {
+        let rows: &[(&str, Option<&str>)] = &[
+            ("when: true", Some("'when' is not a valid attribute for a RoleMetadata")),
+            ("standalone: true", Some("'standalone' is not a valid attribute for a RoleMetadata")),
+            ("tags: [foo]", Some("'tags' is not a valid attribute for a RoleMetadata")),
+            ("author: someone", Some("'author' is not a valid attribute for a RoleMetadata")),
+            ("frobnicate: yes", Some("'frobnicate' is not a valid attribute for a RoleMetadata")),
+            ("become: true", None),
+            ("collections: [ansible.builtin]", None),
+        ];
+        for (line, want) in rows {
+            let got = meta(&format!("dependencies: []\n{line}\n"));
+            match want {
+                Some(msg) => assert_eq!(got, [(Tier::Error, (*msg).into())], "on `{line}`"),
+                None => assert!(got.is_empty(), "`{line}` is valid Ansible: {got:?}"),
+            }
+        }
+    }
+
+    /// The whole 27-key set, not the seven rows above: `galaxy_info` and `argument_specs`
+    /// are `RoleMetadata`'s own, and the other 22 arrive through `Base` — a routing bug that
+    /// pointed this file at the wrong `KeyContext` would still pass the table.
+    #[test]
+    fn every_legal_role_metadata_key_stays_silent() {
+        for k in keywords::legal_keys(KeyContext::RoleMetadata) {
+            let got = meta(&format!("{k}: ~\n"));
+            assert!(got.is_empty(), "`{k}` is legal in meta/main.yml: {got:?}");
+        }
+    }
+
+    /// The typo suggestion is shared with every other context, so this only checks it is
+    /// wired — `dependencie` is one edit from a key that only exists in this set.
+    #[test]
+    fn a_near_miss_in_meta_names_the_repair() {
+        assert_eq!(
+            meta("dependencie: []\n"),
+            [(
+                Tier::Error,
+                "'dependencie' is not a valid attribute for a RoleMetadata (did you mean \
+                 'dependencies'?)"
+                    .into()
+            )]
+        );
+    }
+
+    /// A `meta/main.yml` that is not a mapping fails differently — "the 'meta/main.yml' for
+    /// role %s is not a dictionary" (`metadata.py:54`) — and listing unknown keys for it
+    /// would name the wrong fault. T-150's file-kind work owns that message.
+    #[test]
+    fn a_non_mapping_meta_reports_nothing_here() {
+        assert!(meta("- when: x\n").is_empty());
+        assert!(meta("").is_empty());
     }
 
     #[test]

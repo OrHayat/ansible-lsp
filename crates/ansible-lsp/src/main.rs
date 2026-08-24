@@ -423,6 +423,9 @@ struct Analysis {
     /// T-110 rows 5 and 23, computed during analysis rather than at publish time: they need
     /// the *target* file's parse, and the scan cache that already holds it is only live here.
     include_targets: Vec<placement::Problem>,
+    /// This file is a role's `meta/main.yml` (T-147). Carried rather than recomputed because
+    /// `Analysis` has no path and the answer is `ctx` + path, which only the analyze call has.
+    is_role_metadata: bool,
 }
 
 /// Per-phase time accumulated across a workspace scan (T-074). Sums, not per-file — the
@@ -751,8 +754,9 @@ impl Backend {
             in_playbook: extracted.in_playbook,
             ..Default::default()
         };
+        let is_role_metadata = ctx.is_role_metadata(path);
         let mut extracted = extracted.refs;
-        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+        if is_role_metadata {
             extracted.extend(references::meta_dependencies(&nodes));
         }
         let refs: Vec<(Reference, Resolution)> = extracted
@@ -779,7 +783,7 @@ impl Backend {
             })
             .collect();
 
-        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets })
+        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets, is_role_metadata })
     }
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
@@ -1101,10 +1105,17 @@ impl Backend {
         // Play/Task/...`, classified per context in `ast::build`. Task-level severity
         // follows the project's `invalid_task_attribute_failed`; play/block/loop_control
         // unknowns are errors regardless (T-107).
-        let invalid: Vec<Diagnostic> = attributes::problems(
-            &ansible_core::ast::build(&a.nodes),
-            a.ctx.config.invalid_task_attribute_failed,
-        )
+        // A role's `meta/main.yml` is a top-level mapping, so `ast::build` calls it
+        // `Ast::Other` and the walk above never reaches it. Route it by path instead —
+        // its keys are `RoleMetadata`'s, and unknown ones are fatal at load (T-147).
+        let invalid: Vec<Diagnostic> = if a.is_role_metadata {
+            attributes::role_metadata_problems(&a.nodes)
+        } else {
+            attributes::problems(
+                &ansible_core::ast::build(&a.nodes),
+                a.ctx.config.invalid_task_attribute_failed,
+            )
+        }
         .into_iter()
         .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
         .map(|p| Diagnostic {
@@ -3675,6 +3686,99 @@ mod tests {
         );
     }
 
+    /// T-147's corpus gate, kept runnable rather than done once and described in a ticket.
+    ///
+    /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp role_metadata_corpus -- --ignored --nocapture`
+    ///
+    /// Point it at one tree at a time. Every hit is printed with its file and line, because
+    /// the gate is "read each one": this rule calls valid Ansible fatal if it is wrong, so a
+    /// bare count cannot tell a real find from a rule that has started guessing.
+    ///
+    /// | tree | commit | meta files seen | hits |
+    /// | ------------------------------------------ | --------- | -------------- | ---- |
+    /// | `kubernetes-sigs/kubespray`                | `46dbdd3` | 62 (31 distinct) | 0 |
+    /// | `debops/debops`                            | `65b66ff` | 812 (203 distinct) | 0 |
+    /// | `geerlingguy/ansible-role-mysql`           | `0a0ea6b` | 1              | 0 |
+    /// | `ansible/ansible-examples`                 | `b505865` | 0              | — |
+    ///
+    /// The counts are files *walked*, not distinct files: [`yaml_files`] follows directory
+    /// symlinks, and both trees point a second path at their whole role tree
+    /// (`extra_playbooks/roles -> ../roles`, `debops/roles -> ansible/roles`), so each role
+    /// is visited more than once. Left as-is — following them is right for resolution, since
+    /// Ansible would load through those paths too — but it means a hit count from this gate
+    /// would double-report, and a distinct-file count needs `find`, not this walk.
+    ///
+    /// `ansible-examples` has no role `meta/` at all, so it is listed as measured and
+    /// proving nothing rather than as a tree that passed.
+    ///
+    /// **Zeros are also what a broken sweep looks like**, so the control that must come out
+    /// different is this repo's own `demo/`, which reports exactly 3 — the BAD rows of
+    /// `roles/metadata-keys/meta/main.yml`. If that comes back 0, the sweep is broken.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp role_metadata_corpus -- --ignored --nocapture"]
+    fn role_metadata_corpus() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        if !root.is_dir() {
+            return;
+        }
+        let (mut hits, mut metas) = (Vec::new(), 0);
+        for f in ansible_core::workspace::yaml_files(&root) {
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            if !a.is_role_metadata {
+                continue;
+            }
+            metas += 1;
+            for d in super::Backend::diagnostics_of(&a) {
+                if matches!(&d.code, Some(NumberOrString::String(c)) if c == "invalid-attribute") {
+                    hits.push(format!(
+                        "{}:{} {}",
+                        f.strip_prefix(&root).unwrap_or(&f).display(),
+                        d.range.start.line + 1,
+                        d.message
+                    ));
+                }
+            }
+        }
+        println!("invalid-attribute in role metadata: {} hit(s) across {metas} meta file(s)", hits.len());
+        for h in &hits {
+            println!("  HIT {h}");
+        }
+    }
+
+    /// T-147: the demo's meta file makes the claim, so the claim is pinned. Three BAD rows,
+    /// one SILENCED row that must not appear, and — the half that can fail for the right
+    /// reason — `galaxy_info`, `dependencies` and `become:` staying silent above them.
+    #[test]
+    fn the_role_metadata_demo_reports_exactly_its_bad_rows() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo")
+            .canonicalize()
+            .unwrap()
+            .join("roles/metadata-keys/meta/main.yml");
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-attribute")
+            })
+            .collect();
+        let msgs: Vec<&str> = got.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            msgs,
+            [
+                "'when' is not a valid attribute for a RoleMetadata",
+                "'tags' is not a valid attribute for a RoleMetadata",
+                "'author' is not a valid attribute for a RoleMetadata",
+            ],
+            "one per BAD row; `standalone:` carries a # noqa and the GOOD rows are legal"
+        );
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::ERROR)));
+    }
+
     /// T-088: no false positives — every demo file except the one built to demonstrate
     /// the rule stays free of invalid-attribute diagnostics.
     #[test]
@@ -3690,9 +3794,17 @@ mod tests {
             // `the_dead_loop_control_warning_is_its_own_rule`, so it is covered, not exempt.
             // `role_include_params.yml` is the same arrangement for the closed arg set:
             // `the_role_include_params_demo_reports_exactly_its_bad_rows` pins its four.
-            const DEMOS: [&str; 3] =
-                ["invalid_attributes.yml", "placement.yml", "role_include_params.yml"];
-            if path.file_name().is_some_and(|n| DEMOS.iter().any(|d| n == *d)) {
+            // `roles/metadata-keys/meta/main.yml` is T-147's demo, pinned by
+            // `the_role_metadata_demo_reports_exactly_its_bad_rows`. Matched as a path
+            // suffix, not a file name: every role has a `main.yml`, and exempting that name
+            // would excuse the whole demo tree from the rule.
+            const DEMOS: [&str; 4] = [
+                "invalid_attributes.yml",
+                "placement.yml",
+                "role_include_params.yml",
+                "roles/metadata-keys/meta/main.yml",
+            ];
+            if DEMOS.iter().any(|d| path.ends_with(d)) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -5142,6 +5254,86 @@ mod tests {
         let wrong_id = "- hosts: web\n  tasks:\n    - debug:\n      \
                         loop_control: {loop_var: it} # noqa: invalid-placement\n";
         assert_eq!(count(wrong_id), 1, "invalid-placement must not silence dead-loop-control");
+    }
+
+    /// T-147, the diagnostics consumer. `attributes.rs` owns the message and the key set;
+    /// what this pins is the *routing* — which files reach the rule at all. A top-level
+    /// mapping is `Ast::Other`, so nothing reaches it by accident, and every row below
+    /// differs from the first only in where the file sits or what it is called.
+    ///
+    /// The three silent rows are the control, and they are what a path check that is merely
+    /// "ends with meta/main.yml" gets wrong: `meta/argument_specs.yml` is a sibling under a
+    /// different schema (T-149), and a `meta/main.yml` with no role around it is not role
+    /// metadata at all — it is a vars file with an unlucky name.
+    #[test]
+    fn only_a_role_s_own_meta_main_is_validated_as_role_metadata() {
+        use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
+        let d = std::env::temp_dir().join("ansible-lsp-t147-routing");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("roles/r/meta")).unwrap();
+        std::fs::create_dir_all(d.join("roles/r/tasks")).unwrap();
+        std::fs::create_dir_all(d.join("plain")).unwrap();
+
+        let bad = "dependencies: []\nwhen: true\n";
+        let flagged = |rel: &str, text: &str| -> Vec<Diagnostic> {
+            let path = d.join(rel);
+            std::fs::write(&path, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|x| {
+                    matches!(&x.code, Some(NumberOrString::String(s)) if s == "invalid-attribute")
+                })
+                .collect()
+        };
+
+        let got = flagged("roles/r/meta/main.yml", bad);
+        assert_eq!(got.len(), 1, "the role's own meta/main.yml is RoleMetadata: {got:?}");
+        assert_eq!(got[0].message, "'when' is not a valid attribute for a RoleMetadata");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::ERROR), "fatal at load, never a warning");
+        // The span is the key, not the line or the value — the squiggle sits under `when`.
+        assert_eq!(got[0].range.start.line, 1);
+        assert_eq!((got[0].range.start.character, got[0].range.end.character), (0, 4));
+
+        // `_load_role_yaml` hard-codes `.yml .yaml .json`, in that order, so the `.yaml`
+        // spelling is the same file to Ansible and must be to us.
+        assert_eq!(
+            flagged("roles/r/meta/main.yaml", bad).len(),
+            1,
+            "meta/main.yaml is role metadata too"
+        );
+        assert!(
+            flagged("roles/r/meta/argument_specs.yml", bad).is_empty(),
+            "argument_specs.yml is a different schema (T-149), not RoleMetadata"
+        );
+        assert!(
+            flagged("plain/main.yml", bad).is_empty(),
+            "a main.yml outside a role's meta/ is not role metadata"
+        );
+        assert!(
+            flagged("roles/r/tasks/main.yml", "- debug: {msg: x}\n").is_empty(),
+            "the control that must come out different if the rule fired on everything"
+        );
+        // The row that made this test able to fail. A role's `vars/main.yml` is also a
+        // top-level mapping under `<role>/`, and its keys are *variable names* — `when:` and
+        // `become:` are ordinary variables there. A predicate that checks the filename but
+        // forgets the directory turns every one of them into a false ERROR on valid Ansible,
+        // and the tasks/ row above cannot catch that: a task file is a sequence, so the
+        // non-mapping guard hides the bug.
+        for dir in ["vars", "defaults"] {
+            std::fs::create_dir_all(d.join("roles/r").join(dir)).unwrap();
+            assert!(
+                flagged(&format!("roles/r/{dir}/main.yml"), bad).is_empty(),
+                "keys in a role's {dir}/main.yml are variable names, not RoleMetadata keys"
+            );
+        }
+
+        let silenced = "dependencies: []\nwhen: true # noqa: invalid-attribute\n";
+        assert!(
+            flagged("roles/r/meta/main.yml", silenced).is_empty(),
+            "# noqa: invalid-attribute suppresses it like every other arm"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// T-088: `# noqa: invalid-attribute` on the offending line silences the rule.
