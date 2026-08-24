@@ -58,6 +58,11 @@ is that anything not represented parses to a node that classifies as `Unknown`, 
   (recorded with measurements on T-034)
 - T-089 indexed access into static list vars
 - T-115's filter index has a natural home once filters are nodes rather than substrings
+- T-040, and more directly than the others: `parse_extends`, `parse_include`, `parse_import`
+  and `parse_from` each read their target with `node.template = self.parse_expression()`
+  (jinja2 3.1.6). The expression parser *is* the thing that reads an include target, so T-040
+  stops owning the grammar it currently books as its biggest cost — see its target list
+  for what it still needs on top (document scan, block terminator, four statement forms)
 
 ## Done when
 
