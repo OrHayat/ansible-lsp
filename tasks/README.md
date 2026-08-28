@@ -101,6 +101,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](open/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | M    | ~~T-201~~      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
+| T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 
 ### P2 — coverage and usability
 
@@ -115,7 +116,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-032 | [Static `when:` evaluation](open/T-032-static-when.md)    | L    | 2669 |
 | T-038 | [Resolve file-hitting lookups](open/T-038-file-lookups.md) | M   | —    |
 | T-039 | [`requirements.yml` ↔ installed collections](open/T-039-requirements-collections.md) | M | — |
-| T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L | — |
 | T-041 | [`meta/argument_specs.yml` role signatures](open/T-041-role-argument-specs.md) | M | — |
 | T-042 | [Resolver gaps: collections, `*_from`](open/T-042-resolver-gaps.md) | S | — |
 | T-046 | [Harden the module/args split](open/T-046-module-args-split.md) | M | T-044 |
@@ -168,6 +168,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 | T-211 | **bug** · [The default filter's short and FQCN spellings never classify](open/T-211-the-default-filter-s-short-and-fqcn-spellings-never-classify.md) | S    | —    |
+| T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | T-188 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

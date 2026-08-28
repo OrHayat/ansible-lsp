@@ -61,8 +61,30 @@ is that anything not represented parses to a node that classifies as `Unknown`, 
 - T-040, and more directly than the others: `parse_extends`, `parse_include`, `parse_import`
   and `parse_from` each read their target with `node.template = self.parse_expression()`
   (jinja2 3.1.6). The expression parser *is* the thing that reads an include target, so T-040
-  stops owning the grammar it currently books as its biggest cost — see its target list
-  for what it still needs on top (document scan, block terminator, four statement forms)
+  gets that half for free. It still owns the rest of the grammar in full — the five lexer
+  states and all 14 statement forms — because a `.j2` file goes down Ansible's *template*
+  compile path and a reader that skips unmodelled tags can never report a template that will
+  not render. The split is not a subset of one grammar; it is Ansible's two compile paths.
+
+### The boundary is Ansible's, not ours
+
+`_engine.py:293` routes a value to one of two entry points. `when:`, `loop:` and `assert.that`
+take `_compile_expression` (`playbook/task.py:615`, `executor/task_executor.py:178`,
+`plugins/action/assert.py:81`), which is `env.compile_expression` — `Parser(state="variable")`,
+`parse_expression()`, and nothing else. **This surface physically cannot contain a statement**,
+so "expressions only" is complete here rather than a subset of something larger. Everything
+else goes to `_compile_template` and is T-040's.
+
+That same function ends with `if not parser.stream.eos: raise TemplateSyntaxError("chunk after
+expression")`, which is the error `expressions.rs` already quotes. It is not decoration: a bare
+`parse_expression()` **stops at the first complete expression and leaves the rest**. Measured on
+jinja2 3.1.6 — `x y` returns `Name('x')` with `name:'y'` still on the stream, and `x }} y`
+returns `Name('x')` with `variable_end` pending. Porting the call without porting the check
+would make `when: foo bar` classify as a confident claim about `foo`, which is this ticket's
+own failure mode reintroduced by the fix for it.
+
+(ansible-core lines read from the 2.21.3 sdist and **not run** — no core installed on the
+machine this was written on. The jinja2 lines were run.)
 
 ## Done when
 
@@ -77,6 +99,8 @@ is that anything not represented parses to a node that classifies as `Unknown`, 
 - [ ] T-187's case classifies identically to its spaced spelling, plus one non-`RequiresNonEmpty`
       arm asserted the same way
 - [ ] a quoted operator survives: `x == "a|b"` keeps its literal value
+- [ ] the parse is required to reach end of stream, with `x y` and `x }} y` asserted `Unknown`
+      rather than a claim about `x` — Ansible's own "chunk after expression" check
 - [ ] anything unrepresentable is `Unknown`, with a test naming a construct we deliberately do
       not model
 - [ ] the T-032 corpus classification rate (**39% of all conditions, 93% of import-level**) is

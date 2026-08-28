@@ -66,6 +66,7 @@ resolving paths, and it lives with the other file-reference work.
 - [x] T-141 — Condition rules only see when:, not the other four expression keywords
 - [ ] T-188 — Parse Jinja expressions into a tree instead of matching them as strings
 - [ ] T-211 — The default filter's short and FQCN spellings never classify
+- [ ] T-212 — A `{% for %}`-bound name in a scalar is reported as an undefined variable
 
 ## Done when
 
