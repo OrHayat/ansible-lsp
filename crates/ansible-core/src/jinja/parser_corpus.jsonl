@@ -1,0 +1,1126 @@
+{"err": "unexpected 'end of template'", "src": ""}
+{"err": "unexpected 'end of template'", "src": "   "}
+{"err": "unexpected char '!' at 0", "src": "!x"}
+{"err": "chunk after expression", "src": "\"\n            \"pluralize count"}
+{"ast": {"t": "Const", "value": " + name + "}, "src": "\" + name + \""}
+{"ast": {"args": [{"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"items": [{"t": "Const", "value": "b"}, {"t": "Const", "value": "A"}, {"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "t": "List"}, "t": "Filter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "join", "node": {"t": "Const", "value": ""}, "t": "Getattr"}, "t": "Call"}, "src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique(true))"}
+{"ast": {"args": [{"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"items": [{"t": "Const", "value": "b"}, {"t": "Const", "value": "A"}, {"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "t": "List"}, "t": "Filter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "join", "node": {"t": "Const", "value": ""}, "t": "Getattr"}, "t": "Call"}, "src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique)"}
+{"ast": {"args": [{"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sort", "node": {"items": [{"t": "Const", "value": "c"}, {"t": "Const", "value": "A"}, {"t": "Const", "value": "b"}, {"t": "Const", "value": "D"}], "t": "List"}, "t": "Filter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "join", "node": {"t": "Const", "value": ""}, "t": "Getattr"}, "t": "Call"}, "src": "\"\".join([\"c\", \"A\", \"b\", \"D\"]|sort)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "(see http://www.example.org/?page=subj_<desc.h>)"}, "t": "Filter"}, "src": "\"(see http://www.example.org/?page=subj_<desc.h>)\"|urlize"}
+{"ast": {"t": "Const", "value": ", "}, "src": "\", \""}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "random", "node": {"t": "Const", "value": "1234567890"}, "t": "Filter"}, "src": "\"1234567890\"|random"}
+{"ast": {"t": "Const", "value": "<HelloWorld>"}, "src": "\"<HelloWorld>\""}
+{"ast": {"t": "Const", "value": "<div>foo</div>"}, "src": "\"<div>foo</div>\""}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "<div>foo</div>"}, "t": "Filter"}, "src": "\"<div>foo</div>\"|safe"}
+{"ast": {"t": "Const", "value": "<test>"}, "src": "\"<test>\""}
+{"ast": {"t": "Const", "value": "<y>"}, "src": "\"<y>\""}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lower", "node": {"t": "Const", "value": "FOO"}, "t": "Test"}, "src": "\"FOO\" is lower"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "FOO"}, "t": "Test"}, "src": "\"FOO\" is upper"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lower", "node": {"t": "Const", "value": "FOO"}, "t": "Filter"}, "src": "\"FOO\"|lower"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "FOO\tBAR"}, "t": "Filter"}, "src": "\"FOO\\tBAR\"|title"}
+{"ast": {"args": [{"t": "Const", "value": 7}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"t": "Const", "value": "Joel is a slug"}, "t": "Filter"}, "src": "\"Joel is a slug\"|truncate(7, true)"}
+{"ast": {"t": "Const", "value": "\u2668"}, "src": "\"\\N{HOT SPRINGS}\""}
+{"err": "unexpected char '\"' at 0", "src": "\"also unterminated"}
+{"ast": {"args": [{"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"t": "Const", "value": "a{0.__class__}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{0.__class__}b\".format(42)"}
+{"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"t": "Const", "value": "a{0.foo}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{0.foo}b\".format({\"foo\": 42})"}
+{"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "x"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format_map", "node": {"t": "Const", "value": "a{x.__class__}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{x.__class__}b\".format_map({\"x\":42})"}
+{"err": "unexpected end of template, expected ','.", "src": "\"a{x.foo}b\".format_map({\"x\":{\"foo\": 42"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "b"}, "t": "Test"}, "src": "\"b\" is in \"foo\""}
+{"err": "unexpected end of template, expected ','.", "src": "\"baz\" is in {\"bar\": 1"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "f bar f"}, "t": "Filter"}, "src": "\"f bar f\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo   bar"}, "t": "Filter"}, "src": "\"foo   bar\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo (bar)"}, "t": "Filter"}, "src": "\"foo (bar)\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo <bar>"}, "t": "Filter"}, "src": "\"foo <bar>\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo [bar]"}, "t": "Filter"}, "src": "\"foo [bar]\"|title"}
+{"ast": {"args": [{"t": "Const", "value": 9}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"t": "Const", "value": "foo bar baz"}, "t": "Filter"}, "src": "\"foo bar baz\"|truncate(9)"}
+{"ast": {"args": [{"t": "Const", "value": 9}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"t": "Const", "value": "foo bar baz"}, "t": "Filter"}, "src": "\"foo bar baz\"|truncate(9, true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "wordcount", "node": {"t": "Const", "value": "foo bar baz"}, "t": "Filter"}, "src": "\"foo bar baz\"|wordcount"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "capitalize", "node": {"t": "Const", "value": "foo bar"}, "t": "Filter"}, "src": "\"foo bar\"|capitalize"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo bar"}, "t": "Filter"}, "src": "\"foo bar\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo email@example.com bar"}, "t": "Filter"}, "src": "\"foo email@example.com bar\"|urlize"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo example.org bar"}, "t": "Filter"}, "src": "\"foo example.org bar\"|urlize"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo http://www.example.com/ bar"}, "t": "Filter"}, "src": "\"foo http://www.example.com/ bar\"|urlize"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "target", "t": "Keyword", "value": {"t": "Const", "value": "_blank"}}], "name": "urlize", "node": {"t": "Const", "value": "foo http://www.example.com/ bar"}, "t": "Filter"}, "src": "\"foo http://www.example.com/ bar\"|urlize(target=\"_blank\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo mailto:email@example.com bar"}, "t": "Filter"}, "src": "\"foo mailto:email@example.com bar\"|urlize"}
+{"err": "expected token 'name', got 'string'", "src": "\"foo tel:+1-514-555-1234 ftp://localhost bar\"|'\n            'urlize(extra_schemes=[\"tel:\", \"ftp:\"])"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo {bar}"}, "t": "Filter"}, "src": "\"foo {bar}\"|title"}
+{"ast": {"t": "Const", "value": "foobarbaz"}, "src": "\"foo\" \"bar\" \"baz\""}
+{"ast": {"expr1": {"t": "Const", "value": "foo"}, "expr2": null, "t": "CondExpr", "test": {"t": "Const", "value": false}}, "src": "\"foo\" if false"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is in \"foo\""}
+{"err": "unexpected end of template, expected ','.", "src": "\"foo\" is in {\"foo\": 1"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lower", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is lower"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is upper"}
+{"ast": {"args": [{"t": "Const", "value": 9}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "center", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "src": "\"foo\"|center(9)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "src": "\"foo\"|upper"}
+{"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "right": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "bar"}, "t": "Filter"}, "t": "Add"}, "src": "\"foo\"|upper + \"bar\"|upper"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo's bar"}, "t": "Filter"}, "src": "\"foo's bar\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo-bar"}, "t": "Filter"}, "src": "\"foo-bar\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo\tbar"}, "t": "Filter"}, "src": "\"foo\\tbar\"|title"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "length", "node": {"t": "Const", "value": "hello world"}, "t": "Filter"}, "src": "\"hello world\"|length"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "http://www.example.org/<foo"}, "t": "Filter"}, "src": "\"http://www.example.org/<foo\"|urlize"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "indent", "node": {"t": "Const", "value": "jinja"}, "t": "Filter"}, "src": "\"jinja\"|indent"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "blank", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "indent", "node": {"t": "Const", "value": "jinja"}, "t": "Filter"}, "src": "\"jinja\"|indent(blank=true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "first", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "indent", "node": {"t": "Const", "value": "jinja"}, "t": "Filter"}, "src": "\"jinja\"|indent(first=true)"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "o"}, "t": "Test"}, "src": "\"o\" is in \"foo\""}
+{"ast": {"args": [{"name": "not_here", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": "format"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "attr", "node": {"t": "Const", "value": "{0.__call__.__builtins__[__import__]}"}, "t": "Filter"}, "t": "Call"}, "src": "\"{0.__call__.__builtins__[__import__]}\"\n                  | attr(\"format\")(not_here)"}
+{"err": "unexpected '%'", "src": "% block test %"}
+{"err": "unexpected '%'", "src": "% elif a == {i} %"}
+{"err": "unexpected '%'", "src": "% else %"}
+{"err": "unexpected '%'", "src": "% endblock %"}
+{"err": "unexpected '%'", "src": "% endblock test %"}
+{"err": "unexpected '%'", "src": "% endfor %"}
+{"err": "unexpected '%'", "src": "% endif %"}
+{"err": "unexpected '%'", "src": "% for i in seq %"}
+{"err": "unexpected '%'", "src": "% if a == 0 %"}
+{"err": "unexpected '%'", "src": "% import \"bar\" as bar{i} with context %"}
+{"err": "unexpected '%'", "src": "% set a{i}, b{i}, c{i} = tuple_var{i} %"}
+{"err": "unexpected '%'", "src": "% {op} 'base' %"}
+{"err": "unexpected char \"'\" at 0", "src": "'\n                    \"super()"}
+{"ast": {"args": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "format", "node": {"t": "Const", "value": "%s|%s"}, "t": "Filter"}, "src": "'%s|%s'|format('a', 'b')"}
+{"ast": {"t": "Const", "value": "%}"}, "src": "'%}'"}
+{"ast": {"expr": {"t": "Const", "value": ""}, "ops": [{"expr": {"t": "Const", "value": null}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "'' == None"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"t": "Const", "value": "<\">&"}, "t": "Filter"}, "src": "'<\">&'|escape"}
+{"ast": {"t": "Const", "value": "<testing>"}, "src": "'<testing>'"}
+{"err": "unknown Unicode character name", "src": "'\\N{NOPE}'"}
+{"err": "truncated \\uXXXX escape", "src": "'\\u26'"}
+{"ast": {"t": "Const", "value": "a\nb"}, "src": "'a\nb'"}
+{"ast": {"t": "Const", "value": "a\nb"}, "src": "'a\nb'"}
+{"err": "truncated \\uXXXX escape", "src": "'a' '\\u26'"}
+{"ast": {"t": "Const", "value": "all"}, "src": "'all'"}
+{"err": "chunk after expression", "src": "'a{i}': l_0_a{i}, 'b{i}': l_0_b{i}, 'c{i}': l_0_c{i"}
+{"err": "chunk after expression", "src": "'a{i}': l_1_a{i}, 'b{i}': l_1_b{i}, 'c{i}': l_1_c{i"}
+{"ast": {"t": "Const", "value": "a|b"}, "src": "'a|b'"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "pprint", "node": {"t": "Const", "value": "b\u00e4r"}, "t": "Filter"}, "src": "'b\u00e4r'|pprint"}
+{"ast": {"expr1": {"t": "Const", "value": "foo"}, "expr2": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "t": "CondExpr", "test": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "t": "Not"}}, "src": "'foo' if x is not defined else x|f"}
+{"ast": {"expr": {"t": "Const", "value": "foo"}, "ops": [{"expr": {"name": "missing", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "src": "'foo' in missing"}
+{"err": "chunk after expression", "src": "'foo': item}|upper}{% endfor %}\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == \"{'FOO': 0}{'FOO': 1}{'FOO': 2}\"\n\n    def test_comments(self, env):\n        env = Environment(\"<!--\", \"-->\", \"{\", \"}\")\n        tmpl = env.from_string(\n            \"\"\"\\\n<ul>\n<!--- for item in seq -->\n  <li>{item}</li>\n<!--- endfor -->\n</ul>\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == (\n            \"<ul>\\n  <li>0</li>\\n  <li>1</li>\\n  <li>2</li>\\n</ul>\"\n        )\n\n    def test_string_escapes(self, env):\n        for char in \"\\0\", \"\\u2668\", \"\\xe4\", \"\\t\", \"\\r\", \"\\n\":\n            tmpl = env.from_string(f\"{{{{ {char!r}"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "pprint", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "src": "'foo'|pprint"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reverse", "node": {"t": "Const", "value": "foobar"}, "t": "Filter"}, "t": "Filter"}, "src": "'foobar'|reverse|join"}
+{"ast": {"t": "Const", "value": "hello"}, "src": "'hello'"}
+{"ast": {"t": "Const", "value": "it's"}, "src": "'it\\'s'"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "width", "t": "Keyword", "value": {"t": "Const", "value": ">>> "}}, {"key": "first", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "indent", "node": {"t": "Const", "value": "jinja\nflask"}, "t": "Filter"}, "src": "'jinja\\nflask'|indent(width='>>> ', first=True)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"t": "Const", "value": "static"}, "t": "Filter"}, "src": "'static'|customfilter"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "some", "t": "Keyword", "value": {"t": "Const", "value": "stuff"}}], "name": "testing", "node": {"t": "Const", "value": "test"}, "t": "Filter"}, "src": "'test'|testing(some='stuff')"}
+{"err": "unexpected char \"'\" at 0", "src": "'unterminated"}
+{"ast": {"left": {"args": [{"t": "Const", "value": "(us-east-1|ap-northeast-1)\n            "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "matching", "node": {"t": "Const", "value": "us-west-1"}, "t": "Test"}, "right": {"args": [{"t": "Const", "value": "(dev|stage)"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "matching", "node": {"t": "Const", "value": "stage"}, "t": "Test"}, "t": "Or"}, "src": "'us-west-1' is matching '(us-east-1|ap-northeast-1)'\"\n            \" or 'stage' is matching '(dev|stage)'"}
+{"ast": {"expr1": {"t": "Const", "value": "x"}, "expr2": null, "t": "CondExpr", "test": {"name": "c", "t": "Name"}}, "src": "'x' if c"}
+{"ast": {"t": "Const", "value": "{{"}, "src": "'{{'"}
+{"ast": {"args": [{"t": "Const", "value": 42}, {"t": "Const", "value": "<foo>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "a{0.__class__}b{1}"}, "t": "Filter"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{0.__class__}b{1}\"|safe).format(42, \"<foo>\")"}
+{"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}, {"t": "Const", "value": "<foo>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "a{0.foo}b{1}"}, "t": "Filter"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{0.foo}b{1}\"|safe).format({\"foo\": 42}, \"<foo>\")"}
+{"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "x"}, "t": "Pair", "value": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}}, {"key": {"t": "Const", "value": "y"}, "t": "Pair", "value": {"t": "Const", "value": "<foo>"}}], "t": "Dict"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format_map", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "a{x.foo}b{y}"}, "t": "Filter"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{x.foo}b{y}\"|safe).format_map({\"x\":{\"foo\": 42}, \"y\":\"<foo>\"})"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}, {"t": "Const", "value": "42"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"t": "Const", "value": "a{}b{}"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{}b{}\").format(\"foo\", \"42\")"}
+{"ast": {"args": [{"t": "Const", "value": 42}, {"t": "Const", "value": "<foo>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "a{}b{}"}, "t": "Filter"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{}b{}\"|safe).format(42, \"<foo>\")"}
+{"ast": {"nodes": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}, {"t": "Const", "value": "c"}], "t": "Concat"}, "src": "('a' ~ 'b' ~ 'c')"}
+{"ast": {"items": [], "t": "Tuple"}, "src": "()"}
+{"err": "unexpected 'end of template'", "src": "(1 +"}
+{"ast": {"left": {"left": {"t": "Const", "value": 1}, "right": {"left": {"t": "Const", "value": 1}, "right": {"t": "Const", "value": 2}, "t": "Mul"}, "t": "Add"}, "right": {"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 2}, "t": "Div"}, "t": "Sub"}, "src": "(1 + 1 * 2) - 3 / 2"}
+{"err": "expected token ')', got 'integer'", "src": "(1 2)"}
+{"ast": {"attr": "bar", "node": {"expr1": {"t": "Const", "value": 1}, "expr2": null, "t": "CondExpr", "test": {"t": "Const", "value": false}}, "t": "Getattr"}, "src": "(1 if false).bar"}
+{"err": "unexpected 'end of template'", "src": "(1,"}
+{"ast": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}, "src": "(1, 2)"}
+{"ast": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}, "src": "(1, 2,)"}
+{"ast": {"items": [{"t": "Const", "value": 1}], "t": "Tuple"}, "src": "(1,)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "from_json", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "last", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": "equalto"}, {"t": "Const", "value": ""}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"args": [{"items": [{"t": "Const", "value": "{}"}], "t": "List"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "stdout_lines", "node": {"name": "_beacon_result", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "(_beacon_result.stdout_lines | default(['{}']))\n      | reject('equalto', '')\n      | list\n      | last\n      | from_json"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"args": [{"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "add_each", "node": {"name": "a", "t": "Name"}, "t": "Filter"}, "t": "Getitem"}, "src": "(a|add_each(2))[1:]"}
+{"ast": {"left": {"left": {"t": "Const", "value": true}, "right": {"t": "Const", "value": false}, "t": "And"}, "right": {"left": {"left": {"t": "Const", "value": false}, "right": {"t": "Const", "value": true}, "t": "And"}, "right": {"node": {"t": "Const", "value": false}, "t": "Not"}, "t": "And"}, "t": "Or"}, "src": "(true and false) or (false and true) and not false"}
+{"err": "unexpected 'end of template'", "src": "+"}
+{"ast": {"node": {"name": "endif", "t": "Name"}, "t": "Pos"}, "src": "+ endif"}
+{"err": "chunk after expression", "src": "+ if True"}
+{"ast": {"node": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "t": "Pos"}, "src": "+-x"}
+{"ast": {"node": {"t": "Const", "value": 1}, "t": "Pos"}, "src": "+1"}
+{"ast": {"node": {"t": "Const", "value": 3}, "t": "Pos"}, "src": "+3"}
+{"ast": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "src": "+x"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "d", "node": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "t": "Filter"}, "src": "+x | d"}
+{"err": "unexpected 'end of template'", "src": "-"}
+{"err": "unexpected 'end of template'", "src": "- [1,2] -"}
+{"err": "unexpected 'end of template'", "src": "- item -"}
+{"err": "unexpected 'end of template'", "src": "- item(2) -"}
+{"ast": {"node": {"args": [{"attr": "children", "node": {"name": "page", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "loop", "t": "Name"}, "t": "Call"}, "t": "Neg"}, "src": "- loop(page.children)"}
+{"err": "unexpected 'end of template'", "src": "- wrapper -"}
+{"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "wrapper", "t": "Name"}, "t": "Call"}, "t": "Neg"}, "src": "- wrapper()"}
+{"ast": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "src": "- x"}
+{"err": "unexpected 'end of template'", "src": "- x -"}
+{"err": "unexpected 'end of template'", "src": "- x()[1] -"}
+{"ast": {"node": {"name": "y", "t": "Name"}, "t": "Neg"}, "src": "- y"}
+{"ast": {"node": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "t": "Neg"}, "src": "-+x"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "t": "Filter"}, "src": "-1|abs"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "foo", "node": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "t": "Filter"}, "src": "-1|foo"}
+{"ast": {"node": {"t": "Const", "value": 3}, "t": "Neg"}, "src": "-3"}
+{"ast": {"node": {"arg": {"t": "Const", "value": "bar"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Neg"}, "src": "-foo[\"bar\"]"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"node": {"arg": {"t": "Const", "value": "bar"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Neg"}, "t": "Filter"}, "src": "-foo[\"bar\"]|abs"}
+{"ast": {"left": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "right": {"t": "Const", "value": 2}, "t": "Pow"}, "src": "-x ** 2"}
+{"err": "unexpected '.'", "src": ".5"}
+{"ast": {"expr1": {"t": "Const", "value": 0}, "expr2": {"t": "Const", "value": 1}, "t": "CondExpr", "test": {"t": "Const", "value": true}}, "src": "0 if true else 1"}
+{"ast": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "greaterthan", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is greaterthan 1"}
+{"ast": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lessthan", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is lessthan 1"}
+{"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is sameas false"}
+{"err": "chunk after expression", "src": "007"}
+{"err": "chunk after expression", "src": "01"}
+{"err": "chunk after expression", "src": "0b2"}
+{"ast": {"t": "Const", "value": 1}, "src": "0b_1"}
+{"err": "chunk after expression", "src": "0x_"}
+{"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "1 < 2 < 3"}
+{"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "1 < 2 < 3 > 0"}
+{"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 1}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "1 == 1"}
+{"ast": {"expr1": {"t": "Const", "value": 1}, "expr2": null, "t": "CondExpr", "test": {"t": "Const", "value": false}}, "src": "1 if false"}
+{"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "src": "1 in [1, 2, 3]"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "even", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is even"}
+{"ast": {"args": [{"t": "Const", "value": 0}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "greaterthan", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is greaterthan 0"}
+{"ast": {"args": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is in ((1, 2))"}
+{"ast": {"args": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is in [1, 2]"}
+{"ast": {"args": [{"t": "Const", "value": 0}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lessthan", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is lessthan 0"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "odd", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is odd"}
+{"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "op": "notin", "t": "Operand"}], "t": "Compare"}, "src": "1 not in [1, 2, 3]"}
+{"err": "chunk after expression", "src": "1,"}
+{"err": "chunk after expression", "src": "1, 2"}
+{"err": "chunk after expression", "src": "1.5e"}
+{"ast": {"attr": "e3", "node": {"t": "Const", "value": 1}, "t": "Getattr"}, "src": "1.e3"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000000}, "t": "Filter"}, "src": "1000000000000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000000}, "t": "Filter"}, "src": "1000000000000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000}, "t": "Filter"}, "src": "1000000000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000}, "t": "Filter"}, "src": "1000000000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000}, "t": "Filter"}, "src": "1000000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000}, "t": "Filter"}, "src": "1000000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000}, "t": "Filter"}, "src": "1000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000}, "t": "Filter"}, "src": "1000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 100}, "t": "Filter"}, "src": "100|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 100}, "t": "Filter"}, "src": "100|filesizeformat(true)"}
+{"err": "chunk after expression", "src": "1_000_"}
+{"err": "chunk after expression", "src": "1__0"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"t": "Const", "value": 1}, "t": "Filter"}, "src": "1|abs"}
+{"ast": {"left": {"left": {"left": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 3}, "t": "Mul"}, "right": {"left": {"t": "Const", "value": 4}, "right": {"t": "Const", "value": 2}, "t": "Mod"}, "t": "Add"}, "right": {"t": "Const", "value": 1}, "t": "Add"}, "right": {"t": "Const", "value": 2}, "t": "Sub"}, "src": "2 * 3 + 4 % 2 + 1 - 2"}
+{"ast": {"expr": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 2}, "t": "Add"}, "ops": [{"expr": {"t": "Const", "value": 5}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "2 + 2 == 5"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "even", "node": {"t": "Const", "value": 2}, "t": "Test"}, "src": "2 is even"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "odd", "node": {"t": "Const", "value": 2}, "t": "Test"}, "src": "2 is odd"}
+{"ast": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 3}, "t": "Pow"}, "src": "2**3"}
+{"ast": {"left": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 3}, "t": "Pow"}, "right": {"t": "Const", "value": 2}, "t": "Pow"}, "src": "2**3**2"}
+{"ast": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "floor"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 2.1234}, "t": "Filter"}, "src": "2.1234|round(3, 'floor')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 2.1}, "t": "Filter"}, "src": "2.1|round"}
+{"ast": {"args": [{"t": "Const", "value": 0}, {"t": "Const", "value": "ceil"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 2.1}, "t": "Filter"}, "src": "2.1|round(0, 'ceil')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 2.7}, "t": "Filter"}, "src": "2.7|round"}
+{"ast": {"args": [{"node": {"t": "Const", "value": 1}, "t": "Neg"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 21.3}, "t": "Filter"}, "src": "21.3|round(-1)"}
+{"ast": {"args": [{"node": {"t": "Const", "value": 1}, "t": "Neg"}, {"t": "Const", "value": "ceil"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 21.3}, "t": "Filter"}, "src": "21.3|round(-1, 'ceil')"}
+{"ast": {"args": [{"node": {"t": "Const", "value": 1}, "t": "Neg"}, {"t": "Const", "value": "floor"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "round", "node": {"t": "Const", "value": 21.3}, "t": "Filter"}, "src": "21.3|round(-1, 'floor')"}
+{"ast": {"t": "Const", "value": 23}, "src": "23"}
+{"ast": {"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 2}, "t": "Mod"}, "src": "3 % 2"}
+{"ast": {"left": {"t": "Const", "value": 3}, "right": {"name": "missing", "t": "Name"}, "t": "Add"}, "src": "3 + missing"}
+{"ast": {"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 2}, "t": "Div"}, "src": "3 / 2"}
+{"ast": {"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 2}, "t": "FloorDiv"}, "src": "3 // 2"}
+{"ast": {"args": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": 3}, "t": "Test"}, "src": "3 is in ((1, 2))"}
+{"ast": {"args": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": 3}, "t": "Test"}, "src": "3 is in [1, 2]"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000000000000}, "t": "Filter"}, "src": "3000000000000|filesizeformat"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000000000}, "t": "Filter"}, "src": "3000000000|filesizeformat"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000000}, "t": "Filter"}, "src": "3000000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000000}, "t": "Filter"}, "src": "3000000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000}, "t": "Filter"}, "src": "3000|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 3000}, "t": "Filter"}, "src": "3000|filesizeformat(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 300}, "t": "Filter"}, "src": "300|filesizeformat"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 300}, "t": "Filter"}, "src": "300|filesizeformat(true)"}
+{"ast": {"expr": {"t": "Const", "value": 4}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "4 < 2 < 3"}
+{"ast": {"expr": {"t": "Const", "value": 4}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "gt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "4 > 2 < 3"}
+{"ast": {"expr": {"t": "Const", "value": 4}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "gt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "4 > 2 > 3"}
+{"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "string", "node": {"t": "Const", "value": 42}, "t": "Test"}, "right": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "number", "node": {"t": "Const", "value": 42}, "t": "Test"}, "t": "Or"}, "src": "42 is string or 42 is number"}
+{"ast": {"t": "Const", "value": 99999999999999999999999999}, "src": "99999999999999999999999999"}
+{"ast": {"name": "BAR", "t": "Name"}, "src": "BAR"}
+{"ast": {"name": "FOO", "t": "Name"}, "src": "FOO"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "none", "node": {"t": "Const", "value": null}, "t": "Test"}, "src": "None is none"}
+{"ast": {"t": "Const", "value": true}, "src": "True"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [{"t": "Const", "value": "int"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "map", "node": {"items": [{"t": "Const", "value": "1"}, {"t": "Const", "value": "2"}, {"t": "Const", "value": "3"}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[\"1\", \"2\", \"3\"]|map(\"int\")|sum"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"items": [{"t": "Const", "value": "<foo>"}, {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "<span>foo</span>"}, "t": "Filter"}], "t": "List"}, "t": "Filter"}, "src": "[\"<foo>\", \"<span>foo</span>\"|safe]|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "max", "node": {"items": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "B"}], "t": "List"}, "t": "Filter"}, "src": "[\"a\", \"B\"]|max"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "case_sensitive", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "max", "node": {"items": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "B"}], "t": "List"}, "t": "Filter"}, "src": "[\"a\", \"B\"]|max(case_sensitive=true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "min", "node": {"items": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "B"}], "t": "List"}, "t": "Filter"}, "src": "[\"a\", \"B\"]|min"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "case_sensitive", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "min", "node": {"items": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "B"}], "t": "List"}, "t": "Filter"}, "src": "[\"a\", \"B\"]|min(case_sensitive=true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "first", "node": {"items": [{"t": "Const", "value": "<foo>"}, {"t": "Const", "value": "<bar>"}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "['<foo>', '<bar>']|first|upper|escape"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sort", "node": {"items": [{"t": "Const", "value": "foo"}, {"t": "Const", "value": "Bar"}, {"t": "Const", "value": "blah"}], "t": "List"}, "t": "Filter"}, "src": "['foo', 'Bar', 'blah']|sort"}
+{"err": "unexpected 'end of template'", "src": "[1 +"}
+{"err": "expected token ',', got 'integer'", "src": "[1 2]"}
+{"err": "unexpected 'end of template'", "src": "[1,"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}, {"t": "Const", "value": 6}], "t": "List"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5, 6]|sum"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5]|reject(\"odd\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "select", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5]|select(\"odd\")|join(\"|\")"}
+{"ast": {"arg": {"t": "Const", "value": 0}, "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "t": "Getitem"}, "src": "[1, 2, 3].0"}
+{"ast": {"arg": {"start": null, "step": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "stop": null, "t": "Slice"}, "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "t": "Getitem"}, "src": "[1, 2, 3][::-1]"}
+{"ast": {"arg": {"start": null, "step": null, "stop": null, "t": "Slice"}, "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "t": "Getitem"}, "src": "[1, 2, 3][:]"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "t": "Filter"}, "src": "[1, 2, 3]|join(\"|\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reverse", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[1, 2, 3]|reverse|list"}
+{"ast": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}, "src": "[1, 2,]"}
+{"ast": {"nodes": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}, {"t": "Const", "value": "foo"}], "t": "Concat"}, "src": "[1, 2] ~ 'foo'"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "pop", "node": {"items": [{"t": "Const", "value": 1}], "t": "List"}, "t": "Getattr"}, "t": "Call"}, "src": "[1].pop()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sort", "node": {"items": [{"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 1}], "t": "List"}, "t": "Filter"}, "src": "[2, 3, 1]|sort"}
+{"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sort", "node": {"items": [{"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 1}], "t": "List"}, "t": "Filter"}, "src": "[2, 3, 1]|sort(true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"items": [{"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}, {"t": "Const", "value": 6}], "t": "List"}, "t": "Filter"}, "src": "[3, 4, 5, 6]|customfilter"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": "sum"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "map", "node": {"items": [{"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}, {"items": [{"t": "Const", "value": 3}], "t": "List"}, {"items": [{"t": "Const", "value": 4}, {"t": "Const", "value": 5}, {"t": "Const", "value": 6}], "t": "List"}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[[1,2], [3], [4,5,6]]|map(\"sum\")|list"}
+{"ast": {"arg": {"t": "Const", "value": 0}, "node": {"arg": {"t": "Const", "value": 0}, "node": {"items": [{"items": [{"t": "Const", "value": 1}], "t": "List"}], "t": "List"}, "t": "Getitem"}, "t": "Getitem"}, "src": "[[1]].0.0"}
+{"ast": {"args": [{"t": "Const", "value": 23}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "append", "node": {"items": [], "t": "List"}, "t": "Getattr"}, "t": "Call"}, "src": "[].append(23)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "clear", "node": {"items": [], "t": "List"}, "t": "Getattr"}, "t": "Call"}, "src": "[].clear()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "max", "node": {"items": [], "t": "List"}, "t": "Filter"}, "src": "[]|max"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "min", "node": {"items": [], "t": "List"}, "t": "Filter"}, "src": "[]|min"}
+{"ast": {"left": {"left": {"items": [{"name": "_beacon_mode", "t": "Name"}], "t": "List"}, "right": {"expr1": {"items": [{"t": "Const", "value": "--driver"}, {"name": "_beacon_driver", "t": "Name"}], "t": "List"}, "expr2": {"items": [], "t": "List"}, "t": "CondExpr", "test": {"name": "_beacon_driver", "t": "Name"}}, "t": "Add"}, "right": {"expr1": {"items": [{"t": "Const", "value": "--skip-selftest"}], "t": "List"}, "expr2": {"items": [], "t": "List"}, "t": "CondExpr", "test": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "bool", "node": {"name": "beacon_skip_selftest", "t": "Name"}, "t": "Filter"}}, "t": "Add"}, "src": "[_beacon_mode]\n        + (['--driver', _beacon_driver] if _beacon_driver else [])\n        + (['--skip-selftest'] if (beacon_skip_selftest | bool) else [])"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"items": [{"t": "Const", "value": null}, {"t": "Const", "value": false}, {"t": "Const", "value": 0}, {"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[none, false, 0, 1, 2, 3, 4, 5]|reject|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "select", "node": {"items": [{"t": "Const", "value": null}, {"t": "Const", "value": false}, {"t": "Const", "value": 0}, {"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[none, false, 0, 1, 2, 3, 4, 5]|select|join(\"|\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "num", "t": "Keyword", "value": {"name": "user_count", "t": "Name"}}], "name": "format", "node": {"args": [{"t": "Const", "value": "User: %(num)s"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "_", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "_(\"User: %(num)s\")|format(num=user_count)"}
+{"ast": {"args": [{"t": "Const", "value": "User: %(num)s"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "num", "t": "Keyword", "value": {"name": "user_count", "t": "Name"}}], "node": {"name": "_", "t": "Name"}, "t": "Call"}, "src": "_(\"User: %(num)s\", num=user_count)"}
+{"ast": {"args": [{"t": "Const", "value": " "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"name": "_beacon_args", "t": "Name"}, "t": "Filter"}, "src": "_beacon_args | join(' ')"}
+{"ast": {"name": "_beacon_mode", "t": "Name"}, "src": "_beacon_mode"}
+{"ast": {"name": "a", "t": "Name"}, "src": "a"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "ne", "t": "Operand"}], "t": "Compare"}, "src": "a != b"}
+{"err": "unexpected 'end of template'", "src": "a *"}
+{"err": "unexpected 'end of template'", "src": "a **"}
+{"err": "unexpected 'end of template'", "src": "a +"}
+{"ast": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "Add"}, "src": "a + b"}
+{"ast": {"left": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "Add"}, "right": {"name": "c", "t": "Name"}, "t": "Add"}, "src": "a + b + c"}
+{"err": "unexpected 'end of template'", "src": "a //"}
+{"ast": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "FloorDiv"}, "src": "a // b"}
+{"err": "unexpected 'end of template'", "src": "a <"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "lt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "a < b < c"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "lteq", "t": "Operand"}], "t": "Compare"}, "src": "a <= b"}
+{"err": "chunk after expression", "src": "a = b"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "a > b < c"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "a > b > c"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gteq", "t": "Operand"}], "t": "Compare"}, "src": "a >= b"}
+{"err": "unexpected 'end of template'", "src": "a and"}
+{"err": "unexpected 'end of template'", "src": "a if"}
+{"err": "unexpected 'end of template'", "src": "a if b else"}
+{"ast": {"expr1": {"name": "a", "t": "Name"}, "expr2": {"name": "c", "t": "Name"}, "t": "CondExpr", "test": {"name": "b", "t": "Name"}}, "src": "a if b else c"}
+{"ast": {"expr1": {"name": "a", "t": "Name"}, "expr2": {"expr1": {"name": "c", "t": "Name"}, "expr2": {"name": "e", "t": "Name"}, "t": "CondExpr", "test": {"name": "d", "t": "Name"}}, "t": "CondExpr", "test": {"name": "b", "t": "Name"}}, "src": "a if b else c if d else e"}
+{"err": "unexpected 'end of template'", "src": "a in"}
+{"err": "unexpected 'end of template'", "src": "a not in"}
+{"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "notin", "t": "Operand"}], "t": "Compare"}, "src": "a not in b"}
+{"err": "unexpected 'end of template'", "src": "a or"}
+{"err": "unexpected 'end of template'", "src": "a ~"}
+{"ast": {"nodes": [{"name": "a", "t": "Name"}, {"name": "b", "t": "Name"}], "t": "Concat"}, "src": "a ~ b"}
+{"err": "unexpected char '#' at 1", "src": "a#b"}
+{"err": "unexpected char '$' at 1", "src": "a$b"}
+{"ast": {"arg": {"t": "Const", "value": 0}, "node": {"name": "a", "t": "Name"}, "t": "Getitem"}, "src": "a.0"}
+{"ast": {"attr": "b", "node": {"name": "a", "t": "Name"}, "t": "Getattr"}, "src": "a.b"}
+{"ast": {"attr": "d", "node": {"attr": "c", "node": {"attr": "b", "node": {"name": "a", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "t": "Getattr"}, "src": "a.b.c.d"}
+{"err": "chunk after expression", "src": "a; b"}
+{"err": "unexpected char '@' at 1", "src": "a@b"}
+{"ast": {"name": "a_control", "t": "Name"}, "src": "a_control"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"args": [{"name": "a", "t": "Name"}, {"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "add_each", "t": "Name"}, "t": "Call"}, "t": "Getitem"}, "src": "add_each(a, 2)[1:]"}
+{"ast": {"name": "ansible_playbook_python", "t": "Name"}, "src": "ansible_playbook_python"}
+{"ast": {"name": "ansible_version", "t": "Name"}, "src": "ansible_version"}
+{"ast": {"name": "anything", "t": "Name"}, "src": "anything"}
+{"ast": {"name": "ap_protocol", "t": "Name"}, "src": "ap_protocol"}
+{"ast": {"name": "app_env", "t": "Name"}, "src": "app_env"}
+{"ast": {"name": "app_port", "t": "Name"}, "src": "app_port"}
+{"ast": {"name": "app_root", "t": "Name"}, "src": "app_root"}
+{"ast": {"name": "app_tier", "t": "Name"}, "src": "app_tier"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"name": "arg", "t": "Name"}, "t": "Filter"}, "src": "arg|customfilter"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "async_func", "t": "Name"}, "t": "Call"}, "src": "async_func()"}
+{"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "async_func", "t": "Name"}, "t": "Call"}, "right": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "normal_func", "t": "Name"}, "t": "Call"}, "t": "Add"}, "src": "async_func() + normal_func()"}
+{"err": "chunk after expression", "src": "autoescape ae"}
+{"err": "chunk after expression", "src": "autoescape false"}
+{"err": "chunk after expression", "src": "autoescape foo"}
+{"err": "chunk after expression", "src": "autoescape true"}
+{"err": "chunk after expression", "src": "autoescape val"}
+{"ast": {"name": "a\u00b7", "t": "Name"}, "src": "a\u00b7"}
+{"err": "unexpected char '\ud83d\udc0d' at 1", "src": "a\ud83d\udc0d"}
+{"ast": {"name": "b", "t": "Name"}, "src": "b"}
+{"ast": {"name": "bar", "t": "Name"}, "src": "bar"}
+{"ast": {"left": {"name": "bar", "t": "Name"}, "right": {"name": "foo", "t": "Name"}, "t": "Add"}, "src": "bar + foo"}
+{"ast": {"args": [{"t": "Const", "value": "baz"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq \"baz\""}
+{"ast": {"args": [{"t": "Const", "value": "zab"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq \"zab\""}
+{"ast": {"args": [{"left": {"t": "Const", "value": "ba"}, "right": {"t": "Const", "value": "z"}, "t": "Add"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq (\"ba\" + \"z\")"}
+{"ast": {"args": [{"name": "bar", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq bar"}
+{"ast": {"args": [{"name": "foo", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq foo"}
+{"ast": {"name": "base_url", "t": "Name"}, "src": "base_url"}
+{"ast": {"name": "baz", "t": "Name"}, "src": "baz"}
+{"err": "chunk after expression", "src": "block b"}
+{"err": "chunk after expression", "src": "block block1"}
+{"err": "chunk after expression", "src": "block block2"}
+{"err": "chunk after expression", "src": "block block3"}
+{"err": "chunk after expression", "src": "block block4"}
+{"err": "chunk after expression", "src": "block block5"}
+{"err": "chunk after expression", "src": "block body"}
+{"err": "chunk after expression", "src": "block body scoped"}
+{"err": "chunk after expression", "src": "block content"}
+{"err": "chunk after expression", "src": "block data"}
+{"err": "chunk after expression", "src": "block data \"\n                    \""}
+{"err": "chunk after expression", "src": "block foo"}
+{"err": "chunk after expression", "src": "block foo-bar-baz"}
+{"err": "chunk after expression", "src": "block inner_box"}
+{"err": "chunk after expression", "src": "block intro"}
+{"err": "chunk after expression", "src": "block item"}
+{"err": "chunk after expression", "src": "block item \"\n                    \"required required"}
+{"err": "chunk after expression", "src": "block item \"\n                    \"scoped scoped"}
+{"err": "chunk after expression", "src": "block item required scoped"}
+{"err": "chunk after expression", "src": "block item scoped"}
+{"err": "chunk after expression", "src": "block item scoped required"}
+{"err": "chunk after expression", "src": "block outer_box"}
+{"err": "chunk after expression", "src": "block test"}
+{"err": "chunk after expression", "src": "block testing scoped"}
+{"err": "chunk after expression", "src": "block title"}
+{"err": "chunk after expression", "src": "block useless"}
+{"err": "chunk after expression", "src": "block x"}
+{"err": "chunk after expression", "src": "block x required"}
+{"err": "chunk after expression", "src": "block y"}
+{"err": "chunk after expression", "src": "block y scoped"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "blub", "t": "Name"}, "t": "Call"}, "src": "blub()"}
+{"ast": {"name": "break", "t": "Name"}, "src": "break"}
+{"ast": {"name": "c", "t": "Name"}, "src": "c"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "calc", "t": "Name"}, "t": "Call"}, "src": "calc()"}
+{"err": "chunk after expression", "src": "call do_something()"}
+{"err": "chunk after expression", "src": "call test()"}
+{"err": "chunk after expression", "src": "call x()"}
+{"err": "chunk after expression", "src": "call(data) test()"}
+{"err": "chunk after expression", "src": "call(user) dump_users(list_of_user)"}
+{"err": "chunk after expression", "src": "call(value, href) detail(icon, value, href)"}
+{"err": "invalid syntax for function call expression", "src": "call(x, y=1, z) a()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "callableclass", "t": "Name"}, "t": "Call"}, "src": "callableclass()"}
+{"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "caller", "t": "Name"}, "t": "Test"}, "t": "Not"}, "src": "caller is not defined"}
+{"ast": {"args": [{"t": "Const", "value": "data"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "caller", "t": "Name"}, "t": "Call"}, "src": "caller('data')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "caller", "t": "Name"}, "t": "Call"}, "src": "caller()"}
+{"ast": {"args": [{"name": "user", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "caller", "t": "Name"}, "t": "Call"}, "src": "caller(user)"}
+{"ast": {"args": [{"name": "value", "t": "Name"}], "dyn_args": {"name": "varargs", "t": "Name"}, "dyn_kwargs": null, "kwargs": [], "node": {"name": "caller", "t": "Name"}, "t": "Call"}, "src": "caller(value, *varargs)"}
+{"ast": {"name": "chain_c_tuning", "t": "Name"}, "src": "chain_c_tuning"}
+{"ast": {"name": "chain_depth0", "t": "Name"}, "src": "chain_depth0"}
+{"ast": {"name": "chain_depth1", "t": "Name"}, "src": "chain_depth1"}
+{"ast": {"name": "chain_depth2", "t": "Name"}, "src": "chain_depth2"}
+{"ast": {"name": "chain_depth3", "t": "Name"}, "src": "chain_depth3"}
+{"ast": {"name": "chain_depth4", "t": "Name"}, "src": "chain_depth4"}
+{"ast": {"name": "chain_depth5", "t": "Name"}, "src": "chain_depth5"}
+{"ast": {"name": "chain_depthN", "t": "Name"}, "src": "chain_depthN"}
+{"ast": {"name": "chain_included", "t": "Name"}, "src": "chain_included"}
+{"ast": {"name": "city", "t": "Name"}, "src": "city"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "first", "node": {"args": [{"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "closing", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "closing(foo())|first"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"args": [{"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "closing", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "closing(items())|customfilter"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": "__subclasses__"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "attr", "node": {"name": "cls", "t": "Name"}, "t": "Filter"}, "t": "Call"}, "src": "cls|attr(\"__subclasses__\")()"}
+{"ast": {"attr": "stdout", "node": {"name": "cmd_result", "t": "Name"}, "t": "Getattr"}, "src": "cmd_result.stdout"}
+{"ast": {"name": "coll", "t": "Name"}, "src": "coll"}
+{"ast": {"name": "continue", "t": "Name"}, "src": "continue"}
+{"ast": {"name": "count", "t": "Name"}, "src": "count"}
+{"ast": {"name": "d", "t": "Name"}, "src": "d"}
+{"ast": {"name": "data", "t": "Name"}, "src": "data"}
+{"ast": {"name": "data1", "t": "Name"}, "src": "data1"}
+{"ast": {"name": "data2", "t": "Name"}, "src": "data2"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "pprint", "node": {"name": "data", "t": "Name"}, "t": "Filter"}, "src": "data|pprint"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"name": "data", "t": "Name"}, "t": "Filter"}, "src": "data|title"}
+{"ast": {"args": [{"t": "Const", "value": 15}, {"t": "Const", "value": false}, {"t": "Const", "value": ">>>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"name": "data", "t": "Name"}, "t": "Filter"}, "src": "data|truncate(15, false, \">>>\")"}
+{"ast": {"args": [{"t": "Const", "value": 15}, {"t": "Const", "value": true}, {"t": "Const", "value": ">>>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"name": "data", "t": "Name"}, "t": "Filter"}, "src": "data|truncate(15, true, \">>>\")"}
+{"ast": {"name": "db_pool_size", "t": "Name"}, "src": "db_pool_size"}
+{"ast": {"name": "db_timeout", "t": "Name"}, "src": "db_timeout"}
+{"ast": {"name": "debug", "t": "Name"}, "src": "debug"}
+{"ast": {"name": "demo_mode", "t": "Name"}, "src": "demo_mode"}
+{"ast": {"name": "demo_override", "t": "Name"}, "src": "demo_override"}
+{"ast": {"expr": {"attr": "rc", "node": {"name": "demo_result", "t": "Name"}, "t": "Getattr"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "ne", "t": "Operand"}], "t": "Compare"}, "src": "demo_result.rc != 0"}
+{"ast": {"name": "deploy_region", "t": "Name"}, "src": "deploy_region"}
+{"err": "chunk after expression", "src": "do items.append(loop.index0 ~ char)"}
+{"ast": {"name": "dyn", "t": "Name"}, "src": "dyn"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "items", "node": {"name": "d", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "d|items|list"}
+{"ast": {"name": "e", "t": "Name"}, "src": "e"}
+{"ast": {"name": "elif", "t": "Name"}, "src": "elif"}
+{"err": "chunk after expression", "src": "elif False"}
+{"err": "chunk after expression", "src": "elif b"}
+{"err": "chunk after expression", "src": "elif c == d"}
+{"err": "chunk after expression", "src": "elif true"}
+{"err": "chunk after expression", "src": "elif y is defined"}
+{"ast": {"name": "else", "t": "Name"}, "src": "else"}
+{"ast": {"name": "endautoescape", "t": "Name"}, "src": "endautoescape"}
+{"ast": {"name": "endblock", "t": "Name"}, "src": "endblock"}
+{"err": "chunk after expression", "src": "endblock foo"}
+{"err": "chunk after expression", "src": "endblock y"}
+{"ast": {"name": "endcall", "t": "Name"}, "src": "endcall"}
+{"ast": {"name": "endfilter", "t": "Name"}, "src": "endfilter"}
+{"ast": {"name": "endfor", "t": "Name"}, "src": "endfor"}
+{"ast": {"name": "endif", "t": "Name"}, "src": "endif"}
+{"err": "unexpected char '\\\\' at 7", "src": "endif %\\\\}.*?\n(jinja2\\\\.exceptions\\\\.)?TemplateSyntaxError: Encountered unknown tag 'endif'. Jinja \\\nwas looking for the following tags: 'endfor' or 'else'. The innermost block that needs \\\nto be closed is 'for'.\n    \"\"\",\n        )\n\n    def test_regular_syntax_error(self, fs_env):\n        def test():\n            raise TemplateSyntaxError(\"wtf\", 42)\n\n        self.assert_traceback_matches(\n            test,\n            r\"\"\"\n  File \".*debug.pyc?\", line \\d+, in test\n    raise TemplateSyntaxError\\(\"wtf\", 42\\)(\n    \\^{36})?\n(jinja2\\.exceptions\\.)?TemplateSyntaxError: wtf\n  line 42\"\"\",\n        )\n\n    def test_pickleable_syntax_error(self, fs_env):\n        original = TemplateSyntaxError(\"bad template\", 42, \"test\", \"test.txt\")\n        unpickled = pickle.loads(pickle.dumps(original))\n        assert str(original) == str(unpickled)\n        assert original.name == unpickled.name\n\n    def test_include_syntax_error_source(self, filesystem_loader):\n        e = Environment(\n            loader=ChoiceLoader(\n                [\n                    filesystem_loader,\n                    DictLoader({\"inc\": \"a\\n{% include 'syntaxerror.html'"}
+{"err": "unexpected 'end of template'", "src": "endif +"}
+{"ast": {"name": "endmacro", "t": "Name"}, "src": "endmacro"}
+{"ast": {"name": "endoverlay", "t": "Name"}, "src": "endoverlay"}
+{"ast": {"name": "endraw", "t": "Name"}, "src": "endraw"}
+{"err": "unexpected 'end of template'", "src": "endraw +"}
+{"ast": {"name": "endscope", "t": "Name"}, "src": "endscope"}
+{"ast": {"name": "endset", "t": "Name"}, "src": "endset"}
+{"ast": {"name": "endtrans", "t": "Name"}, "src": "endtrans"}
+{"ast": {"name": "endwibble", "t": "Name"}, "src": "endwibble"}
+{"ast": {"name": "endwith", "t": "Name"}, "src": "endwith"}
+{"ast": {"name": "env", "t": "Name"}, "src": "env"}
+{"ast": {"name": "env_name", "t": "Name"}, "src": "env_name"}
+{"err": "chunk after expression", "src": "extends \"a\""}
+{"err": "chunk after expression", "src": "extends \"b\""}
+{"err": "chunk after expression", "src": "extends \"base\""}
+{"err": "chunk after expression", "src": "extends \"base.html\""}
+{"err": "chunk after expression", "src": "extends \"default.html\""}
+{"err": "chunk after expression", "src": "extends \"header\""}
+{"err": "chunk after expression", "src": "extends \"layout\""}
+{"err": "chunk after expression", "src": "extends \"layout.html\""}
+{"err": "chunk after expression", "src": "extends \"level1\""}
+{"err": "chunk after expression", "src": "extends \"level2\""}
+{"err": "chunk after expression", "src": "extends \"level3\""}
+{"err": "chunk after expression", "src": "extends \"main\""}
+{"err": "chunk after expression", "src": "extends \"parent.html\""}
+{"err": "chunk after expression", "src": "extends 'default'"}
+{"err": "chunk after expression", "src": "extends 'default.html'"}
+{"err": "chunk after expression", "src": "extends 'default1'"}
+{"err": "chunk after expression", "src": "extends 'default2'"}
+{"err": "chunk after expression", "src": "extends 'details.html'"}
+{"err": "chunk after expression", "src": "extends 'layout.html'"}
+{"err": "chunk after expression", "src": "extends 'level1'"}
+{"err": "chunk after expression", "src": "extends 'level2'"}
+{"err": "chunk after expression", "src": "extends 'standard.html'"}
+{"err": "expected name or number", "src": "extends ..."}
+{"err": "chunk after expression", "src": "extends default"}
+{"err": "chunk after expression", "src": "extends t"}
+{"err": "unexpected 'end of template'", "src": "f(*"}
+{"err": "unexpected 'end of template'", "src": "f(**"}
+{"err": "invalid syntax for function call expression", "src": "f(**a, **b)"}
+{"err": "invalid syntax for function call expression", "src": "f(**k, *a)"}
+{"err": "invalid syntax for function call expression", "src": "f(**k, a=1)"}
+{"ast": {"args": [], "dyn_args": {"name": "a", "t": "Name"}, "dyn_kwargs": {"name": "k", "t": "Name"}, "kwargs": [], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(*a, **k)"}
+{"err": "invalid syntax for function call expression", "src": "f(*a, *b)"}
+{"err": "invalid syntax for function call expression", "src": "f(*a, 1)"}
+{"err": "unexpected 'end of template'", "src": "f(1 +"}
+{"err": "expected token ',', got 'integer'", "src": "f(1 2)"}
+{"ast": {"args": [{"name": "a", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "b", "t": "Keyword", "value": {"t": "Const", "value": 1}}], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(a, b=1)"}
+{"ast": {"args": [{"name": "a", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(a,)"}
+{"err": "unexpected 'end of template'", "src": "f(a="}
+{"err": "invalid syntax for function call expression", "src": "f(a=1, 2)"}
+{"ast": {"attr": "baz", "node": {"name": "f", "t": "Name"}, "t": "Getattr"}, "src": "f.baz"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "fail", "t": "Name"}, "t": "Call"}, "src": "fail()"}
+{"ast": {"t": "Const", "value": false}, "src": "false"}
+{"ast": {"left": {"t": "Const", "value": false}, "right": {"t": "Const", "value": true}, "t": "Or"}, "src": "false or true"}
+{"ast": {"args": [{"t": "Const", "value": "no"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"t": "Const", "value": false}, "t": "Filter"}, "src": "false|default('no')"}
+{"ast": {"args": [{"t": "Const", "value": "no"}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"t": "Const", "value": false}, "t": "Filter"}, "src": "false|default('no', true)"}
+{"err": "chunk after expression", "src": "filter lower|escape"}
+{"err": "chunk after expression", "src": "filter upper|replace('FOO', 'foo')"}
+{"ast": {"name": "foo", "t": "Name"}, "src": "foo"}
+{"err": "chunk after expression", "src": "foo bar"}
+{"ast": {"args": [{"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 4}, "t": "Mul"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq (3 * 4)"}
+{"ast": {"args": [{"t": "Const", "value": 0}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq 0"}
+{"ast": {"args": [{"t": "Const", "value": 12}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq 12"}
+{"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is sameas false"}
+{"ast": {"args": [{"t": "Const", "value": null}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is sameas none"}
+{"err": "You cannot chain multiple tests with is", "src": "foo is string is sequence"}
+{"ast": {"args": [{"t": "Const", "value": "a"}], "dyn_args": {"items": [{"t": "Const", "value": "b"}], "t": "List"}, "dyn_kwargs": {"items": [{"key": {"t": "Const", "value": "g"}, "t": "Pair", "value": {"t": "Const", "value": "h"}}], "t": "Dict"}, "kwargs": [{"key": "c", "t": "Keyword", "value": {"t": "Const", "value": "d"}}, {"key": "e", "t": "Keyword", "value": {"t": "Const", "value": "f"}}], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo('a', c='d', e='f', *['b'], **{'g': 'h'})"}
+{"ast": {"attr": "__name__", "node": {"attr": "__class__", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "t": "Getattr"}, "t": "Getattr"}, "src": "foo().__class__.__name__"}
+{"ast": {"args": [{"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(42)"}
+{"ast": {"args": [{"t": "Const", "value": 5}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(5)"}
+{"ast": {"args": [{"left": {"name": "x", "t": "Name"}, "right": {"t": "Const", "value": 1}, "t": "Sub"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(x - 1)"}
+{"ast": {"args": [{"name": "x", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(x)"}
+{"err": "expected name or number", "src": "foo."}
+{"ast": {"arg": {"t": "Const", "value": 5}, "node": {"arg": {"t": "Const", "value": 5}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Getitem"}, "src": "foo.5.5"}
+{"err": "chunk after expression", "src": "foo.5e3"}
+{"ast": {"attr": "__class__", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "src": "foo.__class__"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "__subclasses__", "node": {"attr": "__class__", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "t": "Call"}, "src": "foo.__class__.__subclasses__()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "_foo", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "foo._foo()"}
+{"ast": {"attr": "bar", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "src": "foo.bar"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "bar", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "foo.bar()"}
+{"ast": {"attr": "_undefined_name", "node": {"arg": {"t": "Const", "value": "baz"}, "node": {"attr": "bar", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Getitem"}, "t": "Getattr"}, "src": "foo.bar[\"baz\"]._undefined_name"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "foo", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "foo.foo()"}
+{"ast": {"attr": "func_code", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "src": "foo.func_code"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "items", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "t": "Filter"}, "src": "foo.items()|list"}
+{"ast": {"attr": "missing", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "src": "foo.missing"}
+{"ast": {"arg": {"t": "Const", "value": "items"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "src": "foo[\"items\"]"}
+{"ast": {"arg": {"t": "Const", "value": "bar"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "src": "foo['bar']"}
+{"ast": {"arg": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "src": "foo[-1]"}
+{"ast": {"arg": {"t": "Const", "value": 0}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "src": "foo[0]"}
+{"ast": {"arg": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "src": "foo[1, 2]"}
+{"ast": {"name": "foobar", "t": "Name"}, "src": "foobar"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": "items"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "attr", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Call"}, "t": "Filter"}, "src": "foo|attr(\"items\")()|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "batch", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "foo|batch(3)|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "X"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "batch", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "foo|batch(3, 'X')|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "first", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|first"}
+{"ast": {"args": [{"t": "Const", "value": 2}, {"t": "Const", "value": false}, {"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "indent", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|indent(2, false, false)"}
+{"ast": {"args": [{"t": "Const", "value": 2}, {"t": "Const", "value": false}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "indent", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|indent(2, false, true)"}
+{"ast": {"args": [{"t": "Const", "value": 2}, {"t": "Const", "value": true}, {"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "indent", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|indent(2, true, false)"}
+{"ast": {"args": [{"t": "Const", "value": 2}, {"t": "Const", "value": true}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "indent", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|indent(2, true, true)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "last", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|last"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "foo|slice(3)|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "X"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "foo|slice(3, 'X')|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "striptags", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|striptags"}
+{"ast": {"args": [{"name": "chars", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "trim", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|trim(chars)"}
+{"err": "chunk after expression", "src": "for _, g in gs"}
+{"err": "chunk after expression", "src": "for a, b, c in [[1, 2, 3]]"}
+{"err": "chunk after expression", "src": "for c in s"}
+{"err": "chunk after expression", "src": "for cell in row"}
+{"err": "chunk after expression", "src": "for char in \"foo\""}
+{"err": "chunk after expression", "src": "for city, items in users|groupby('city', default='NY')"}
+{"err": "chunk after expression", "src": "for f in p.fields recursive"}
+{"err": "chunk after expression", "src": "for foo, bar in seq"}
+{"err": "chunk after expression", "src": "for foo, bar.baz in seq"}
+{"err": "chunk after expression", "src": "for grouper, list in [('a', 1), ('a', 2), ('b', 1)]|groupby(0)"}
+{"err": "chunk after expression", "src": "for grouper, list in [{'foo': 1, 'bar': 2},\n                                  {'foo': 2, 'bar': 3},\n                                  {'foo': 1, 'bar': 1},\n                                  {'foo': 3, 'bar': 4}]|groupby('foo')"}
+{"err": "chunk after expression", "src": "for grouper, list in items()|groupby('foo')"}
+{"err": "chunk after expression", "src": "for grouper, list in items()|groupby(0)"}
+{"err": "chunk after expression", "src": "for i in (1, 2)"}
+{"err": "chunk after expression", "src": "for i in [\"foo\", \"bar\"]"}
+{"err": "chunk after expression", "src": "for i in [1, 2, 3]"}
+{"err": "chunk after expression", "src": "for i in items"}
+{"err": "chunk after expression", "src": "for i in lst|reverse"}
+{"err": "chunk after expression", "src": "for i in range(0, 10)"}
+{"err": "chunk after expression", "src": "for i in range(1)"}
+{"err": "chunk after expression", "src": "for i in range(3)"}
+{"err": "chunk after expression", "src": "for idx in range(2)"}
+{"err": "chunk after expression", "src": "for item in (1, 2, 3, 4)"}
+{"err": "chunk after expression", "src": "for item in [1, 2, 3, 4]"}
+{"err": "chunk after expression", "src": "for item in [1, 2, 3]"}
+{"err": "chunk after expression", "src": "for item in [1, 2]"}
+{"err": "chunk after expression", "src": "for item in [1]"}
+{"err": "chunk after expression", "src": "for item in [1] if loop.index\n                                      == 0"}
+{"err": "chunk after expression", "src": "for item in []"}
+{"err": "chunk after expression", "src": "for item in broken"}
+{"err": "chunk after expression", "src": "for item in foo"}
+{"err": "chunk after expression", "src": "for item in foo recursive"}
+{"err": "chunk after expression", "src": "for item in iter"}
+{"err": "chunk after expression", "src": "for item in none"}
+{"err": "chunk after expression", "src": "for item in range(10) if item is even"}
+{"err": "chunk after expression", "src": "for item in range(total)"}
+{"err": "chunk after expression", "src": "for item in seq"}
+{"err": "chunk after expression", "src": "for item in seq recursive"}
+{"err": "chunk after expression", "src": "for item in x"}
+{"err": "chunk after expression", "src": "for item.attribute in seq"}
+{"err": "chunk after expression", "src": "for k, v in kvs"}
+{"err": "chunk after expression", "src": "for k, vs in data|groupby('k', case_sensitive=cs)"}
+{"err": "chunk after expression", "src": "for loop in seq"}
+{"err": "chunk after expression", "src": "for n in [[1,2,3], [3,4,5], [5,6,7]]"}
+{"err": "chunk after expression", "src": "for none in seq"}
+{"err": "chunk after expression", "src": "for num1 in range(5)"}
+{"err": "chunk after expression", "src": "for num2 in range(10)"}
+{"err": "chunk after expression", "src": "for p in foo"}
+{"err": "chunk after expression", "src": "for p in foo recursive"}
+{"err": "chunk after expression", "src": "for page in [site.root] if page.url != this recursive"}
+{"err": "chunk after expression", "src": "for page in items if page.url != this"}
+{"err": "chunk after expression", "src": "for row in table"}
+{"err": "chunk after expression", "src": "for s in seq"}
+{"err": "chunk after expression", "src": "for test_var in [\"test_content\"]"}
+{"err": "chunk after expression", "src": "for user in users"}
+{"err": "chunk after expression", "src": "for value in values recursive"}
+{"err": "chunk after expression", "src": "for x in"}
+{"err": "chunk after expression", "src": "for x in ['one', 'foo'] | select('foo')"}
+{"err": "chunk after expression", "src": "for x in [1, 2, 3]"}
+{"err": "chunk after expression", "src": "for x in [1,2,3]"}
+{"err": "chunk after expression", "src": "for x in a.b[:1]"}
+{"err": "chunk after expression", "src": "for x in a['b']['c']"}
+{"err": "chunk after expression", "src": "for x in foo,"}
+{"err": "chunk after expression", "src": "for x in foo, bar"}
+{"err": "chunk after expression", "src": "for x in list"}
+{"err": "chunk after expression", "src": "for x in range(4)"}
+{"err": "chunk after expression", "src": "for x in range(5)"}
+{"err": "chunk after expression", "src": "for x in rng"}
+{"err": "chunk after expression", "src": "for x in seq"}
+{"err": "chunk after expression", "src": "for x in value"}
+{"err": "chunk after expression", "src": "for x in x.y"}
+{"err": "chunk after expression", "src": "for x in x.y recursive"}
+{"err": "chunk after expression", "src": "for x in y"}
+{"err": "chunk after expression", "src": "for y in seq"}
+{"err": "chunk after expression", "src": "for year, list in articles()|groupby('date.year')"}
+{"err": "chunk after expression", "src": "for year, list in articles|groupby('date.year')"}
+{"err": "chunk after expression", "src": "from \"foo\" import"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar with context,"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar,"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, baz"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, baz with context"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, baz, with context"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, with context"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, with with context"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar, with, context"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar,,"}
+{"err": "chunk after expression", "src": "from \"foo\" import bar,, with context"}
+{"err": "chunk after expression", "src": "from \"foo\" import,"}
+{"err": "chunk after expression", "src": "from \"include\" import test"}
+{"err": "chunk after expression", "src": "from \"module\" import test"}
+{"err": "chunk after expression", "src": "from \"module\" import test with context"}
+{"err": "chunk after expression", "src": "from \"module\" import test without context"}
+{"err": "chunk after expression", "src": "from \"test.html\" import a, b as c"}
+{"err": "chunk after expression", "src": "from 'a' import x with context"}
+{"err": "chunk after expression", "src": "from 'helpers.html' import foo with context"}
+{"err": "chunk after expression", "src": "from 'macro' import m"}
+{"err": "chunk after expression", "src": "from 'module' import nothing"}
+{"ast": {"name": "from_inventory", "t": "Name"}, "src": "from_inventory"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "name", "t": "Keyword", "value": {"t": "Const", "value": "\n            <test>"}}], "node": {"name": "gettext", "t": "Name"}, "t": "Call"}, "src": "gettext(\"foo\", name='\n            '\"<test>\")"}
+{"ast": {"args": [{"t": "Const", "value": " Hello  \n  World"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "gettext", "t": "Name"}, "t": "Call"}, "src": "gettext(' Hello  \\n  World')"}
+{"ast": {"args": [{"t": "Const", "value": "Hello World"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "gettext", "t": "Name"}, "t": "Call"}, "src": "gettext('Hello World')"}
+{"ast": {"args": [{"t": "Const", "value": "no"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "given", "t": "Name"}, "t": "Filter"}, "src": "given|default('no')"}
+{"ast": {"name": "group", "t": "Name"}, "src": "group"}
+{"ast": {"name": "grouper", "t": "Name"}, "src": "grouper"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"name": "g", "t": "Name"}, "t": "Filter"}, "src": "g|list"}
+{"ast": {"name": "host", "t": "Name"}, "src": "host"}
+{"ast": {"name": "host_line_ip", "t": "Name"}, "src": "host_line_ip"}
+{"ast": {"expr": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "length", "node": {"name": "hosts", "t": "Name"}, "t": "Filter"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "hosts | length > 0"}
+{"ast": {"expr": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "length", "node": {"name": "hosts", "t": "Name"}, "t": "Filter"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "hosts|length>0"}
+{"ast": {"attr": "build_root", "node": {"arg": {"t": "Const", "value": "buildbox"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['buildbox'].build_root"}
+{"ast": {"arg": {"t": "Const", "value": "x"}, "node": {"arg": {"t": "Const", "value": "h"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getitem"}, "src": "hostvars['h']['x']"}
+{"ast": {"args": [{"t": "Const", "value": "implicit"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "ansible_connection", "node": {"arg": {"t": "Const", "value": "localhost"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "t": "Filter"}, "src": "hostvars['localhost'].ansible_connection | default('implicit')"}
+{"ast": {"attr": "app_tier", "node": {"arg": {"t": "Const", "value": "web01"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web01'].app_tier"}
+{"ast": {"attr": "infiniband_ip", "node": {"arg": {"t": "Const", "value": "web01"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web01'].infiniband_ip"}
+{"ast": {"attr": "play_scoped", "node": {"arg": {"t": "Const", "value": "web01"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web01'].play_scoped"}
+{"ast": {"attr": "web01_ib_ip", "node": {"arg": {"t": "Const", "value": "web01"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web01'].web01_ib_ip"}
+{"ast": {"attr": "app_tier", "node": {"arg": {"t": "Const", "value": "web0143"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web0143'].app_tier"}
+{"ast": {"args": [{"t": "Const", "value": "none"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "app_tier", "node": {"arg": {"t": "Const", "value": "web0143"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "t": "Filter"}, "src": "hostvars['web0143'].app_tier | default('none')"}
+{"ast": {"attr": "infiniband_ip", "node": {"arg": {"t": "Const", "value": "web0143"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars['web0143'].infiniband_ip"}
+{"ast": {"attr": "app_tier", "node": {"arg": {"arg": {"t": "Const", "value": 0}, "node": {"arg": {"t": "Const", "value": "webservers"}, "node": {"name": "groups", "t": "Name"}, "t": "Getitem"}, "t": "Getitem"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars[groups['webservers'][0]].app_tier"}
+{"ast": {"attr": "x", "node": {"arg": {"name": "h", "t": "Name"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars[h].x"}
+{"ast": {"attr": "not_exists", "node": {"arg": {"name": "inventory_hostname", "t": "Name"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars[inventory_hostname].not_exists"}
+{"ast": {"attr": "play_scoped", "node": {"arg": {"name": "inventory_hostname", "t": "Name"}, "node": {"name": "hostvars", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "hostvars[inventory_hostname].play_scoped"}
+{"ast": {"name": "href", "t": "Name"}, "src": "href"}
+{"ast": {"name": "http_port", "t": "Name"}, "src": "http_port"}
+{"ast": {"name": "i", "t": "Name"}, "src": "i"}
+{"ast": {"left": {"name": "i", "t": "Name"}, "right": {"expr": {"name": "j", "t": "Name"}, "ops": [{"expr": {"t": "Const", "value": 5}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "t": "Mul"}, "src": "i * (j < 5)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "i", "t": "Name"}, "t": "Call"}, "src": "i()"}
+{"ast": {"name": "icon", "t": "Name"}, "src": "icon"}
+{"ast": {"name": "if", "t": "Name"}, "src": "if"}
+{"err": "chunk after expression", "src": "if True"}
+{"err": "chunk after expression", "src": "if True +"}
+{"err": "chunk after expression", "src": "if a"}
+{"err": "chunk after expression", "src": "if b"}
+{"err": "chunk after expression", "src": "if caller"}
+{"err": "chunk after expression", "src": "if caller is undefined"}
+{"err": "chunk after expression", "src": "if default"}
+{"err": "chunk after expression", "src": "if expr"}
+{"err": "chunk after expression", "src": "if f.rec"}
+{"err": "chunk after expression", "src": "if false"}
+{"err": "chunk after expression", "src": "if foo"}
+{"err": "chunk after expression", "src": "if item % 2 == 0"}
+{"err": "chunk after expression", "src": "if item == 1"}
+{"err": "chunk after expression", "src": "if item > 2"}
+{"err": "chunk after expression", "src": "if item.b"}
+{"err": "chunk after expression", "src": "if kvs"}
+{"err": "chunk after expression", "src": "if l"}
+{"err": "chunk after expression", "src": "if loop.last"}
+{"err": "chunk after expression", "src": "if not loop.last"}
+{"err": "chunk after expression", "src": "if object1.subproperty1 is eq object2.subproperty2"}
+{"err": "chunk after expression", "src": "if true"}
+{"err": "chunk after expression", "src": "if value"}
+{"err": "chunk after expression", "src": "if x == v"}
+{"err": "chunk after expression", "src": "if x > 1"}
+{"err": "chunk after expression", "src": "if x is defined"}
+{"err": "chunk after expression", "src": "if x is not defined"}
+{"err": "chunk after expression", "src": "if y \"\n            \"is defined"}
+{"err": "chunk after expression", "src": "import \"meh.html\" as meh"}
+{"err": "chunk after expression", "src": "import \"module\" as m"}
+{"err": "chunk after expression", "src": "import \"module\" as m with context"}
+{"err": "chunk after expression", "src": "import \"module\" as m without context"}
+{"err": "chunk after expression", "src": "include \"header\""}
+{"err": "chunk after expression", "src": "include \"header\" with context"}
+{"err": "chunk after expression", "src": "include \"header\" without context"}
+{"err": "chunk after expression", "src": "include \"inc\""}
+{"err": "chunk after expression", "src": "include \"include.html\""}
+{"err": "chunk after expression", "src": "include \"missing\""}
+{"err": "chunk after expression", "src": "include \"missing\" ignore missing ' + extra + \""}
+{"err": "chunk after expression", "src": "include \"muh.html\""}
+{"err": "chunk after expression", "src": "include \"o_printer\""}
+{"err": "chunk after expression", "src": "include 'item'"}
+{"err": "chunk after expression", "src": "include 'x.html'"}
+{"ast": {"args": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "include", "t": "Name"}, "t": "Call"}, "src": "include (\"foo.html\", \"bar.html\")"}
+{"ast": {"args": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}, {"name": "foo", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "include", "t": "Name"}, "t": "Call"}, "src": "include (\"foo.html\", \"bar.html\", foo)"}
+{"ast": {"arg": {"items": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}, {"name": "foo", "t": "Name"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"foo.html\", \"bar.html\", foo]"}
+{"ast": {"arg": {"items": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"foo.html\", \"bar.html\"]"}
+{"ast": {"arg": {"items": [{"t": "Const", "value": "missing"}, {"t": "Const", "value": "header"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"missing\", \"header\"]"}
+{"ast": {"arg": {"items": [{"t": "Const", "value": "missing"}, {"t": "Const", "value": "missing2"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"missing\", \"missing2\"]"}
+{"err": "chunk after expression", "src": "include [\"missing\", \"missing2\"] ignore missing"}
+{"ast": {"arg": {"items": [{"name": "x", "t": "Name"}, {"t": "Const", "value": "header"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [x, \"header\"]"}
+{"ast": {"arg": {"name": "x", "t": "Name"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [x]"}
+{"err": "chunk after expression", "src": "include helper"}
+{"err": "chunk after expression", "src": "include x"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "inner", "t": "Name"}, "t": "Call"}, "src": "inner()"}
+{"ast": {"name": "inventory_hostname", "t": "Name"}, "src": "inventory_hostname"}
+{"ast": {"name": "it", "t": "Name"}, "src": "it"}
+{"ast": {"name": "item", "t": "Name"}, "src": "item"}
+{"ast": {"left": {"name": "item", "t": "Name"}, "right": {"t": "Const", "value": 2}, "t": "Mul"}, "src": "item * 2"}
+{"ast": {"attr": "a", "node": {"name": "item", "t": "Name"}, "t": "Getattr"}, "src": "item.a"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "items()|join(\"|\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [{"t": "Const", "value": "int"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "map", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|map(\"int\")|sum"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|reject(\"odd\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|reject|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "select", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|select(\"odd\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "select", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|select|join(\"|\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|slice(3)|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "X"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|slice(3, 'X')|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "items()|sum"}
+{"ast": {"args": [{"t": "Const", "value": "value"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "items()|sum('value')"}
+{"err": "expected token 'name', got 'string'", "src": "items|\" + name + '(attribute=\"value\")"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "src": "items|join(', ')"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|map(attribute='name')|join(', ')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"args": [{"t": "Const", "value": "=="}, {"t": "Const", "value": "z"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "items|reject('==', 'z')|unique|list"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value"}}], "name": "sort", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|sort(attribute='value')|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value.0"}}], "name": "sort", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|sort(attribute='value.0')|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value1,value2"}}], "name": "sort", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|sort(attribute='value1,value2')|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value1.0,value2.0"}}], "name": "sort", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|sort(attribute='value1.0,value2.0')|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value2,value1"}}], "name": "sort", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|sort(attribute='value2,value1')|join"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "value"}}], "name": "unique", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|unique(attribute='value')|join"}
+{"ast": {"name": "j", "t": "Name"}, "src": "j"}
+{"ast": {"name": "k", "t": "Name"}, "src": "k"}
+{"ast": {"name": "kwargs", "t": "Name"}, "src": "kwargs"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "pop", "node": {"name": "l", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "l.pop()"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "level1", "t": "Name"}, "t": "Call"}, "src": "level1('foo')"}
+{"ast": {"args": [{"t": "Const", "value": "bar"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "level2", "t": "Name"}, "t": "Call"}, "src": "level2('bar')"}
+{"ast": {"name": "local_note", "t": "Name"}, "src": "local_note"}
+{"ast": {"name": "loop", "t": "Name"}, "src": "loop"}
+{"ast": {"args": [{"attr": "sub", "node": {"name": "f", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "loop", "t": "Name"}, "t": "Call"}, "src": "loop(f.sub)"}
+{"ast": {"args": [{"attr": "b", "node": {"name": "item", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "loop", "t": "Name"}, "t": "Call"}, "src": "loop(item.b)"}
+{"ast": {"args": [{"name": "item", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "changed", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "loop.changed(item)"}
+{"ast": {"args": [{"t": "Const", "value": "<1>"}, {"t": "Const", "value": "<2>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "cycle", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "loop.cycle('<1>', '<2>')"}
+{"ast": {"args": [], "dyn_args": {"name": "through", "t": "Name"}, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "cycle", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "loop.cycle(*through)"}
+{"ast": {"attr": "depth", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.depth"}
+{"ast": {"attr": "depth0", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.depth0"}
+{"ast": {"attr": "first", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.first"}
+{"ast": {"attr": "index", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.index"}
+{"ast": {"attr": "index0", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.index0"}
+{"ast": {"attr": "last", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.last"}
+{"ast": {"attr": "length", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.length"}
+{"ast": {"expr1": {"attr": "a", "node": {"attr": "nextitem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "expr2": {"t": "Const", "value": "x"}, "t": "CondExpr", "test": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"attr": "nextitem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Test"}}, "src": "loop.nextitem.a if loop.nextitem is defined else 'x'"}
+{"ast": {"args": [{"t": "Const", "value": "x"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "nextitem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "src": "loop.nextitem|default('x')"}
+{"ast": {"expr1": {"attr": "a", "node": {"attr": "previtem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "expr2": {"t": "Const", "value": "x"}, "t": "CondExpr", "test": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"attr": "previtem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Test"}}, "src": "loop.previtem.a if loop.previtem is defined else 'x'"}
+{"ast": {"args": [{"t": "Const", "value": "x"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "previtem", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "src": "loop.previtem|default('x')"}
+{"ast": {"attr": "revindex", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.revindex"}
+{"ast": {"attr": "revindex0", "node": {"name": "loop", "t": "Name"}, "t": "Getattr"}, "src": "loop.revindex0"}
+{"ast": {"args": [{"t": "Const", "value": "a"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m('a')"}
+{"ast": {"args": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m('a', 'b')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m()"}
+{"ast": {"args": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m(1, 2, 3)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "test", "node": {"name": "m", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "m.test()"}
+{"err": "chunk after expression", "src": "macro __private()"}
+{"err": "chunk after expression", "src": "macro a()"}
+{"err": "chunk after expression", "src": "macro bar()"}
+{"err": "chunk after expression", "src": "macro baz()"}
+{"err": "chunk after expression", "src": "macro blub()"}
+{"err": "chunk after expression", "src": "macro detail(icon, value)"}
+{"err": "chunk after expression", "src": "macro do_something()"}
+{"err": "chunk after expression", "src": "macro dump_users(users)"}
+{"err": "chunk after expression", "src": "macro foo(a, b)"}
+{"err": "chunk after expression", "src": "macro foo(x)"}
+{"err": "chunk after expression", "src": "macro i()"}
+{"err": "chunk after expression", "src": "macro inner()"}
+{"err": "chunk after expression", "src": "macro item(a)"}
+{"err": "chunk after expression", "src": "macro level1(data1)"}
+{"err": "chunk after expression", "src": "macro level2(data2)"}
+{"err": "chunk after expression", "src": "macro link_detail(icon, value, href)"}
+{"err": "chunk after expression", "src": "macro m()"}
+{"err": "chunk after expression", "src": "macro m(a, b, c='c', d='d')"}
+{"err": "chunk after expression", "src": "macro m(a, b=1, c)"}
+{"err": "chunk after expression", "src": "macro m(a, b=x, x=23)"}
+{"err": "chunk after expression", "src": "macro magic(x)"}
+{"err": "chunk after expression", "src": "macro meh(x)"}
+{"err": "chunk after expression", "src": "macro my_macro()"}
+{"err": "chunk after expression", "src": "macro notthere()"}
+{"err": "chunk after expression", "src": "macro outer()"}
+{"err": "chunk after expression", "src": "macro outer(o)"}
+{"err": "chunk after expression", "src": "macro say_hello(name)"}
+{"err": "chunk after expression", "src": "macro test()"}
+{"err": "chunk after expression", "src": "macro test(a, b, c=get_int())"}
+{"err": "chunk after expression", "src": "macro test(foo)"}
+{"err": "chunk after expression", "src": "macro toplevel()"}
+{"err": "chunk after expression", "src": "macro wrapper()"}
+{"err": "chunk after expression", "src": "macro x()"}
+{"err": "chunk after expression", "src": "macro x(caller)"}
+{"err": "chunk after expression", "src": "macro x(caller=none)"}
+{"err": "chunk after expression", "src": "macro x(l)"}
+{"ast": {"args": [{"name": "ns", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "magic", "t": "Name"}, "t": "Call"}, "src": "magic(ns)"}
+{"ast": {"name": "missing", "t": "Name"}, "src": "missing"}
+{"ast": {"left": {"name": "missing", "t": "Name"}, "right": {"t": "Const", "value": 1}, "t": "Sub"}, "src": "missing - 1"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "missing", "t": "Name"}, "t": "Test"}, "src": "missing is defined"}
+{"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "missing", "t": "Name"}, "t": "Test"}, "t": "Not"}, "src": "missing is not defined"}
+{"ast": {"attr": "attribute", "node": {"name": "missing", "t": "Name"}, "t": "Getattr"}, "src": "missing.attribute"}
+{"ast": {"arg": {"t": "Const", "value": "baz"}, "node": {"attr": "bar", "node": {"name": "missing", "t": "Name"}, "t": "Getattr"}, "t": "Getitem"}, "src": "missing.bar[\"baz\"]"}
+{"ast": {"args": [{"t": "Const", "value": "default"}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "missing", "t": "Name"}, "t": "Filter"}, "src": "missing|default(\"default\", true)"}
+{"ast": {"args": [{"t": "Const", "value": "no"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "missing", "t": "Name"}, "t": "Filter"}, "src": "missing|default('no')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"name": "missing", "t": "Name"}, "t": "Filter"}, "src": "missing|list"}
+{"ast": {"name": "mod", "t": "Name"}, "src": "mod"}
+{"ast": {"expr": {"args": [{"t": "Const", "value": "native"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "mode", "t": "Name"}, "t": "Filter"}, "ops": [{"expr": {"t": "Const", "value": "native"}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "mode | default('native') == 'native'"}
+{"ast": {"left": {"args": [{"name": "item", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "muh", "t": "Name"}, "t": "Call"}, "right": {"args": [{"name": "seq", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "meh", "t": "Name"}, "t": "Call"}, "t": "Add"}, "src": "muh(item) + meh(seq)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "my_macro", "t": "Name"}, "t": "Call"}, "src": "my_macro()"}
+{"ast": {"name": "myport", "t": "Name"}, "src": "myport"}
+{"ast": {"name": "name", "t": "Name"}, "src": "name"}
+{"ast": {"name": "network_mtu", "t": "Name"}, "src": "network_mtu"}
+{"ast": {"name": "network_ready", "t": "Name"}, "src": "network_ready"}
+{"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "network_ready", "t": "Name"}, "t": "Filter"}, "src": "network_ready | default(false)"}
+{"ast": {"args": [{"t": "Const", "value": "%(num)s apple"}, {"t": "Const", "value": "%(num)s apples"}, {"name": "apples", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "ngettext", "t": "Name"}, "t": "Call"}, "src": "ngettext(\"%(num)s apple\", \"%(num)s apples\", apples)"}
+{"ast": {"attr": "stdout", "node": {"name": "nginx_state", "t": "Name"}, "t": "Getattr"}, "src": "nginx_state.stdout"}
+{"err": "chunk after expression", "src": "no such element: int object['missing']"}
+{"ast": {"t": "Const", "value": null}, "src": "none"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"t": "Const", "value": null}, "t": "Test"}, "src": "none is defined"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": "upper"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "map", "node": {"t": "Const", "value": null}, "t": "Filter"}, "t": "Filter"}, "src": "none|map(\"upper\")|list"}
+{"err": "unexpected 'end of template'", "src": "not"}
+{"err": "unexpected 'end of template'", "src": "not ("}
+{"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "bool", "node": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "skip_x", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Not"}, "src": "not (skip_x | default(false) | bool)"}
+{"ast": {"node": {"expr": {"t": "Const", "value": 42}, "ops": [{"expr": {"name": "bar", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "t": "Not"}, "src": "not 42 in bar"}
+{"ast": {"node": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "t": "Not"}, "src": "not a in b"}
+{"ast": {"node": {"t": "Const", "value": false}, "t": "Not"}, "src": "not false"}
+{"ast": {"node": {"name": "missing", "t": "Name"}, "t": "Not"}, "src": "not missing"}
+{"ast": {"name": "not_in_any_inventory", "t": "Name"}, "src": "not_in_any_inventory"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "nothing", "t": "Name"}, "t": "Call"}, "src": "nothing()"}
+{"ast": {"args": [{"t": "Const", "value": "babel"}, {"t": "Const", "value": "%(users)s user"}, {"t": "Const", "value": "%(users)s users"}, {"name": "users", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "npgettext", "t": "Name"}, "t": "Call"}, "src": "npgettext(\"babel\", \"%(users)s user\", \"%(users)s users\", users)"}
+{"err": "unexpected char \"'\" at 53", "src": "npgettext(\"fruit\", \"%(num)s apple\", \"%(num)s apples\",'\n    \" apples)"}
+{"ast": {"args": [{"name": "not_here", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "run", "node": {"name": "ns", "t": "Name"}, "t": "Filter"}, "src": "ns | run(not_here)"}
+{"ast": {"attr": "a", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.a"}
+{"ast": {"attr": "b", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.b"}
+{"ast": {"attr": "bar", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.bar"}
+{"ast": {"attr": "foo", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.foo"}
+{"ast": {"attr": "found", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.found"}
+{"ast": {"attr": "self", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.self"}
+{"ast": {"name": "ntp_server", "t": "Name"}, "src": "ntp_server"}
+{"ast": {"name": "num", "t": "Name"}, "src": "num"}
+{"ast": {"name": "o", "t": "Name"}, "src": "o"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "string", "node": {"name": "obj", "t": "Name"}, "t": "Filter"}, "src": "obj|string"}
+{"ast": {"args": [{"t": "Const", "value": "FOO"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "outer", "t": "Name"}, "t": "Call"}, "src": "outer(\"FOO\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "outer", "t": "Name"}, "t": "Call"}, "src": "outer()"}
+{"ast": {"name": "output", "t": "Name"}, "src": "output"}
+{"ast": {"name": "overlay", "t": "Name"}, "src": "overlay"}
+{"ast": {"attr": "bar", "node": {"name": "p", "t": "Name"}, "t": "Getattr"}, "src": "p.bar"}
+{"ast": {"attr": "url", "node": {"name": "page", "t": "Name"}, "t": "Getattr"}, "src": "page.url"}
+{"ast": {"args": [{"args": [{"t": "Const", "value": "missing"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "_", "t": "Name"}, "t": "Call"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "page_title", "t": "Name"}, "t": "Filter"}, "src": "page_title|default(_(\"missing\"))"}
+{"ast": {"args": [{"t": "Const", "value": "babel"}, {"t": "Const", "value": "Hello World"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "pgettext", "t": "Name"}, "t": "Call"}, "src": "pgettext(\"babel\", \"Hello World\")"}
+{"ast": {"args": [{"t": "Const", "value": "fruit"}, {"t": "Const", "value": "Apple"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "pgettext", "t": "Name"}, "t": "Call"}, "src": "pgettext(\"fruit\", \"Apple\")"}
+{"ast": {"name": "play_scoped", "t": "Name"}, "src": "play_scoped"}
+{"ast": {"name": "playbook_dir", "t": "Name"}, "src": "playbook_dir"}
+{"ast": {"name": "pluralize", "t": "Name"}, "src": "pluralize"}
+{"err": "chunk after expression", "src": "pluralize bar"}
+{"ast": {"name": "pod_label", "t": "Name"}, "src": "pod_label"}
+{"ast": {"name": "pod_namespace", "t": "Name"}, "src": "pod_namespace"}
+{"ast": {"name": "port_count", "t": "Name"}, "src": "port_count"}
+{"ast": {"name": "protocol", "t": "Name"}, "src": "protocol"}
+{"ast": {"name": "provisioner_user", "t": "Name"}, "src": "provisioner_user"}
+{"ast": {"attr": "stdout", "node": {"arg": {"t": "Const", "value": 0}, "node": {"attr": "results", "node": {"name": "r", "t": "Name"}, "t": "Getattr"}, "t": "Getitem"}, "t": "Getattr"}, "src": "r.results[0].stdout"}
+{"ast": {"expr": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "length", "node": {"attr": "stdout", "node": {"name": "r", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "r.stdout | length > 0"}
+{"ast": {"name": "raw", "t": "Name"}, "src": "raw"}
+{"err": "unexpected 'end of template'", "src": "raw +"}
+{"ast": {"name": "region", "t": "Name"}, "src": "region"}
+{"ast": {"name": "result_name", "t": "Name"}, "src": "result_name"}
+{"ast": {"name": "retries_left", "t": "Name"}, "src": "retries_left"}
+{"ast": {"name": "role_path", "t": "Name"}, "src": "role_path"}
+{"ast": {"attr": "index", "node": {"name": "rowloop", "t": "Name"}, "t": "Getattr"}, "src": "rowloop.index"}
+{"ast": {"args": [{"t": "Const", "value": "<blink>foo</blink>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "say_hello", "t": "Name"}, "t": "Call"}, "src": "say_hello(\"<blink>foo</blink>\")"}
+{"ast": {"args": [{"t": "Const", "value": "Peter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "say_hello", "t": "Name"}, "t": "Call"}, "src": "say_hello('Peter')"}
+{"err": "chunk after expression", "src": "scope a=1, b=2, c=b, d=e, e=5"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "b", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.b()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "foo", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.foo()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "x", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.x()"}
+{"ast": {"name": "service_port", "t": "Name"}, "src": "service_port"}
+{"err": "chunk after expression", "src": "set\n                ns = namespace(run=\"{0.__call__.__builtins__[__import__]}\".format)"}
+{"err": "chunk after expression", "src": "set a = \" xxx \""}
+{"err": "chunk after expression", "src": "set a = 1"}
+{"err": "chunk after expression", "src": "set a = 2"}
+{"err": "chunk after expression", "src": "set a = 3"}
+{"err": "chunk after expression", "src": "set a = 42"}
+{"err": "chunk after expression", "src": "set b = \" yy \""}
+{"err": "chunk after expression", "src": "set caller = 42"}
+{"err": "chunk after expression", "src": "set foo"}
+{"err": "chunk after expression", "src": "set foo = \"foo\""}
+{"err": "chunk after expression", "src": "set foo = 'bar'"}
+{"err": "chunk after expression", "src": "set foo = 0"}
+{"err": "chunk after expression", "src": "set foo = 1"}
+{"err": "chunk after expression", "src": "set foo = 41"}
+{"err": "chunk after expression", "src": "set foo = 42"}
+{"err": "chunk after expression", "src": "set foo = foo"}
+{"err": "chunk after expression", "src": "set foo | myfilter(a) | trim | length | string"}
+{"err": "chunk after expression", "src": "set foo | trim"}
+{"err": "chunk after expression", "src": "set foo | trim | length | string"}
+{"err": "chunk after expression", "src": "set foo.bar = 1"}
+{"err": "chunk after expression", "src": "set foo['bar'] = 1"}
+{"err": "chunk after expression", "src": "set foobar = 42"}
+{"err": "chunk after expression", "src": "set hello = 1"}
+{"err": "chunk after expression", "src": "set i = 1"}
+{"err": "chunk after expression", "src": "set i = 24"}
+{"err": "chunk after expression", "src": "set i = 42"}
+{"err": "chunk after expression", "src": "set i = idx"}
+{"err": "chunk after expression", "src": "set i = loop.index0"}
+{"err": "chunk after expression", "src": "set item = 42"}
+{"err": "chunk after expression", "src": "set items = []"}
+{"err": "chunk after expression", "src": "set j = loop.index"}
+{"err": "chunk after expression", "src": "set n=[1,2,3,4,5]"}
+{"err": "chunk after expression", "src": "set ns = namespace()"}
+{"err": "chunk after expression", "src": "set ns = namespace(a=12, b=36)"}
+{"err": "chunk after expression", "src": "set ns = namespace(d, self=37)"}
+{"err": "chunk after expression", "src": "set ns = namespace(foo=\"Bar\")"}
+{"err": "chunk after expression", "src": "set ns = namespace(found=false)"}
+{"err": "chunk after expression", "src": "set ns.a = 13"}
+{"err": "chunk after expression", "src": "set ns.a, ns.b = ns.a + 1, ns.b + 1"}
+{"err": "chunk after expression", "src": "set ns.b = 42"}
+{"err": "chunk after expression", "src": "set ns.bar"}
+{"err": "chunk after expression", "src": "set ns.bar = '42'"}
+{"err": "chunk after expression", "src": "set ns.bar = 'hi'"}
+{"err": "chunk after expression", "src": "set ns.found = true"}
+{"err": "chunk after expression", "src": "set output"}
+{"err": "chunk after expression", "src": "set rowloop = loop"}
+{"err": "chunk after expression", "src": "set test_var=\"test_content\""}
+{"err": "chunk after expression", "src": "set true = 42"}
+{"err": "chunk after expression", "src": "set var = 42"}
+{"err": "chunk after expression", "src": "set variable = 42"}
+{"err": "chunk after expression", "src": "set wrapper = \"<FOO>\""}
+{"err": "chunk after expression", "src": "set x"}
+{"err": "chunk after expression", "src": "set x = \" {% str"}
+{"err": "chunk after expression", "src": "set x = \"<x>\""}
+{"err": "chunk after expression", "src": "set x = 1"}
+{"err": "chunk after expression", "src": "set x = 2"}
+{"err": "chunk after expression", "src": "set x = 42"}
+{"err": "chunk after expression", "src": "set x = 9"}
+{"err": "chunk after expression", "src": "set x = item"}
+{"err": "chunk after expression", "src": "set x.b = 37"}
+{"err": "chunk after expression", "src": "set z = 99"}
+{"ast": {"name": "shared_endpoint", "t": "Name"}, "src": "shared_endpoint"}
+{"ast": {"name": "shared_timeout", "t": "Name"}, "src": "shared_timeout"}
+{"ast": {"expr": {"name": "skip_demo", "t": "Name"}, "ops": [{"expr": {"t": "Const", "value": false}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "skip_demo == false"}
+{"ast": {"args": [{"t": "Const", "value": 15}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"name": "smalldata", "t": "Name"}, "t": "Filter"}, "src": "smalldata|truncate(15)"}
+{"ast": {"name": "str", "t": "Name"}, "src": "str"}
+{"ast": {"args": [{"t": "Const", "value": "<"}, {"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "replace", "node": {"name": "string", "t": "Name"}, "t": "Filter"}, "src": "string|replace(\"<\", 42)"}
+{"ast": {"args": [{"t": "Const", "value": "o"}, {"t": "Const", "value": ">x<"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "replace", "node": {"name": "string", "t": "Name"}, "t": "Filter"}, "src": "string|replace(\"o\", \">x<\")"}
+{"ast": {"args": [{"t": "Const", "value": "o"}, {"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "replace", "node": {"name": "string", "t": "Name"}, "t": "Filter"}, "src": "string|replace(\"o\", 42)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "super", "t": "Name"}, "t": "Call"}, "src": "super()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "wordcount", "node": {"name": "s", "t": "Name"}, "t": "Filter"}, "src": "s|wordcount"}
+{"ast": {"args": [{"t": "Const", "value": 20}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "wordwrap", "node": {"name": "s", "t": "Name"}, "t": "Filter"}, "src": "s|wordwrap(20)"}
+{"ast": {"name": "target", "t": "Name"}, "src": "target"}
+{"ast": {"name": "test", "t": "Name"}, "src": "test"}
+{"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "test", "t": "Name"}, "t": "Call"}, "src": "test(\"foo\")"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "test", "t": "Name"}, "t": "Call"}, "src": "test()"}
+{"ast": {"attr": "missingattribute", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "test", "t": "Name"}, "t": "Call"}, "t": "Getattr"}, "src": "test().missingattribute"}
+{"ast": {"args": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "test", "t": "Name"}, "t": "Call"}, "src": "test(1, 2)"}
+{"ast": {"args": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "test", "t": "Name"}, "t": "Call"}, "src": "test(1, 2, 3)"}
+{"ast": {"left": {"name": "the_foo", "t": "Name"}, "right": {"name": "x", "t": "Name"}, "t": "Add"}, "src": "the_foo + x"}
+{"ast": {"name": "topic", "t": "Name"}, "src": "topic"}
+{"ast": {"name": "trans", "t": "Name"}, "src": "trans"}
+{"err": "chunk after expression", "src": "trans 'fruit' num=apples"}
+{"err": "chunk after expression", "src": "trans count=num"}
+{"err": "chunk after expression", "src": "trans foo"}
+{"err": "chunk after expression", "src": "trans foo=\"42\""}
+{"err": "chunk after expression", "src": "trans foo=42, count=2"}
+{"err": "chunk after expression", "src": "trans notrimmed"}
+{"err": "chunk after expression", "src": "trans num=3"}
+{"err": "chunk after expression", "src": "trans num=apples"}
+{"err": "chunk after expression", "src": "trans num=count"}
+{"err": "chunk after expression", "src": "trans trimmed"}
+{"err": "chunk after expression", "src": "trans trimmed = 'world'"}
+{"err": "chunk after expression", "src": "trans trimmed x=\"world\""}
+{"err": "chunk after expression", "src": "trans user_count"}
+{"err": "chunk after expression", "src": "trans user_count=get_user_count()"}
+{"ast": {"name": "trimmed", "t": "Name"}, "src": "trimmed"}
+{"ast": {"t": "Const", "value": true}, "src": "true"}
+{"ast": {"left": {"t": "Const", "value": true}, "right": {"t": "Const", "value": false}, "t": "And"}, "src": "true and false"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"t": "Const", "value": true}, "t": "Test"}, "src": "true is defined"}
+{"ast": {"attr": "__class__", "node": {"t": "Const", "value": true}, "t": "Getattr"}, "src": "true.__class__"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "string", "node": {"attr": "__class__", "node": {"t": "Const", "value": true}, "t": "Getattr"}, "t": "Filter"}, "src": "true.__class__|string"}
+{"ast": {"name": "unknown_tag", "t": "Name"}, "src": "unknown_tag"}
+{"ast": {"name": "user", "t": "Name"}, "src": "user"}
+{"ast": {"attr": "description", "node": {"name": "user", "t": "Name"}, "t": "Getattr"}, "src": "user.description"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "e", "node": {"attr": "realname", "node": {"name": "user", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "src": "user.realname|e"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "e", "node": {"attr": "username", "node": {"name": "user", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "src": "user.username|e"}
+{"ast": {"name": "user_count", "t": "Name"}, "src": "user_count"}
+{"ast": {"name": "users", "t": "Name"}, "src": "users"}
+{"ast": {"args": [{"t": "Const", "value": ", "}, {"t": "Const", "value": "username"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "users", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "users()|join(', ', 'username')"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "users", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "users()|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [{"t": "Const", "value": "is_active"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "selectattr", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "users", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "users()|selectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": ", "}, {"t": "Const", "value": "username"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "src": "users|join(', ', 'username')"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "lastname"}}, {"key": "default", "t": "Keyword", "value": {"t": "Const", "value": ""}}], "name": "map", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "users|map(attribute=\"lastname\", default=\"\")|join(\", \")"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "lastname"}}, {"key": "default", "t": "Keyword", "value": {"t": "Const", "value": "smith"}}], "name": "map", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "users|map(attribute=\"lastname\", default=\"smith\")|join(\", \")"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "lastname"}}, {"key": "default", "t": "Keyword", "value": {"items": [{"t": "Const", "value": "smith"}, {"t": "Const", "value": "x"}], "t": "List"}}], "name": "map", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "users|map(attribute=\"lastname\", default=[\"smith\",\"x\"])|join(\", \")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "users|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [{"t": "Const", "value": "id"}, {"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "rejectattr", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "users|rejectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [{"t": "Const", "value": "is_active"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "rejectattr", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "users|rejectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [{"t": "Const", "value": "id"}, {"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "selectattr", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "users|selectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"args": [{"t": "Const", "value": "is_active"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "selectattr", "node": {"name": "users", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "users|selectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")"}
+{"ast": {"name": "v", "t": "Name"}, "src": "v"}
+{"ast": {"name": "value", "t": "Name"}, "src": "value"}
+{"ast": {"args": [{"t": "Const", "value": "1"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "items", "node": {"name": "values", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "t": "Filter"}, "src": "values.items()|sum('1')"}
+{"ast": {"args": [{"t": "Const", "value": "real.value"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"name": "values", "t": "Name"}, "t": "Filter"}, "src": "values|sum('real.value')"}
+{"ast": {"args": [{"t": "Const", "value": "value"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"name": "values", "t": "Name"}, "t": "Filter"}, "src": "values|sum('value')"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "float", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|float"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "default", "t": "Keyword", "value": {"t": "Const", "value": 1.0}}], "name": "float", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|float(default=1.0)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "int", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|int"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "base", "t": "Keyword", "value": {"name": "base", "t": "Name"}}], "name": "int", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|int(base=base)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "default", "t": "Keyword", "value": {"t": "Const", "value": 1}}], "name": "int", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|int(default=1)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlencode", "node": {"name": "value", "t": "Name"}, "t": "Filter"}, "src": "value|urlencode"}
+{"ast": {"name": "var", "t": "Name"}, "src": "var"}
+{"ast": {"attr": "foo", "node": {"arg": {"t": "Const", "value": 42}, "node": {"name": "var", "t": "Name"}, "t": "Getitem"}, "t": "Getattr"}, "src": "var[42].foo"}
+{"ast": {"name": "varargs", "t": "Name"}, "src": "varargs"}
+{"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"name": "varargs", "t": "Name"}, "t": "Filter"}, "src": "varargs|join('|')"}
+{"ast": {"name": "variable", "t": "Name"}, "src": "variable"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "var", "t": "Name"}, "t": "Filter"}, "src": "var|f"}
+{"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "v"}}], "name": "join", "node": {"name": "vs", "t": "Name"}, "t": "Filter"}, "src": "vs|join(', ', attribute='v')"}
+{"ast": {"name": "which", "t": "Name"}, "src": "which"}
+{"err": "chunk after expression", "src": "wibble bar"}
+{"err": "chunk after expression", "src": "with a=1, b=2, c=b, d=e, e=5"}
+{"err": "chunk after expression", "src": "with a=42, b=23"}
+{"err": "chunk after expression", "src": "with x = 2"}
+{"ast": {"name": "x", "t": "Name"}, "src": "x"}
+{"ast": {"left": {"name": "x", "t": "Name"}, "right": {"node": {"t": "Const", "value": 2}, "t": "Neg"}, "t": "Pow"}, "src": "x ** -2"}
+{"err": "unexpected 'end of template'", "src": "x =="}
+{"err": "unexpected end of template, expected 'name'.", "src": "x is"}
+{"err": "expected token 'name', got 'integer'", "src": "x is a.1"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "ansible.builtin.defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is ansible.builtin.defined"}
+{"err": "unexpected 'end of template'", "src": "x is defined and"}
+{"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "right": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "y", "t": "Name"}, "t": "Test"}, "t": "Not"}, "t": "And"}, "src": "x is defined and y is not defined"}
+{"err": "unexpected end of template, expected ','.", "src": "x is defined(1"}
+{"ast": {"args": [{"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "divisibleby", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is divisibleby 3"}
+{"err": "unexpected 'end of template'", "src": "x is divisibleby("}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escaped", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is escaped"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is f"}
+{"err": "unexpected end of template, expected 'name'.", "src": "x is not"}
+{"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "t": "Not"}, "src": "x is not defined"}
+{"err": "expected name or number", "src": "x is sameas foo."}
+{"ast": {"args": [{"attr": "bar", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is sameas foo.bar"}
+{"err": "unexpected end of template, expected 'name'.", "src": "x |"}
+{"err": "expected token 'name', got 'integer'", "src": "x | a.1"}
+{"ast": {"args": [{"t": "Const", "value": "v"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "ansible.builtin.default", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x | ansible.builtin.default('v')"}
+{"err": "unexpected 'end of template'", "src": "x | default("}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x()"}
+{"ast": {"args": [{"name": "l", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x(l)"}
+{"ast": {"args": [{"name": "n", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x(n)"}
+{"err": "expected name or number", "src": "x."}
+{"ast": {"arg": {"t": "Const", "value": 1}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x.1"}
+{"ast": {"arg": {"t": "Const", "value": 99999999999999999999999999}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x.99999999999999999999999999"}
+{"ast": {"attr": "__class__", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.__class__"}
+{"ast": {"attr": "bar", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.bar"}
+{"ast": {"attr": "foo", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.foo"}
+{"ast": {"attr": "title", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.title"}
+{"err": "unexpected end of template, expected ','.", "src": "x.y(1"}
+{"err": "unexpected 'end of template'", "src": "x["}
+{"err": "unexpected end of template, expected ','.", "src": "x['a'"}
+{"err": "unexpected 'end of template'", "src": "x[1 +"}
+{"err": "expected token ',', got 'integer'", "src": "x[1 2]"}
+{"err": "unexpected 'end of template'", "src": "x[1:"}
+{"err": "unexpected 'end of template'", "src": "x[1:2:"}
+{"ast": {"arg": {"t": "Const", "value": 99999999999999999999999999}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x[99999999999999999999999999]"}
+{"err": "unexpected 'end of template'", "src": "x[:"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "x"}}], "name": "map", "node": {"name": "xs", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "xs | map(attribute='x') | list"}
+{"ast": {"arg": {"items": [{"start": {"t": "Const", "value": 1}, "step": null, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, {"t": "Const", "value": 3}], "t": "Tuple"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:2, 3]"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:2:-1]"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:2]"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1::]"}
+{"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:]"}
+{"ast": {"arg": {"start": null, "step": null, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[:2]"}
+{"ast": {"arg": {"start": null, "step": {"t": "Const", "value": 2}, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[::2]"}
+{"ast": {"arg": {"start": null, "step": null, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[:]"}
+{"err": "unexpected end of template, expected ','.", "src": "x|d(1)(2"}
+{"ast": {"args": [{"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "d", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "t": "Call"}, "src": "x|d(1)(2)"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x|f"}
+{"ast": {"expr1": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "expr2": {"t": "Const", "value": "foo"}, "t": "CondExpr", "test": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}}, "src": "x|f if x is defined else 'foo'"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "forceescape", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x|forceescape"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "tojson", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x|tojson"}
+{"ast": {"name": "y", "t": "Name"}, "src": "y"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escaped", "node": {"name": "y", "t": "Name"}, "t": "Test"}, "src": "y is escaped"}
+{"ast": {"name": "year", "t": "Name"}, "src": "year"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "y", "t": "Name"}, "t": "Filter"}, "src": "y|f"}
+{"ast": {"name": "z", "t": "Name"}, "src": "z"}
+{"err": "unexpected char \"'\" at 17", "src": "{\"foo\": \"<test>\"}'\n            \"|xmlattr|escape"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": "<test>"}}], "t": "Dict"}, "t": "Filter"}, "t": "Filter"}, "src": "{\"foo\": \"<test>\"}|xmlattr|escape"}
+{"err": "unexpected '%'", "src": "{%"}
+{"err": "unexpected end of template, expected ':'.", "src": "{'a'"}
+{"err": "unexpected 'end of template'", "src": "{'a':"}
+{"err": "expected token ',', got 'string'", "src": "{'a': 1 'b': 2}"}
+{"err": "unexpected 'end of template'", "src": "{'a': 1 +"}
+{"ast": {"arg": {"t": "Const", "value": "a"}, "node": {"items": [{"key": {"t": "Const", "value": "a"}, "t": "Pair", "value": {"t": "Const", "value": 1}}], "t": "Dict"}, "t": "Getitem"}, "src": "{'a': 1}['a']"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}, {"key": {"t": "Const", "value": "bar"}, "t": "Pair", "value": {"t": "Const", "value": 23}}, {"key": {"t": "Const", "value": "fish"}, "t": "Pair", "value": {"t": "Const", "value": null}}, {"key": {"t": "Const", "value": "\n            spam"}, "t": "Pair", "value": {"name": "missing", "t": "Name"}}, {"key": {"t": "Const", "value": "blub:blub"}, "t": "Pair", "value": {"t": "Const", "value": "<?>"}}], "t": "Dict"}, "t": "Filter"}, "src": "{'foo': 42, 'bar': 23, 'fish': none, \"\n            \"'spam': missing, 'blub:blub': '<?>'}|xmlattr"}
+{"ast": {"attr": "foo", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": "bar"}}], "t": "Dict"}, "t": "Getattr"}, "src": "{'foo':'bar'}.foo"}
+{"ast": {"items": [{"key": {"t": "Const", "value": "k"}, "t": "Pair", "value": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "List"}}], "t": "Dict"}, "src": "{'k': [1, 2]}"}
+{"ast": {"items": [{"key": {"t": "Const", "value": 1}, "t": "Pair", "value": {"t": "Const", "value": 2}}, {"key": {"t": "Const", "value": 3}, "t": "Pair", "value": {"t": "Const", "value": 4}}], "t": "Dict"}, "src": "{1: 2, 3: 4}"}
+{"ast": {"items": [{"key": {"t": "Const", "value": 1}, "t": "Pair", "value": {"t": "Const", "value": 2}}], "t": "Dict"}, "src": "{1: 2,}"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "clear", "node": {"items": [{"key": {"t": "Const", "value": 1}, "t": "Pair", "value": {"t": "Const", "value": 2}}], "t": "Dict"}, "t": "Getattr"}, "t": "Call"}, "src": "{1:2}.clear()"}
+{"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"name": "key", "t": "Name"}, "t": "Pair", "value": {"t": "Const", "value": "my_class"}}], "t": "Dict"}, "t": "Filter"}, "src": "{key: 'my_class'}|xmlattr"}
+{"err": "expected token 'name', got '{'", "src": "{{ 2 is {op}"}
+{"err": "expected token ':', got '}'", "src": "{{ foo({sig})"}
+{"err": "expected token ':', got '}'", "src": "{{ foo|dictsort({args})"}
+{"err": "expected token ':', got 'value'", "src": "{{ undefined value printed: {undefined_hint}"}
+{"err": "expected token ':', got '}'", "src": "{{ {a} {op} {b}"}
+{"err": "expected token ':', got '}'", "src": "{{ {const.lower()}"}
+{"err": "expected token ':', got '}'", "src": "{{ {const.upper()}"}
+{"err": "expected token ':', got '}'", "src": "{{ {const}"}
+{"err": "expected token ':', got '}'", "src": "{{ {expr}"}
+{"err": "expected token ':', got '}'", "src": "{{ {i}|filter{i}"}
+{"err": "expected token ':', got '}'", "src": "{{ {op}"}
+{"err": "expected token ':', got '}'", "src": "{{ {test}"}
+{"err": "expected token ':', got '}'", "src": "{{ {value}"}
+{"err": "unexpected 'end of print statement'", "src": "}}"}
+{"err": "Invalid character in identifier", "src": "\u00b7"}
+{"err": "unexpected char '\ud83d\udc0d' at 0", "src": "\ud83d\udc0da"}

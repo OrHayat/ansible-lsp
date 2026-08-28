@@ -3,3 +3,6 @@ client/node_modules
 *.exe
 *.dll
 *.pdb
+
+# Python bytecode from the scripts/ differential generators (T-188).
+__pycache__/

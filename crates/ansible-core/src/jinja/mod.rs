@@ -11,4 +11,10 @@
 //! [`lexer`] is private on purpose. A token stream is not an answer about Ansible, and the
 //! only thing that should be able to ask for one is the parser next to it.
 
+mod ast;
 mod lexer;
+mod parser;
+
+pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
+pub use lexer::Error;
+pub use parser::parse;
