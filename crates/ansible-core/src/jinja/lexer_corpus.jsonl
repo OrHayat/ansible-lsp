@@ -1,0 +1,1025 @@
+{"src": "", "toks": []}
+{"src": "   ", "toks": []}
+{"err_at": 0, "src": "!x"}
+{"src": "\"\n            \"pluralize count", "toks": [["Str", 0, 15], ["Name", 15, 24], ["Name", 25, 30]]}
+{"src": "\" + name + \"", "toks": [["Str", 0, 12]]}
+{"src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique(true))", "toks": [["Str", 0, 2], ["Dot", 2, 3], ["Name", 3, 7], ["Lparen", 7, 8], ["Lbracket", 8, 9], ["Str", 9, 12], ["Comma", 12, 13], ["Str", 14, 17], ["Comma", 17, 18], ["Str", 19, 22], ["Comma", 22, 23], ["Str", 24, 27], ["Rbracket", 27, 28], ["Pipe", 28, 29], ["Name", 29, 35], ["Lparen", 35, 36], ["Name", 36, 40], ["Rparen", 40, 41], ["Rparen", 41, 42]]}
+{"src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique)", "toks": [["Str", 0, 2], ["Dot", 2, 3], ["Name", 3, 7], ["Lparen", 7, 8], ["Lbracket", 8, 9], ["Str", 9, 12], ["Comma", 12, 13], ["Str", 14, 17], ["Comma", 17, 18], ["Str", 19, 22], ["Comma", 22, 23], ["Str", 24, 27], ["Rbracket", 27, 28], ["Pipe", 28, 29], ["Name", 29, 35], ["Rparen", 35, 36]]}
+{"src": "\"\".join([\"c\", \"A\", \"b\", \"D\"]|sort)", "toks": [["Str", 0, 2], ["Dot", 2, 3], ["Name", 3, 7], ["Lparen", 7, 8], ["Lbracket", 8, 9], ["Str", 9, 12], ["Comma", 12, 13], ["Str", 14, 17], ["Comma", 17, 18], ["Str", 19, 22], ["Comma", 22, 23], ["Str", 24, 27], ["Rbracket", 27, 28], ["Pipe", 28, 29], ["Name", 29, 33], ["Rparen", 33, 34]]}
+{"src": "\"(see http://www.example.org/?page=subj_<desc.h>)\"|urlize", "toks": [["Str", 0, 50], ["Pipe", 50, 51], ["Name", 51, 57]]}
+{"src": "\", \"", "toks": [["Str", 0, 4]]}
+{"src": "\"1234567890\"|random", "toks": [["Str", 0, 12], ["Pipe", 12, 13], ["Name", 13, 19]]}
+{"src": "\"<HelloWorld>\"", "toks": [["Str", 0, 14]]}
+{"src": "\"<div>foo</div>\"", "toks": [["Str", 0, 16]]}
+{"src": "\"<div>foo</div>\"|safe", "toks": [["Str", 0, 16], ["Pipe", 16, 17], ["Name", 17, 21]]}
+{"src": "\"<test>\"", "toks": [["Str", 0, 8]]}
+{"src": "\"<y>\"", "toks": [["Str", 0, 5]]}
+{"src": "\"FOO\" is lower", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "\"FOO\" is upper", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "\"FOO\"|lower", "toks": [["Str", 0, 5], ["Pipe", 5, 6], ["Name", 6, 11]]}
+{"src": "\"FOO\\tBAR\"|title", "toks": [["Str", 0, 10], ["Pipe", 10, 11], ["Name", 11, 16]]}
+{"src": "\"Joel is a slug\"|truncate(7, true)", "toks": [["Str", 0, 16], ["Pipe", 16, 17], ["Name", 17, 25], ["Lparen", 25, 26], ["Int", 26, 27], ["Comma", 27, 28], ["Name", 29, 33], ["Rparen", 33, 34]]}
+{"src": "\"\\N{HOT SPRINGS}\"", "toks": [["Str", 0, 17]]}
+{"err_at": 0, "src": "\"also unterminated"}
+{"src": "\"a{0.__class__}b\".format(42)", "toks": [["Str", 0, 17], ["Dot", 17, 18], ["Name", 18, 24], ["Lparen", 24, 25], ["Int", 25, 27], ["Rparen", 27, 28]]}
+{"src": "\"a{0.foo}b\".format({\"foo\": 42})", "toks": [["Str", 0, 11], ["Dot", 11, 12], ["Name", 12, 18], ["Lparen", 18, 19], ["Lbrace", 19, 20], ["Str", 20, 25], ["Colon", 25, 26], ["Int", 27, 29], ["Rbrace", 29, 30], ["Rparen", 30, 31]]}
+{"src": "\"a{x.__class__}b\".format_map({\"x\":42})", "toks": [["Str", 0, 17], ["Dot", 17, 18], ["Name", 18, 28], ["Lparen", 28, 29], ["Lbrace", 29, 30], ["Str", 30, 33], ["Colon", 33, 34], ["Int", 34, 36], ["Rbrace", 36, 37], ["Rparen", 37, 38]]}
+{"src": "\"a{x.foo}b\".format_map({\"x\":{\"foo\": 42", "toks": [["Str", 0, 11], ["Dot", 11, 12], ["Name", 12, 22], ["Lparen", 22, 23], ["Lbrace", 23, 24], ["Str", 24, 27], ["Colon", 27, 28], ["Lbrace", 28, 29], ["Str", 29, 34], ["Colon", 34, 35], ["Int", 36, 38]]}
+{"src": "\"b\" is in \"foo\"", "toks": [["Str", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Str", 10, 15]]}
+{"src": "\"baz\" is in {\"bar\": 1", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 11], ["Lbrace", 12, 13], ["Str", 13, 18], ["Colon", 18, 19], ["Int", 20, 21]]}
+{"src": "\"f bar f\"|title", "toks": [["Str", 0, 9], ["Pipe", 9, 10], ["Name", 10, 15]]}
+{"src": "\"foo   bar\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo (bar)\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo <bar>\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo [bar]\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo bar baz\"|truncate(9)", "toks": [["Str", 0, 13], ["Pipe", 13, 14], ["Name", 14, 22], ["Lparen", 22, 23], ["Int", 23, 24], ["Rparen", 24, 25]]}
+{"src": "\"foo bar baz\"|truncate(9, true)", "toks": [["Str", 0, 13], ["Pipe", 13, 14], ["Name", 14, 22], ["Lparen", 22, 23], ["Int", 23, 24], ["Comma", 24, 25], ["Name", 26, 30], ["Rparen", 30, 31]]}
+{"src": "\"foo bar baz\"|wordcount", "toks": [["Str", 0, 13], ["Pipe", 13, 14], ["Name", 14, 23]]}
+{"src": "\"foo bar\"|capitalize", "toks": [["Str", 0, 9], ["Pipe", 9, 10], ["Name", 10, 20]]}
+{"src": "\"foo bar\"|title", "toks": [["Str", 0, 9], ["Pipe", 9, 10], ["Name", 10, 15]]}
+{"src": "\"foo email@example.com bar\"|urlize", "toks": [["Str", 0, 27], ["Pipe", 27, 28], ["Name", 28, 34]]}
+{"src": "\"foo example.org bar\"|urlize", "toks": [["Str", 0, 21], ["Pipe", 21, 22], ["Name", 22, 28]]}
+{"src": "\"foo http://www.example.com/ bar\"|urlize", "toks": [["Str", 0, 33], ["Pipe", 33, 34], ["Name", 34, 40]]}
+{"src": "\"foo http://www.example.com/ bar\"|urlize(target=\"_blank\")", "toks": [["Str", 0, 33], ["Pipe", 33, 34], ["Name", 34, 40], ["Lparen", 40, 41], ["Name", 41, 47], ["Assign", 47, 48], ["Str", 48, 56], ["Rparen", 56, 57]]}
+{"src": "\"foo mailto:email@example.com bar\"|urlize", "toks": [["Str", 0, 34], ["Pipe", 34, 35], ["Name", 35, 41]]}
+{"src": "\"foo tel:+1-514-555-1234 ftp://localhost bar\"|'\n            'urlize(extra_schemes=[\"tel:\", \"ftp:\"])", "toks": [["Str", 0, 45], ["Pipe", 45, 46], ["Str", 46, 61], ["Name", 61, 67], ["Lparen", 67, 68], ["Name", 68, 81], ["Assign", 81, 82], ["Lbracket", 82, 83], ["Str", 83, 89], ["Comma", 89, 90], ["Str", 91, 97], ["Rbracket", 97, 98], ["Rparen", 98, 99]]}
+{"src": "\"foo {bar}\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo\" \"bar\" \"baz\"", "toks": [["Str", 0, 5], ["Str", 6, 11], ["Str", 12, 17]]}
+{"src": "\"foo\" if false", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "\"foo\" is in \"foo\"", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 11], ["Str", 12, 17]]}
+{"src": "\"foo\" is in {\"foo\": 1", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 11], ["Lbrace", 12, 13], ["Str", 13, 18], ["Colon", 18, 19], ["Int", 20, 21]]}
+{"src": "\"foo\" is lower", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "\"foo\" is upper", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "\"foo\"|center(9)", "toks": [["Str", 0, 5], ["Pipe", 5, 6], ["Name", 6, 12], ["Lparen", 12, 13], ["Int", 13, 14], ["Rparen", 14, 15]]}
+{"src": "\"foo\"|upper", "toks": [["Str", 0, 5], ["Pipe", 5, 6], ["Name", 6, 11]]}
+{"src": "\"foo\"|upper + \"bar\"|upper", "toks": [["Str", 0, 5], ["Pipe", 5, 6], ["Name", 6, 11], ["Add", 12, 13], ["Str", 14, 19], ["Pipe", 19, 20], ["Name", 20, 25]]}
+{"src": "\"foo's bar\"|title", "toks": [["Str", 0, 11], ["Pipe", 11, 12], ["Name", 12, 17]]}
+{"src": "\"foo-bar\"|title", "toks": [["Str", 0, 9], ["Pipe", 9, 10], ["Name", 10, 15]]}
+{"src": "\"foo\\tbar\"|title", "toks": [["Str", 0, 10], ["Pipe", 10, 11], ["Name", 11, 16]]}
+{"src": "\"hello world\"|length", "toks": [["Str", 0, 13], ["Pipe", 13, 14], ["Name", 14, 20]]}
+{"src": "\"http://www.example.org/<foo\"|urlize", "toks": [["Str", 0, 29], ["Pipe", 29, 30], ["Name", 30, 36]]}
+{"src": "\"jinja\"|indent", "toks": [["Str", 0, 7], ["Pipe", 7, 8], ["Name", 8, 14]]}
+{"src": "\"jinja\"|indent(blank=true)", "toks": [["Str", 0, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Lparen", 14, 15], ["Name", 15, 20], ["Assign", 20, 21], ["Name", 21, 25], ["Rparen", 25, 26]]}
+{"src": "\"jinja\"|indent(first=true)", "toks": [["Str", 0, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Lparen", 14, 15], ["Name", 15, 20], ["Assign", 20, 21], ["Name", 21, 25], ["Rparen", 25, 26]]}
+{"src": "\"o\" is in \"foo\"", "toks": [["Str", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Str", 10, 15]]}
+{"src": "\"{0.__call__.__builtins__[__import__]}\"\n                  | attr(\"format\")(not_here)", "toks": [["Str", 0, 39], ["Pipe", 58, 59], ["Name", 60, 64], ["Lparen", 64, 65], ["Str", 65, 73], ["Rparen", 73, 74], ["Lparen", 74, 75], ["Name", 75, 83], ["Rparen", 83, 84]]}
+{"src": "% block test %", "toks": [["Mod", 0, 1], ["Name", 2, 7], ["Name", 8, 12], ["Mod", 13, 14]]}
+{"src": "% elif a == {i} %", "toks": [["Mod", 0, 1], ["Name", 2, 6], ["Name", 7, 8], ["Eq", 9, 11], ["Lbrace", 12, 13], ["Name", 13, 14], ["Rbrace", 14, 15], ["Mod", 16, 17]]}
+{"src": "% else %", "toks": [["Mod", 0, 1], ["Name", 2, 6], ["Mod", 7, 8]]}
+{"src": "% endblock %", "toks": [["Mod", 0, 1], ["Name", 2, 10], ["Mod", 11, 12]]}
+{"src": "% endblock test %", "toks": [["Mod", 0, 1], ["Name", 2, 10], ["Name", 11, 15], ["Mod", 16, 17]]}
+{"src": "% endfor %", "toks": [["Mod", 0, 1], ["Name", 2, 8], ["Mod", 9, 10]]}
+{"src": "% endif %", "toks": [["Mod", 0, 1], ["Name", 2, 7], ["Mod", 8, 9]]}
+{"src": "% for i in seq %", "toks": [["Mod", 0, 1], ["Name", 2, 5], ["Name", 6, 7], ["Name", 8, 10], ["Name", 11, 14], ["Mod", 15, 16]]}
+{"src": "% if a == 0 %", "toks": [["Mod", 0, 1], ["Name", 2, 4], ["Name", 5, 6], ["Eq", 7, 9], ["Int", 10, 11], ["Mod", 12, 13]]}
+{"src": "% import \"bar\" as bar{i} with context %", "toks": [["Mod", 0, 1], ["Name", 2, 8], ["Str", 9, 14], ["Name", 15, 17], ["Name", 18, 21], ["Lbrace", 21, 22], ["Name", 22, 23], ["Rbrace", 23, 24], ["Name", 25, 29], ["Name", 30, 37], ["Mod", 38, 39]]}
+{"src": "% set a{i}, b{i}, c{i} = tuple_var{i} %", "toks": [["Mod", 0, 1], ["Name", 2, 5], ["Name", 6, 7], ["Lbrace", 7, 8], ["Name", 8, 9], ["Rbrace", 9, 10], ["Comma", 10, 11], ["Name", 12, 13], ["Lbrace", 13, 14], ["Name", 14, 15], ["Rbrace", 15, 16], ["Comma", 16, 17], ["Name", 18, 19], ["Lbrace", 19, 20], ["Name", 20, 21], ["Rbrace", 21, 22], ["Assign", 23, 24], ["Name", 25, 34], ["Lbrace", 34, 35], ["Name", 35, 36], ["Rbrace", 36, 37], ["Mod", 38, 39]]}
+{"src": "% {op} 'base' %", "toks": [["Mod", 0, 1], ["Lbrace", 2, 3], ["Name", 3, 5], ["Rbrace", 5, 6], ["Str", 7, 13], ["Mod", 14, 15]]}
+{"err_at": 0, "src": "'\n                    \"super()"}
+{"src": "'%s|%s'|format('a', 'b')", "toks": [["Str", 0, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Lparen", 14, 15], ["Str", 15, 18], ["Comma", 18, 19], ["Str", 20, 23], ["Rparen", 23, 24]]}
+{"src": "'%}'", "toks": [["Str", 0, 4]]}
+{"src": "'' == None", "toks": [["Str", 0, 2], ["Eq", 3, 5], ["Name", 6, 10]]}
+{"src": "'<\">&'|escape", "toks": [["Str", 0, 6], ["Pipe", 6, 7], ["Name", 7, 13]]}
+{"src": "'<testing>'", "toks": [["Str", 0, 11]]}
+{"src": "'a\nb'", "toks": [["Str", 0, 5]]}
+{"src": "'a\nb'", "toks": [["Str", 0, 5]]}
+{"src": "'all'", "toks": [["Str", 0, 5]]}
+{"src": "'a{i}': l_0_a{i}, 'b{i}': l_0_b{i}, 'c{i}': l_0_c{i", "toks": [["Str", 0, 6], ["Colon", 6, 7], ["Name", 8, 13], ["Lbrace", 13, 14], ["Name", 14, 15], ["Rbrace", 15, 16], ["Comma", 16, 17], ["Str", 18, 24], ["Colon", 24, 25], ["Name", 26, 31], ["Lbrace", 31, 32], ["Name", 32, 33], ["Rbrace", 33, 34], ["Comma", 34, 35], ["Str", 36, 42], ["Colon", 42, 43], ["Name", 44, 49], ["Lbrace", 49, 50], ["Name", 50, 51]]}
+{"src": "'a{i}': l_1_a{i}, 'b{i}': l_1_b{i}, 'c{i}': l_1_c{i", "toks": [["Str", 0, 6], ["Colon", 6, 7], ["Name", 8, 13], ["Lbrace", 13, 14], ["Name", 14, 15], ["Rbrace", 15, 16], ["Comma", 16, 17], ["Str", 18, 24], ["Colon", 24, 25], ["Name", 26, 31], ["Lbrace", 31, 32], ["Name", 32, 33], ["Rbrace", 33, 34], ["Comma", 34, 35], ["Str", 36, 42], ["Colon", 42, 43], ["Name", 44, 49], ["Lbrace", 49, 50], ["Name", 50, 51]]}
+{"src": "'a|b'", "toks": [["Str", 0, 5]]}
+{"src": "'b\u00e4r'|pprint", "toks": [["Str", 0, 6], ["Pipe", 6, 7], ["Name", 7, 13]]}
+{"src": "'foo' if x is not defined else x|f", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 10], ["Name", 11, 13], ["Name", 14, 17], ["Name", 18, 25], ["Name", 26, 30], ["Name", 31, 32], ["Pipe", 32, 33], ["Name", 33, 34]]}
+{"src": "'foo' in missing", "toks": [["Str", 0, 5], ["Name", 6, 8], ["Name", 9, 16]]}
+{"err_at": null, "src": "'foo': item}|upper}{% endfor %}\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == \"{'FOO': 0}{'FOO': 1}{'FOO': 2}\"\n\n    def test_comments(self, env):\n        env = Environment(\"<!--\", \"-->\", \"{\", \"}\")\n        tmpl = env.from_string(\n            \"\"\"\\\n<ul>\n<!--- for item in seq -->\n  <li>{item}</li>\n<!--- endfor -->\n</ul>\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == (\n            \"<ul>\\n  <li>0</li>\\n  <li>1</li>\\n  <li>2</li>\\n</ul>\"\n        )\n\n    def test_string_escapes(self, env):\n        for char in \"\\0\", \"\\u2668\", \"\\xe4\", \"\\t\", \"\\r\", \"\\n\":\n            tmpl = env.from_string(f\"{{{{ {char!r}"}
+{"src": "'foo'|pprint", "toks": [["Str", 0, 5], ["Pipe", 5, 6], ["Name", 6, 12]]}
+{"src": "'foobar'|reverse|join", "toks": [["Str", 0, 8], ["Pipe", 8, 9], ["Name", 9, 16], ["Pipe", 16, 17], ["Name", 17, 21]]}
+{"src": "'hello'", "toks": [["Str", 0, 7]]}
+{"src": "'it\\'s'", "toks": [["Str", 0, 7]]}
+{"src": "'jinja\\nflask'|indent(width='>>> ', first=True)", "toks": [["Str", 0, 14], ["Pipe", 14, 15], ["Name", 15, 21], ["Lparen", 21, 22], ["Name", 22, 27], ["Assign", 27, 28], ["Str", 28, 34], ["Comma", 34, 35], ["Name", 36, 41], ["Assign", 41, 42], ["Name", 42, 46], ["Rparen", 46, 47]]}
+{"src": "'static'|customfilter", "toks": [["Str", 0, 8], ["Pipe", 8, 9], ["Name", 9, 21]]}
+{"src": "'test'|testing(some='stuff')", "toks": [["Str", 0, 6], ["Pipe", 6, 7], ["Name", 7, 14], ["Lparen", 14, 15], ["Name", 15, 19], ["Assign", 19, 20], ["Str", 20, 27], ["Rparen", 27, 28]]}
+{"err_at": 0, "src": "'unterminated"}
+{"src": "'us-west-1' is matching '(us-east-1|ap-northeast-1)'\"\n            \" or 'stage' is matching '(dev|stage)'", "toks": [["Str", 0, 11], ["Name", 12, 14], ["Name", 15, 23], ["Str", 24, 52], ["Str", 52, 67], ["Name", 68, 70], ["Str", 71, 78], ["Name", 79, 81], ["Name", 82, 90], ["Str", 91, 104]]}
+{"src": "'{{'", "toks": [["Str", 0, 4]]}
+{"src": "(\"a{0.__class__}b{1}\"|safe).format(42, \"<foo>\")", "toks": [["Lparen", 0, 1], ["Str", 1, 21], ["Pipe", 21, 22], ["Name", 22, 26], ["Rparen", 26, 27], ["Dot", 27, 28], ["Name", 28, 34], ["Lparen", 34, 35], ["Int", 35, 37], ["Comma", 37, 38], ["Str", 39, 46], ["Rparen", 46, 47]]}
+{"src": "(\"a{0.foo}b{1}\"|safe).format({\"foo\": 42}, \"<foo>\")", "toks": [["Lparen", 0, 1], ["Str", 1, 15], ["Pipe", 15, 16], ["Name", 16, 20], ["Rparen", 20, 21], ["Dot", 21, 22], ["Name", 22, 28], ["Lparen", 28, 29], ["Lbrace", 29, 30], ["Str", 30, 35], ["Colon", 35, 36], ["Int", 37, 39], ["Rbrace", 39, 40], ["Comma", 40, 41], ["Str", 42, 49], ["Rparen", 49, 50]]}
+{"src": "(\"a{x.foo}b{y}\"|safe).format_map({\"x\":{\"foo\": 42}, \"y\":\"<foo>\"})", "toks": [["Lparen", 0, 1], ["Str", 1, 15], ["Pipe", 15, 16], ["Name", 16, 20], ["Rparen", 20, 21], ["Dot", 21, 22], ["Name", 22, 32], ["Lparen", 32, 33], ["Lbrace", 33, 34], ["Str", 34, 37], ["Colon", 37, 38], ["Lbrace", 38, 39], ["Str", 39, 44], ["Colon", 44, 45], ["Int", 46, 48], ["Rbrace", 48, 49], ["Comma", 49, 50], ["Str", 51, 54], ["Colon", 54, 55], ["Str", 55, 62], ["Rbrace", 62, 63], ["Rparen", 63, 64]]}
+{"src": "(\"a{}b{}\").format(\"foo\", \"42\")", "toks": [["Lparen", 0, 1], ["Str", 1, 9], ["Rparen", 9, 10], ["Dot", 10, 11], ["Name", 11, 17], ["Lparen", 17, 18], ["Str", 18, 23], ["Comma", 23, 24], ["Str", 25, 29], ["Rparen", 29, 30]]}
+{"src": "(\"a{}b{}\"|safe).format(42, \"<foo>\")", "toks": [["Lparen", 0, 1], ["Str", 1, 9], ["Pipe", 9, 10], ["Name", 10, 14], ["Rparen", 14, 15], ["Dot", 15, 16], ["Name", 16, 22], ["Lparen", 22, 23], ["Int", 23, 25], ["Comma", 25, 26], ["Str", 27, 34], ["Rparen", 34, 35]]}
+{"src": "()", "toks": [["Lparen", 0, 1], ["Rparen", 1, 2]]}
+{"src": "(1 + 1 * 2) - 3 / 2", "toks": [["Lparen", 0, 1], ["Int", 1, 2], ["Add", 3, 4], ["Int", 5, 6], ["Mul", 7, 8], ["Int", 9, 10], ["Rparen", 10, 11], ["Sub", 12, 13], ["Int", 14, 15], ["Div", 16, 17], ["Int", 18, 19]]}
+{"src": "(1 if false).bar", "toks": [["Lparen", 0, 1], ["Int", 1, 2], ["Name", 3, 5], ["Name", 6, 11], ["Rparen", 11, 12], ["Dot", 12, 13], ["Name", 13, 16]]}
+{"src": "(1, 2)", "toks": [["Lparen", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Rparen", 5, 6]]}
+{"src": "(1, 2,)", "toks": [["Lparen", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Rparen", 6, 7]]}
+{"src": "(1,)", "toks": [["Lparen", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Rparen", 3, 4]]}
+{"src": "(_beacon_result.stdout_lines | default(['{}']))\n      | reject('equalto', '')\n      | list\n      | last\n      | from_json", "toks": [["Lparen", 0, 1], ["Name", 1, 15], ["Dot", 15, 16], ["Name", 16, 28], ["Pipe", 29, 30], ["Name", 31, 38], ["Lparen", 38, 39], ["Lbracket", 39, 40], ["Str", 40, 44], ["Rbracket", 44, 45], ["Rparen", 45, 46], ["Rparen", 46, 47], ["Pipe", 54, 55], ["Name", 56, 62], ["Lparen", 62, 63], ["Str", 63, 72], ["Comma", 72, 73], ["Str", 74, 76], ["Rparen", 76, 77], ["Pipe", 84, 85], ["Name", 86, 90], ["Pipe", 97, 98], ["Name", 99, 103], ["Pipe", 110, 111], ["Name", 112, 121]]}
+{"src": "(a|add_each(2))[1:]", "toks": [["Lparen", 0, 1], ["Name", 1, 2], ["Pipe", 2, 3], ["Name", 3, 11], ["Lparen", 11, 12], ["Int", 12, 13], ["Rparen", 13, 14], ["Rparen", 14, 15], ["Lbracket", 15, 16], ["Int", 16, 17], ["Colon", 17, 18], ["Rbracket", 18, 19]]}
+{"src": "(true and false) or (false and true) and not false", "toks": [["Lparen", 0, 1], ["Name", 1, 5], ["Name", 6, 9], ["Name", 10, 15], ["Rparen", 15, 16], ["Name", 17, 19], ["Lparen", 20, 21], ["Name", 21, 26], ["Name", 27, 30], ["Name", 31, 35], ["Rparen", 35, 36], ["Name", 37, 40], ["Name", 41, 44], ["Name", 45, 50]]}
+{"src": "+ endif", "toks": [["Add", 0, 1], ["Name", 2, 7]]}
+{"src": "+ if True", "toks": [["Add", 0, 1], ["Name", 2, 4], ["Name", 5, 9]]}
+{"src": "+3", "toks": [["Add", 0, 1], ["Int", 1, 2]]}
+{"src": "- [1,2] -", "toks": [["Sub", 0, 1], ["Lbracket", 2, 3], ["Int", 3, 4], ["Comma", 4, 5], ["Int", 5, 6], ["Rbracket", 6, 7], ["Sub", 8, 9]]}
+{"src": "- item -", "toks": [["Sub", 0, 1], ["Name", 2, 6], ["Sub", 7, 8]]}
+{"src": "- item(2) -", "toks": [["Sub", 0, 1], ["Name", 2, 6], ["Lparen", 6, 7], ["Int", 7, 8], ["Rparen", 8, 9], ["Sub", 10, 11]]}
+{"src": "- loop(page.children)", "toks": [["Sub", 0, 1], ["Name", 2, 6], ["Lparen", 6, 7], ["Name", 7, 11], ["Dot", 11, 12], ["Name", 12, 20], ["Rparen", 20, 21]]}
+{"src": "- wrapper -", "toks": [["Sub", 0, 1], ["Name", 2, 9], ["Sub", 10, 11]]}
+{"src": "- wrapper()", "toks": [["Sub", 0, 1], ["Name", 2, 9], ["Lparen", 9, 10], ["Rparen", 10, 11]]}
+{"src": "- x", "toks": [["Sub", 0, 1], ["Name", 2, 3]]}
+{"src": "- x -", "toks": [["Sub", 0, 1], ["Name", 2, 3], ["Sub", 4, 5]]}
+{"src": "- x()[1] -", "toks": [["Sub", 0, 1], ["Name", 2, 3], ["Lparen", 3, 4], ["Rparen", 4, 5], ["Lbracket", 5, 6], ["Int", 6, 7], ["Rbracket", 7, 8], ["Sub", 9, 10]]}
+{"src": "- y", "toks": [["Sub", 0, 1], ["Name", 2, 3]]}
+{"src": "-1|abs", "toks": [["Sub", 0, 1], ["Int", 1, 2], ["Pipe", 2, 3], ["Name", 3, 6]]}
+{"src": "-1|foo", "toks": [["Sub", 0, 1], ["Int", 1, 2], ["Pipe", 2, 3], ["Name", 3, 6]]}
+{"src": "-3", "toks": [["Sub", 0, 1], ["Int", 1, 2]]}
+{"src": "-foo[\"bar\"]", "toks": [["Sub", 0, 1], ["Name", 1, 4], ["Lbracket", 4, 5], ["Str", 5, 10], ["Rbracket", 10, 11]]}
+{"src": "-foo[\"bar\"]|abs", "toks": [["Sub", 0, 1], ["Name", 1, 4], ["Lbracket", 4, 5], ["Str", 5, 10], ["Rbracket", 10, 11], ["Pipe", 11, 12], ["Name", 12, 15]]}
+{"src": "-x ** 2", "toks": [["Sub", 0, 1], ["Name", 1, 2], ["Pow", 3, 5], ["Int", 6, 7]]}
+{"src": ".5", "toks": [["Dot", 0, 1], ["Int", 1, 2]]}
+{"src": "0 if true else 1", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 9], ["Name", 10, 14], ["Int", 15, 16]]}
+{"src": "0 is greaterthan 1", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 16], ["Int", 17, 18]]}
+{"src": "0 is lessthan 1", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 13], ["Int", 14, 15]]}
+{"src": "0 is sameas false", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 11], ["Name", 12, 17]]}
+{"src": "007", "toks": [["Int", 0, 2], ["Int", 2, 3]]}
+{"src": "01", "toks": [["Int", 0, 1], ["Int", 1, 2]]}
+{"src": "0b2", "toks": [["Int", 0, 1], ["Name", 1, 3]]}
+{"src": "0b_1", "toks": [["Int", 0, 4]]}
+{"src": "0x_", "toks": [["Int", 0, 1], ["Name", 1, 3]]}
+{"src": "1 < 2 < 3", "toks": [["Int", 0, 1], ["Lt", 2, 3], ["Int", 4, 5], ["Lt", 6, 7], ["Int", 8, 9]]}
+{"src": "1 == 1", "toks": [["Int", 0, 1], ["Eq", 2, 4], ["Int", 5, 6]]}
+{"src": "1 if false", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 10]]}
+{"src": "1 in [1, 2, 3]", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Lbracket", 5, 6], ["Int", 6, 7], ["Comma", 7, 8], ["Int", 9, 10], ["Comma", 10, 11], ["Int", 12, 13], ["Rbracket", 13, 14]]}
+{"src": "1 is even", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 9]]}
+{"src": "1 is greaterthan 0", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 16], ["Int", 17, 18]]}
+{"src": "1 is in ((1, 2))", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 7], ["Lparen", 8, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Rparen", 14, 15], ["Rparen", 15, 16]]}
+{"src": "1 is in [1, 2]", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 7], ["Lbracket", 8, 9], ["Int", 9, 10], ["Comma", 10, 11], ["Int", 12, 13], ["Rbracket", 13, 14]]}
+{"src": "1 is lessthan 0", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 13], ["Int", 14, 15]]}
+{"src": "1 is odd", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 8]]}
+{"src": "1 not in [1, 2, 3]", "toks": [["Int", 0, 1], ["Name", 2, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Rbracket", 17, 18]]}
+{"src": "1,", "toks": [["Int", 0, 1], ["Comma", 1, 2]]}
+{"src": "1, 2", "toks": [["Int", 0, 1], ["Comma", 1, 2], ["Int", 3, 4]]}
+{"src": "1.5e", "toks": [["Float", 0, 3], ["Name", 3, 4]]}
+{"src": "1.e3", "toks": [["Int", 0, 1], ["Dot", 1, 2], ["Name", 2, 4]]}
+{"src": "1000000000000|filesizeformat", "toks": [["Int", 0, 13], ["Pipe", 13, 14], ["Name", 14, 28]]}
+{"src": "1000000000000|filesizeformat(true)", "toks": [["Int", 0, 13], ["Pipe", 13, 14], ["Name", 14, 28], ["Lparen", 28, 29], ["Name", 29, 33], ["Rparen", 33, 34]]}
+{"src": "1000000000|filesizeformat", "toks": [["Int", 0, 10], ["Pipe", 10, 11], ["Name", 11, 25]]}
+{"src": "1000000000|filesizeformat(true)", "toks": [["Int", 0, 10], ["Pipe", 10, 11], ["Name", 11, 25], ["Lparen", 25, 26], ["Name", 26, 30], ["Rparen", 30, 31]]}
+{"src": "1000000|filesizeformat", "toks": [["Int", 0, 7], ["Pipe", 7, 8], ["Name", 8, 22]]}
+{"src": "1000000|filesizeformat(true)", "toks": [["Int", 0, 7], ["Pipe", 7, 8], ["Name", 8, 22], ["Lparen", 22, 23], ["Name", 23, 27], ["Rparen", 27, 28]]}
+{"src": "1000|filesizeformat", "toks": [["Int", 0, 4], ["Pipe", 4, 5], ["Name", 5, 19]]}
+{"src": "1000|filesizeformat(true)", "toks": [["Int", 0, 4], ["Pipe", 4, 5], ["Name", 5, 19], ["Lparen", 19, 20], ["Name", 20, 24], ["Rparen", 24, 25]]}
+{"src": "100|filesizeformat", "toks": [["Int", 0, 3], ["Pipe", 3, 4], ["Name", 4, 18]]}
+{"src": "100|filesizeformat(true)", "toks": [["Int", 0, 3], ["Pipe", 3, 4], ["Name", 4, 18], ["Lparen", 18, 19], ["Name", 19, 23], ["Rparen", 23, 24]]}
+{"src": "1_000_", "toks": [["Int", 0, 5], ["Name", 5, 6]]}
+{"src": "1__0", "toks": [["Int", 0, 1], ["Name", 1, 4]]}
+{"src": "1|abs", "toks": [["Int", 0, 1], ["Pipe", 1, 2], ["Name", 2, 5]]}
+{"src": "2 * 3 + 4 % 2 + 1 - 2", "toks": [["Int", 0, 1], ["Mul", 2, 3], ["Int", 4, 5], ["Add", 6, 7], ["Int", 8, 9], ["Mod", 10, 11], ["Int", 12, 13], ["Add", 14, 15], ["Int", 16, 17], ["Sub", 18, 19], ["Int", 20, 21]]}
+{"src": "2 + 2 == 5", "toks": [["Int", 0, 1], ["Add", 2, 3], ["Int", 4, 5], ["Eq", 6, 8], ["Int", 9, 10]]}
+{"src": "2 is even", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 9]]}
+{"src": "2 is odd", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 8]]}
+{"src": "2**3", "toks": [["Int", 0, 1], ["Pow", 1, 3], ["Int", 3, 4]]}
+{"src": "2**3**2", "toks": [["Int", 0, 1], ["Pow", 1, 3], ["Int", 3, 4], ["Pow", 4, 6], ["Int", 6, 7]]}
+{"src": "2.1234|round(3, 'floor')", "toks": [["Float", 0, 6], ["Pipe", 6, 7], ["Name", 7, 12], ["Lparen", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Str", 16, 23], ["Rparen", 23, 24]]}
+{"src": "2.1|round", "toks": [["Float", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9]]}
+{"src": "2.1|round(0, 'ceil')", "toks": [["Float", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Str", 13, 19], ["Rparen", 19, 20]]}
+{"src": "2.7|round", "toks": [["Float", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9]]}
+{"src": "21.3|round(-1)", "toks": [["Float", 0, 4], ["Pipe", 4, 5], ["Name", 5, 10], ["Lparen", 10, 11], ["Sub", 11, 12], ["Int", 12, 13], ["Rparen", 13, 14]]}
+{"src": "21.3|round(-1, 'ceil')", "toks": [["Float", 0, 4], ["Pipe", 4, 5], ["Name", 5, 10], ["Lparen", 10, 11], ["Sub", 11, 12], ["Int", 12, 13], ["Comma", 13, 14], ["Str", 15, 21], ["Rparen", 21, 22]]}
+{"src": "21.3|round(-1, 'floor')", "toks": [["Float", 0, 4], ["Pipe", 4, 5], ["Name", 5, 10], ["Lparen", 10, 11], ["Sub", 11, 12], ["Int", 12, 13], ["Comma", 13, 14], ["Str", 15, 22], ["Rparen", 22, 23]]}
+{"src": "23", "toks": [["Int", 0, 2]]}
+{"src": "3 % 2", "toks": [["Int", 0, 1], ["Mod", 2, 3], ["Int", 4, 5]]}
+{"src": "3 + missing", "toks": [["Int", 0, 1], ["Add", 2, 3], ["Name", 4, 11]]}
+{"src": "3 / 2", "toks": [["Int", 0, 1], ["Div", 2, 3], ["Int", 4, 5]]}
+{"src": "3 // 2", "toks": [["Int", 0, 1], ["FloorDiv", 2, 4], ["Int", 5, 6]]}
+{"src": "3 is in ((1, 2))", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 7], ["Lparen", 8, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Rparen", 14, 15], ["Rparen", 15, 16]]}
+{"src": "3 is in [1, 2]", "toks": [["Int", 0, 1], ["Name", 2, 4], ["Name", 5, 7], ["Lbracket", 8, 9], ["Int", 9, 10], ["Comma", 10, 11], ["Int", 12, 13], ["Rbracket", 13, 14]]}
+{"src": "3000000000000|filesizeformat", "toks": [["Int", 0, 13], ["Pipe", 13, 14], ["Name", 14, 28]]}
+{"src": "3000000000|filesizeformat", "toks": [["Int", 0, 10], ["Pipe", 10, 11], ["Name", 11, 25]]}
+{"src": "3000000|filesizeformat", "toks": [["Int", 0, 7], ["Pipe", 7, 8], ["Name", 8, 22]]}
+{"src": "3000000|filesizeformat(true)", "toks": [["Int", 0, 7], ["Pipe", 7, 8], ["Name", 8, 22], ["Lparen", 22, 23], ["Name", 23, 27], ["Rparen", 27, 28]]}
+{"src": "3000|filesizeformat", "toks": [["Int", 0, 4], ["Pipe", 4, 5], ["Name", 5, 19]]}
+{"src": "3000|filesizeformat(true)", "toks": [["Int", 0, 4], ["Pipe", 4, 5], ["Name", 5, 19], ["Lparen", 19, 20], ["Name", 20, 24], ["Rparen", 24, 25]]}
+{"src": "300|filesizeformat", "toks": [["Int", 0, 3], ["Pipe", 3, 4], ["Name", 4, 18]]}
+{"src": "300|filesizeformat(true)", "toks": [["Int", 0, 3], ["Pipe", 3, 4], ["Name", 4, 18], ["Lparen", 18, 19], ["Name", 19, 23], ["Rparen", 23, 24]]}
+{"src": "4 < 2 < 3", "toks": [["Int", 0, 1], ["Lt", 2, 3], ["Int", 4, 5], ["Lt", 6, 7], ["Int", 8, 9]]}
+{"src": "4 > 2 < 3", "toks": [["Int", 0, 1], ["Gt", 2, 3], ["Int", 4, 5], ["Lt", 6, 7], ["Int", 8, 9]]}
+{"src": "4 > 2 > 3", "toks": [["Int", 0, 1], ["Gt", 2, 3], ["Int", 4, 5], ["Gt", 6, 7], ["Int", 8, 9]]}
+{"src": "42 is string or 42 is number", "toks": [["Int", 0, 2], ["Name", 3, 5], ["Name", 6, 12], ["Name", 13, 15], ["Int", 16, 18], ["Name", 19, 21], ["Name", 22, 28]]}
+{"src": "BAR", "toks": [["Name", 0, 3]]}
+{"src": "FOO", "toks": [["Name", 0, 3]]}
+{"src": "None is none", "toks": [["Name", 0, 4], ["Name", 5, 7], ["Name", 8, 12]]}
+{"src": "True", "toks": [["Name", 0, 4]]}
+{"src": "[\"1\", \"2\", \"3\"]|map(\"int\")|sum", "toks": [["Lbracket", 0, 1], ["Str", 1, 4], ["Comma", 4, 5], ["Str", 6, 9], ["Comma", 9, 10], ["Str", 11, 14], ["Rbracket", 14, 15], ["Pipe", 15, 16], ["Name", 16, 19], ["Lparen", 19, 20], ["Str", 20, 25], ["Rparen", 25, 26], ["Pipe", 26, 27], ["Name", 27, 30]]}
+{"src": "[\"<foo>\", \"<span>foo</span>\"|safe]|join", "toks": [["Lbracket", 0, 1], ["Str", 1, 8], ["Comma", 8, 9], ["Str", 10, 28], ["Pipe", 28, 29], ["Name", 29, 33], ["Rbracket", 33, 34], ["Pipe", 34, 35], ["Name", 35, 39]]}
+{"src": "[\"a\", \"B\"]|max", "toks": [["Lbracket", 0, 1], ["Str", 1, 4], ["Comma", 4, 5], ["Str", 6, 9], ["Rbracket", 9, 10], ["Pipe", 10, 11], ["Name", 11, 14]]}
+{"src": "[\"a\", \"B\"]|max(case_sensitive=true)", "toks": [["Lbracket", 0, 1], ["Str", 1, 4], ["Comma", 4, 5], ["Str", 6, 9], ["Rbracket", 9, 10], ["Pipe", 10, 11], ["Name", 11, 14], ["Lparen", 14, 15], ["Name", 15, 29], ["Assign", 29, 30], ["Name", 30, 34], ["Rparen", 34, 35]]}
+{"src": "[\"a\", \"B\"]|min", "toks": [["Lbracket", 0, 1], ["Str", 1, 4], ["Comma", 4, 5], ["Str", 6, 9], ["Rbracket", 9, 10], ["Pipe", 10, 11], ["Name", 11, 14]]}
+{"src": "[\"a\", \"B\"]|min(case_sensitive=true)", "toks": [["Lbracket", 0, 1], ["Str", 1, 4], ["Comma", 4, 5], ["Str", 6, 9], ["Rbracket", 9, 10], ["Pipe", 10, 11], ["Name", 11, 14], ["Lparen", 14, 15], ["Name", 15, 29], ["Assign", 29, 30], ["Name", 30, 34], ["Rparen", 34, 35]]}
+{"src": "['<foo>', '<bar>']|first|upper|escape", "toks": [["Lbracket", 0, 1], ["Str", 1, 8], ["Comma", 8, 9], ["Str", 10, 17], ["Rbracket", 17, 18], ["Pipe", 18, 19], ["Name", 19, 24], ["Pipe", 24, 25], ["Name", 25, 30], ["Pipe", 30, 31], ["Name", 31, 37]]}
+{"src": "['foo', 'Bar', 'blah']|sort", "toks": [["Lbracket", 0, 1], ["Str", 1, 6], ["Comma", 6, 7], ["Str", 8, 13], ["Comma", 13, 14], ["Str", 15, 21], ["Rbracket", 21, 22], ["Pipe", 22, 23], ["Name", 23, 27]]}
+{"src": "[1, 2, 3, 4, 5, 6]|sum", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Rbracket", 17, 18], ["Pipe", 18, 19], ["Name", 19, 22]]}
+{"src": "[1, 2, 3, 4, 5]|reject(\"odd\")|join(\"|\")", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Rbracket", 14, 15], ["Pipe", 15, 16], ["Name", 16, 22], ["Lparen", 22, 23], ["Str", 23, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 34], ["Lparen", 34, 35], ["Str", 35, 38], ["Rparen", 38, 39]]}
+{"src": "[1, 2, 3, 4, 5]|select(\"odd\")|join(\"|\")", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Rbracket", 14, 15], ["Pipe", 15, 16], ["Name", 16, 22], ["Lparen", 22, 23], ["Str", 23, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 34], ["Lparen", 34, 35], ["Str", 35, 38], ["Rparen", 38, 39]]}
+{"src": "[1, 2, 3].0", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Dot", 9, 10], ["Int", 10, 11]]}
+{"src": "[1, 2, 3][::-1]", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Lbracket", 9, 10], ["Colon", 10, 11], ["Colon", 11, 12], ["Sub", 12, 13], ["Int", 13, 14], ["Rbracket", 14, 15]]}
+{"src": "[1, 2, 3][:]", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Lbracket", 9, 10], ["Colon", 10, 11], ["Rbracket", 11, 12]]}
+{"src": "[1, 2, 3]|join(\"|\")", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Pipe", 9, 10], ["Name", 10, 14], ["Lparen", 14, 15], ["Str", 15, 18], ["Rparen", 18, 19]]}
+{"src": "[1, 2, 3]|reverse|list", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Pipe", 9, 10], ["Name", 10, 17], ["Pipe", 17, 18], ["Name", 18, 22]]}
+{"src": "[1, 2,]", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Rbracket", 6, 7]]}
+{"src": "[1, 2] ~ 'foo'", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Rbracket", 5, 6], ["Tilde", 7, 8], ["Str", 9, 14]]}
+{"src": "[1].pop()", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Rbracket", 2, 3], ["Dot", 3, 4], ["Name", 4, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "[2, 3, 1]|sort", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Pipe", 9, 10], ["Name", 10, 14]]}
+{"src": "[2, 3, 1]|sort(true)", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9], ["Pipe", 9, 10], ["Name", 10, 14], ["Lparen", 14, 15], ["Name", 15, 19], ["Rparen", 19, 20]]}
+{"src": "[3, 4, 5, 6]|customfilter", "toks": [["Lbracket", 0, 1], ["Int", 1, 2], ["Comma", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 10, 11], ["Rbracket", 11, 12], ["Pipe", 12, 13], ["Name", 13, 25]]}
+{"src": "[[1,2], [3], [4,5,6]]|map(\"sum\")|list", "toks": [["Lbracket", 0, 1], ["Lbracket", 1, 2], ["Int", 2, 3], ["Comma", 3, 4], ["Int", 4, 5], ["Rbracket", 5, 6], ["Comma", 6, 7], ["Lbracket", 8, 9], ["Int", 9, 10], ["Rbracket", 10, 11], ["Comma", 11, 12], ["Lbracket", 13, 14], ["Int", 14, 15], ["Comma", 15, 16], ["Int", 16, 17], ["Comma", 17, 18], ["Int", 18, 19], ["Rbracket", 19, 20], ["Rbracket", 20, 21], ["Pipe", 21, 22], ["Name", 22, 25], ["Lparen", 25, 26], ["Str", 26, 31], ["Rparen", 31, 32], ["Pipe", 32, 33], ["Name", 33, 37]]}
+{"src": "[[1]].0.0", "toks": [["Lbracket", 0, 1], ["Lbracket", 1, 2], ["Int", 2, 3], ["Rbracket", 3, 4], ["Rbracket", 4, 5], ["Dot", 5, 6], ["Int", 6, 7], ["Dot", 7, 8], ["Int", 8, 9]]}
+{"src": "[].append(23)", "toks": [["Lbracket", 0, 1], ["Rbracket", 1, 2], ["Dot", 2, 3], ["Name", 3, 9], ["Lparen", 9, 10], ["Int", 10, 12], ["Rparen", 12, 13]]}
+{"src": "[].clear()", "toks": [["Lbracket", 0, 1], ["Rbracket", 1, 2], ["Dot", 2, 3], ["Name", 3, 8], ["Lparen", 8, 9], ["Rparen", 9, 10]]}
+{"src": "[]|max", "toks": [["Lbracket", 0, 1], ["Rbracket", 1, 2], ["Pipe", 2, 3], ["Name", 3, 6]]}
+{"src": "[]|min", "toks": [["Lbracket", 0, 1], ["Rbracket", 1, 2], ["Pipe", 2, 3], ["Name", 3, 6]]}
+{"src": "[_beacon_mode]\n        + (['--driver', _beacon_driver] if _beacon_driver else [])\n        + (['--skip-selftest'] if (beacon_skip_selftest | bool) else [])", "toks": [["Lbracket", 0, 1], ["Name", 1, 13], ["Rbracket", 13, 14], ["Add", 23, 24], ["Lparen", 25, 26], ["Lbracket", 26, 27], ["Str", 27, 37], ["Comma", 37, 38], ["Name", 39, 53], ["Rbracket", 53, 54], ["Name", 55, 57], ["Name", 58, 72], ["Name", 73, 77], ["Lbracket", 78, 79], ["Rbracket", 79, 80], ["Rparen", 80, 81], ["Add", 90, 91], ["Lparen", 92, 93], ["Lbracket", 93, 94], ["Str", 94, 111], ["Rbracket", 111, 112], ["Name", 113, 115], ["Lparen", 116, 117], ["Name", 117, 137], ["Pipe", 138, 139], ["Name", 140, 144], ["Rparen", 144, 145], ["Name", 146, 150], ["Lbracket", 151, 152], ["Rbracket", 152, 153], ["Rparen", 153, 154]]}
+{"src": "[none, false, 0, 1, 2, 3, 4, 5]|reject|join(\"|\")", "toks": [["Lbracket", 0, 1], ["Name", 1, 5], ["Comma", 5, 6], ["Name", 7, 12], ["Comma", 12, 13], ["Int", 14, 15], ["Comma", 15, 16], ["Int", 17, 18], ["Comma", 18, 19], ["Int", 20, 21], ["Comma", 21, 22], ["Int", 23, 24], ["Comma", 24, 25], ["Int", 26, 27], ["Comma", 27, 28], ["Int", 29, 30], ["Rbracket", 30, 31], ["Pipe", 31, 32], ["Name", 32, 38], ["Pipe", 38, 39], ["Name", 39, 43], ["Lparen", 43, 44], ["Str", 44, 47], ["Rparen", 47, 48]]}
+{"src": "[none, false, 0, 1, 2, 3, 4, 5]|select|join(\"|\")", "toks": [["Lbracket", 0, 1], ["Name", 1, 5], ["Comma", 5, 6], ["Name", 7, 12], ["Comma", 12, 13], ["Int", 14, 15], ["Comma", 15, 16], ["Int", 17, 18], ["Comma", 18, 19], ["Int", 20, 21], ["Comma", 21, 22], ["Int", 23, 24], ["Comma", 24, 25], ["Int", 26, 27], ["Comma", 27, 28], ["Int", 29, 30], ["Rbracket", 30, 31], ["Pipe", 31, 32], ["Name", 32, 38], ["Pipe", 38, 39], ["Name", 39, 43], ["Lparen", 43, 44], ["Str", 44, 47], ["Rparen", 47, 48]]}
+{"src": "_(\"User: %(num)s\")|format(num=user_count)", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Str", 2, 17], ["Rparen", 17, 18], ["Pipe", 18, 19], ["Name", 19, 25], ["Lparen", 25, 26], ["Name", 26, 29], ["Assign", 29, 30], ["Name", 30, 40], ["Rparen", 40, 41]]}
+{"src": "_(\"User: %(num)s\", num=user_count)", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Str", 2, 17], ["Comma", 17, 18], ["Name", 19, 22], ["Assign", 22, 23], ["Name", 23, 33], ["Rparen", 33, 34]]}
+{"src": "_beacon_args | join(' ')", "toks": [["Name", 0, 12], ["Pipe", 13, 14], ["Name", 15, 19], ["Lparen", 19, 20], ["Str", 20, 23], ["Rparen", 23, 24]]}
+{"src": "_beacon_mode", "toks": [["Name", 0, 12]]}
+{"src": "a", "toks": [["Name", 0, 1]]}
+{"src": "a != b", "toks": [["Name", 0, 1], ["Ne", 2, 4], ["Name", 5, 6]]}
+{"src": "a + b", "toks": [["Name", 0, 1], ["Add", 2, 3], ["Name", 4, 5]]}
+{"src": "a + b + c", "toks": [["Name", 0, 1], ["Add", 2, 3], ["Name", 4, 5], ["Add", 6, 7], ["Name", 8, 9]]}
+{"src": "a // b", "toks": [["Name", 0, 1], ["FloorDiv", 2, 4], ["Name", 5, 6]]}
+{"src": "a < b < c", "toks": [["Name", 0, 1], ["Lt", 2, 3], ["Name", 4, 5], ["Lt", 6, 7], ["Name", 8, 9]]}
+{"src": "a <= b", "toks": [["Name", 0, 1], ["Lteq", 2, 4], ["Name", 5, 6]]}
+{"src": "a = b", "toks": [["Name", 0, 1], ["Assign", 2, 3], ["Name", 4, 5]]}
+{"src": "a > b < c", "toks": [["Name", 0, 1], ["Gt", 2, 3], ["Name", 4, 5], ["Lt", 6, 7], ["Name", 8, 9]]}
+{"src": "a > b > c", "toks": [["Name", 0, 1], ["Gt", 2, 3], ["Name", 4, 5], ["Gt", 6, 7], ["Name", 8, 9]]}
+{"src": "a >= b", "toks": [["Name", 0, 1], ["Gteq", 2, 4], ["Name", 5, 6]]}
+{"src": "a if b else c", "toks": [["Name", 0, 1], ["Name", 2, 4], ["Name", 5, 6], ["Name", 7, 11], ["Name", 12, 13]]}
+{"src": "a ~ b", "toks": [["Name", 0, 1], ["Tilde", 2, 3], ["Name", 4, 5]]}
+{"err_at": 1, "src": "a#b"}
+{"err_at": 1, "src": "a$b"}
+{"src": "a.b", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 3]]}
+{"src": "a; b", "toks": [["Name", 0, 1], ["Semicolon", 1, 2], ["Name", 3, 4]]}
+{"err_at": 1, "src": "a@b"}
+{"src": "a_control", "toks": [["Name", 0, 9]]}
+{"src": "add_each(a, 2)[1:]", "toks": [["Name", 0, 8], ["Lparen", 8, 9], ["Name", 9, 10], ["Comma", 10, 11], ["Int", 12, 13], ["Rparen", 13, 14], ["Lbracket", 14, 15], ["Int", 15, 16], ["Colon", 16, 17], ["Rbracket", 17, 18]]}
+{"src": "ansible_playbook_python", "toks": [["Name", 0, 23]]}
+{"src": "ansible_version", "toks": [["Name", 0, 15]]}
+{"src": "anything", "toks": [["Name", 0, 8]]}
+{"src": "ap_protocol", "toks": [["Name", 0, 11]]}
+{"src": "app_env", "toks": [["Name", 0, 7]]}
+{"src": "app_port", "toks": [["Name", 0, 8]]}
+{"src": "app_root", "toks": [["Name", 0, 8]]}
+{"src": "app_tier", "toks": [["Name", 0, 8]]}
+{"src": "arg|customfilter", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 16]]}
+{"src": "async_func()", "toks": [["Name", 0, 10], ["Lparen", 10, 11], ["Rparen", 11, 12]]}
+{"src": "async_func() + normal_func()", "toks": [["Name", 0, 10], ["Lparen", 10, 11], ["Rparen", 11, 12], ["Add", 13, 14], ["Name", 15, 26], ["Lparen", 26, 27], ["Rparen", 27, 28]]}
+{"src": "autoescape ae", "toks": [["Name", 0, 10], ["Name", 11, 13]]}
+{"src": "autoescape false", "toks": [["Name", 0, 10], ["Name", 11, 16]]}
+{"src": "autoescape foo", "toks": [["Name", 0, 10], ["Name", 11, 14]]}
+{"src": "autoescape true", "toks": [["Name", 0, 10], ["Name", 11, 15]]}
+{"src": "autoescape val", "toks": [["Name", 0, 10], ["Name", 11, 14]]}
+{"src": "a\u00b7", "toks": [["Name", 0, 3]]}
+{"err_at": 1, "src": "a\ud83d\udc0d"}
+{"src": "b", "toks": [["Name", 0, 1]]}
+{"src": "bar", "toks": [["Name", 0, 3]]}
+{"src": "bar + foo", "toks": [["Name", 0, 3], ["Add", 4, 5], ["Name", 6, 9]]}
+{"src": "bar is eq \"baz\"", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Str", 10, 15]]}
+{"src": "bar is eq \"zab\"", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Str", 10, 15]]}
+{"src": "bar is eq (\"ba\" + \"z\")", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Lparen", 10, 11], ["Str", 11, 15], ["Add", 16, 17], ["Str", 18, 21], ["Rparen", 21, 22]]}
+{"src": "bar is eq bar", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Name", 10, 13]]}
+{"src": "bar is eq foo", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Name", 10, 13]]}
+{"src": "base_url", "toks": [["Name", 0, 8]]}
+{"src": "baz", "toks": [["Name", 0, 3]]}
+{"src": "block b", "toks": [["Name", 0, 5], ["Name", 6, 7]]}
+{"src": "block block1", "toks": [["Name", 0, 5], ["Name", 6, 12]]}
+{"src": "block block2", "toks": [["Name", 0, 5], ["Name", 6, 12]]}
+{"src": "block block3", "toks": [["Name", 0, 5], ["Name", 6, 12]]}
+{"src": "block block4", "toks": [["Name", 0, 5], ["Name", 6, 12]]}
+{"src": "block block5", "toks": [["Name", 0, 5], ["Name", 6, 12]]}
+{"src": "block body", "toks": [["Name", 0, 5], ["Name", 6, 10]]}
+{"src": "block body scoped", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Name", 11, 17]]}
+{"src": "block content", "toks": [["Name", 0, 5], ["Name", 6, 13]]}
+{"src": "block data", "toks": [["Name", 0, 5], ["Name", 6, 10]]}
+{"src": "block data \"\n                    \"", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Str", 11, 34]]}
+{"src": "block foo", "toks": [["Name", 0, 5], ["Name", 6, 9]]}
+{"src": "block foo-bar-baz", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Sub", 9, 10], ["Name", 10, 13], ["Sub", 13, 14], ["Name", 14, 17]]}
+{"src": "block inner_box", "toks": [["Name", 0, 5], ["Name", 6, 15]]}
+{"src": "block intro", "toks": [["Name", 0, 5], ["Name", 6, 11]]}
+{"src": "block item", "toks": [["Name", 0, 5], ["Name", 6, 10]]}
+{"src": "block item \"\n                    \"required required", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Str", 11, 34], ["Name", 34, 42], ["Name", 43, 51]]}
+{"src": "block item \"\n                    \"scoped scoped", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Str", 11, 34], ["Name", 34, 40], ["Name", 41, 47]]}
+{"src": "block item required scoped", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Name", 11, 19], ["Name", 20, 26]]}
+{"src": "block item scoped", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Name", 11, 17]]}
+{"src": "block item scoped required", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Name", 11, 17], ["Name", 18, 26]]}
+{"src": "block outer_box", "toks": [["Name", 0, 5], ["Name", 6, 15]]}
+{"src": "block test", "toks": [["Name", 0, 5], ["Name", 6, 10]]}
+{"src": "block testing scoped", "toks": [["Name", 0, 5], ["Name", 6, 13], ["Name", 14, 20]]}
+{"src": "block title", "toks": [["Name", 0, 5], ["Name", 6, 11]]}
+{"src": "block useless", "toks": [["Name", 0, 5], ["Name", 6, 13]]}
+{"src": "block x", "toks": [["Name", 0, 5], ["Name", 6, 7]]}
+{"src": "block x required", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Name", 8, 16]]}
+{"src": "block y", "toks": [["Name", 0, 5], ["Name", 6, 7]]}
+{"src": "block y scoped", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Name", 8, 14]]}
+{"src": "blub()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Rparen", 5, 6]]}
+{"src": "break", "toks": [["Name", 0, 5]]}
+{"src": "c", "toks": [["Name", 0, 1]]}
+{"src": "calc()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Rparen", 5, 6]]}
+{"src": "call do_something()", "toks": [["Name", 0, 4], ["Name", 5, 17], ["Lparen", 17, 18], ["Rparen", 18, 19]]}
+{"src": "call test()", "toks": [["Name", 0, 4], ["Name", 5, 9], ["Lparen", 9, 10], ["Rparen", 10, 11]]}
+{"src": "call x()", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Lparen", 6, 7], ["Rparen", 7, 8]]}
+{"src": "call(data) test()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 9], ["Rparen", 9, 10], ["Name", 11, 15], ["Lparen", 15, 16], ["Rparen", 16, 17]]}
+{"src": "call(user) dump_users(list_of_user)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 9], ["Rparen", 9, 10], ["Name", 11, 21], ["Lparen", 21, 22], ["Name", 22, 34], ["Rparen", 34, 35]]}
+{"src": "call(value, href) detail(icon, value, href)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 10], ["Comma", 10, 11], ["Name", 12, 16], ["Rparen", 16, 17], ["Name", 18, 24], ["Lparen", 24, 25], ["Name", 25, 29], ["Comma", 29, 30], ["Name", 31, 36], ["Comma", 36, 37], ["Name", 38, 42], ["Rparen", 42, 43]]}
+{"src": "call(x, y=1, z) a()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 6], ["Comma", 6, 7], ["Name", 8, 9], ["Assign", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Name", 13, 14], ["Rparen", 14, 15], ["Name", 16, 17], ["Lparen", 17, 18], ["Rparen", 18, 19]]}
+{"src": "callableclass()", "toks": [["Name", 0, 13], ["Lparen", 13, 14], ["Rparen", 14, 15]]}
+{"src": "caller is not defined", "toks": [["Name", 0, 6], ["Name", 7, 9], ["Name", 10, 13], ["Name", 14, 21]]}
+{"src": "caller('data')", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Str", 7, 13], ["Rparen", 13, 14]]}
+{"src": "caller()", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Rparen", 7, 8]]}
+{"src": "caller(user)", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Name", 7, 11], ["Rparen", 11, 12]]}
+{"src": "caller(value, *varargs)", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Name", 7, 12], ["Comma", 12, 13], ["Mul", 14, 15], ["Name", 15, 22], ["Rparen", 22, 23]]}
+{"src": "chain_c_tuning", "toks": [["Name", 0, 14]]}
+{"src": "chain_depth0", "toks": [["Name", 0, 12]]}
+{"src": "chain_depth1", "toks": [["Name", 0, 12]]}
+{"src": "chain_depth2", "toks": [["Name", 0, 12]]}
+{"src": "chain_depth3", "toks": [["Name", 0, 12]]}
+{"src": "chain_depth4", "toks": [["Name", 0, 12]]}
+{"src": "chain_depth5", "toks": [["Name", 0, 12]]}
+{"src": "chain_depthN", "toks": [["Name", 0, 12]]}
+{"src": "chain_included", "toks": [["Name", 0, 14]]}
+{"src": "city", "toks": [["Name", 0, 4]]}
+{"src": "closing(foo())|first", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Name", 8, 11], ["Lparen", 11, 12], ["Rparen", 12, 13], ["Rparen", 13, 14], ["Pipe", 14, 15], ["Name", 15, 20]]}
+{"src": "closing(items())|customfilter", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Name", 8, 13], ["Lparen", 13, 14], ["Rparen", 14, 15], ["Rparen", 15, 16], ["Pipe", 16, 17], ["Name", 17, 29]]}
+{"src": "cls|attr(\"__subclasses__\")()", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 8], ["Lparen", 8, 9], ["Str", 9, 25], ["Rparen", 25, 26], ["Lparen", 26, 27], ["Rparen", 27, 28]]}
+{"src": "cmd_result.stdout", "toks": [["Name", 0, 10], ["Dot", 10, 11], ["Name", 11, 17]]}
+{"src": "coll", "toks": [["Name", 0, 4]]}
+{"src": "continue", "toks": [["Name", 0, 8]]}
+{"src": "count", "toks": [["Name", 0, 5]]}
+{"src": "d", "toks": [["Name", 0, 1]]}
+{"src": "data", "toks": [["Name", 0, 4]]}
+{"src": "data1", "toks": [["Name", 0, 5]]}
+{"src": "data2", "toks": [["Name", 0, 5]]}
+{"src": "data|pprint", "toks": [["Name", 0, 4], ["Pipe", 4, 5], ["Name", 5, 11]]}
+{"src": "data|title", "toks": [["Name", 0, 4], ["Pipe", 4, 5], ["Name", 5, 10]]}
+{"src": "data|truncate(15, false, \">>>\")", "toks": [["Name", 0, 4], ["Pipe", 4, 5], ["Name", 5, 13], ["Lparen", 13, 14], ["Int", 14, 16], ["Comma", 16, 17], ["Name", 18, 23], ["Comma", 23, 24], ["Str", 25, 30], ["Rparen", 30, 31]]}
+{"src": "data|truncate(15, true, \">>>\")", "toks": [["Name", 0, 4], ["Pipe", 4, 5], ["Name", 5, 13], ["Lparen", 13, 14], ["Int", 14, 16], ["Comma", 16, 17], ["Name", 18, 22], ["Comma", 22, 23], ["Str", 24, 29], ["Rparen", 29, 30]]}
+{"src": "db_pool_size", "toks": [["Name", 0, 12]]}
+{"src": "db_timeout", "toks": [["Name", 0, 10]]}
+{"src": "debug", "toks": [["Name", 0, 5]]}
+{"src": "demo_mode", "toks": [["Name", 0, 9]]}
+{"src": "demo_override", "toks": [["Name", 0, 13]]}
+{"src": "demo_result.rc != 0", "toks": [["Name", 0, 11], ["Dot", 11, 12], ["Name", 12, 14], ["Ne", 15, 17], ["Int", 18, 19]]}
+{"src": "deploy_region", "toks": [["Name", 0, 13]]}
+{"src": "do items.append(loop.index0 ~ char)", "toks": [["Name", 0, 2], ["Name", 3, 8], ["Dot", 8, 9], ["Name", 9, 15], ["Lparen", 15, 16], ["Name", 16, 20], ["Dot", 20, 21], ["Name", 21, 27], ["Tilde", 28, 29], ["Name", 30, 34], ["Rparen", 34, 35]]}
+{"src": "dyn", "toks": [["Name", 0, 3]]}
+{"src": "d|items|list", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 7], ["Pipe", 7, 8], ["Name", 8, 12]]}
+{"src": "e", "toks": [["Name", 0, 1]]}
+{"src": "elif", "toks": [["Name", 0, 4]]}
+{"src": "elif False", "toks": [["Name", 0, 4], ["Name", 5, 10]]}
+{"src": "elif b", "toks": [["Name", 0, 4], ["Name", 5, 6]]}
+{"src": "elif c == d", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Eq", 7, 9], ["Name", 10, 11]]}
+{"src": "elif true", "toks": [["Name", 0, 4], ["Name", 5, 9]]}
+{"src": "elif y is defined", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Name", 7, 9], ["Name", 10, 17]]}
+{"src": "else", "toks": [["Name", 0, 4]]}
+{"src": "endautoescape", "toks": [["Name", 0, 13]]}
+{"src": "endblock", "toks": [["Name", 0, 8]]}
+{"src": "endblock foo", "toks": [["Name", 0, 8], ["Name", 9, 12]]}
+{"src": "endblock y", "toks": [["Name", 0, 8], ["Name", 9, 10]]}
+{"src": "endcall", "toks": [["Name", 0, 7]]}
+{"src": "endfilter", "toks": [["Name", 0, 9]]}
+{"src": "endfor", "toks": [["Name", 0, 6]]}
+{"src": "endif", "toks": [["Name", 0, 5]]}
+{"err_at": 7, "src": "endif %\\\\}.*?\n(jinja2\\\\.exceptions\\\\.)?TemplateSyntaxError: Encountered unknown tag 'endif'. Jinja \\\nwas looking for the following tags: 'endfor' or 'else'. The innermost block that needs \\\nto be closed is 'for'.\n    \"\"\",\n        )\n\n    def test_regular_syntax_error(self, fs_env):\n        def test():\n            raise TemplateSyntaxError(\"wtf\", 42)\n\n        self.assert_traceback_matches(\n            test,\n            r\"\"\"\n  File \".*debug.pyc?\", line \\d+, in test\n    raise TemplateSyntaxError\\(\"wtf\", 42\\)(\n    \\^{36})?\n(jinja2\\.exceptions\\.)?TemplateSyntaxError: wtf\n  line 42\"\"\",\n        )\n\n    def test_pickleable_syntax_error(self, fs_env):\n        original = TemplateSyntaxError(\"bad template\", 42, \"test\", \"test.txt\")\n        unpickled = pickle.loads(pickle.dumps(original))\n        assert str(original) == str(unpickled)\n        assert original.name == unpickled.name\n\n    def test_include_syntax_error_source(self, filesystem_loader):\n        e = Environment(\n            loader=ChoiceLoader(\n                [\n                    filesystem_loader,\n                    DictLoader({\"inc\": \"a\\n{% include 'syntaxerror.html'"}
+{"src": "endif +", "toks": [["Name", 0, 5], ["Add", 6, 7]]}
+{"src": "endmacro", "toks": [["Name", 0, 8]]}
+{"src": "endoverlay", "toks": [["Name", 0, 10]]}
+{"src": "endraw", "toks": [["Name", 0, 6]]}
+{"src": "endraw +", "toks": [["Name", 0, 6], ["Add", 7, 8]]}
+{"src": "endscope", "toks": [["Name", 0, 8]]}
+{"src": "endset", "toks": [["Name", 0, 6]]}
+{"src": "endtrans", "toks": [["Name", 0, 8]]}
+{"src": "endwibble", "toks": [["Name", 0, 9]]}
+{"src": "endwith", "toks": [["Name", 0, 7]]}
+{"src": "env", "toks": [["Name", 0, 3]]}
+{"src": "env_name", "toks": [["Name", 0, 8]]}
+{"src": "extends \"a\"", "toks": [["Name", 0, 7], ["Str", 8, 11]]}
+{"src": "extends \"b\"", "toks": [["Name", 0, 7], ["Str", 8, 11]]}
+{"src": "extends \"base\"", "toks": [["Name", 0, 7], ["Str", 8, 14]]}
+{"src": "extends \"base.html\"", "toks": [["Name", 0, 7], ["Str", 8, 19]]}
+{"src": "extends \"default.html\"", "toks": [["Name", 0, 7], ["Str", 8, 22]]}
+{"src": "extends \"header\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends \"layout\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends \"layout.html\"", "toks": [["Name", 0, 7], ["Str", 8, 21]]}
+{"src": "extends \"level1\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends \"level2\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends \"level3\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends \"main\"", "toks": [["Name", 0, 7], ["Str", 8, 14]]}
+{"src": "extends \"parent.html\"", "toks": [["Name", 0, 7], ["Str", 8, 21]]}
+{"src": "extends 'default'", "toks": [["Name", 0, 7], ["Str", 8, 17]]}
+{"src": "extends 'default.html'", "toks": [["Name", 0, 7], ["Str", 8, 22]]}
+{"src": "extends 'default1'", "toks": [["Name", 0, 7], ["Str", 8, 18]]}
+{"src": "extends 'default2'", "toks": [["Name", 0, 7], ["Str", 8, 18]]}
+{"src": "extends 'details.html'", "toks": [["Name", 0, 7], ["Str", 8, 22]]}
+{"src": "extends 'layout.html'", "toks": [["Name", 0, 7], ["Str", 8, 21]]}
+{"src": "extends 'level1'", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends 'level2'", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "extends 'standard.html'", "toks": [["Name", 0, 7], ["Str", 8, 23]]}
+{"src": "extends ...", "toks": [["Name", 0, 7], ["Dot", 8, 9], ["Dot", 9, 10], ["Dot", 10, 11]]}
+{"src": "extends default", "toks": [["Name", 0, 7], ["Name", 8, 15]]}
+{"src": "extends t", "toks": [["Name", 0, 7], ["Name", 8, 9]]}
+{"src": "f.baz", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 5]]}
+{"src": "fail()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Rparen", 5, 6]]}
+{"src": "false", "toks": [["Name", 0, 5]]}
+{"src": "false or true", "toks": [["Name", 0, 5], ["Name", 6, 8], ["Name", 9, 13]]}
+{"src": "false|default('no')", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 13], ["Lparen", 13, 14], ["Str", 14, 18], ["Rparen", 18, 19]]}
+{"src": "false|default('no', true)", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 13], ["Lparen", 13, 14], ["Str", 14, 18], ["Comma", 18, 19], ["Name", 20, 24], ["Rparen", 24, 25]]}
+{"src": "filter lower|escape", "toks": [["Name", 0, 6], ["Name", 7, 12], ["Pipe", 12, 13], ["Name", 13, 19]]}
+{"src": "filter upper|replace('FOO', 'foo')", "toks": [["Name", 0, 6], ["Name", 7, 12], ["Pipe", 12, 13], ["Name", 13, 20], ["Lparen", 20, 21], ["Str", 21, 26], ["Comma", 26, 27], ["Str", 28, 33], ["Rparen", 33, 34]]}
+{"src": "foo", "toks": [["Name", 0, 3]]}
+{"src": "foo is eq (3 * 4)", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Lparen", 10, 11], ["Int", 11, 12], ["Mul", 13, 14], ["Int", 15, 16], ["Rparen", 16, 17]]}
+{"src": "foo is eq 0", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Int", 10, 11]]}
+{"src": "foo is eq 12", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 9], ["Int", 10, 12]]}
+{"src": "foo is sameas false", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 13], ["Name", 14, 19]]}
+{"src": "foo is sameas none", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 13], ["Name", 14, 18]]}
+{"src": "foo is string is sequence", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Name", 7, 13], ["Name", 14, 16], ["Name", 17, 25]]}
+{"src": "foo('a', c='d', e='f', *['b'], **{'g': 'h'})", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Str", 4, 7], ["Comma", 7, 8], ["Name", 9, 10], ["Assign", 10, 11], ["Str", 11, 14], ["Comma", 14, 15], ["Name", 16, 17], ["Assign", 17, 18], ["Str", 18, 21], ["Comma", 21, 22], ["Mul", 23, 24], ["Lbracket", 24, 25], ["Str", 25, 28], ["Rbracket", 28, 29], ["Comma", 29, 30], ["Pow", 31, 33], ["Lbrace", 33, 34], ["Str", 34, 37], ["Colon", 37, 38], ["Str", 39, 42], ["Rbrace", 42, 43], ["Rparen", 43, 44]]}
+{"src": "foo().__class__.__name__", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Rparen", 4, 5], ["Dot", 5, 6], ["Name", 6, 15], ["Dot", 15, 16], ["Name", 16, 24]]}
+{"src": "foo(42)", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Int", 4, 6], ["Rparen", 6, 7]]}
+{"src": "foo(5)", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Int", 4, 5], ["Rparen", 5, 6]]}
+{"src": "foo(x - 1)", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Name", 4, 5], ["Sub", 6, 7], ["Int", 8, 9], ["Rparen", 9, 10]]}
+{"src": "foo(x)", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Name", 4, 5], ["Rparen", 5, 6]]}
+{"src": "foo.5.5", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Int", 4, 5], ["Dot", 5, 6], ["Int", 6, 7]]}
+{"src": "foo.5e3", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Int", 4, 5], ["Name", 5, 7]]}
+{"src": "foo.__class__", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 13]]}
+{"src": "foo.__class__.__subclasses__()", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 13], ["Dot", 13, 14], ["Name", 14, 28], ["Lparen", 28, 29], ["Rparen", 29, 30]]}
+{"src": "foo._foo()", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 8], ["Lparen", 8, 9], ["Rparen", 9, 10]]}
+{"src": "foo.bar", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 7]]}
+{"src": "foo.bar()", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "foo.bar[\"baz\"]._undefined_name", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 7], ["Lbracket", 7, 8], ["Str", 8, 13], ["Rbracket", 13, 14], ["Dot", 14, 15], ["Name", 15, 30]]}
+{"src": "foo.foo()", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "foo.func_code", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 13]]}
+{"src": "foo.items()|list", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Rparen", 10, 11], ["Pipe", 11, 12], ["Name", 12, 16]]}
+{"src": "foo.missing", "toks": [["Name", 0, 3], ["Dot", 3, 4], ["Name", 4, 11]]}
+{"src": "foo[\"items\"]", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Str", 4, 11], ["Rbracket", 11, 12]]}
+{"src": "foo['bar']", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Str", 4, 9], ["Rbracket", 9, 10]]}
+{"src": "foo[-1]", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Sub", 4, 5], ["Int", 5, 6], ["Rbracket", 6, 7]]}
+{"src": "foo[0]", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Int", 4, 5], ["Rbracket", 5, 6]]}
+{"src": "foo[1, 2]", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Int", 4, 5], ["Comma", 5, 6], ["Int", 7, 8], ["Rbracket", 8, 9]]}
+{"src": "foobar", "toks": [["Name", 0, 6]]}
+{"src": "foo|attr(\"items\")()|list", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 8], ["Lparen", 8, 9], ["Str", 9, 16], ["Rparen", 16, 17], ["Lparen", 17, 18], ["Rparen", 18, 19], ["Pipe", 19, 20], ["Name", 20, 24]]}
+{"src": "foo|batch(3)|list", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Rparen", 11, 12], ["Pipe", 12, 13], ["Name", 13, 17]]}
+{"src": "foo|batch(3, 'X')|list", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Str", 13, 16], ["Rparen", 16, 17], ["Pipe", 17, 18], ["Name", 18, 22]]}
+{"src": "foo|first", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9]]}
+{"src": "foo|indent(2, false, false)", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 10], ["Lparen", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Name", 14, 19], ["Comma", 19, 20], ["Name", 21, 26], ["Rparen", 26, 27]]}
+{"src": "foo|indent(2, false, true)", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 10], ["Lparen", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Name", 14, 19], ["Comma", 19, 20], ["Name", 21, 25], ["Rparen", 25, 26]]}
+{"src": "foo|indent(2, true, false)", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 10], ["Lparen", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Name", 14, 18], ["Comma", 18, 19], ["Name", 20, 25], ["Rparen", 25, 26]]}
+{"src": "foo|indent(2, true, true)", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 10], ["Lparen", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Name", 14, 18], ["Comma", 18, 19], ["Name", 20, 24], ["Rparen", 24, 25]]}
+{"src": "foo|last", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 8]]}
+{"src": "foo|slice(3)|list", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Rparen", 11, 12], ["Pipe", 12, 13], ["Name", 13, 17]]}
+{"src": "foo|slice(3, 'X')|list", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 9], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Str", 13, 16], ["Rparen", 16, 17], ["Pipe", 17, 18], ["Name", 18, 22]]}
+{"src": "foo|striptags", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 13]]}
+{"src": "foo|trim(chars)", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 8], ["Lparen", 8, 9], ["Name", 9, 14], ["Rparen", 14, 15]]}
+{"src": "for _, g in gs", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Comma", 5, 6], ["Name", 7, 8], ["Name", 9, 11], ["Name", 12, 14]]}
+{"src": "for a, b, c in [[1, 2, 3]]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Comma", 5, 6], ["Name", 7, 8], ["Comma", 8, 9], ["Name", 10, 11], ["Name", 12, 14], ["Lbracket", 15, 16], ["Lbracket", 16, 17], ["Int", 17, 18], ["Comma", 18, 19], ["Int", 20, 21], ["Comma", 21, 22], ["Int", 23, 24], ["Rbracket", 24, 25], ["Rbracket", 25, 26]]}
+{"src": "for c in s", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10]]}
+{"src": "for cell in row", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for char in \"foo\"", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Str", 12, 17]]}
+{"src": "for city, items in users|groupby('city', default='NY')", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Comma", 8, 9], ["Name", 10, 15], ["Name", 16, 18], ["Name", 19, 24], ["Pipe", 24, 25], ["Name", 25, 32], ["Lparen", 32, 33], ["Str", 33, 39], ["Comma", 39, 40], ["Name", 41, 48], ["Assign", 48, 49], ["Str", 49, 53], ["Rparen", 53, 54]]}
+{"src": "for f in p.fields recursive", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10], ["Dot", 10, 11], ["Name", 11, 17], ["Name", 18, 27]]}
+{"src": "for foo, bar in seq", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Comma", 7, 8], ["Name", 9, 12], ["Name", 13, 15], ["Name", 16, 19]]}
+{"src": "for foo, bar.baz in seq", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Comma", 7, 8], ["Name", 9, 12], ["Dot", 12, 13], ["Name", 13, 16], ["Name", 17, 19], ["Name", 20, 23]]}
+{"src": "for grouper, list in [('a', 1), ('a', 2), ('b', 1)]|groupby(0)", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Comma", 11, 12], ["Name", 13, 17], ["Name", 18, 20], ["Lbracket", 21, 22], ["Lparen", 22, 23], ["Str", 23, 26], ["Comma", 26, 27], ["Int", 28, 29], ["Rparen", 29, 30], ["Comma", 30, 31], ["Lparen", 32, 33], ["Str", 33, 36], ["Comma", 36, 37], ["Int", 38, 39], ["Rparen", 39, 40], ["Comma", 40, 41], ["Lparen", 42, 43], ["Str", 43, 46], ["Comma", 46, 47], ["Int", 48, 49], ["Rparen", 49, 50], ["Rbracket", 50, 51], ["Pipe", 51, 52], ["Name", 52, 59], ["Lparen", 59, 60], ["Int", 60, 61], ["Rparen", 61, 62]]}
+{"src": "for grouper, list in [{'foo': 1, 'bar': 2},\n                                  {'foo': 2, 'bar': 3},\n                                  {'foo': 1, 'bar': 1},\n                                  {'foo': 3, 'bar': 4}]|groupby('foo')", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Comma", 11, 12], ["Name", 13, 17], ["Name", 18, 20], ["Lbracket", 21, 22], ["Lbrace", 22, 23], ["Str", 23, 28], ["Colon", 28, 29], ["Int", 30, 31], ["Comma", 31, 32], ["Str", 33, 38], ["Colon", 38, 39], ["Int", 40, 41], ["Rbrace", 41, 42], ["Comma", 42, 43], ["Lbrace", 78, 79], ["Str", 79, 84], ["Colon", 84, 85], ["Int", 86, 87], ["Comma", 87, 88], ["Str", 89, 94], ["Colon", 94, 95], ["Int", 96, 97], ["Rbrace", 97, 98], ["Comma", 98, 99], ["Lbrace", 134, 135], ["Str", 135, 140], ["Colon", 140, 141], ["Int", 142, 143], ["Comma", 143, 144], ["Str", 145, 150], ["Colon", 150, 151], ["Int", 152, 153], ["Rbrace", 153, 154], ["Comma", 154, 155], ["Lbrace", 190, 191], ["Str", 191, 196], ["Colon", 196, 197], ["Int", 198, 199], ["Comma", 199, 200], ["Str", 201, 206], ["Colon", 206, 207], ["Int", 208, 209], ["Rbrace", 209, 210], ["Rbracket", 210, 211], ["Pipe", 211, 212], ["Name", 212, 219], ["Lparen", 219, 220], ["Str", 220, 225], ["Rparen", 225, 226]]}
+{"src": "for grouper, list in items()|groupby('foo')", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Comma", 11, 12], ["Name", 13, 17], ["Name", 18, 20], ["Name", 21, 26], ["Lparen", 26, 27], ["Rparen", 27, 28], ["Pipe", 28, 29], ["Name", 29, 36], ["Lparen", 36, 37], ["Str", 37, 42], ["Rparen", 42, 43]]}
+{"src": "for grouper, list in items()|groupby(0)", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Comma", 11, 12], ["Name", 13, 17], ["Name", 18, 20], ["Name", 21, 26], ["Lparen", 26, 27], ["Rparen", 27, 28], ["Pipe", 28, 29], ["Name", 29, 36], ["Lparen", 36, 37], ["Int", 37, 38], ["Rparen", 38, 39]]}
+{"src": "for i in (1, 2)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lparen", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Rparen", 14, 15]]}
+{"src": "for i in [\"foo\", \"bar\"]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Str", 10, 15], ["Comma", 15, 16], ["Str", 17, 22], ["Rbracket", 22, 23]]}
+{"src": "for i in [1, 2, 3]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Rbracket", 17, 18]]}
+{"src": "for i in items", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "for i in lst|reverse", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12], ["Pipe", 12, 13], ["Name", 13, 20]]}
+{"src": "for i in range(0, 10)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14], ["Lparen", 14, 15], ["Int", 15, 16], ["Comma", 16, 17], ["Int", 18, 20], ["Rparen", 20, 21]]}
+{"src": "for i in range(1)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14], ["Lparen", 14, 15], ["Int", 15, 16], ["Rparen", 16, 17]]}
+{"src": "for i in range(3)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14], ["Lparen", 14, 15], ["Int", 15, 16], ["Rparen", 16, 17]]}
+{"src": "for idx in range(2)", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Name", 8, 10], ["Name", 11, 16], ["Lparen", 16, 17], ["Int", 17, 18], ["Rparen", 18, 19]]}
+{"src": "for item in (1, 2, 3, 4)", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lparen", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Comma", 17, 18], ["Int", 19, 20], ["Comma", 20, 21], ["Int", 22, 23], ["Rparen", 23, 24]]}
+{"src": "for item in [1, 2, 3, 4]", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Comma", 17, 18], ["Int", 19, 20], ["Comma", 20, 21], ["Int", 22, 23], ["Rbracket", 23, 24]]}
+{"src": "for item in [1, 2, 3]", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Comma", 17, 18], ["Int", 19, 20], ["Rbracket", 20, 21]]}
+{"src": "for item in [1, 2]", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Rbracket", 17, 18]]}
+{"src": "for item in [1]", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Int", 13, 14], ["Rbracket", 14, 15]]}
+{"src": "for item in [1] if loop.index\n                                      == 0", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Int", 13, 14], ["Rbracket", 14, 15], ["Name", 16, 18], ["Name", 19, 23], ["Dot", 23, 24], ["Name", 24, 29], ["Eq", 68, 70], ["Int", 71, 72]]}
+{"src": "for item in []", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Rbracket", 13, 14]]}
+{"src": "for item in broken", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 18]]}
+{"src": "for item in foo", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for item in foo recursive", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15], ["Name", 16, 25]]}
+{"src": "for item in iter", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 16]]}
+{"src": "for item in none", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 16]]}
+{"src": "for item in range(10) if item is even", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17], ["Lparen", 17, 18], ["Int", 18, 20], ["Rparen", 20, 21], ["Name", 22, 24], ["Name", 25, 29], ["Name", 30, 32], ["Name", 33, 37]]}
+{"src": "for item in range(total)", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17], ["Lparen", 17, 18], ["Name", 18, 23], ["Rparen", 23, 24]]}
+{"src": "for item in seq", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for item in seq recursive", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15], ["Name", 16, 25]]}
+{"src": "for item in x", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 13]]}
+{"src": "for item.attribute in seq", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Dot", 8, 9], ["Name", 9, 18], ["Name", 19, 21], ["Name", 22, 25]]}
+{"src": "for k, v in kvs", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Comma", 5, 6], ["Name", 7, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for k, vs in data|groupby('k', case_sensitive=cs)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Comma", 5, 6], ["Name", 7, 9], ["Name", 10, 12], ["Name", 13, 17], ["Pipe", 17, 18], ["Name", 18, 25], ["Lparen", 25, 26], ["Str", 26, 29], ["Comma", 29, 30], ["Name", 31, 45], ["Assign", 45, 46], ["Name", 46, 48], ["Rparen", 48, 49]]}
+{"src": "for loop in seq", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for n in [[1,2,3], [3,4,5], [5,6,7]]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Lbracket", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 15, 16], ["Rbracket", 16, 17], ["Comma", 17, 18], ["Lbracket", 19, 20], ["Int", 20, 21], ["Comma", 21, 22], ["Int", 22, 23], ["Comma", 23, 24], ["Int", 24, 25], ["Rbracket", 25, 26], ["Comma", 26, 27], ["Lbracket", 28, 29], ["Int", 29, 30], ["Comma", 30, 31], ["Int", 31, 32], ["Comma", 32, 33], ["Int", 33, 34], ["Rbracket", 34, 35], ["Rbracket", 35, 36]]}
+{"src": "for none in seq", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 15]]}
+{"src": "for num1 in range(5)", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17], ["Lparen", 17, 18], ["Int", 18, 19], ["Rparen", 19, 20]]}
+{"src": "for num2 in range(10)", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17], ["Lparen", 17, 18], ["Int", 18, 20], ["Rparen", 20, 21]]}
+{"src": "for p in foo", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12]]}
+{"src": "for p in foo recursive", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12], ["Name", 13, 22]]}
+{"src": "for page in [site.root] if page.url != this recursive", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Lbracket", 12, 13], ["Name", 13, 17], ["Dot", 17, 18], ["Name", 18, 22], ["Rbracket", 22, 23], ["Name", 24, 26], ["Name", 27, 31], ["Dot", 31, 32], ["Name", 32, 35], ["Ne", 36, 38], ["Name", 39, 43], ["Name", 44, 53]]}
+{"src": "for page in items if page.url != this", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17], ["Name", 18, 20], ["Name", 21, 25], ["Dot", 25, 26], ["Name", 26, 29], ["Ne", 30, 32], ["Name", 33, 37]]}
+{"src": "for row in table", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Name", 8, 10], ["Name", 11, 16]]}
+{"src": "for s in seq", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12]]}
+{"src": "for test_var in [\"test_content\"]", "toks": [["Name", 0, 3], ["Name", 4, 12], ["Name", 13, 15], ["Lbracket", 16, 17], ["Str", 17, 31], ["Rbracket", 31, 32]]}
+{"src": "for user in users", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Name", 9, 11], ["Name", 12, 17]]}
+{"src": "for value in values recursive", "toks": [["Name", 0, 3], ["Name", 4, 9], ["Name", 10, 12], ["Name", 13, 19], ["Name", 20, 29]]}
+{"src": "for x in", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8]]}
+{"src": "for x in ['one', 'foo'] | select('foo')", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Str", 10, 15], ["Comma", 15, 16], ["Str", 17, 22], ["Rbracket", 22, 23], ["Pipe", 24, 25], ["Name", 26, 32], ["Lparen", 32, 33], ["Str", 33, 38], ["Rparen", 38, 39]]}
+{"src": "for x in [1, 2, 3]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 16, 17], ["Rbracket", 17, 18]]}
+{"src": "for x in [1,2,3]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Lbracket", 9, 10], ["Int", 10, 11], ["Comma", 11, 12], ["Int", 12, 13], ["Comma", 13, 14], ["Int", 14, 15], ["Rbracket", 15, 16]]}
+{"src": "for x in a.b[:1]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10], ["Dot", 10, 11], ["Name", 11, 12], ["Lbracket", 12, 13], ["Colon", 13, 14], ["Int", 14, 15], ["Rbracket", 15, 16]]}
+{"src": "for x in a['b']['c']", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10], ["Lbracket", 10, 11], ["Str", 11, 14], ["Rbracket", 14, 15], ["Lbracket", 15, 16], ["Str", 16, 19], ["Rbracket", 19, 20]]}
+{"src": "for x in foo,", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12], ["Comma", 12, 13]]}
+{"src": "for x in foo, bar", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12], ["Comma", 12, 13], ["Name", 14, 17]]}
+{"src": "for x in list", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 13]]}
+{"src": "for x in range(4)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14], ["Lparen", 14, 15], ["Int", 15, 16], ["Rparen", 16, 17]]}
+{"src": "for x in range(5)", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14], ["Lparen", 14, 15], ["Int", 15, 16], ["Rparen", 16, 17]]}
+{"src": "for x in rng", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12]]}
+{"src": "for x in seq", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12]]}
+{"src": "for x in value", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 14]]}
+{"src": "for x in x.y", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10], ["Dot", 10, 11], ["Name", 11, 12]]}
+{"src": "for x in x.y recursive", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10], ["Dot", 10, 11], ["Name", 11, 12], ["Name", 13, 22]]}
+{"src": "for x in y", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 10]]}
+{"src": "for y in seq", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Name", 6, 8], ["Name", 9, 12]]}
+{"src": "for year, list in articles()|groupby('date.year')", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Comma", 8, 9], ["Name", 10, 14], ["Name", 15, 17], ["Name", 18, 26], ["Lparen", 26, 27], ["Rparen", 27, 28], ["Pipe", 28, 29], ["Name", 29, 36], ["Lparen", 36, 37], ["Str", 37, 48], ["Rparen", 48, 49]]}
+{"src": "for year, list in articles|groupby('date.year')", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Comma", 8, 9], ["Name", 10, 14], ["Name", 15, 17], ["Name", 18, 26], ["Pipe", 26, 27], ["Name", 27, 34], ["Lparen", 34, 35], ["Str", 35, 46], ["Rparen", 46, 47]]}
+{"src": "from \"foo\" import", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17]]}
+{"src": "from \"foo\" import bar", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21]]}
+{"src": "from \"foo\" import bar with context,", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Name", 22, 26], ["Name", 27, 34], ["Comma", 34, 35]]}
+{"src": "from \"foo\" import bar,", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22]]}
+{"src": "from \"foo\" import bar, baz", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 26]]}
+{"src": "from \"foo\" import bar, baz with context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 26], ["Name", 27, 31], ["Name", 32, 39]]}
+{"src": "from \"foo\" import bar, baz, with context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 26], ["Comma", 26, 27], ["Name", 28, 32], ["Name", 33, 40]]}
+{"src": "from \"foo\" import bar, with context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 27], ["Name", 28, 35]]}
+{"src": "from \"foo\" import bar, with with context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 27], ["Name", 28, 32], ["Name", 33, 40]]}
+{"src": "from \"foo\" import bar, with, context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Name", 23, 27], ["Comma", 27, 28], ["Name", 29, 36]]}
+{"src": "from \"foo\" import bar,,", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Comma", 22, 23]]}
+{"src": "from \"foo\" import bar,, with context", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Name", 18, 21], ["Comma", 21, 22], ["Comma", 22, 23], ["Name", 24, 28], ["Name", 29, 36]]}
+{"src": "from \"foo\" import,", "toks": [["Name", 0, 4], ["Str", 5, 10], ["Name", 11, 17], ["Comma", 17, 18]]}
+{"src": "from \"include\" import test", "toks": [["Name", 0, 4], ["Str", 5, 14], ["Name", 15, 21], ["Name", 22, 26]]}
+{"src": "from \"module\" import test", "toks": [["Name", 0, 4], ["Str", 5, 13], ["Name", 14, 20], ["Name", 21, 25]]}
+{"src": "from \"module\" import test with context", "toks": [["Name", 0, 4], ["Str", 5, 13], ["Name", 14, 20], ["Name", 21, 25], ["Name", 26, 30], ["Name", 31, 38]]}
+{"src": "from \"module\" import test without context", "toks": [["Name", 0, 4], ["Str", 5, 13], ["Name", 14, 20], ["Name", 21, 25], ["Name", 26, 33], ["Name", 34, 41]]}
+{"src": "from \"test.html\" import a, b as c", "toks": [["Name", 0, 4], ["Str", 5, 16], ["Name", 17, 23], ["Name", 24, 25], ["Comma", 25, 26], ["Name", 27, 28], ["Name", 29, 31], ["Name", 32, 33]]}
+{"src": "from 'a' import x with context", "toks": [["Name", 0, 4], ["Str", 5, 8], ["Name", 9, 15], ["Name", 16, 17], ["Name", 18, 22], ["Name", 23, 30]]}
+{"src": "from 'helpers.html' import foo with context", "toks": [["Name", 0, 4], ["Str", 5, 19], ["Name", 20, 26], ["Name", 27, 30], ["Name", 31, 35], ["Name", 36, 43]]}
+{"src": "from 'macro' import m", "toks": [["Name", 0, 4], ["Str", 5, 12], ["Name", 13, 19], ["Name", 20, 21]]}
+{"src": "from 'module' import nothing", "toks": [["Name", 0, 4], ["Str", 5, 13], ["Name", 14, 20], ["Name", 21, 28]]}
+{"src": "from_inventory", "toks": [["Name", 0, 14]]}
+{"src": "gettext(\"foo\", name='\n            '\"<test>\")", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Str", 8, 13], ["Comma", 13, 14], ["Name", 15, 19], ["Assign", 19, 20], ["Str", 20, 35], ["Str", 35, 43], ["Rparen", 43, 44]]}
+{"src": "gettext(' Hello  \\n  World')", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Str", 8, 27], ["Rparen", 27, 28]]}
+{"src": "gettext('Hello World')", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Str", 8, 21], ["Rparen", 21, 22]]}
+{"src": "given|default('no')", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 13], ["Lparen", 13, 14], ["Str", 14, 18], ["Rparen", 18, 19]]}
+{"src": "group", "toks": [["Name", 0, 5]]}
+{"src": "grouper", "toks": [["Name", 0, 7]]}
+{"src": "g|list", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 6]]}
+{"src": "host", "toks": [["Name", 0, 4]]}
+{"src": "host_line_ip", "toks": [["Name", 0, 12]]}
+{"src": "hosts | length > 0", "toks": [["Name", 0, 5], ["Pipe", 6, 7], ["Name", 8, 14], ["Gt", 15, 16], ["Int", 17, 18]]}
+{"src": "hosts|length>0", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 12], ["Gt", 12, 13], ["Int", 13, 14]]}
+{"src": "hostvars['buildbox'].build_root", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 19], ["Rbracket", 19, 20], ["Dot", 20, 21], ["Name", 21, 31]]}
+{"src": "hostvars['localhost'].ansible_connection | default('implicit')", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 20], ["Rbracket", 20, 21], ["Dot", 21, 22], ["Name", 22, 40], ["Pipe", 41, 42], ["Name", 43, 50], ["Lparen", 50, 51], ["Str", 51, 61], ["Rparen", 61, 62]]}
+{"src": "hostvars['web01'].app_tier", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 16], ["Rbracket", 16, 17], ["Dot", 17, 18], ["Name", 18, 26]]}
+{"src": "hostvars['web01'].infiniband_ip", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 16], ["Rbracket", 16, 17], ["Dot", 17, 18], ["Name", 18, 31]]}
+{"src": "hostvars['web01'].play_scoped", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 16], ["Rbracket", 16, 17], ["Dot", 17, 18], ["Name", 18, 29]]}
+{"src": "hostvars['web01'].web01_ib_ip", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 16], ["Rbracket", 16, 17], ["Dot", 17, 18], ["Name", 18, 29]]}
+{"src": "hostvars['web0143'].app_tier", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 18], ["Rbracket", 18, 19], ["Dot", 19, 20], ["Name", 20, 28]]}
+{"src": "hostvars['web0143'].app_tier | default('none')", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 18], ["Rbracket", 18, 19], ["Dot", 19, 20], ["Name", 20, 28], ["Pipe", 29, 30], ["Name", 31, 38], ["Lparen", 38, 39], ["Str", 39, 45], ["Rparen", 45, 46]]}
+{"src": "hostvars['web0143'].infiniband_ip", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Str", 9, 18], ["Rbracket", 18, 19], ["Dot", 19, 20], ["Name", 20, 33]]}
+{"src": "hostvars[groups['webservers'][0]].app_tier", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Name", 9, 15], ["Lbracket", 15, 16], ["Str", 16, 28], ["Rbracket", 28, 29], ["Lbracket", 29, 30], ["Int", 30, 31], ["Rbracket", 31, 32], ["Rbracket", 32, 33], ["Dot", 33, 34], ["Name", 34, 42]]}
+{"src": "hostvars[inventory_hostname].not_exists", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Name", 9, 27], ["Rbracket", 27, 28], ["Dot", 28, 29], ["Name", 29, 39]]}
+{"src": "hostvars[inventory_hostname].play_scoped", "toks": [["Name", 0, 8], ["Lbracket", 8, 9], ["Name", 9, 27], ["Rbracket", 27, 28], ["Dot", 28, 29], ["Name", 29, 40]]}
+{"src": "href", "toks": [["Name", 0, 4]]}
+{"src": "http_port", "toks": [["Name", 0, 9]]}
+{"src": "i", "toks": [["Name", 0, 1]]}
+{"src": "i * (j < 5)", "toks": [["Name", 0, 1], ["Mul", 2, 3], ["Lparen", 4, 5], ["Name", 5, 6], ["Lt", 7, 8], ["Int", 9, 10], ["Rparen", 10, 11]]}
+{"src": "i()", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Rparen", 2, 3]]}
+{"src": "icon", "toks": [["Name", 0, 4]]}
+{"src": "if", "toks": [["Name", 0, 2]]}
+{"src": "if True", "toks": [["Name", 0, 2], ["Name", 3, 7]]}
+{"src": "if True +", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Add", 8, 9]]}
+{"src": "if a", "toks": [["Name", 0, 2], ["Name", 3, 4]]}
+{"src": "if b", "toks": [["Name", 0, 2], ["Name", 3, 4]]}
+{"src": "if caller", "toks": [["Name", 0, 2], ["Name", 3, 9]]}
+{"src": "if caller is undefined", "toks": [["Name", 0, 2], ["Name", 3, 9], ["Name", 10, 12], ["Name", 13, 22]]}
+{"src": "if default", "toks": [["Name", 0, 2], ["Name", 3, 10]]}
+{"src": "if expr", "toks": [["Name", 0, 2], ["Name", 3, 7]]}
+{"src": "if f.rec", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Dot", 4, 5], ["Name", 5, 8]]}
+{"src": "if false", "toks": [["Name", 0, 2], ["Name", 3, 8]]}
+{"src": "if foo", "toks": [["Name", 0, 2], ["Name", 3, 6]]}
+{"src": "if item % 2 == 0", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Mod", 8, 9], ["Int", 10, 11], ["Eq", 12, 14], ["Int", 15, 16]]}
+{"src": "if item == 1", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Eq", 8, 10], ["Int", 11, 12]]}
+{"src": "if item > 2", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Gt", 8, 9], ["Int", 10, 11]]}
+{"src": "if item.b", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Dot", 7, 8], ["Name", 8, 9]]}
+{"src": "if kvs", "toks": [["Name", 0, 2], ["Name", 3, 6]]}
+{"src": "if l", "toks": [["Name", 0, 2], ["Name", 3, 4]]}
+{"src": "if loop.last", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Dot", 7, 8], ["Name", 8, 12]]}
+{"src": "if not loop.last", "toks": [["Name", 0, 2], ["Name", 3, 6], ["Name", 7, 11], ["Dot", 11, 12], ["Name", 12, 16]]}
+{"src": "if object1.subproperty1 is eq object2.subproperty2", "toks": [["Name", 0, 2], ["Name", 3, 10], ["Dot", 10, 11], ["Name", 11, 23], ["Name", 24, 26], ["Name", 27, 29], ["Name", 30, 37], ["Dot", 37, 38], ["Name", 38, 50]]}
+{"src": "if true", "toks": [["Name", 0, 2], ["Name", 3, 7]]}
+{"src": "if value", "toks": [["Name", 0, 2], ["Name", 3, 8]]}
+{"src": "if x == v", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Eq", 5, 7], ["Name", 8, 9]]}
+{"src": "if x > 1", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Gt", 5, 6], ["Int", 7, 8]]}
+{"src": "if x is defined", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Name", 5, 7], ["Name", 8, 15]]}
+{"src": "if x is not defined", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Name", 5, 7], ["Name", 8, 11], ["Name", 12, 19]]}
+{"src": "if y \"\n            \"is defined", "toks": [["Name", 0, 2], ["Name", 3, 4], ["Str", 5, 20], ["Name", 20, 22], ["Name", 23, 30]]}
+{"src": "import \"meh.html\" as meh", "toks": [["Name", 0, 6], ["Str", 7, 17], ["Name", 18, 20], ["Name", 21, 24]]}
+{"src": "import \"module\" as m", "toks": [["Name", 0, 6], ["Str", 7, 15], ["Name", 16, 18], ["Name", 19, 20]]}
+{"src": "import \"module\" as m with context", "toks": [["Name", 0, 6], ["Str", 7, 15], ["Name", 16, 18], ["Name", 19, 20], ["Name", 21, 25], ["Name", 26, 33]]}
+{"src": "import \"module\" as m without context", "toks": [["Name", 0, 6], ["Str", 7, 15], ["Name", 16, 18], ["Name", 19, 20], ["Name", 21, 28], ["Name", 29, 36]]}
+{"src": "include \"header\"", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "include \"header\" with context", "toks": [["Name", 0, 7], ["Str", 8, 16], ["Name", 17, 21], ["Name", 22, 29]]}
+{"src": "include \"header\" without context", "toks": [["Name", 0, 7], ["Str", 8, 16], ["Name", 17, 24], ["Name", 25, 32]]}
+{"src": "include \"inc\"", "toks": [["Name", 0, 7], ["Str", 8, 13]]}
+{"src": "include \"include.html\"", "toks": [["Name", 0, 7], ["Str", 8, 22]]}
+{"src": "include \"missing\"", "toks": [["Name", 0, 7], ["Str", 8, 17]]}
+{"err_at": 33, "src": "include \"missing\" ignore missing ' + extra + \""}
+{"src": "include \"muh.html\"", "toks": [["Name", 0, 7], ["Str", 8, 18]]}
+{"src": "include \"o_printer\"", "toks": [["Name", 0, 7], ["Str", 8, 19]]}
+{"src": "include 'item'", "toks": [["Name", 0, 7], ["Str", 8, 14]]}
+{"src": "include 'x.html'", "toks": [["Name", 0, 7], ["Str", 8, 16]]}
+{"src": "include (\"foo.html\", \"bar.html\")", "toks": [["Name", 0, 7], ["Lparen", 8, 9], ["Str", 9, 19], ["Comma", 19, 20], ["Str", 21, 31], ["Rparen", 31, 32]]}
+{"src": "include (\"foo.html\", \"bar.html\", foo)", "toks": [["Name", 0, 7], ["Lparen", 8, 9], ["Str", 9, 19], ["Comma", 19, 20], ["Str", 21, 31], ["Comma", 31, 32], ["Name", 33, 36], ["Rparen", 36, 37]]}
+{"src": "include [\"foo.html\", \"bar.html\", foo]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Str", 9, 19], ["Comma", 19, 20], ["Str", 21, 31], ["Comma", 31, 32], ["Name", 33, 36], ["Rbracket", 36, 37]]}
+{"src": "include [\"foo.html\", \"bar.html\"]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Str", 9, 19], ["Comma", 19, 20], ["Str", 21, 31], ["Rbracket", 31, 32]]}
+{"src": "include [\"missing\", \"header\"]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Str", 9, 18], ["Comma", 18, 19], ["Str", 20, 28], ["Rbracket", 28, 29]]}
+{"src": "include [\"missing\", \"missing2\"]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Str", 9, 18], ["Comma", 18, 19], ["Str", 20, 30], ["Rbracket", 30, 31]]}
+{"src": "include [\"missing\", \"missing2\"] ignore missing", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Str", 9, 18], ["Comma", 18, 19], ["Str", 20, 30], ["Rbracket", 30, 31], ["Name", 32, 38], ["Name", 39, 46]]}
+{"src": "include [x, \"header\"]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Name", 9, 10], ["Comma", 10, 11], ["Str", 12, 20], ["Rbracket", 20, 21]]}
+{"src": "include [x]", "toks": [["Name", 0, 7], ["Lbracket", 8, 9], ["Name", 9, 10], ["Rbracket", 10, 11]]}
+{"src": "include helper", "toks": [["Name", 0, 7], ["Name", 8, 14]]}
+{"src": "include x", "toks": [["Name", 0, 7], ["Name", 8, 9]]}
+{"src": "inner()", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7]]}
+{"src": "inventory_hostname", "toks": [["Name", 0, 18]]}
+{"src": "it", "toks": [["Name", 0, 2]]}
+{"src": "item", "toks": [["Name", 0, 4]]}
+{"src": "item * 2", "toks": [["Name", 0, 4], ["Mul", 5, 6], ["Int", 7, 8]]}
+{"src": "item.a", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 6]]}
+{"src": "items()|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 12], ["Lparen", 12, 13], ["Str", 13, 16], ["Rparen", 16, 17]]}
+{"src": "items()|map(\"int\")|sum", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 11], ["Lparen", 11, 12], ["Str", 12, 17], ["Rparen", 17, 18], ["Pipe", 18, 19], ["Name", 19, 22]]}
+{"src": "items()|reject(\"odd\")|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Lparen", 14, 15], ["Str", 15, 20], ["Rparen", 20, 21], ["Pipe", 21, 22], ["Name", 22, 26], ["Lparen", 26, 27], ["Str", 27, 30], ["Rparen", 30, 31]]}
+{"src": "items()|reject|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Pipe", 14, 15], ["Name", 15, 19], ["Lparen", 19, 20], ["Str", 20, 23], ["Rparen", 23, 24]]}
+{"src": "items()|select(\"odd\")|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Lparen", 14, 15], ["Str", 15, 20], ["Rparen", 20, 21], ["Pipe", 21, 22], ["Name", 22, 26], ["Lparen", 26, 27], ["Str", 27, 30], ["Rparen", 30, 31]]}
+{"src": "items()|select|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 14], ["Pipe", 14, 15], ["Name", 15, 19], ["Lparen", 19, 20], ["Str", 20, 23], ["Rparen", 23, 24]]}
+{"src": "items()|slice(3)|list", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 13], ["Lparen", 13, 14], ["Int", 14, 15], ["Rparen", 15, 16], ["Pipe", 16, 17], ["Name", 17, 21]]}
+{"src": "items()|slice(3, 'X')|list", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 13], ["Lparen", 13, 14], ["Int", 14, 15], ["Comma", 15, 16], ["Str", 17, 20], ["Rparen", 20, 21], ["Pipe", 21, 22], ["Name", 22, 26]]}
+{"src": "items()|sum", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 11]]}
+{"src": "items()|sum('value')", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 11], ["Lparen", 11, 12], ["Str", 12, 19], ["Rparen", 19, 20]]}
+{"err_at": 35, "src": "items|\" + name + '(attribute=\"value\")"}
+{"src": "items|join(', ')", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Str", 11, 15], ["Rparen", 15, 16]]}
+{"src": "items|map(attribute='name')|join(', ')", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 19], ["Assign", 19, 20], ["Str", 20, 26], ["Rparen", 26, 27], ["Pipe", 27, 28], ["Name", 28, 32], ["Lparen", 32, 33], ["Str", 33, 37], ["Rparen", 37, 38]]}
+{"src": "items|reject('==', 'z')|unique|list", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 12], ["Lparen", 12, 13], ["Str", 13, 17], ["Comma", 17, 18], ["Str", 19, 22], ["Rparen", 22, 23], ["Pipe", 23, 24], ["Name", 24, 30], ["Pipe", 30, 31], ["Name", 31, 35]]}
+{"src": "items|sort(attribute='value')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 20], ["Assign", 20, 21], ["Str", 21, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 34]]}
+{"src": "items|sort(attribute='value.0')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 20], ["Assign", 20, 21], ["Str", 21, 30], ["Rparen", 30, 31], ["Pipe", 31, 32], ["Name", 32, 36]]}
+{"src": "items|sort(attribute='value1,value2')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 20], ["Assign", 20, 21], ["Str", 21, 36], ["Rparen", 36, 37], ["Pipe", 37, 38], ["Name", 38, 42]]}
+{"src": "items|sort(attribute='value1.0,value2.0')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 20], ["Assign", 20, 21], ["Str", 21, 40], ["Rparen", 40, 41], ["Pipe", 41, 42], ["Name", 42, 46]]}
+{"src": "items|sort(attribute='value2,value1')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 20], ["Assign", 20, 21], ["Str", 21, 36], ["Rparen", 36, 37], ["Pipe", 37, 38], ["Name", 38, 42]]}
+{"src": "items|unique(attribute='value')|join", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 12], ["Lparen", 12, 13], ["Name", 13, 22], ["Assign", 22, 23], ["Str", 23, 30], ["Rparen", 30, 31], ["Pipe", 31, 32], ["Name", 32, 36]]}
+{"src": "j", "toks": [["Name", 0, 1]]}
+{"src": "k", "toks": [["Name", 0, 1]]}
+{"src": "kwargs", "toks": [["Name", 0, 6]]}
+{"src": "l.pop()", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 5], ["Lparen", 5, 6], ["Rparen", 6, 7]]}
+{"src": "level1('foo')", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Str", 7, 12], ["Rparen", 12, 13]]}
+{"src": "level2('bar')", "toks": [["Name", 0, 6], ["Lparen", 6, 7], ["Str", 7, 12], ["Rparen", 12, 13]]}
+{"src": "local_note", "toks": [["Name", 0, 10]]}
+{"src": "loop", "toks": [["Name", 0, 4]]}
+{"src": "loop(f.sub)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 6], ["Dot", 6, 7], ["Name", 7, 10], ["Rparen", 10, 11]]}
+{"src": "loop(item.b)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Name", 5, 9], ["Dot", 9, 10], ["Name", 10, 11], ["Rparen", 11, 12]]}
+{"src": "loop.changed(item)", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 12], ["Lparen", 12, 13], ["Name", 13, 17], ["Rparen", 17, 18]]}
+{"src": "loop.cycle('<1>', '<2>')", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 10], ["Lparen", 10, 11], ["Str", 11, 16], ["Comma", 16, 17], ["Str", 18, 23], ["Rparen", 23, 24]]}
+{"src": "loop.cycle(*through)", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 10], ["Lparen", 10, 11], ["Mul", 11, 12], ["Name", 12, 19], ["Rparen", 19, 20]]}
+{"src": "loop.depth", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 10]]}
+{"src": "loop.depth0", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 11]]}
+{"src": "loop.first", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 10]]}
+{"src": "loop.index", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 10]]}
+{"src": "loop.index0", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 11]]}
+{"src": "loop.last", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 9]]}
+{"src": "loop.length", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 11]]}
+{"src": "loop.nextitem.a if loop.nextitem is defined else 'x'", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Dot", 13, 14], ["Name", 14, 15], ["Name", 16, 18], ["Name", 19, 23], ["Dot", 23, 24], ["Name", 24, 32], ["Name", 33, 35], ["Name", 36, 43], ["Name", 44, 48], ["Str", 49, 52]]}
+{"src": "loop.nextitem|default('x')", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Pipe", 13, 14], ["Name", 14, 21], ["Lparen", 21, 22], ["Str", 22, 25], ["Rparen", 25, 26]]}
+{"src": "loop.previtem.a if loop.previtem is defined else 'x'", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Dot", 13, 14], ["Name", 14, 15], ["Name", 16, 18], ["Name", 19, 23], ["Dot", 23, 24], ["Name", 24, 32], ["Name", 33, 35], ["Name", 36, 43], ["Name", 44, 48], ["Str", 49, 52]]}
+{"src": "loop.previtem|default('x')", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Pipe", 13, 14], ["Name", 14, 21], ["Lparen", 21, 22], ["Str", 22, 25], ["Rparen", 25, 26]]}
+{"src": "loop.revindex", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13]]}
+{"src": "loop.revindex0", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 14]]}
+{"src": "m('a')", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Str", 2, 5], ["Rparen", 5, 6]]}
+{"src": "m('a', 'b')", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Str", 2, 5], ["Comma", 5, 6], ["Str", 7, 10], ["Rparen", 10, 11]]}
+{"src": "m()", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Rparen", 2, 3]]}
+{"src": "m(1, 2, 3)", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Int", 2, 3], ["Comma", 3, 4], ["Int", 5, 6], ["Comma", 6, 7], ["Int", 8, 9], ["Rparen", 9, 10]]}
+{"src": "m.test()", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 6], ["Lparen", 6, 7], ["Rparen", 7, 8]]}
+{"src": "macro __private()", "toks": [["Name", 0, 5], ["Name", 6, 15], ["Lparen", 15, 16], ["Rparen", 16, 17]]}
+{"src": "macro a()", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "macro bar()", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Lparen", 9, 10], ["Rparen", 10, 11]]}
+{"src": "macro baz()", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Lparen", 9, 10], ["Rparen", 10, 11]]}
+{"src": "macro blub()", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Lparen", 10, 11], ["Rparen", 11, 12]]}
+{"src": "macro detail(icon, value)", "toks": [["Name", 0, 5], ["Name", 6, 12], ["Lparen", 12, 13], ["Name", 13, 17], ["Comma", 17, 18], ["Name", 19, 24], ["Rparen", 24, 25]]}
+{"src": "macro do_something()", "toks": [["Name", 0, 5], ["Name", 6, 18], ["Lparen", 18, 19], ["Rparen", 19, 20]]}
+{"src": "macro dump_users(users)", "toks": [["Name", 0, 5], ["Name", 6, 16], ["Lparen", 16, 17], ["Name", 17, 22], ["Rparen", 22, 23]]}
+{"src": "macro foo(a, b)", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 11], ["Comma", 11, 12], ["Name", 13, 14], ["Rparen", 14, 15]]}
+{"src": "macro foo(x)", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 11], ["Rparen", 11, 12]]}
+{"src": "macro i()", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "macro inner()", "toks": [["Name", 0, 5], ["Name", 6, 11], ["Lparen", 11, 12], ["Rparen", 12, 13]]}
+{"src": "macro item(a)", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 12], ["Rparen", 12, 13]]}
+{"src": "macro level1(data1)", "toks": [["Name", 0, 5], ["Name", 6, 12], ["Lparen", 12, 13], ["Name", 13, 18], ["Rparen", 18, 19]]}
+{"src": "macro level2(data2)", "toks": [["Name", 0, 5], ["Name", 6, 12], ["Lparen", 12, 13], ["Name", 13, 18], ["Rparen", 18, 19]]}
+{"src": "macro link_detail(icon, value, href)", "toks": [["Name", 0, 5], ["Name", 6, 17], ["Lparen", 17, 18], ["Name", 18, 22], ["Comma", 22, 23], ["Name", 24, 29], ["Comma", 29, 30], ["Name", 31, 35], ["Rparen", 35, 36]]}
+{"src": "macro m()", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "macro m(a, b, c='c', d='d')", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 9], ["Comma", 9, 10], ["Name", 11, 12], ["Comma", 12, 13], ["Name", 14, 15], ["Assign", 15, 16], ["Str", 16, 19], ["Comma", 19, 20], ["Name", 21, 22], ["Assign", 22, 23], ["Str", 23, 26], ["Rparen", 26, 27]]}
+{"src": "macro m(a, b=1, c)", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 9], ["Comma", 9, 10], ["Name", 11, 12], ["Assign", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Name", 16, 17], ["Rparen", 17, 18]]}
+{"src": "macro m(a, b=x, x=23)", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 9], ["Comma", 9, 10], ["Name", 11, 12], ["Assign", 12, 13], ["Name", 13, 14], ["Comma", 14, 15], ["Name", 16, 17], ["Assign", 17, 18], ["Int", 18, 20], ["Rparen", 20, 21]]}
+{"src": "macro magic(x)", "toks": [["Name", 0, 5], ["Name", 6, 11], ["Lparen", 11, 12], ["Name", 12, 13], ["Rparen", 13, 14]]}
+{"src": "macro meh(x)", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 11], ["Rparen", 11, 12]]}
+{"src": "macro my_macro()", "toks": [["Name", 0, 5], ["Name", 6, 14], ["Lparen", 14, 15], ["Rparen", 15, 16]]}
+{"src": "macro notthere()", "toks": [["Name", 0, 5], ["Name", 6, 14], ["Lparen", 14, 15], ["Rparen", 15, 16]]}
+{"src": "macro outer()", "toks": [["Name", 0, 5], ["Name", 6, 11], ["Lparen", 11, 12], ["Rparen", 12, 13]]}
+{"src": "macro outer(o)", "toks": [["Name", 0, 5], ["Name", 6, 11], ["Lparen", 11, 12], ["Name", 12, 13], ["Rparen", 13, 14]]}
+{"src": "macro say_hello(name)", "toks": [["Name", 0, 5], ["Name", 6, 15], ["Lparen", 15, 16], ["Name", 16, 20], ["Rparen", 20, 21]]}
+{"src": "macro test()", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Lparen", 10, 11], ["Rparen", 11, 12]]}
+{"src": "macro test(a, b, c=get_int())", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 12], ["Comma", 12, 13], ["Name", 14, 15], ["Comma", 15, 16], ["Name", 17, 18], ["Assign", 18, 19], ["Name", 19, 26], ["Lparen", 26, 27], ["Rparen", 27, 28], ["Rparen", 28, 29]]}
+{"src": "macro test(foo)", "toks": [["Name", 0, 5], ["Name", 6, 10], ["Lparen", 10, 11], ["Name", 11, 14], ["Rparen", 14, 15]]}
+{"src": "macro toplevel()", "toks": [["Name", 0, 5], ["Name", 6, 14], ["Lparen", 14, 15], ["Rparen", 15, 16]]}
+{"src": "macro wrapper()", "toks": [["Name", 0, 5], ["Name", 6, 13], ["Lparen", 13, 14], ["Rparen", 14, 15]]}
+{"src": "macro x()", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "macro x(caller)", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 14], ["Rparen", 14, 15]]}
+{"src": "macro x(caller=none)", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 14], ["Assign", 14, 15], ["Name", 15, 19], ["Rparen", 19, 20]]}
+{"src": "macro x(l)", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Lparen", 7, 8], ["Name", 8, 9], ["Rparen", 9, 10]]}
+{"src": "magic(ns)", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Name", 6, 8], ["Rparen", 8, 9]]}
+{"src": "missing", "toks": [["Name", 0, 7]]}
+{"src": "missing - 1", "toks": [["Name", 0, 7], ["Sub", 8, 9], ["Int", 10, 11]]}
+{"src": "missing is defined", "toks": [["Name", 0, 7], ["Name", 8, 10], ["Name", 11, 18]]}
+{"src": "missing is not defined", "toks": [["Name", 0, 7], ["Name", 8, 10], ["Name", 11, 14], ["Name", 15, 22]]}
+{"src": "missing.attribute", "toks": [["Name", 0, 7], ["Dot", 7, 8], ["Name", 8, 17]]}
+{"src": "missing.bar[\"baz\"]", "toks": [["Name", 0, 7], ["Dot", 7, 8], ["Name", 8, 11], ["Lbracket", 11, 12], ["Str", 12, 17], ["Rbracket", 17, 18]]}
+{"src": "missing|default(\"default\", true)", "toks": [["Name", 0, 7], ["Pipe", 7, 8], ["Name", 8, 15], ["Lparen", 15, 16], ["Str", 16, 25], ["Comma", 25, 26], ["Name", 27, 31], ["Rparen", 31, 32]]}
+{"src": "missing|default('no')", "toks": [["Name", 0, 7], ["Pipe", 7, 8], ["Name", 8, 15], ["Lparen", 15, 16], ["Str", 16, 20], ["Rparen", 20, 21]]}
+{"src": "missing|list", "toks": [["Name", 0, 7], ["Pipe", 7, 8], ["Name", 8, 12]]}
+{"src": "mod", "toks": [["Name", 0, 3]]}
+{"src": "mode | default('native') == 'native'", "toks": [["Name", 0, 4], ["Pipe", 5, 6], ["Name", 7, 14], ["Lparen", 14, 15], ["Str", 15, 23], ["Rparen", 23, 24], ["Eq", 25, 27], ["Str", 28, 36]]}
+{"src": "muh(item) + meh(seq)", "toks": [["Name", 0, 3], ["Lparen", 3, 4], ["Name", 4, 8], ["Rparen", 8, 9], ["Add", 10, 11], ["Name", 12, 15], ["Lparen", 15, 16], ["Name", 16, 19], ["Rparen", 19, 20]]}
+{"src": "my_macro()", "toks": [["Name", 0, 8], ["Lparen", 8, 9], ["Rparen", 9, 10]]}
+{"src": "myport", "toks": [["Name", 0, 6]]}
+{"src": "name", "toks": [["Name", 0, 4]]}
+{"src": "network_mtu", "toks": [["Name", 0, 11]]}
+{"src": "network_ready", "toks": [["Name", 0, 13]]}
+{"src": "network_ready | default(false)", "toks": [["Name", 0, 13], ["Pipe", 14, 15], ["Name", 16, 23], ["Lparen", 23, 24], ["Name", 24, 29], ["Rparen", 29, 30]]}
+{"src": "ngettext(\"%(num)s apple\", \"%(num)s apples\", apples)", "toks": [["Name", 0, 8], ["Lparen", 8, 9], ["Str", 9, 24], ["Comma", 24, 25], ["Str", 26, 42], ["Comma", 42, 43], ["Name", 44, 50], ["Rparen", 50, 51]]}
+{"src": "nginx_state.stdout", "toks": [["Name", 0, 11], ["Dot", 11, 12], ["Name", 12, 18]]}
+{"src": "no such element: int object['missing']", "toks": [["Name", 0, 2], ["Name", 3, 7], ["Name", 8, 15], ["Colon", 15, 16], ["Name", 17, 20], ["Name", 21, 27], ["Lbracket", 27, 28], ["Str", 28, 37], ["Rbracket", 37, 38]]}
+{"src": "none", "toks": [["Name", 0, 4]]}
+{"src": "none is defined", "toks": [["Name", 0, 4], ["Name", 5, 7], ["Name", 8, 15]]}
+{"src": "none|map(\"upper\")|list", "toks": [["Name", 0, 4], ["Pipe", 4, 5], ["Name", 5, 8], ["Lparen", 8, 9], ["Str", 9, 16], ["Rparen", 16, 17], ["Pipe", 17, 18], ["Name", 18, 22]]}
+{"src": "not (skip_x | default(false) | bool)", "toks": [["Name", 0, 3], ["Lparen", 4, 5], ["Name", 5, 11], ["Pipe", 12, 13], ["Name", 14, 21], ["Lparen", 21, 22], ["Name", 22, 27], ["Rparen", 27, 28], ["Pipe", 29, 30], ["Name", 31, 35], ["Rparen", 35, 36]]}
+{"src": "not 42 in bar", "toks": [["Name", 0, 3], ["Int", 4, 6], ["Name", 7, 9], ["Name", 10, 13]]}
+{"src": "not false", "toks": [["Name", 0, 3], ["Name", 4, 9]]}
+{"src": "not missing", "toks": [["Name", 0, 3], ["Name", 4, 11]]}
+{"src": "not_in_any_inventory", "toks": [["Name", 0, 20]]}
+{"src": "nothing()", "toks": [["Name", 0, 7], ["Lparen", 7, 8], ["Rparen", 8, 9]]}
+{"src": "npgettext(\"babel\", \"%(users)s user\", \"%(users)s users\", users)", "toks": [["Name", 0, 9], ["Lparen", 9, 10], ["Str", 10, 17], ["Comma", 17, 18], ["Str", 19, 35], ["Comma", 35, 36], ["Str", 37, 54], ["Comma", 54, 55], ["Name", 56, 61], ["Rparen", 61, 62]]}
+{"err_at": 53, "src": "npgettext(\"fruit\", \"%(num)s apple\", \"%(num)s apples\",'\n    \" apples)"}
+{"src": "ns | run(not_here)", "toks": [["Name", 0, 2], ["Pipe", 3, 4], ["Name", 5, 8], ["Lparen", 8, 9], ["Name", 9, 17], ["Rparen", 17, 18]]}
+{"src": "ns.a", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 4]]}
+{"src": "ns.b", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 4]]}
+{"src": "ns.bar", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 6]]}
+{"src": "ns.foo", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 6]]}
+{"src": "ns.found", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 8]]}
+{"src": "ns.self", "toks": [["Name", 0, 2], ["Dot", 2, 3], ["Name", 3, 7]]}
+{"src": "ntp_server", "toks": [["Name", 0, 10]]}
+{"src": "num", "toks": [["Name", 0, 3]]}
+{"src": "o", "toks": [["Name", 0, 1]]}
+{"src": "obj|string", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 10]]}
+{"src": "outer(\"FOO\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Str", 6, 11], ["Rparen", 11, 12]]}
+{"src": "outer()", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7]]}
+{"src": "output", "toks": [["Name", 0, 6]]}
+{"src": "overlay", "toks": [["Name", 0, 7]]}
+{"src": "p.bar", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 5]]}
+{"src": "page.url", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 8]]}
+{"src": "page_title|default(_(\"missing\"))", "toks": [["Name", 0, 10], ["Pipe", 10, 11], ["Name", 11, 18], ["Lparen", 18, 19], ["Name", 19, 20], ["Lparen", 20, 21], ["Str", 21, 30], ["Rparen", 30, 31], ["Rparen", 31, 32]]}
+{"src": "pgettext(\"babel\", \"Hello World\")", "toks": [["Name", 0, 8], ["Lparen", 8, 9], ["Str", 9, 16], ["Comma", 16, 17], ["Str", 18, 31], ["Rparen", 31, 32]]}
+{"src": "pgettext(\"fruit\", \"Apple\")", "toks": [["Name", 0, 8], ["Lparen", 8, 9], ["Str", 9, 16], ["Comma", 16, 17], ["Str", 18, 25], ["Rparen", 25, 26]]}
+{"src": "play_scoped", "toks": [["Name", 0, 11]]}
+{"src": "playbook_dir", "toks": [["Name", 0, 12]]}
+{"src": "pluralize", "toks": [["Name", 0, 9]]}
+{"src": "pluralize bar", "toks": [["Name", 0, 9], ["Name", 10, 13]]}
+{"src": "pod_label", "toks": [["Name", 0, 9]]}
+{"src": "pod_namespace", "toks": [["Name", 0, 13]]}
+{"src": "port_count", "toks": [["Name", 0, 10]]}
+{"src": "protocol", "toks": [["Name", 0, 8]]}
+{"src": "provisioner_user", "toks": [["Name", 0, 16]]}
+{"src": "r.results[0].stdout", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 9], ["Lbracket", 9, 10], ["Int", 10, 11], ["Rbracket", 11, 12], ["Dot", 12, 13], ["Name", 13, 19]]}
+{"src": "r.stdout | length > 0", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 8], ["Pipe", 9, 10], ["Name", 11, 17], ["Gt", 18, 19], ["Int", 20, 21]]}
+{"src": "raw", "toks": [["Name", 0, 3]]}
+{"src": "raw +", "toks": [["Name", 0, 3], ["Add", 4, 5]]}
+{"src": "region", "toks": [["Name", 0, 6]]}
+{"src": "result_name", "toks": [["Name", 0, 11]]}
+{"src": "retries_left", "toks": [["Name", 0, 12]]}
+{"src": "role_path", "toks": [["Name", 0, 9]]}
+{"src": "rowloop.index", "toks": [["Name", 0, 7], ["Dot", 7, 8], ["Name", 8, 13]]}
+{"src": "say_hello(\"<blink>foo</blink>\")", "toks": [["Name", 0, 9], ["Lparen", 9, 10], ["Str", 10, 30], ["Rparen", 30, 31]]}
+{"src": "say_hello('Peter')", "toks": [["Name", 0, 9], ["Lparen", 9, 10], ["Str", 10, 17], ["Rparen", 17, 18]]}
+{"src": "scope a=1, b=2, c=b, d=e, e=5", "toks": [["Name", 0, 5], ["Name", 6, 7], ["Assign", 7, 8], ["Int", 8, 9], ["Comma", 9, 10], ["Name", 11, 12], ["Assign", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Name", 16, 17], ["Assign", 17, 18], ["Name", 18, 19], ["Comma", 19, 20], ["Name", 21, 22], ["Assign", 22, 23], ["Name", 23, 24], ["Comma", 24, 25], ["Name", 26, 27], ["Assign", 27, 28], ["Int", 28, 29]]}
+{"src": "self.b()", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 6], ["Lparen", 6, 7], ["Rparen", 7, 8]]}
+{"src": "self.foo()", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 8], ["Lparen", 8, 9], ["Rparen", 9, 10]]}
+{"src": "self.x()", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 6], ["Lparen", 6, 7], ["Rparen", 7, 8]]}
+{"src": "service_port", "toks": [["Name", 0, 12]]}
+{"src": "set\n                ns = namespace(run=\"{0.__call__.__builtins__[__import__]}\".format)", "toks": [["Name", 0, 3], ["Name", 20, 22], ["Assign", 23, 24], ["Name", 25, 34], ["Lparen", 34, 35], ["Name", 35, 38], ["Assign", 38, 39], ["Str", 39, 78], ["Dot", 78, 79], ["Name", 79, 85], ["Rparen", 85, 86]]}
+{"src": "set a = \" xxx \"", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Str", 8, 15]]}
+{"src": "set a = 1", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set a = 2", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set a = 3", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set a = 42", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 10]]}
+{"src": "set b = \" yy \"", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Str", 8, 14]]}
+{"src": "set caller = 42", "toks": [["Name", 0, 3], ["Name", 4, 10], ["Assign", 11, 12], ["Int", 13, 15]]}
+{"src": "set foo", "toks": [["Name", 0, 3], ["Name", 4, 7]]}
+{"src": "set foo = \"foo\"", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Str", 10, 15]]}
+{"src": "set foo = 'bar'", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Str", 10, 15]]}
+{"src": "set foo = 0", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Int", 10, 11]]}
+{"src": "set foo = 1", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Int", 10, 11]]}
+{"src": "set foo = 41", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Int", 10, 12]]}
+{"src": "set foo = 42", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Int", 10, 12]]}
+{"src": "set foo = foo", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Name", 10, 13]]}
+{"src": "set foo | myfilter(a) | trim | length | string", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Pipe", 8, 9], ["Name", 10, 18], ["Lparen", 18, 19], ["Name", 19, 20], ["Rparen", 20, 21], ["Pipe", 22, 23], ["Name", 24, 28], ["Pipe", 29, 30], ["Name", 31, 37], ["Pipe", 38, 39], ["Name", 40, 46]]}
+{"src": "set foo | trim", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Pipe", 8, 9], ["Name", 10, 14]]}
+{"src": "set foo | trim | length | string", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Pipe", 8, 9], ["Name", 10, 14], ["Pipe", 15, 16], ["Name", 17, 23], ["Pipe", 24, 25], ["Name", 26, 32]]}
+{"src": "set foo.bar = 1", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Dot", 7, 8], ["Name", 8, 11], ["Assign", 12, 13], ["Int", 14, 15]]}
+{"src": "set foo['bar'] = 1", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Lbracket", 7, 8], ["Str", 8, 13], ["Rbracket", 13, 14], ["Assign", 15, 16], ["Int", 17, 18]]}
+{"src": "set foobar = 42", "toks": [["Name", 0, 3], ["Name", 4, 10], ["Assign", 11, 12], ["Int", 13, 15]]}
+{"src": "set hello = 1", "toks": [["Name", 0, 3], ["Name", 4, 9], ["Assign", 10, 11], ["Int", 12, 13]]}
+{"src": "set i = 1", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set i = 24", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 10]]}
+{"src": "set i = 42", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 10]]}
+{"src": "set i = idx", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Name", 8, 11]]}
+{"src": "set i = loop.index0", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Name", 8, 12], ["Dot", 12, 13], ["Name", 13, 19]]}
+{"src": "set item = 42", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Assign", 9, 10], ["Int", 11, 13]]}
+{"src": "set items = []", "toks": [["Name", 0, 3], ["Name", 4, 9], ["Assign", 10, 11], ["Lbracket", 12, 13], ["Rbracket", 13, 14]]}
+{"src": "set j = loop.index", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Name", 8, 12], ["Dot", 12, 13], ["Name", 13, 18]]}
+{"src": "set n=[1,2,3,4,5]", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 5, 6], ["Lbracket", 6, 7], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 9, 10], ["Comma", 10, 11], ["Int", 11, 12], ["Comma", 12, 13], ["Int", 13, 14], ["Comma", 14, 15], ["Int", 15, 16], ["Rbracket", 16, 17]]}
+{"src": "set ns = namespace()", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Assign", 7, 8], ["Name", 9, 18], ["Lparen", 18, 19], ["Rparen", 19, 20]]}
+{"src": "set ns = namespace(a=12, b=36)", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Assign", 7, 8], ["Name", 9, 18], ["Lparen", 18, 19], ["Name", 19, 20], ["Assign", 20, 21], ["Int", 21, 23], ["Comma", 23, 24], ["Name", 25, 26], ["Assign", 26, 27], ["Int", 27, 29], ["Rparen", 29, 30]]}
+{"src": "set ns = namespace(d, self=37)", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Assign", 7, 8], ["Name", 9, 18], ["Lparen", 18, 19], ["Name", 19, 20], ["Comma", 20, 21], ["Name", 22, 26], ["Assign", 26, 27], ["Int", 27, 29], ["Rparen", 29, 30]]}
+{"src": "set ns = namespace(foo=\"Bar\")", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Assign", 7, 8], ["Name", 9, 18], ["Lparen", 18, 19], ["Name", 19, 22], ["Assign", 22, 23], ["Str", 23, 28], ["Rparen", 28, 29]]}
+{"src": "set ns = namespace(found=false)", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Assign", 7, 8], ["Name", 9, 18], ["Lparen", 18, 19], ["Name", 19, 24], ["Assign", 24, 25], ["Name", 25, 30], ["Rparen", 30, 31]]}
+{"src": "set ns.a = 13", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 8], ["Assign", 9, 10], ["Int", 11, 13]]}
+{"src": "set ns.a, ns.b = ns.a + 1, ns.b + 1", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 8], ["Comma", 8, 9], ["Name", 10, 12], ["Dot", 12, 13], ["Name", 13, 14], ["Assign", 15, 16], ["Name", 17, 19], ["Dot", 19, 20], ["Name", 20, 21], ["Add", 22, 23], ["Int", 24, 25], ["Comma", 25, 26], ["Name", 27, 29], ["Dot", 29, 30], ["Name", 30, 31], ["Add", 32, 33], ["Int", 34, 35]]}
+{"src": "set ns.b = 42", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 8], ["Assign", 9, 10], ["Int", 11, 13]]}
+{"src": "set ns.bar", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 10]]}
+{"src": "set ns.bar = '42'", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 10], ["Assign", 11, 12], ["Str", 13, 17]]}
+{"src": "set ns.bar = 'hi'", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 10], ["Assign", 11, 12], ["Str", 13, 17]]}
+{"src": "set ns.found = true", "toks": [["Name", 0, 3], ["Name", 4, 6], ["Dot", 6, 7], ["Name", 7, 12], ["Assign", 13, 14], ["Name", 15, 19]]}
+{"src": "set output", "toks": [["Name", 0, 3], ["Name", 4, 10]]}
+{"src": "set rowloop = loop", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Assign", 12, 13], ["Name", 14, 18]]}
+{"src": "set test_var=\"test_content\"", "toks": [["Name", 0, 3], ["Name", 4, 12], ["Assign", 12, 13], ["Str", 13, 27]]}
+{"src": "set true = 42", "toks": [["Name", 0, 3], ["Name", 4, 8], ["Assign", 9, 10], ["Int", 11, 13]]}
+{"src": "set var = 42", "toks": [["Name", 0, 3], ["Name", 4, 7], ["Assign", 8, 9], ["Int", 10, 12]]}
+{"src": "set variable = 42", "toks": [["Name", 0, 3], ["Name", 4, 12], ["Assign", 13, 14], ["Int", 15, 17]]}
+{"src": "set wrapper = \"<FOO>\"", "toks": [["Name", 0, 3], ["Name", 4, 11], ["Assign", 12, 13], ["Str", 14, 21]]}
+{"src": "set x", "toks": [["Name", 0, 3], ["Name", 4, 5]]}
+{"err_at": 8, "src": "set x = \" {% str"}
+{"src": "set x = \"<x>\"", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Str", 8, 13]]}
+{"src": "set x = 1", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set x = 2", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set x = 42", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 10]]}
+{"src": "set x = 9", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 9]]}
+{"src": "set x = item", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Name", 8, 12]]}
+{"src": "set x.b = 37", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Dot", 5, 6], ["Name", 6, 7], ["Assign", 8, 9], ["Int", 10, 12]]}
+{"src": "set z = 99", "toks": [["Name", 0, 3], ["Name", 4, 5], ["Assign", 6, 7], ["Int", 8, 10]]}
+{"src": "shared_endpoint", "toks": [["Name", 0, 15]]}
+{"src": "shared_timeout", "toks": [["Name", 0, 14]]}
+{"src": "skip_demo == false", "toks": [["Name", 0, 9], ["Eq", 10, 12], ["Name", 13, 18]]}
+{"src": "smalldata|truncate(15)", "toks": [["Name", 0, 9], ["Pipe", 9, 10], ["Name", 10, 18], ["Lparen", 18, 19], ["Int", 19, 21], ["Rparen", 21, 22]]}
+{"src": "str", "toks": [["Name", 0, 3]]}
+{"src": "string|replace(\"<\", 42)", "toks": [["Name", 0, 6], ["Pipe", 6, 7], ["Name", 7, 14], ["Lparen", 14, 15], ["Str", 15, 18], ["Comma", 18, 19], ["Int", 20, 22], ["Rparen", 22, 23]]}
+{"src": "string|replace(\"o\", \">x<\")", "toks": [["Name", 0, 6], ["Pipe", 6, 7], ["Name", 7, 14], ["Lparen", 14, 15], ["Str", 15, 18], ["Comma", 18, 19], ["Str", 20, 25], ["Rparen", 25, 26]]}
+{"src": "string|replace(\"o\", 42)", "toks": [["Name", 0, 6], ["Pipe", 6, 7], ["Name", 7, 14], ["Lparen", 14, 15], ["Str", 15, 18], ["Comma", 18, 19], ["Int", 20, 22], ["Rparen", 22, 23]]}
+{"src": "super()", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7]]}
+{"src": "s|wordcount", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 11]]}
+{"src": "s|wordwrap(20)", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 10], ["Lparen", 10, 11], ["Int", 11, 13], ["Rparen", 13, 14]]}
+{"src": "target", "toks": [["Name", 0, 6]]}
+{"src": "test", "toks": [["Name", 0, 4]]}
+{"src": "test(\"foo\")", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Str", 5, 10], ["Rparen", 10, 11]]}
+{"src": "test()", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Rparen", 5, 6]]}
+{"src": "test().missingattribute", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Rparen", 5, 6], ["Dot", 6, 7], ["Name", 7, 23]]}
+{"src": "test(1, 2)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Int", 5, 6], ["Comma", 6, 7], ["Int", 8, 9], ["Rparen", 9, 10]]}
+{"src": "test(1, 2, 3)", "toks": [["Name", 0, 4], ["Lparen", 4, 5], ["Int", 5, 6], ["Comma", 6, 7], ["Int", 8, 9], ["Comma", 9, 10], ["Int", 11, 12], ["Rparen", 12, 13]]}
+{"src": "the_foo + x", "toks": [["Name", 0, 7], ["Add", 8, 9], ["Name", 10, 11]]}
+{"src": "topic", "toks": [["Name", 0, 5]]}
+{"src": "trans", "toks": [["Name", 0, 5]]}
+{"src": "trans 'fruit' num=apples", "toks": [["Name", 0, 5], ["Str", 6, 13], ["Name", 14, 17], ["Assign", 17, 18], ["Name", 18, 24]]}
+{"src": "trans count=num", "toks": [["Name", 0, 5], ["Name", 6, 11], ["Assign", 11, 12], ["Name", 12, 15]]}
+{"src": "trans foo", "toks": [["Name", 0, 5], ["Name", 6, 9]]}
+{"src": "trans foo=\"42\"", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Assign", 9, 10], ["Str", 10, 14]]}
+{"src": "trans foo=42, count=2", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Assign", 9, 10], ["Int", 10, 12], ["Comma", 12, 13], ["Name", 14, 19], ["Assign", 19, 20], ["Int", 20, 21]]}
+{"src": "trans notrimmed", "toks": [["Name", 0, 5], ["Name", 6, 15]]}
+{"src": "trans num=3", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Assign", 9, 10], ["Int", 10, 11]]}
+{"src": "trans num=apples", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Assign", 9, 10], ["Name", 10, 16]]}
+{"src": "trans num=count", "toks": [["Name", 0, 5], ["Name", 6, 9], ["Assign", 9, 10], ["Name", 10, 15]]}
+{"src": "trans trimmed", "toks": [["Name", 0, 5], ["Name", 6, 13]]}
+{"src": "trans trimmed = 'world'", "toks": [["Name", 0, 5], ["Name", 6, 13], ["Assign", 14, 15], ["Str", 16, 23]]}
+{"src": "trans trimmed x=\"world\"", "toks": [["Name", 0, 5], ["Name", 6, 13], ["Name", 14, 15], ["Assign", 15, 16], ["Str", 16, 23]]}
+{"src": "trans user_count", "toks": [["Name", 0, 5], ["Name", 6, 16]]}
+{"src": "trans user_count=get_user_count()", "toks": [["Name", 0, 5], ["Name", 6, 16], ["Assign", 16, 17], ["Name", 17, 31], ["Lparen", 31, 32], ["Rparen", 32, 33]]}
+{"src": "trimmed", "toks": [["Name", 0, 7]]}
+{"src": "true", "toks": [["Name", 0, 4]]}
+{"src": "true and false", "toks": [["Name", 0, 4], ["Name", 5, 8], ["Name", 9, 14]]}
+{"src": "true is defined", "toks": [["Name", 0, 4], ["Name", 5, 7], ["Name", 8, 15]]}
+{"src": "true.__class__", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 14]]}
+{"src": "true.__class__|string", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 14], ["Pipe", 14, 15], ["Name", 15, 21]]}
+{"src": "unknown_tag", "toks": [["Name", 0, 11]]}
+{"src": "user", "toks": [["Name", 0, 4]]}
+{"src": "user.description", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 16]]}
+{"src": "user.realname|e", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Pipe", 13, 14], ["Name", 14, 15]]}
+{"src": "user.username|e", "toks": [["Name", 0, 4], ["Dot", 4, 5], ["Name", 5, 13], ["Pipe", 13, 14], ["Name", 14, 15]]}
+{"src": "user_count", "toks": [["Name", 0, 10]]}
+{"src": "users", "toks": [["Name", 0, 5]]}
+{"src": "users()|join(', ', 'username')", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 12], ["Lparen", 12, 13], ["Str", 13, 17], ["Comma", 17, 18], ["Str", 19, 29], ["Rparen", 29, 30]]}
+{"src": "users()|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 11], ["Lparen", 11, 12], ["Name", 12, 21], ["Assign", 21, 22], ["Str", 22, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 34], ["Lparen", 34, 35], ["Str", 35, 38], ["Rparen", 38, 39]]}
+{"src": "users()|selectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Lparen", 5, 6], ["Rparen", 6, 7], ["Pipe", 7, 8], ["Name", 8, 18], ["Lparen", 18, 19], ["Str", 19, 30], ["Rparen", 30, 31], ["Pipe", 31, 32], ["Name", 32, 35], ["Lparen", 35, 36], ["Name", 36, 45], ["Assign", 45, 46], ["Str", 46, 52], ["Rparen", 52, 53], ["Pipe", 53, 54], ["Name", 54, 58], ["Lparen", 58, 59], ["Str", 59, 62], ["Rparen", 62, 63]]}
+{"src": "users|join(', ', 'username')", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 10], ["Lparen", 10, 11], ["Str", 11, 15], ["Comma", 15, 16], ["Str", 17, 27], ["Rparen", 27, 28]]}
+{"src": "users|map(attribute=\"lastname\", default=\"\")|join(\", \")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 19], ["Assign", 19, 20], ["Str", 20, 30], ["Comma", 30, 31], ["Name", 32, 39], ["Assign", 39, 40], ["Str", 40, 42], ["Rparen", 42, 43], ["Pipe", 43, 44], ["Name", 44, 48], ["Lparen", 48, 49], ["Str", 49, 53], ["Rparen", 53, 54]]}
+{"src": "users|map(attribute=\"lastname\", default=\"smith\")|join(\", \")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 19], ["Assign", 19, 20], ["Str", 20, 30], ["Comma", 30, 31], ["Name", 32, 39], ["Assign", 39, 40], ["Str", 40, 47], ["Rparen", 47, 48], ["Pipe", 48, 49], ["Name", 49, 53], ["Lparen", 53, 54], ["Str", 54, 58], ["Rparen", 58, 59]]}
+{"src": "users|map(attribute=\"lastname\", default=[\"smith\",\"x\"])|join(\", \")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 19], ["Assign", 19, 20], ["Str", 20, 30], ["Comma", 30, 31], ["Name", 32, 39], ["Assign", 39, 40], ["Lbracket", 40, 41], ["Str", 41, 48], ["Comma", 48, 49], ["Str", 49, 52], ["Rbracket", 52, 53], ["Rparen", 53, 54], ["Pipe", 54, 55], ["Name", 55, 59], ["Lparen", 59, 60], ["Str", 60, 64], ["Rparen", 64, 65]]}
+{"src": "users|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 19], ["Assign", 19, 20], ["Str", 20, 26], ["Rparen", 26, 27], ["Pipe", 27, 28], ["Name", 28, 32], ["Lparen", 32, 33], ["Str", 33, 36], ["Rparen", 36, 37]]}
+{"src": "users|rejectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 16], ["Lparen", 16, 17], ["Str", 17, 21], ["Comma", 21, 22], ["Str", 23, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 33], ["Lparen", 33, 34], ["Name", 34, 43], ["Assign", 43, 44], ["Str", 44, 50], ["Rparen", 50, 51], ["Pipe", 51, 52], ["Name", 52, 56], ["Lparen", 56, 57], ["Str", 57, 60], ["Rparen", 60, 61]]}
+{"src": "users|rejectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 16], ["Lparen", 16, 17], ["Str", 17, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 33], ["Lparen", 33, 34], ["Name", 34, 43], ["Assign", 43, 44], ["Str", 44, 50], ["Rparen", 50, 51], ["Pipe", 51, 52], ["Name", 52, 56], ["Lparen", 56, 57], ["Str", 57, 60], ["Rparen", 60, 61]]}
+{"src": "users|selectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 16], ["Lparen", 16, 17], ["Str", 17, 21], ["Comma", 21, 22], ["Str", 23, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 33], ["Lparen", 33, 34], ["Name", 34, 43], ["Assign", 43, 44], ["Str", 44, 50], ["Rparen", 50, 51], ["Pipe", 51, 52], ["Name", 52, 56], ["Lparen", 56, 57], ["Str", 57, 60], ["Rparen", 60, 61]]}
+{"src": "users|selectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\")", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 16], ["Lparen", 16, 17], ["Str", 17, 28], ["Rparen", 28, 29], ["Pipe", 29, 30], ["Name", 30, 33], ["Lparen", 33, 34], ["Name", 34, 43], ["Assign", 43, 44], ["Str", 44, 50], ["Rparen", 50, 51], ["Pipe", 51, 52], ["Name", 52, 56], ["Lparen", 56, 57], ["Str", 57, 60], ["Rparen", 60, 61]]}
+{"src": "v", "toks": [["Name", 0, 1]]}
+{"src": "value", "toks": [["Name", 0, 5]]}
+{"src": "values.items()|sum('1')", "toks": [["Name", 0, 6], ["Dot", 6, 7], ["Name", 7, 12], ["Lparen", 12, 13], ["Rparen", 13, 14], ["Pipe", 14, 15], ["Name", 15, 18], ["Lparen", 18, 19], ["Str", 19, 22], ["Rparen", 22, 23]]}
+{"src": "values|sum('real.value')", "toks": [["Name", 0, 6], ["Pipe", 6, 7], ["Name", 7, 10], ["Lparen", 10, 11], ["Str", 11, 23], ["Rparen", 23, 24]]}
+{"src": "values|sum('value')", "toks": [["Name", 0, 6], ["Pipe", 6, 7], ["Name", 7, 10], ["Lparen", 10, 11], ["Str", 11, 18], ["Rparen", 18, 19]]}
+{"src": "value|float", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 11]]}
+{"src": "value|float(default=1.0)", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 11], ["Lparen", 11, 12], ["Name", 12, 19], ["Assign", 19, 20], ["Float", 20, 23], ["Rparen", 23, 24]]}
+{"src": "value|int", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9]]}
+{"src": "value|int(base=base)", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 14], ["Assign", 14, 15], ["Name", 15, 19], ["Rparen", 19, 20]]}
+{"src": "value|int(default=1)", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 9], ["Lparen", 9, 10], ["Name", 10, 17], ["Assign", 17, 18], ["Int", 18, 19], ["Rparen", 19, 20]]}
+{"src": "value|urlencode", "toks": [["Name", 0, 5], ["Pipe", 5, 6], ["Name", 6, 15]]}
+{"src": "var", "toks": [["Name", 0, 3]]}
+{"src": "var[42].foo", "toks": [["Name", 0, 3], ["Lbracket", 3, 4], ["Int", 4, 6], ["Rbracket", 6, 7], ["Dot", 7, 8], ["Name", 8, 11]]}
+{"src": "varargs", "toks": [["Name", 0, 7]]}
+{"src": "varargs|join('|')", "toks": [["Name", 0, 7], ["Pipe", 7, 8], ["Name", 8, 12], ["Lparen", 12, 13], ["Str", 13, 16], ["Rparen", 16, 17]]}
+{"src": "variable", "toks": [["Name", 0, 8]]}
+{"src": "var|f", "toks": [["Name", 0, 3], ["Pipe", 3, 4], ["Name", 4, 5]]}
+{"src": "vs|join(', ', attribute='v')", "toks": [["Name", 0, 2], ["Pipe", 2, 3], ["Name", 3, 7], ["Lparen", 7, 8], ["Str", 8, 12], ["Comma", 12, 13], ["Name", 14, 23], ["Assign", 23, 24], ["Str", 24, 27], ["Rparen", 27, 28]]}
+{"src": "which", "toks": [["Name", 0, 5]]}
+{"src": "wibble bar", "toks": [["Name", 0, 6], ["Name", 7, 10]]}
+{"src": "with a=1, b=2, c=b, d=e, e=5", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Assign", 6, 7], ["Int", 7, 8], ["Comma", 8, 9], ["Name", 10, 11], ["Assign", 11, 12], ["Int", 12, 13], ["Comma", 13, 14], ["Name", 15, 16], ["Assign", 16, 17], ["Name", 17, 18], ["Comma", 18, 19], ["Name", 20, 21], ["Assign", 21, 22], ["Name", 22, 23], ["Comma", 23, 24], ["Name", 25, 26], ["Assign", 26, 27], ["Int", 27, 28]]}
+{"src": "with a=42, b=23", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Assign", 6, 7], ["Int", 7, 9], ["Comma", 9, 10], ["Name", 11, 12], ["Assign", 12, 13], ["Int", 13, 15]]}
+{"src": "with x = 2", "toks": [["Name", 0, 4], ["Name", 5, 6], ["Assign", 7, 8], ["Int", 9, 10]]}
+{"src": "x", "toks": [["Name", 0, 1]]}
+{"src": "x is escaped", "toks": [["Name", 0, 1], ["Name", 2, 4], ["Name", 5, 12]]}
+{"src": "x is f", "toks": [["Name", 0, 1], ["Name", 2, 4], ["Name", 5, 6]]}
+{"src": "x is not defined", "toks": [["Name", 0, 1], ["Name", 2, 4], ["Name", 5, 8], ["Name", 9, 16]]}
+{"src": "x()", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Rparen", 2, 3]]}
+{"src": "x(l)", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Name", 2, 3], ["Rparen", 3, 4]]}
+{"src": "x(n)", "toks": [["Name", 0, 1], ["Lparen", 1, 2], ["Name", 2, 3], ["Rparen", 3, 4]]}
+{"src": "x.1", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Int", 2, 3]]}
+{"src": "x.__class__", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 11]]}
+{"src": "x.bar", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 5]]}
+{"src": "x.foo", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 5]]}
+{"src": "x.title", "toks": [["Name", 0, 1], ["Dot", 1, 2], ["Name", 2, 7]]}
+{"src": "xs | map(attribute='x') | list", "toks": [["Name", 0, 2], ["Pipe", 3, 4], ["Name", 5, 8], ["Lparen", 8, 9], ["Name", 9, 18], ["Assign", 18, 19], ["Str", 19, 22], ["Rparen", 22, 23], ["Pipe", 24, 25], ["Name", 26, 30]]}
+{"src": "xs[1:2:-1]", "toks": [["Name", 0, 2], ["Lbracket", 2, 3], ["Int", 3, 4], ["Colon", 4, 5], ["Int", 5, 6], ["Colon", 6, 7], ["Sub", 7, 8], ["Int", 8, 9], ["Rbracket", 9, 10]]}
+{"src": "x|f", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 3]]}
+{"src": "x|f if x is defined else 'foo'", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 3], ["Name", 4, 6], ["Name", 7, 8], ["Name", 9, 11], ["Name", 12, 19], ["Name", 20, 24], ["Str", 25, 30]]}
+{"src": "x|forceescape", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 13]]}
+{"src": "x|tojson", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 8]]}
+{"src": "y", "toks": [["Name", 0, 1]]}
+{"src": "y is escaped", "toks": [["Name", 0, 1], ["Name", 2, 4], ["Name", 5, 12]]}
+{"src": "year", "toks": [["Name", 0, 4]]}
+{"src": "y|f", "toks": [["Name", 0, 1], ["Pipe", 1, 2], ["Name", 2, 3]]}
+{"src": "z", "toks": [["Name", 0, 1]]}
+{"err_at": 17, "src": "{\"foo\": \"<test>\"}'\n            \"|xmlattr|escape"}
+{"src": "{\"foo\": \"<test>\"}|xmlattr|escape", "toks": [["Lbrace", 0, 1], ["Str", 1, 6], ["Colon", 6, 7], ["Str", 8, 16], ["Rbrace", 16, 17], ["Pipe", 17, 18], ["Name", 18, 25], ["Pipe", 25, 26], ["Name", 26, 32]]}
+{"src": "{%", "toks": [["Lbrace", 0, 1], ["Mod", 1, 2]]}
+{"src": "{'foo': 42, 'bar': 23, 'fish': none, \"\n            \"'spam': missing, 'blub:blub': '<?>'}|xmlattr", "toks": [["Lbrace", 0, 1], ["Str", 1, 6], ["Colon", 6, 7], ["Int", 8, 10], ["Comma", 10, 11], ["Str", 12, 17], ["Colon", 17, 18], ["Int", 19, 21], ["Comma", 21, 22], ["Str", 23, 29], ["Colon", 29, 30], ["Name", 31, 35], ["Comma", 35, 36], ["Str", 37, 52], ["Str", 52, 58], ["Colon", 58, 59], ["Name", 60, 67], ["Comma", 67, 68], ["Str", 69, 80], ["Colon", 80, 81], ["Str", 82, 87], ["Rbrace", 87, 88], ["Pipe", 88, 89], ["Name", 89, 96]]}
+{"src": "{'foo':'bar'}.foo", "toks": [["Lbrace", 0, 1], ["Str", 1, 6], ["Colon", 6, 7], ["Str", 7, 12], ["Rbrace", 12, 13], ["Dot", 13, 14], ["Name", 14, 17]]}
+{"src": "{'k': [1, 2]}", "toks": [["Lbrace", 0, 1], ["Str", 1, 4], ["Colon", 4, 5], ["Lbracket", 6, 7], ["Int", 7, 8], ["Comma", 8, 9], ["Int", 10, 11], ["Rbracket", 11, 12], ["Rbrace", 12, 13]]}
+{"src": "{1: 2,}", "toks": [["Lbrace", 0, 1], ["Int", 1, 2], ["Colon", 2, 3], ["Int", 4, 5], ["Comma", 5, 6], ["Rbrace", 6, 7]]}
+{"src": "{1:2}.clear()", "toks": [["Lbrace", 0, 1], ["Int", 1, 2], ["Colon", 2, 3], ["Int", 3, 4], ["Rbrace", 4, 5], ["Dot", 5, 6], ["Name", 6, 11], ["Lparen", 11, 12], ["Rparen", 12, 13]]}
+{"src": "{key: 'my_class'}|xmlattr", "toks": [["Lbrace", 0, 1], ["Name", 1, 4], ["Colon", 4, 5], ["Str", 6, 16], ["Rbrace", 16, 17], ["Pipe", 17, 18], ["Name", 18, 25]]}
+{"src": "{{ 2 is {op}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Int", 3, 4], ["Name", 5, 7], ["Lbrace", 8, 9], ["Name", 9, 11], ["Rbrace", 11, 12]]}
+{"src": "{{ foo({sig})", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Name", 3, 6], ["Lparen", 6, 7], ["Lbrace", 7, 8], ["Name", 8, 11], ["Rbrace", 11, 12], ["Rparen", 12, 13]]}
+{"src": "{{ foo|dictsort({args})", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Name", 3, 6], ["Pipe", 6, 7], ["Name", 7, 15], ["Lparen", 15, 16], ["Lbrace", 16, 17], ["Name", 17, 21], ["Rbrace", 21, 22], ["Rparen", 22, 23]]}
+{"src": "{{ undefined value printed: {undefined_hint}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Name", 3, 12], ["Name", 13, 18], ["Name", 19, 26], ["Colon", 26, 27], ["Lbrace", 28, 29], ["Name", 29, 43], ["Rbrace", 43, 44]]}
+{"src": "{{ {a} {op} {b}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 5], ["Rbrace", 5, 6], ["Lbrace", 7, 8], ["Name", 8, 10], ["Rbrace", 10, 11], ["Lbrace", 12, 13], ["Name", 13, 14], ["Rbrace", 14, 15]]}
+{"src": "{{ {const.lower()}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 9], ["Dot", 9, 10], ["Name", 10, 15], ["Lparen", 15, 16], ["Rparen", 16, 17], ["Rbrace", 17, 18]]}
+{"src": "{{ {const.upper()}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 9], ["Dot", 9, 10], ["Name", 10, 15], ["Lparen", 15, 16], ["Rparen", 16, 17], ["Rbrace", 17, 18]]}
+{"src": "{{ {const}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 9], ["Rbrace", 9, 10]]}
+{"src": "{{ {expr}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 8], ["Rbrace", 8, 9]]}
+{"src": "{{ {i}|filter{i}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 5], ["Rbrace", 5, 6], ["Pipe", 6, 7], ["Name", 7, 13], ["Lbrace", 13, 14], ["Name", 14, 15], ["Rbrace", 15, 16]]}
+{"src": "{{ {op}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 6], ["Rbrace", 6, 7]]}
+{"src": "{{ {test}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 8], ["Rbrace", 8, 9]]}
+{"src": "{{ {value}", "toks": [["Lbrace", 0, 1], ["Lbrace", 1, 2], ["Lbrace", 3, 4], ["Name", 4, 9], ["Rbrace", 9, 10]]}
+{"err_at": null, "src": "\u00b7"}
+{"err_at": 0, "src": "\ud83d\udc0da"}

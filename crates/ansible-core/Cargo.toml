@@ -8,6 +8,7 @@ rust-version.workspace = true
 libyaml-safer.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+unicode-ident.workspace = true
 toml_edit = { version = "0.25.13", default-features = false, features = ["parse"] }
 
 # `testing` is `#[cfg(test)]`, which unit tests get for free but integration tests in `tests/`
