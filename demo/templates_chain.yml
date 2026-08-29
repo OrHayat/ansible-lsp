@@ -57,6 +57,15 @@
     # include names a file that does not exist, and the failure only happens at render time.
     # It still needs a call site for us to know its search path, so it is named here in a
     # task that never runs.
+    # Same trick, and the same reason: `templates/inheriting.conf.j2` renders its partial
+    # under line-statement delimiters, which makes that partial a syntax error. It needs a
+    # call site for us to know its grammar; it must not actually run.
+    - name: never runs, but gives inheriting.conf.j2 a call site
+      ansible.builtin.template:
+        src: inheriting.conf.j2
+        dest: /tmp/never2.conf
+      when: false
+
     - name: never runs, but gives broken_include.conf.j2 a call site
       ansible.builtin.template:
         src: broken_include.conf.j2

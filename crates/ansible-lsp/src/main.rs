@@ -339,6 +339,11 @@ fn cached_definitions_in(
 /// recomputing the thing being invalidated. Coarse on purpose — **editing a `.j2` never lands
 /// here**, so the per-keystroke case this cache exists for stays warm.
 fn invalidate_render_sites(state: &State, file: &Path) {
+    // The grammar map depends on the include graph, which lives in the `.j2` files
+    // themselves — so unlike the render sites it *must* drop on a template edit too.
+    if let Ok(mut c) = state.template_grammars.lock() {
+        c.clear();
+    }
     if Backend::is_template_file(file) {
         return;
     }
@@ -410,6 +415,15 @@ struct State {
     /// warm, and the case that clears it pays once. T-012's watcher and T-020's reverse index
     /// are where a precise version would live.
     render_sites: Mutex<HashMap<PathBuf, std::sync::Arc<Vec<resolve::RenderSite>>>>,
+    /// The include graph's grammars, per workspace root, on the same invalidation as
+    /// [`State::render_sites`] — and for the same reason: `template_grammars` walks every YAML
+    /// file and every template, so asking per request is a scan per keystroke.
+    ///
+    /// Keyed by root and not by template: it is computed for the whole tree in one pass
+    /// because a child can only be read once its parent's grammar is known, so there is no
+    /// cheaper per-file version to cache.
+    template_grammars:
+        Mutex<HashMap<PathBuf, std::sync::Arc<HashMap<PathBuf, resolve::TemplateGrammar>>>>,
     /// The variable-index cache (T-055), owned rather than process-global (T-201).
     ///
     /// Every reader reaches it through this `Arc<State>`, including the detached workspace
@@ -578,11 +592,12 @@ impl State {
         ctx: &FileContext,
         sites: &[resolve::RenderSite],
         d: &jinja::Delimiters,
+        is_root: bool,
     ) -> Vec<Diagnostic> {
         if sites.is_empty() {
             return Vec::new();
         }
-        let Ok(refs) = jinja::references(text, d) else { return Vec::new() };
+        let Ok(refs) = jinja::references_in(text, d, is_root) else { return Vec::new() };
         let doc = Document::new(text.to_string());
         refs.iter()
             .filter(|r| !r.ignore_missing)
@@ -626,12 +641,13 @@ impl State {
         // turns that into a red squiggle — so it has to ask.
         let root = self.roots.lock().ok().and_then(|r| r.first().cloned());
         let sites = Backend::render_sites_cached(self, &path, root.as_deref(), &ctx);
-        let d = Backend::template_delimiters_for(&sites);
-        let mut out = Self::template_diagnostics_in(&text, &ctx.config.jinja2_extensions, &d);
+        let (d, is_root) = Backend::template_grammar_cached(self, &path, root.as_deref(), &ctx);
+        let mut out =
+            Self::template_diagnostics_at(&text, &ctx.config.jinja2_extensions, &d, is_root);
         // Only when the file renders: an include that names nothing is not worth saying on a
         // template that will not parse at all.
         if out.is_empty() && ctx.config.jinja2_extensions.is_empty() {
-            out.extend(Self::missing_include_diagnostics(&text, &path, &ctx, &sites, &d));
+            out.extend(Self::missing_include_diagnostics(&text, &path, &ctx, &sites, &d, is_root));
         }
         out
     }
@@ -655,7 +671,18 @@ impl State {
         extensions: &[String],
         d: &jinja::Delimiters,
     ) -> Vec<Diagnostic> {
-        let Some(e) = jinja::will_not_render(text, d, extensions) else {
+        Self::template_diagnostics_at(text, extensions, d, true)
+    }
+
+    /// [`template_diagnostics_in`](Self::template_diagnostics_in) with `root` saying whether
+    /// this file's own `#jinja2:` header applies — false for one that is only ever included.
+    fn template_diagnostics_at(
+        text: &str,
+        extensions: &[String],
+        d: &jinja::Delimiters,
+        root: bool,
+    ) -> Vec<Diagnostic> {
+        let Some(e) = jinja::will_not_render_in(text, d, extensions, root) else {
             return Vec::new();
         };
         let doc = Document::new(text.to_string());
@@ -966,8 +993,8 @@ impl Backend {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let ctx = FileContext::discover(path);
         let sites = Self::render_sites_cached(state, path, root, &ctx);
-        let d = Self::template_delimiters_for(&sites);
-        let Ok(refs) = jinja::references(text, &d) else { return Vec::new() };
+        let (d, is_root) = Self::template_grammar_cached(state, path, root, &ctx);
+        let Ok(refs) = jinja::references_in(text, &d, is_root) else { return Vec::new() };
         let Some(r) = refs.into_iter().find(|r| r.span.start <= byte && byte <= r.span.end)
         else {
             return Vec::new();
@@ -1021,6 +1048,49 @@ impl Backend {
     /// same as the rest of this impl.
     fn template_delimiters_for(sites: &[resolve::RenderSite]) -> jinja::Delimiters {
         resolve::delimiters_for_sites(sites)
+    }
+
+    /// The grammar a template is read with, and whether its own `#jinja2:` header counts.
+    ///
+    /// Not `template_delimiters_for` alone: a partial that no task names inherits its
+    /// includer's delimiters, and its own header is inert. Measured — see
+    /// [`resolve::effective_delimiters`].
+    fn template_grammar(path: &Path, root: Option<&Path>, ctx: &FileContext) -> (jinja::Delimiters, bool) {
+        let root = root.map(Path::to_path_buf).or_else(|| ctx.project_root.clone());
+        match root {
+            Some(r) => resolve::effective_delimiters(path, &r, &StdFs),
+            None => (jinja::Delimiters::default(), true),
+        }
+    }
+
+    /// [`template_grammar`](Self::template_grammar) through [`State::template_grammars`].
+    fn template_grammar_cached(
+        state: &State,
+        path: &Path,
+        root: Option<&Path>,
+        ctx: &FileContext,
+    ) -> (jinja::Delimiters, bool) {
+        let Some(r) = root.map(Path::to_path_buf).or_else(|| ctx.project_root.clone()) else {
+            return (jinja::Delimiters::default(), true);
+        };
+        let key = canon(&r);
+        let map = {
+            let hit = state.template_grammars.lock().ok().and_then(|c| c.get(&key).cloned());
+            match hit {
+                Some(m) => m,
+                None => {
+                    let m = std::sync::Arc::new(resolve::template_grammars(&r, &StdFs));
+                    if let Ok(mut c) = state.template_grammars.lock() {
+                        c.insert(key, m.clone());
+                    }
+                    m
+                }
+            }
+        };
+        match map.get(&canon(path)) {
+            Some(g) => (g.delimiters.clone(), g.root),
+            None => (jinja::Delimiters::default(), true),
+        }
     }
 
     async fn publish_diagnostics(&self, uri: &Url) {
@@ -3397,6 +3467,7 @@ async fn main() {
             roots: Mutex::new(Vec::new()),
             flagged: Mutex::new(HashSet::new()),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Mutex::new(HashMap::new()),
             settings: Mutex::new(Settings::default()),
             inventory: Mutex::new(Vec::new()),
@@ -5242,6 +5313,8 @@ mod tests {
         let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
         let mut paths = Vec::new();
         walk(&demo, &mut paths);
+        let grammars =
+            ansible_core::resolve::template_grammars(&demo, &ansible_core::fs::StdFs);
         paths.sort();
         let mut flagged: Vec<(String, String)> = Vec::new();
         let mut with_sites = 0;
@@ -5252,8 +5325,9 @@ mod tests {
             if !sites.is_empty() {
                 with_sites += 1;
             }
-            let d = super::Backend::template_delimiters_for(&sites);
-            for diag in super::State::missing_include_diagnostics(&text, path, &ctx, &sites, &d)
+            let (d, is_root) = grammar_of(&grammars, path);
+            for diag in
+                super::State::missing_include_diagnostics(&text, path, &ctx, &sites, &d, is_root)
             {
                 flagged.push((
                     path.file_name().unwrap().to_string_lossy().to_string(),
@@ -5358,6 +5432,19 @@ mod tests {
   tasks: []
 ").await;
         assert_eq!(n(&state), 0, "a YAML edit must clear the cache");
+    }
+
+    /// The whole tree's grammars in one pass, then a lookup — never per file. Asking
+    /// `effective_delimiters` once per template re-walks the workspace once per template.
+    fn grammar_of(
+        map: &std::collections::HashMap<std::path::PathBuf, ansible_core::resolve::TemplateGrammar>,
+        template: &std::path::Path,
+    ) -> (ansible_core::jinja::Delimiters, bool) {
+        let key = template.canonicalize().unwrap_or_else(|_| template.to_path_buf());
+        match map.get(&key) {
+            Some(g) => (g.delimiters.clone(), g.root),
+            None => (ansible_core::jinja::Delimiters::default(), true),
+        }
     }
 
     /// The candidates box. `demo/templates/common.j2` holds one `{% include "shared.j2" %}`
@@ -5470,16 +5557,21 @@ mod tests {
         assert!(super::State::template_diagnostics_for("{{ x }", &loaded).is_empty());
     }
 
-    /// Rule 4: exactly the two demo templates labelled BAD get a `template-syntax` ERROR, and
-    /// every other demo template is labelled as one that renders. Both halves asserted, so the
-    /// rule cannot start firing elsewhere unnoticed.
+    /// Rule 4: exactly the three demo templates labelled BAD get a `template-syntax` ERROR,
+    /// and every other demo template is labelled as one that renders. Both halves asserted, so
+    /// the rule cannot start firing elsewhere unnoticed.
+    ///
+    /// `partials/inherited.j2` is the third and the interesting one: nothing about its bytes
+    /// is wrong. It is unparseable only in the grammar its includer imposes, so it is flagged
+    /// only because the include graph is read — with the graph ignored it comes back clean and
+    /// ansible fails the render.
     ///
     /// `overridden.conf.j2` is the row that earns the `#jinja2:` reader: it contains a
     /// `{% notatag %}` that is ordinary text under its own delimiters and an unknown tag under
     /// the default ones. Stop reading the header and it joins the flagged list — a red squiggle
     /// on a template ansible renders without complaint.
     #[test]
-    fn the_demo_flags_the_two_bad_templates_and_no_other() {
+    fn the_demo_flags_the_three_bad_templates_and_no_other() {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else { return };
             for e in entries.flatten() {
@@ -5494,6 +5586,8 @@ mod tests {
         let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
         let mut paths = Vec::new();
         walk(&demo, &mut paths);
+        let grammars =
+            ansible_core::resolve::template_grammars(&demo, &ansible_core::fs::StdFs);
         assert!(paths.len() > 5, "the demo walk found no templates");
         let mut flagged = Vec::new();
         let mut default_flagged = Vec::new();
@@ -5503,7 +5597,7 @@ mod tests {
             // read with can live in the task that renders it.
             let ctx = ansible_core::workspace::FileContext::discover(path);
             let sites = super::Backend::render_sites_for(path, Some(&demo), &ctx);
-            let d = super::Backend::template_delimiters_for(&sites);
+            let (d, is_root) = grammar_of(&grammars, path);
             if !super::State::template_diagnostics_for(&text, &[]).is_empty() {
                 default_flagged
                     .push(path.file_name().unwrap().to_string_lossy().to_string());
@@ -5518,9 +5612,22 @@ mod tests {
         }
         flagged.sort();
         let names: Vec<&str> = flagged.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["bad_header.conf.j2", "broken.conf.j2"], "{flagged:?}");
+        assert_eq!(
+            names,
+            ["bad_header.conf.j2", "broken.conf.j2", "inherited.j2"],
+            "{flagged:?}"
+        );
         assert!(flagged[0].1.contains("nosuchkey"), "{}", flagged[0].1);
         assert!(flagged[1].1.contains("forr"), "{}", flagged[1].1);
+        assert!(flagged[2].1.contains("notatag"), "{}", flagged[2].1);
+        // The control for the third: read as its own root — which is what we did before the
+        // include graph was walked — it is clean, and ansible still fails the render.
+        let inherited = demo.join("templates/partials/inherited.j2");
+        let text = std::fs::read_to_string(&inherited).unwrap();
+        assert!(
+            super::State::template_diagnostics_for(&text, &[]).is_empty(),
+            "the fixture stopped being fine on its own bytes"
+        );
 
         // The control, and the reason the link exists: read with the DEFAULT delimiters,
         // `module_delims.j2` is a false positive — its `{% notatag %}` is text only because
@@ -7016,6 +7123,7 @@ mod tests {
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: std::sync::Mutex::new(std::collections::HashSet::new()),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: std::sync::Mutex::new(std::collections::HashMap::new()),
             settings: std::sync::Mutex::new(Default::default()),
             inventory: std::sync::Mutex::new(Vec::new()),
@@ -7896,6 +8004,7 @@ mod tests {
             roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8074,6 +8183,7 @@ mod tests {
             roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8145,6 +8255,7 @@ mod tests {
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8324,6 +8435,7 @@ mod tests {
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8429,6 +8541,7 @@ mod tests {
             roots: std::sync::Mutex::new(vec![root.clone()]),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8646,6 +8759,7 @@ mod tests {
             roots: std::sync::Mutex::new(vec![a.clone(), b.clone()]),
             flagged: Default::default(),
             render_sites: Default::default(),
+            template_grammars: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),

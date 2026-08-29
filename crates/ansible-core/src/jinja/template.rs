@@ -273,6 +273,26 @@ fn literal(raw: &str) -> Option<String> {
 /// whatever delimiters came out of it. `base` is what the `template:` module's parameters say,
 /// or [`Delimiters::default`] when nothing does.
 pub fn document(src: &str, base: &Delimiters) -> Result<(Vec<Block>, Delimiters), Error> {
+    document_in(src, base, true)
+}
+
+/// [`document`] for a file whose grammar is **inherited** rather than its own.
+///
+/// Measured on ansible-core 2.21.2: a `#jinja2:` header in an *included* file is not honoured
+/// — the header line is rendered out as ordinary text and the delimiters it names never apply.
+/// `_extract_template_overrides` runs on the template the templar compiles, and an include
+/// goes through jinja's loader instead, which knows nothing about the marker.
+///
+/// So `root` decides whether the header is read at all. Passing `true` for a file that is only
+/// ever included reads it with a grammar Ansible never uses for it.
+pub fn document_in(
+    src: &str,
+    base: &Delimiters,
+    root: bool,
+) -> Result<(Vec<Block>, Delimiters), Error> {
+    if !root {
+        return Ok((blocks(src, base)?, base.clone()));
+    }
     let h = header(src, base)?;
     let bs = blocks_from(src, &h.delimiters, h.body)?;
     Ok((bs, h.delimiters))
@@ -1055,6 +1075,40 @@ body
         ] {
             assert!(document(ok, &Delimiters::default()).is_ok(), "{ok:?}");
         }
+    }
+
+    /// A `#jinja2:` header is honoured only in the template the **task** names. In an
+    /// included file it is inert.
+    ///
+    /// Measured on ansible-core 2.21.2: a root with default delimiters includes a partial
+    /// carrying `variable_start_string:"[%"`. The rendered output shows the header line
+    /// **verbatim as text**, `[% name %]` still literal, and `{{ name }}` rendered — so the
+    /// partial was compiled in the root's grammar and its own header was never read.
+    /// `_extract_template_overrides` runs on what the templar compiles; an include goes
+    /// through jinja's loader, which knows nothing about the marker.
+    #[test]
+    fn an_included_files_own_header_is_inert() {
+        let src = format!("{VAR_HEADER}[% name %] and {{{{ name }}}}
+");
+        let src = src.as_str();
+        // As a root: the header applies, `[% %]` is the live pair, and the header line is not
+        // a block.
+        let (bs, d) = document_in(src, &Delimiters::default(), true).expect("splits");
+        assert_eq!(d.variable_start, "[%");
+        assert_eq!(bs[0].kind, Kind::Expression);
+        assert_eq!(bs[0].inner.slice(src), " name ");
+
+        // As an included file: the header is ordinary text and `{{ }}` is what renders.
+        let (bs, d) = document_in(src, &Delimiters::default(), false).expect("splits");
+        assert_eq!(d.variable_start, "{{");
+        assert_eq!(bs[0].kind, Kind::Data);
+        assert!(bs[0].inner.slice(src).contains("#jinja2"), "{:?}", bs[0].inner.slice(src));
+        let live: Vec<&str> = bs
+            .iter()
+            .filter(|b| b.kind == Kind::Expression)
+            .map(|b| b.inner.slice(src))
+            .collect();
+        assert_eq!(live, [" name "], "the `{{ }}` pair is the live one when inherited");
     }
 
     /// Spans still index the file on disk, header and all. Upstream removes the header line

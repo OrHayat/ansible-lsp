@@ -1,0 +1,11 @@
+#jinja2: line_statement_prefix:"#"
+{# GOOD in itself — nothing in this file is wrong. It exists to give
+   `partials/inherited.j2` an includer whose grammar is not the default one, which is what
+   makes that partial unparseable. Measured on ansible-core 2.21.2: rendering this file fails
+   with `Encountered unknown tag 'notatag'`, pointing at the partial, so no task renders it.
+
+   Note the comment you are reading is `{# #}` and not `##`: this header sets
+   `line_statement_prefix` and NOT `line_comment_prefix`, so a line opening `##` here would be
+   a line STATEMENT whose body begins with `#`. That is a syntax error, and it is the mistake
+   this fixture was first written with. #}
+# include "partials/inherited.j2"

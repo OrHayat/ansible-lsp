@@ -395,10 +395,17 @@ pub fn check(src: &str, blocks: &[Block]) -> Result<Vec<Reference>, Error> {
 
 /// Every template this source references, or the reason it will not render.
 pub fn references(src: &str, d: &Delimiters) -> Result<Vec<Reference>, Error> {
+    references_in(src, d, true)
+}
+
+/// [`references`] for a file whose grammar is inherited rather than its own — see
+/// [`template::document_in`]. `root` false means the `#jinja2:` header is inert, which is what
+/// ansible does for an included file.
+pub fn references_in(src: &str, d: &Delimiters, root: bool) -> Result<Vec<Reference>, Error> {
     // `document`, not `blocks`: a `#jinja2:` header can change every delimiter in the file,
     // and reading the body with the wrong ones invents tags that are not there. `d` is what
     // the `template:` module's parameters say, which the header then overrides.
-    let (blocks, _) = template::document(src, d)?;
+    let (blocks, _) = template::document_in(src, d, root)?;
     check(src, &blocks)
 }
 
@@ -415,10 +422,20 @@ pub fn references(src: &str, d: &Delimiters) -> Result<Vec<Reference>, Error> {
 /// `jinja2.ext.loopcontrols`. `DEFAULT_JINJA2_EXTENSIONS` defaults to `[]`, so the default
 /// case is the one that speaks.
 pub fn will_not_render(src: &str, d: &Delimiters, extensions: &[String]) -> Option<Error> {
+    will_not_render_in(src, d, extensions, true)
+}
+
+/// [`will_not_render`] for a file whose grammar is inherited — see [`references_in`].
+pub fn will_not_render_in(
+    src: &str,
+    d: &Delimiters,
+    extensions: &[String],
+    root: bool,
+) -> Option<Error> {
     if !extensions.is_empty() {
         return None;
     }
-    references(src, d).err()
+    references_in(src, d, root).err()
 }
 
 #[cfg(test)]
@@ -618,9 +635,29 @@ mod tests {
 
     /// The delimiters the server would read this template with — from the tasks that render
     /// it. Reading the demo any other way tests a path no user takes.
-    fn delims(root: &std::path::Path, template: &std::path::Path) -> Delimiters {
-        let sites = crate::resolve::render_sites(template, root, &crate::fs::StdFs);
-        crate::resolve::delimiters_for_sites(&sites)
+    /// The grammar the server would read each demo template with, and whether its own
+    /// `#jinja2:` header counts — which for a partial that is only ever included is **no**.
+    /// Reading the demo any other way tests a path no user takes.
+    ///
+    /// Computed **once** for the whole tree, not per file: `effective_delimiters` is a lookup
+    /// into this map, and calling it per template re-walks the workspace once per template.
+    /// Doing that here took the crate's suite from 0.3 s to 4.7 s, which is the same mistake
+    /// the one-pass rewrite exists to prevent.
+    fn grammars(
+        root: &std::path::Path,
+    ) -> std::collections::HashMap<std::path::PathBuf, crate::resolve::TemplateGrammar> {
+        crate::resolve::template_grammars(root, &crate::fs::StdFs)
+    }
+
+    fn grammar_of(
+        map: &std::collections::HashMap<std::path::PathBuf, crate::resolve::TemplateGrammar>,
+        template: &std::path::Path,
+    ) -> (Delimiters, bool) {
+        let key = template.canonicalize().unwrap_or_else(|_| template.to_path_buf());
+        match map.get(&key) {
+            Some(g) => (g.delimiters.clone(), g.root),
+            None => (Delimiters::default(), true),
+        }
     }
 
     /// The `demo/` control T-040 asks for, and the pin rule 4 asks for: the fixture's
@@ -661,6 +698,8 @@ mod tests {
             // `# include` line, not a `{% %}` tag, so this row is zero if the sixth lexer
             // state is not built.
             ("templates/line_statements.conf.j2", &["partials/plain.j2"]),
+            // Its own grammar is line statements; the partial it names is what breaks, not it.
+            ("templates/inheriting.conf.j2", &["partials/inherited.j2"]),
             ("templates/macros.j2", &[]),
             // No `#jinja2:` header: its delimiters come from the TASK that renders it. Read
             // with the defaults it is refused as `unknown tag 'notatag'` — the false positive
@@ -682,10 +721,13 @@ mod tests {
             ),
             ("templates/partials/header.j2", &[]),
             ("templates/partials/plain.j2", &[]),
+            // NOT listed with the others: read with the grammar it inherits it does not parse,
+            // so it lives in the refusal branch below.
             ("templates/shared.j2", &[]),
         ];
 
         let demo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let grammars = grammars(&demo_root);
         let found = demo_templates();
         // Non-zero is the whole point of a control: an empty demo tree passes everything
         // below by vacuity, and did until this fixture existed.
@@ -694,7 +736,11 @@ mod tests {
         let mut expected: Vec<&str> = want
             .iter()
             .map(|(p, _)| *p)
-            .chain(["templates/broken.conf.j2", "templates/bad_header.conf.j2"])
+            .chain([
+                "templates/broken.conf.j2",
+                "templates/bad_header.conf.j2",
+                "templates/partials/inherited.j2",
+            ])
             .collect();
         expected.sort_unstable();
         assert_eq!(names, expected, "the demo template set changed");
@@ -705,9 +751,12 @@ mod tests {
             if let Some(want_msg) = match rel.as_str() {
                 "templates/broken.conf.j2" => Some("forr"),
                 "templates/bad_header.conf.j2" => Some("nosuchkey"),
+                // Fine on its own bytes, unparseable in the grammar its includer imposes.
+                "templates/partials/inherited.j2" => Some("notatag"),
                 _ => None,
             } {
-                let msg = match references(src, &delims(&demo_root, &demo_root.join(rel))) {
+                let (d, is_root) = grammar_of(&grammars, &demo_root.join(rel));
+                let msg = match references_in(src, &d, is_root) {
                     Err(e) => e.msg,
                     Ok(r) => panic!("{rel} must not render, but we accepted it: {r:?}"),
                 };
@@ -715,7 +764,8 @@ mod tests {
                 continue;
             }
             let (_, theirs) = want.iter().find(|(p, _)| p == rel).expect("listed above");
-            let ours = references(src, &delims(&demo_root, &demo_root.join(rel)))
+            let (d, is_root) = grammar_of(&grammars, &demo_root.join(rel));
+            let ours = references_in(src, &d, is_root)
                 .unwrap_or_else(|e| panic!("{rel} must render, but we refuse it: {}", e.msg));
             let mine: Vec<&str> = ours.iter().map(|r| r.template.as_str()).collect();
             assert_eq!(mine, *theirs, "{rel}");
@@ -749,7 +799,7 @@ mod tests {
                 named += 1;
             }
         }
-        assert_eq!(named, 8, "the demo renders eight templates by name");
+        assert_eq!(named, 9, "the demo renders nine templates by name");
         // The control: the walk still finds the references that were already working, so the
         // count above is about `src:` and not about a walk that found everything.
         let text = std::fs::read_to_string(demo.join("templates_chain.yml")).expect("demo file");

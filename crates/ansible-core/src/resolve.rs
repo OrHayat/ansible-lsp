@@ -908,12 +908,16 @@ pub struct RenderSite {
 /// open template, not a scan. The general inverse of the reference graph is T-020's, and this
 /// is deliberately *not* it: one kind, one direction, no bookkeeping to keep fresh.
 pub fn render_sites(template: &Path, root: &Path, fs: &dyn Fs) -> Vec<RenderSite> {
-    // Compared canonically, not textually. The editor hands over `C:\x\y.j2` while the
-    // workspace walk yields `\\?\C:\x\y.j2` for the same file, and a `==` on those two
-    // silently finds no call sites at all — which is exactly how this first came back with one
-    // candidate instead of three.
-    let target = same_file_key(template, fs);
-    let mut out = Vec::new();
+    all_render_sites(root, fs).remove(&same_file_key(template, fs)).unwrap_or_default()
+}
+
+/// Every `template:` task under `root`, inverted onto the file it renders — **one walk**.
+///
+/// The per-template entry point above is this one plus a lookup. Anything needing the answer
+/// for more than one template must call this directly: asking per file re-walks the workspace
+/// once per template, which measured 10x on the demo tree alone and is quadratic in a real one.
+pub fn all_render_sites(root: &Path, fs: &dyn Fs) -> HashMap<PathBuf, Vec<RenderSite>> {
+    let mut out: HashMap<PathBuf, Vec<RenderSite>> = HashMap::new();
     for task_file in crate::workspace::yaml_files_in(root, fs) {
         let Some(text) = fs.read(&task_file) else { continue };
         // Parsing dominates the walk, and most files cannot possibly hold a `template:` task.
@@ -936,21 +940,26 @@ pub fn render_sites(template: &Path, root: &Path, fs: &dyn Fs) -> Vec<RenderSite
         let resolver = Resolver { fs, in_playbook: extracted.in_playbook, ..Resolver::default() };
         for r in extracted.refs.iter().filter(|r| r.kind == ReferenceKind::TemplateSrc) {
             let res = resolver.resolve(r, &ctx);
-            if !res.targets.iter().any(|p| same_file_key(p, fs) == target) {
-                continue;
+            // Keyed canonically, not textually: the editor hands over one spelling of a path
+            // and the workspace walk another, and comparing those two literally finds no call
+            // sites at all — which is how the candidates first came back with one answer
+            // instead of three.
+            for target in res.targets.iter().map(|p| same_file_key(p, fs)) {
+                out.entry(target).or_default().push(RenderSite {
+                    task_file: task_file.clone(),
+                    span: r.span,
+                    search_path: rendering_search_path(&ctx),
+                    delimiters: r.template_delimiters.as_deref().cloned(),
+                });
             }
-            out.push(RenderSite {
-                task_file: task_file.clone(),
-                span: r.span,
-                search_path: rendering_search_path(&ctx),
-                delimiters: r.template_delimiters.as_deref().cloned(),
-            });
         }
     }
     // Sorted by task file, so the candidate order a user sees is the same on every machine.
     // A directory walk's order is not, and with several call sites there is no "right" first
     // answer to prefer — stable beats arbitrary.
-    out.sort_by(|a, b| (&a.task_file, a.span.start).cmp(&(&b.task_file, b.span.start)));
+    for sites in out.values_mut() {
+        sites.sort_by(|a, b| (&a.task_file, a.span.start).cmp(&(&b.task_file, b.span.start)));
+    }
     out
 }
 
@@ -1053,7 +1062,149 @@ pub fn template_search_path(template: &Path, ctx: &crate::workspace::FileContext
     out
 }
 
-/// The delimiters to read a template with, given the tasks that render it.
+/// Every template file under `root`.
+fn template_files(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
+    fn walk(dir: &Path, fs: &dyn Fs, out: &mut Vec<PathBuf>) {
+        for (p, kind) in fs.read_dir(dir) {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if kind == crate::fs::Kind::Dir {
+                if !name.starts_with('.') && name != "node_modules" {
+                    walk(&p, fs, out);
+                }
+            } else if matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("j2") | Some("jinja") | Some("jinja2")
+            ) {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, fs, &mut out);
+    out.sort();
+    out
+}
+
+/// The grammar one template is read with.
+#[derive(Debug, Clone)]
+pub struct TemplateGrammar {
+    pub delimiters: crate::jinja::Delimiters,
+    /// Whether this file's own `#jinja2:` header applies. False for one that is only ever
+    /// included — measured, an included file's header is rendered out as text.
+    pub root: bool,
+}
+
+/// The grammar every template under `root` is read with, in one pass.
+///
+/// **Measured on ansible-core 2.21.2, and not what the field layout suggests.** Delimiters
+/// belong to the *render*, so they come from the template the task names — the root of the
+/// include tree — and everything pulled in inherits them at any depth:
+///
+/// | probe | result |
+/// | --- | --- |
+/// | a root with `[% %]` includes a partial two levels down | `[% name %]` renders at all three levels; `{{ name }}` stays literal in the leaf |
+/// | an *included* file carries its own `#jinja2:` header | the header line is rendered out **as text** and the delimiters it names never apply |
+/// | a root with `line_statement_prefix:"#"` includes a partial opening `# this line…` | `Encountered unknown tag 'this'` — unparseable purely because of who included it |
+///
+/// One pass and not a query per file: the include graph has to be walked from the roots
+/// downwards anyway, because a child can only be *read* once its parent's grammar is known —
+/// a `# include "x.j2"` line statement is invisible in the default grammar. Answering per
+/// template instead re-walks the workspace for every one of them, which measured 10x on the
+/// demo alone.
+///
+/// A template reached from two roots whose grammars differ gets the defaults: two grammars,
+/// no single answer, and guessing one is how a working file earns a red squiggle.
+pub fn template_grammars(root: &Path, fs: &dyn Fs) -> HashMap<PathBuf, TemplateGrammar> {
+    let files = template_files(root, fs);
+    let all_sites = all_render_sites(root, fs);
+    let mut out: HashMap<PathBuf, TemplateGrammar> = HashMap::new();
+
+    // Roots first: a template some `template:` task names. Its own header applies, over the
+    // module parameters that task passes.
+    let mut queue: Vec<(PathBuf, crate::jinja::Delimiters)> = Vec::new();
+    for f in &files {
+        let key = same_file_key(f, fs);
+        let Some(sites) = all_sites.get(&key) else { continue };
+        if sites.is_empty() {
+            continue;
+        }
+        let base = delimiters_for_sites(sites);
+        let resolved = fs
+            .read(f)
+            .and_then(|src| crate::jinja::header(&src, &base).ok().map(|h| h.delimiters))
+            .unwrap_or(base);
+        out.insert(key.clone(), TemplateGrammar { delimiters: resolved.clone(), root: true });
+        queue.push((f.clone(), resolved));
+    }
+
+    // Then downwards. Each file is read in the grammar it inherits, which is what makes an
+    // include written in a non-default grammar visible at all.
+    let mut guard = 0usize;
+    while let Some((file, d)) = queue.pop() {
+        guard += 1;
+        if guard > files.len() * 8 {
+            // An include cycle, or a graph pathological enough that the answer is not worth
+            // more work than this. Stopping leaves the defaults, never a wrong grammar.
+            break;
+        }
+        let Some(src) = fs.read(&file) else { continue };
+        let is_root = out.get(&same_file_key(&file, fs)).is_some_and(|g| g.root);
+        let Ok(refs) = crate::jinja::references_in(&src, &d, is_root) else { continue };
+        if refs.is_empty() {
+            continue;
+        }
+        let ctx = crate::workspace::FileContext::discover_with(&file, fs, |r| {
+            crate::config::AnsibleConfig::builder(r).fs(fs).load()
+        });
+        let sites = all_sites.get(&same_file_key(&file, fs)).cloned().unwrap_or_default();
+        for r in &refs {
+            for hit in template_include_candidates(&r.template, &file, &ctx, &sites, fs) {
+                let key = same_file_key(&hit, fs);
+                match out.get(&key) {
+                    // A root's own grammar is never overwritten by an includer's.
+                    Some(g) if g.root => {}
+                    Some(g) if g.delimiters == d => {}
+                    // Reached from two roots that disagree: no single answer.
+                    Some(_) => {
+                        out.insert(
+                            key,
+                            TemplateGrammar {
+                                delimiters: crate::jinja::Delimiters::default(),
+                                root: false,
+                            },
+                        );
+                    }
+                    None => {
+                        out.insert(
+                            key,
+                            TemplateGrammar { delimiters: d.clone(), root: false },
+                        );
+                        queue.push((hit, d.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The grammar `template` is read with, and whether its own `#jinja2:` header counts.
+///
+/// A template nothing reaches is read as its own root, header and all — that is the standalone
+/// case and the commonest one.
+pub fn effective_delimiters(
+    template: &Path,
+    root: &Path,
+    fs: &dyn Fs,
+) -> (crate::jinja::Delimiters, bool) {
+    let key = same_file_key(template, fs);
+    match template_grammars(root, fs).remove(&key) {
+        Some(g) => (g.delimiters, g.root),
+        None => (crate::jinja::Delimiters::default(), true),
+    }
+}
+
+/// The delimiters to read a template with, given the tasks that render it./// The delimiters to read a template with, given the tasks that render it.
 ///
 /// One site, or several that agree: use them. Several that **disagree**: fall back to the
 /// defaults and stay quiet rather than pick a winner — reading a template with the wrong

@@ -1,0 +1,10 @@
+{# BAD, and only from here — this file is included by `line_statements.conf.j2`, whose
+   `#jinja2:` header sets `line_statement_prefix:"#"`. Delimiters belong to the RENDER, not to
+   the file, so the line below is a line statement in that grammar and the render fails:
+
+     Task failed: Syntax error in template: Encountered unknown tag 'notatag'
+
+   measured on ansible-core 2.21.2. Read on its own with the default grammar this file is
+   perfectly fine, which is the whole point: nothing about these bytes is wrong, and the fault
+   is who includes them. #}
+# notatag this line is text by itself and a tag when included

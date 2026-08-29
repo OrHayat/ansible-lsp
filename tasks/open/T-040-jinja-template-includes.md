@@ -586,6 +586,57 @@ failure rather than a footnote: **a partial written for the default grammar can 
 unparseable purely by who includes it.** The fixture includes `partials/plain.j2` instead and
 records why at the line.
 
+## Progress: delimiters are inherited down the include tree
+
+The last gap, and the measurements settled it differently from how the fields are laid out.
+**Delimiters belong to the render, not to the file.** Measured on ansible-core 2.21.2:
+
+| probe | result |
+| --- | --- |
+| a root with `[% %]` includes a partial two levels down | `[% name %]` renders at all three levels; `{{ name }}` stays literal in the leaf |
+| an *included* file carries its own `#jinja2:` header | the header line is rendered out **as text** and the delimiters it names never apply |
+| a root with `line_statement_prefix:"#"` includes a partial opening `# this line…` | `Encountered unknown tag 'this'` — unparseable purely because of who included it |
+
+So there were two bugs, opposite in direction. We applied a `#jinja2:` header to any file that
+had one, including files only ever included, reading them in a grammar ansible never uses for
+them. And we read an included partial with the defaults when its includer's differ, so a
+partial that cannot render came back clean.
+
+`resolve::template_grammars` answers both: roots first (a template some `template:` task names,
+its own header over that task's module parameters), then breadth-first down the include graph.
+`jinja::document_in` / `references_in` / `will_not_render_in` take a `root` flag, and a false
+one makes the header inert. A template reached from two roots that disagree gets the defaults —
+two grammars, no single answer.
+
+**One pass, and that is a correctness property before it is a performance one.** A child can
+only be *read* once its parent's grammar is known: a `# include "x.j2"` line statement is
+invisible in the default grammar, so a per-file query would miss exactly the edges that matter.
+
+### It has to be one pass, and the first two versions were not
+
+The first version asked per template, and each query re-walked the workspace: `template_includers`
+called `render_sites` per candidate, and `render_sites` walked every YAML file. The crate's
+suite went **0.27 s → 2.6 s on the demo tree alone**, which is a tiny one. The rewrite to a
+single graph pass made it *worse* — 4.7 s — because `template_grammars` still called
+`render_sites` per template.
+
+`all_render_sites` is the fix: one YAML walk, inverted onto the file each task renders, with
+`render_sites` reduced to that plus a lookup. Back to 0.25 s. Cached in the server beside the
+render sites, and — unlike them — **dropped on a `.j2` edit too**, because the include graph
+lives in the templates themselves.
+
+### The fixture was wrong twice, and both times the pin said so
+
+`inheriting.conf.j2` was first written with `##` comment lines under a header that sets
+`line_statement_prefix` and *not* `line_comment_prefix` — so those lines were statements whose
+bodies begin with `#`, a syntax error. The demo pin refused it and named the character. It is a
+`{# #}` comment now, with the trap recorded in the file.
+
+Then the header-inertness control **passed with the code broken**: disabling it changed
+nothing, because no test covered a header in an included file — the behaviour was measured
+against ansible and never asserted. `an_included_files_own_header_is_inert` covers it, and the
+mutation fails it now.
+
 ### Still to do here
 
 - **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped
@@ -594,9 +645,9 @@ records why at the line.
 - **the render-site cache is cleared by any YAML edit**, so a repo where task files are edited
   constantly pays the full walk often. A precise invalidation needs the inbound edges [[T-020]]
   builds and the watcher [[T-012]] provides; revisit when either lands.
-- **a template is still read with its own delimiters when included by one whose differ.** The
-  demo shows the failure (`partials/header.j2` under a line-statement includer); resolving an
-  include and re-reading the target has to carry the includer's delimiters into it.
+- **an included-only file's own includes are read in the default grammar** while the graph is
+  being built, so an edge it declares in an inherited non-default grammar is missed. Closing it
+  means solving the graph as a fixed point rather than in one downward pass.
 
 ## Done when
 
