@@ -10,6 +10,7 @@
 //! resolving anything. That matters — Ansible has 22 variable precedence levels.
 
 use crate::install::Version;
+use crate::jinja::{self, CmpOp, Const as JConst, Expr, ExprKind, UnOp};
 use crate::parse::Node;
 
 /// Jinja tests and filters that are not variable references.
@@ -47,35 +48,6 @@ pub fn is_magic(name: &str) -> bool {
     MAGIC.contains(&name)
 }
 
-/// Strip one balanced enclosing pair of parens, if the whole string is wrapped.
-///
-/// `trim_end_matches(')')` cannot be used here — it eats the closing paren of a trailing
-/// `default(...)`, which silently broke every guarded comparison.
-fn strip_outer_parens(s: &str) -> &str {
-    let t = s.trim();
-    if !(t.starts_with('(') && t.ends_with(')')) {
-        return t;
-    }
-    let mut depth = 0usize;
-    for (i, c) in t.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                // The opening paren closes before the end, so it isn't a wrapper.
-                if depth == 0 && i != t.len() - 1 {
-                    return t;
-                }
-            }
-            _ => {}
-        }
-    }
-    if depth == 0 {
-        t[1..t.len() - 1].trim()
-    } else {
-        t
-    }
-}
 
 /// A variable reference in a condition: the name that is bound, and the accessor path
 /// applied to it. They part company the moment there is an accessor — `r.stdout` binds `r`,
@@ -114,13 +86,17 @@ impl std::fmt::Display for VarRef {
     }
 }
 
-/// Test-only, so a fabricated root cannot reach production: real references come from
-/// [`parse_var_ref`], which refuses shapes this cannot represent. Panics rather than
-/// inventing a root, so a typo in an expectation fails instead of quietly asserting itself.
+/// Test-only, so a fabricated root cannot reach production: an expectation is built by the
+/// same reader production uses, so a shape `classify` would refuse cannot be asserted here.
+/// Panics rather than inventing a root, so a typo in an expectation fails instead of quietly
+/// asserting itself.
 #[cfg(test)]
 impl From<&str> for VarRef {
     fn from(s: &str) -> Self {
-        parse_var_ref(s).unwrap_or_else(|| panic!("not a variable reference: {s}"))
+        jinja::parse(s)
+            .ok()
+            .and_then(|e| var_ref(s, &e))
+            .unwrap_or_else(|| panic!("not a variable reference: {s}"))
     }
 }
 
@@ -855,125 +831,265 @@ pub fn classify_all(conditions: &[String]) -> Verdict {
     }
 }
 
+/// What a condition says, read from its parse tree.
+///
+/// Every arm below used to be a `strip_suffix` or a `split_once` against one exact spelling
+/// of a construct Jinja accepts in many (T-188). Reading the tree is not a tidier way to do
+/// the same thing — it is what makes `hosts|length>0` and `hosts | length > 0` the same
+/// question (T-187), and what stops `r.stdout | length > 0` becoming a claim about `r`
+/// (T-186), because the parser has already decided that a filter wraps the accessor path
+/// rather than its root.
+///
+/// A condition that does not parse is [`Verdict::Unknown`], never a guess. `problems()` is
+/// what reports *why* it does not parse; this only declines to describe it.
 pub fn classify(cond: &str) -> Verdict {
-    let s = normalize(cond);
-    if is_falsy(&s) {
-        return Verdict::Never;
-    }
-    // `true` is in NOT_VARIABLES, so without this it falls through to `Unknown` and
-    // `when: true` says nothing while `when: false` says "never runs".
-    if is_truthy(&s) {
-        return Verdict::Always;
-    }
-    if s.contains("{{") {
-        // Double-templated; `problems()` reports it and the shape is unreliable.
+    // Double-templated. `problems()` reports it, and Ansible evaluates the result of the
+    // inner render, so the shape here says nothing about the condition that actually runs.
+    if cond.contains("{{") {
         return Verdict::Unknown;
     }
-    // Multiple clauses joined inline: no single summary, same rule as a list `when:`.
-    if s.contains(" and ") || s.contains(" or ") {
-        return Verdict::Unknown;
+    match jinja::parse(cond) {
+        Ok(e) => classify_expr(cond, &e),
+        Err(_) => Verdict::Unknown,
+    }
+}
+
+fn classify_expr(src: &str, e: &Expr) -> Verdict {
+    // A constant condition, in any of the spellings Ansible's YAML can deliver. `when: yes`
+    // reaches here as a bare name because Jinja has no such keyword; `when: 1` as an integer.
+    if let Some(b) = constant_truth(e) {
+        return if b { Verdict::Always } else { Verdict::Never };
     }
 
-    if let Some(inner) = strip_not(&s) {
-        return match classify(&inner) {
-            Verdict::OnlyIfSet { var } => Verdict::UnlessSet { var },
-            Verdict::UnlessCleared { var } => Verdict::OnlyIfSet { var },
-            Verdict::UnlessSet { var } => Verdict::OnlyIfSet { var },
-            Verdict::WhenEquals { var, value, negated, matches_default } => Verdict::WhenEquals {
-                var,
-                value,
-                negated: !negated,
-                matches_default: !matches_default,
-            },
-            Verdict::WhenIn { var, values, negated } => Verdict::WhenIn {
-                var,
-                values,
-                negated: !negated,
-            },
-            Verdict::RequiresDefined { var, negated } => Verdict::RequiresDefined {
-                var,
-                negated: !negated,
-            },
-            Verdict::Never => Verdict::Always,
-            Verdict::Always => Verdict::Never,
-            // De Morgan on a conjunction gives a disjunction, which these verdicts
-            // cannot express. Refuse rather than invert it wrongly.
-            Verdict::All { .. } => Verdict::Unknown,
+    match &e.kind {
+        // De Morgan on a conjunction gives a disjunction, which these verdicts cannot
+        // express, so `Verdict::All` inverts to `Unknown` rather than wrongly.
+        ExprKind::Unary { op: UnOp::Not, node } => invert(classify_expr(src, node)),
+
+        // `x is defined` / `x is not defined` — the negated spelling arrives as a `Not`
+        // around this, so it is handled by the arm above.
+        ExprKind::Test { node, name, args } if name == "defined" && args.is_empty() => {
+            match var_ref(src, node) {
+                Some(var) => Verdict::RequiresDefined { var, negated: false },
+                None => Verdict::Unknown,
+            }
+        }
+
+        ExprKind::Compare { expr, ops } if ops.len() == 1 => {
+            let (op, rhs) = &ops[0];
+            match op {
+                // `x | default('') | length > 0`
+                // `length` must be the *only* filter this module does not model. Any other
+                // — `sort`, `select`, `unique` — can change what is being counted, so
+                // passing it through would be a guess about a different value.
+                CmpOp::Gt if is_zero(rhs) => match strip_guards(src, expr) {
+                    Some((var, _, filters)) if filters == ["length"] => {
+                        Verdict::RequiresNonEmpty { var }
+                    }
+                    _ => Verdict::Unknown,
+                },
+                // `mode | default('native') == 'native'`, and the `!=` form.
+                CmpOp::Eq | CmpOp::Ne => {
+                    let negated = matches!(op, CmpOp::Ne);
+                    let Some(value) = literal_text(rhs) else { return Verdict::Unknown };
+                    match strip_guards(src, expr) {
+                        // Unguarded `x == 'lit'`: no default, so nothing is known about an
+                        // unset run, and a verdict would be inventing one.
+                        Some((var, Some(dflt), filters)) if filters.is_empty() => {
+                            let matches_default = (dflt == value) != negated;
+                            Verdict::WhenEquals { var, value, negated, matches_default }
+                        }
+                        _ => Verdict::Unknown,
+                    }
+                }
+                // `mode in ['a', 'b']` / `mode not in [...]`
+                CmpOp::In | CmpOp::NotIn => {
+                    let negated = matches!(op, CmpOp::NotIn);
+                    let Some((var, _, filters)) = strip_guards(src, expr) else {
+                        return Verdict::Unknown;
+                    };
+                    if !filters.is_empty() {
+                        return Verdict::Unknown;
+                    }
+                    let values = literal_list(rhs);
+                    if values.is_empty() {
+                        return Verdict::Unknown;
+                    }
+                    Verdict::WhenIn { var, values, negated }
+                }
+                _ => Verdict::Unknown,
+            }
+        }
+
+        // `not (skip_x | default(false) | bool)` reaches here through the `Not` arm, so this
+        // is the bare `x | default(D) | bool` form.
+        ExprKind::Filter { .. } => match strip_guards(src, e) {
+            Some((var, Some(dflt), filters)) if filters.is_empty() => {
+                if is_truthy(&dflt) {
+                    Verdict::UnlessCleared { var }
+                } else if is_falsy(&dflt) {
+                    Verdict::OnlyIfSet { var }
+                } else {
+                    Verdict::Unknown
+                }
+            }
             _ => Verdict::Unknown,
-        };
-    }
+        },
 
-    // `x is defined` / `x is not defined`
-    if let Some((lhs, rest)) = s.split_once(" is ") {
-        let (negated, test) = match rest.strip_prefix("not ") {
-            Some(t) => (true, t.trim()),
-            None => (false, rest.trim()),
-        };
-        if test == "defined" {
-            if let Some(var) = parse_var_ref(lhs.trim()) {
-                return Verdict::RequiresDefined { var, negated };
-            }
-        }
-        return Verdict::Unknown;
+        _ => Verdict::Unknown,
     }
-
-    // `x | default('') | length > 0`
-    if let Some(lhs) = s.strip_suffix("> 0").map(str::trim) {
-        if let Some(base) = lhs.strip_suffix("| length").map(str::trim) {
-            if let Some(var) = parse_defaulted(base).map(|(v, _)| v).or_else(|| parse_var_ref(base)) {
-                return Verdict::RequiresNonEmpty { var };
-            }
-        }
-        return Verdict::Unknown;
-    }
-
-    // `x in ['a', 'b']` / `x not in [...]`
-    if let Some((lhs, rhs)) = split_membership(&s) {
-        let (lhs, negated) = match lhs.strip_suffix(" not") {
-            Some(l) => (l.trim(), true),
-            None => (lhs, false),
-        };
-        if let Some(var) = parse_defaulted(lhs).map(|(v, _)| v).or_else(|| parse_var_ref(lhs)) {
-            let values = list_literals(rhs);
-            if !values.is_empty() {
-                return Verdict::WhenIn { var, values, negated };
-            }
-        }
-        return Verdict::Unknown;
-    }
-
-    // `x | default('v') == 'lit'`, and the `!=` form
-    for (op, negated) in [("==", false), ("!=", true)] {
-        if let Some((lhs, rhs)) = s.rsplit_once(op) {
-            let value = unquote(rhs.trim()).to_string();
-            let lhs = strip_outer_parens(lhs);
-            if let Some((var, dflt)) = parse_defaulted(lhs) {
-                let matches_default = (unquote(&dflt) == value) != negated;
-                return Verdict::WhenEquals { var, value, negated, matches_default };
-            }
-            // Unguarded `x == 'lit'`: no default, so nothing is known about an unset run.
-            if parse_var_ref(lhs).is_some() {
-                return Verdict::Unknown;
-            }
-            return Verdict::Unknown;
-        }
-    }
-
-    if let Some((var, dflt)) = parse_defaulted(&s) {
-        if is_truthy(&dflt) {
-            return Verdict::UnlessCleared { var };
-        }
-        if is_falsy(&dflt) {
-            return Verdict::OnlyIfSet { var };
-        }
-    }
-
-    Verdict::Unknown
 }
 
-fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+/// The inverse of a verdict, for `not (...)`.
+fn invert(v: Verdict) -> Verdict {
+    match v {
+        Verdict::OnlyIfSet { var } => Verdict::UnlessSet { var },
+        Verdict::UnlessCleared { var } => Verdict::OnlyIfSet { var },
+        Verdict::UnlessSet { var } => Verdict::OnlyIfSet { var },
+        Verdict::WhenEquals { var, value, negated, matches_default } => Verdict::WhenEquals {
+            var,
+            value,
+            negated: !negated,
+            matches_default: !matches_default,
+        },
+        Verdict::WhenIn { var, values, negated } => {
+            Verdict::WhenIn { var, values, negated: !negated }
+        }
+        Verdict::RequiresDefined { var, negated } => {
+            Verdict::RequiresDefined { var, negated: !negated }
+        }
+        Verdict::Never => Verdict::Always,
+        Verdict::Always => Verdict::Never,
+        // De Morgan turns a conjunction into a disjunction, which `All` cannot express.
+        _ => Verdict::Unknown,
+    }
 }
+
+/// Whether the whole expression is a constant, and which way.
+///
+/// Wider than Jinja's own `true`/`false`, because Ansible's YAML hands us `yes`, `no`, `1`
+/// and `0` — and a quoted `'true'` is still a constant condition, not a variable.
+fn constant_truth(e: &Expr) -> Option<bool> {
+    let word = match &e.kind {
+        ExprKind::Const(JConst::Bool(b)) => return Some(*b),
+        ExprKind::Const(JConst::Str(s)) => s.as_str(),
+        // A bare `yes`/`no` is a name to Jinja: it has no such keyword.
+        ExprKind::Name(n) => n.as_str(),
+        ExprKind::Const(JConst::Int(0)) => return Some(false),
+        ExprKind::Const(JConst::Int(1)) => return Some(true),
+        _ => return None,
+    };
+    if is_truthy(word) {
+        Some(true)
+    } else if is_falsy(word) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn is_zero(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Const(JConst::Int(0)))
+}
+
+/// Peel the guard filters off a reference, returning the reference, the `default(...)`
+/// argument if there was one, and any filters left over that this module does not model.
+///
+/// `default` and `d` are the same filter — ansible-core registers both
+/// (`plugins/filter/core.py`), and T-211 is the bug where only the long spelling classified.
+/// `bool` is passed through because it changes nothing about which value is used when the
+/// variable is unset, which is the only question these verdicts answer.
+fn strip_guards<'a>(src: &str, e: &'a Expr) -> Option<(VarRef, Option<String>, Vec<String>)> {
+    let mut node = e;
+    let mut dflt = None;
+    let mut unmodelled: Vec<String> = Vec::new();
+
+    while let ExprKind::Filter { node: inner, name, args } = &node.kind {
+        let short = name.rsplit('.').next().unwrap_or(name);
+        match short {
+            "default" | "d" => {
+                // `default(D)` and `default(D, true)`: the second argument only decides
+                // whether a *falsy* value is replaced too, not what the unset value is.
+                match args.args.first() {
+                    Some(a) => dflt = literal_text(a),
+                    None => return None,
+                }
+                if dflt.is_none() {
+                    return None;
+                }
+            }
+            "bool" if args.args.is_empty() => {}
+            other => unmodelled.push(other.to_string()),
+        }
+        node = inner;
+    }
+
+    let var = var_ref(src, node)?;
+    // Outermost-first reads better for the one caller that inspects it.
+    unmodelled.reverse();
+    Some((var, dflt, unmodelled))
+}
+
+/// A variable reference, as written.
+///
+/// The text comes from the node's span rather than being re-rendered, so a label quotes the
+/// author's spelling instead of a normalisation of it.
+fn var_ref(src: &str, e: &Expr) -> Option<VarRef> {
+    let root = e.root_name()?;
+    if NOT_VARIABLES.contains(&root) {
+        return None;
+    }
+    // A non-literal subscript — `hostvars[h].x` — is representable in the tree but not
+    // resolvable: `h` is exactly the part that is not known statically. Refused, as it was
+    // before the tree existed, rather than reported as a claim about `hostvars`.
+    if !literal_path(e) {
+        return None;
+    }
+    Some(VarRef { root: root.to_string(), expr: e.span.slice(src).to_string() })
+}
+
+/// Whether every accessor on the path is spellable without knowing a variable's value.
+fn literal_path(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Name(_) => true,
+        ExprKind::Getattr { node, .. } => literal_path(node),
+        ExprKind::Getitem { node, arg } => {
+            matches!(arg.kind, ExprKind::Const(JConst::Str(_) | JConst::Int(_)))
+                && literal_path(node)
+        }
+        _ => false,
+    }
+}
+
+/// A literal's value as a label would print it. `None` for anything computed.
+fn literal_text(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Const(JConst::Str(s)) => Some(s.clone()),
+        ExprKind::Const(JConst::Int(i)) => Some(i.to_string()),
+        ExprKind::Const(JConst::Float(f)) => Some(f.to_string()),
+        ExprKind::Const(JConst::Bool(b)) => Some(b.to_string()),
+        ExprKind::Const(JConst::None) => Some("none".to_string()),
+        _ => None,
+    }
+}
+
+/// The members of a literal list or tuple. Empty for anything else — `groups['servers']` is
+/// a subscript, not a list, and reading it as one produced a bogus single-element membership.
+fn literal_list(e: &Expr) -> Vec<String> {
+    let items = match &e.kind {
+        ExprKind::List(items) | ExprKind::Tuple(items) => items,
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for item in items {
+        match literal_text(item) {
+            Some(v) => out.push(v),
+            None => return Vec::new(),
+        }
+    }
+    out
+}
+
 
 fn strip_strings(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -1074,104 +1190,12 @@ fn lone_equals(s: &str) -> bool {
     false
 }
 
-fn strip_not(s: &str) -> Option<String> {
-    let rest = s.strip_prefix("not ")?.trim();
-    Some(normalize(strip_outer_parens(rest)))
-}
 
-/// ` in ` / ` not in ` at the top level, returning (lhs, rhs).
-fn split_membership(s: &str) -> Option<(&str, &str)> {
-    let at = s.find(" in ")?;
-    Some((s[..at].trim(), s[at + 4..].trim()))
-}
 
-fn list_literals(s: &str) -> Vec<String> {
-    let t = s.trim();
-    // Must be an actual literal list. `groups['servers']` is a subscript, not a list,
-    // and accepting it produced a bogus one-element "list" of `groups['servers'`.
-    let inner = match (t.strip_prefix('['), t.strip_suffix(']')) {
-        (Some(_), Some(_)) => &t[1..t.len() - 1],
-        _ => match (t.strip_prefix('('), t.strip_suffix(')')) {
-            (Some(_), Some(_)) => &t[1..t.len() - 1],
-            _ => return Vec::new(),
-        },
-    };
-    if inner.contains('[') || inner.contains('|') {
-        return Vec::new();
-    }
-    inner
-        .split(',')
-        .map(|p| unquote(p.trim()).to_string())
-        .filter(|p| !p.is_empty() && !p.contains(' '))
-        .collect()
-}
 
-/// A variable, plus any attribute and literal-subscript accessors hanging off it:
-/// `r`, `r.stdout`, `r['stdout']`, `r.results[0].stdout`. Everything after the root is kept
-/// rather than cut off, which is what lets a label name what the condition actually talks
-/// about instead of the variable underneath it.
-///
-/// A subscript that is not a literal — `hostvars[h].x` — makes the path unspellable here,
-/// since `h` is exactly the thing that is not known statically. The whole reference is
-/// refused in that case. Reporting the root instead would be T-186 again: `hostvars` is
-/// genuinely the root, and a claim about it is still not a claim the condition made.
-fn parse_var_ref(s: &str) -> Option<VarRef> {
-    let s = strip_outer_parens(s);
-    let mut i = ident_end(s, 0)?;
-    let root = &s[..i];
-    if NOT_VARIABLES.contains(&root) {
-        return None;
-    }
-    while i < s.len() {
-        i = match s.as_bytes()[i] {
-            b'.' => ident_end(s, i + 1)?,
-            b'[' => literal_subscript_end(s, i)?,
-            _ => return None,
-        };
-    }
-    Some(VarRef { root: root.to_string(), expr: s.to_string() })
-}
 
-/// End of the identifier starting at `from`, or `None` if there isn't one.
-fn ident_end(s: &str, from: usize) -> Option<usize> {
-    let end = s[from..]
-        .char_indices()
-        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_'))
-        .map_or(s.len(), |(i, _)| from + i);
-    (end > from).then_some(end)
-}
 
-/// End of a `['key']` or `[0]` subscript opening at `open`, or `None` for anything else —
-/// including a quoted key containing a `]`, where the first `]` found is the wrong one and
-/// the slice fails to read as a literal. Refusing is the right answer either way.
-fn literal_subscript_end(s: &str, open: usize) -> Option<usize> {
-    let close = open + 1 + s[open + 1..].find(']')?;
-    let inner = s[open + 1..close].trim();
-    let quoted = inner.len() >= 2
-        && inner.starts_with(['\'', '"'])
-        && inner.ends_with(inner.chars().next()?)
-        && !inner[1..inner.len() - 1].contains(inner.chars().next()?);
-    let indexed = !inner.is_empty() && inner.bytes().all(|c| c.is_ascii_digit());
-    (quoted || indexed).then_some(close + 1)
-}
 
-/// `x | default(false) | bool` -> `("x", "false")`. `None` unless the pipeline is a single
-/// reference followed by a `default(...)`, so anything with real logic falls through.
-fn parse_defaulted(s: &str) -> Option<(VarRef, String)> {
-    let s = strip_outer_parens(s);
-    let mut parts = s.split('|').map(str::trim);
-    let var = parse_var_ref(parts.next()?)?;
-    let mut dflt = None;
-    for p in parts {
-        if let Some(arg) = p.strip_prefix("default(").and_then(|a| a.strip_suffix(')')) {
-            dflt = Some(arg.trim().to_string());
-        } else if p != "bool" {
-            // An unrecognised filter could change the result; don't guess.
-            return None;
-        }
-    }
-    Some((var, dflt?))
-}
 
 fn unquote(s: &str) -> &str {
     let b = s.as_bytes();
@@ -1217,6 +1241,190 @@ fn is_bare_literal(cond: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------ T-188: the tree, not the text
+
+    /// T-187. Whitespace never reaches the parser, so the two spellings are not "handled the
+    /// same" — they are the same question. Asserted on more than one arm, because a fix that
+    /// only reached `RequiresNonEmpty` would look identical from the ticket's own example.
+    #[test]
+    fn spacing_around_operators_cannot_change_a_verdict() {
+        let pairs = [
+            ("hosts | length > 0", "hosts|length>0"),
+            ("skip_x | default(false) | bool", "skip_x|default(false)|bool"),
+            ("mode | default('native') == 'native'", "mode|default('native')=='native'"),
+            ("mode | default('a') in ['a', 'b']", "mode|default('a')in['a','b']"),
+            ("x is defined", "x  is  defined"),
+        ];
+        for (spaced, tight) in pairs {
+            assert_eq!(classify(spaced), classify(tight), "{spaced:?} vs {tight:?}");
+            assert_ne!(classify(spaced), Verdict::Unknown, "{spaced:?} must classify at all");
+        }
+    }
+
+    /// T-211. `d` is `default` — ansible-core registers both names for the same filter — and
+    /// either may be written fully qualified. All four spellings are one shape once the
+    /// filter is a node with a name rather than a substring to strip.
+    #[test]
+    fn every_spelling_of_the_default_filter_classifies_the_same() {
+        let want = classify("skip_x | default(false)");
+        assert_eq!(want, Verdict::OnlyIfSet { var: "skip_x".into() });
+        for spelling in [
+            "skip_x | d(false)",
+            "skip_x | ansible.builtin.default(false)",
+            "skip_x | ansible.builtin.d(false)",
+            "skip_x|d(false)|bool",
+        ] {
+            assert_eq!(classify(spelling), want, "{spelling:?}");
+        }
+    }
+
+    /// A quoted operator is text, not syntax. This is the half `strip_strings` existed to
+    /// fake: the old matcher cut on `|` and `==` wherever they appeared, so a value that
+    /// contained one came apart.
+    #[test]
+    fn an_operator_inside_a_string_literal_survives_as_its_value() {
+        assert_eq!(
+            classify("mode | default('a|b') == 'a|b'"),
+            Verdict::WhenEquals {
+                var: "mode".into(),
+                value: "a|b".to_string(),
+                negated: false,
+                matches_default: true,
+            }
+        );
+        assert_eq!(
+            classify("mode | default('x') == 'a > 0'"),
+            Verdict::WhenEquals {
+                var: "mode".into(),
+                value: "a > 0".to_string(),
+                negated: false,
+                matches_default: false,
+            }
+        );
+    }
+
+    /// Ansible's own check: `compile_expression` refuses anything left over rather than
+    /// returning a verdict about the first token. Without it these are a confident claim
+    /// about `foo`, which is this ticket's failure mode reintroduced by its own fix.
+    #[test]
+    fn a_condition_with_trailing_junk_is_unknown_not_a_claim_about_its_first_token() {
+        for cond in ["foo bar", "x }} y", "x is defined and", "hosts | length > 0 )"] {
+            assert_eq!(classify(cond), Verdict::Unknown, "{cond:?}");
+        }
+        // The control: each prefix on its own does classify, so the refusal is about the
+        // leftovers rather than about the prefix being unreadable.
+        assert_ne!(classify("x is defined"), Verdict::Unknown);
+        assert_ne!(classify("hosts | length > 0"), Verdict::Unknown);
+    }
+
+    /// The bar is not "parses" but "is a shape this module models". Each of these is valid
+    /// Jinja that the tree represents perfectly well, and every one must still be `Unknown`
+    /// — a verdict here would be an invention, which is the thing the whole module exists
+    /// not to do.
+    #[test]
+    fn constructs_we_deliberately_do_not_model_stay_unknown() {
+        let unmodelled = [
+            // Arithmetic and comparison against something that is not a literal.
+            "a + b > c",
+            "x > y",
+            // A conditional expression: two answers, and no way to say which.
+            "a if b else c",
+            // A filter this module has no model for. `sort` may change what `length` counts,
+            // so passing it through would be a guess.
+            "x | sort | length > 0",
+            // A call. What it returns is a runtime question.
+            "lookup('env', 'HOME')",
+            "x.method()",
+            // A test other than `defined`.
+            "x is divisibleby 3",
+            "x is sameas y",
+            // Boolean structure: `and` and `or` in Jinja return an *operand*, not a bool
+            // (T-114), so even the shape is not what it looks like.
+            "a and b",
+            "a or b",
+            // Membership in something that is not a literal list.
+            "x in groups['web']",
+            "x in y",
+            // A subscript whose key is itself a variable — `h` is exactly the part that is
+            // not knowable, so the reference cannot be spelled (T-186).
+            "hostvars[h].x is defined",
+        ];
+        for cond in unmodelled {
+            assert_eq!(classify(cond), Verdict::Unknown, "{cond:?} must not be described");
+        }
+    }
+
+    /// The nine conditions in `ansible/ansible` that the string matcher classified and the
+    /// tree does not. Every one was a claim it had no right to make, so the drop is the fix
+    /// working — but a drop in reach is exactly the kind of thing that gets waved through, so
+    /// each shape is pinned here with what the old answer was.
+    ///
+    /// `in ('RedHat')` is the one worth reading twice. A parenthesised string is not a tuple,
+    /// so this is a *substring* test. Live on ansible-core 2.21.2: `distro` of `Red` and of
+    /// `Hat` both run it, and `distro in ["RedHat"]` — a real list — skips for `Red`. The old
+    /// verdict, "runs when distro is one of: RedHat", was false for every substring.
+    #[test]
+    fn shapes_the_string_matcher_claimed_and_could_not_have_known() {
+        for cond in [
+            // A literal is not a variable. `parse_var_ref` took the digits as a name and
+            // answered about a variable called `1`.
+            "1 in [1,2,3]",
+            "0 not in [1,2,3]",
+            "200 is not defined",
+            // A parenthesised string is a string. Membership in it is a substring test.
+            "ansible_distribution in ('RedHat')",
+            "ansible_distribution in ('Ubuntu')",
+            // The right-hand side is a concatenation, not a literal. The old matcher took the
+            // raw text after `==` as the value and reported the `+` signs as part of it.
+            "result.url|default(\"\") == \"https://\" + httpbin_host + \"/get\"",
+        ] {
+            assert_eq!(classify(cond), Verdict::Unknown, "{cond:?} must not be described");
+        }
+        // The control: the shapes these were mistaken for do still classify, so the refusals
+        // above are about these inputs and not about the arms having stopped working.
+        assert_ne!(classify("x in ['RedHat']"), Verdict::Unknown);
+        assert_ne!(classify("x is not defined"), Verdict::Unknown);
+        assert_ne!(classify("x | default('') == 'https://get'"), Verdict::Unknown);
+    }
+
+    /// The tree can represent far more than the old matcher could, and that is exactly why
+    /// the reach has to be pinned: growing it is a decision, not a side effect. These are the
+    /// shapes that *do* classify, one per arm.
+    #[test]
+    fn every_arm_still_has_a_shape_that_reaches_it() {
+        use Verdict::*;
+        let cases: &[(&str, Verdict)] = &[
+            ("false", Never),
+            ("true", Always),
+            ("x | default(false)", OnlyIfSet { var: "x".into() }),
+            ("x | default(true)", UnlessCleared { var: "x".into() }),
+            ("not (x | default(false))", UnlessSet { var: "x".into() }),
+            ("x is defined", RequiresDefined { var: "x".into(), negated: false }),
+            ("x is not defined", RequiresDefined { var: "x".into(), negated: true }),
+            ("x | length > 0", RequiresNonEmpty { var: "x".into() }),
+            (
+                "m | default('a') == 'a'",
+                WhenEquals {
+                    var: "m".into(),
+                    value: "a".into(),
+                    negated: false,
+                    matches_default: true,
+                },
+            ),
+            (
+                "m | default('a') in ['a', 'b']",
+                WhenIn {
+                    var: "m".into(),
+                    values: vec!["a".into(), "b".into()],
+                    negated: false,
+                },
+            ),
+        ];
+        for (cond, want) in cases {
+            assert_eq!(&classify(cond), want, "{cond:?}");
+        }
+    }
 
     /// T-104: the name a `hostvars[...]` read actually consults, in both spellings. The
     /// root extractor sees none of it — `hostvars` is injected and dropped, `app_port` is
@@ -2189,6 +2397,81 @@ mod corpus {
             let _ = classify_all(&cs);
             let _ = is_guarded(&cs);
         }
+    }
+
+    /// T-032's classification rate, re-measurable. Env-gated in the T-184 shape because the
+    /// trees it needs are never committed.
+    ///
+    /// `ANSIBLE_CORPUS` may be one tree or a directory of them. Every immediate subdirectory
+    /// is reported on its own line and the blended total is printed last, because the rate is
+    /// **per-repo house style** rather than a global property — T-211 measured one tree using
+    /// `d(` 852 times and another using it once, and a single averaged number hides exactly
+    /// that.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-core when_coverage -- --ignored --nocapture"]
+    fn when_coverage() {
+        fn pct(n: usize, d: usize) -> usize {
+            if d == 0 { 0 } else { n * 100 / d }
+        }
+
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        assert!(root.is_dir(), "ANSIBLE_CORPUS={} is not a directory", root.display());
+
+        let mut trees: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        trees.sort();
+        if trees.is_empty() {
+            trees.push(root.clone());
+        }
+
+        let (mut t_files, mut t_sites, mut t_hit, mut t_cl, mut t_cl_hit) = (0, 0, 0, 0, 0);
+        for tree in &trees {
+            let (mut files, mut sites, mut hit, mut cl, mut cl_hit) = (0, 0, 0, 0, 0);
+            for f in crate::workspace::yaml_files(tree) {
+                let Ok(text) = std::fs::read_to_string(&f) else { continue };
+                let Some(nodes) = crate::parse_libyaml::parse_lenient(&text) else { continue };
+                files += 1;
+                for site in crate::expressions::sites(&nodes) {
+                    sites += 1;
+                    if classify_all(&site.clauses) != Verdict::Unknown {
+                        hit += 1;
+                    }
+                    for c in &site.clauses {
+                        cl += 1;
+                        if classify(c) != Verdict::Unknown {
+                            cl_hit += 1;
+                        }
+                    }
+                }
+            }
+            let name = tree.file_name().map_or_else(String::new, |n| n.to_string_lossy().into());
+            println!(
+                "{name:22} files={files:5} sites={sites:5} classified={hit:5} ({:2}%)  \
+                 clauses={cl:5} classified={cl_hit:5} ({:2}%)",
+                pct(hit, sites),
+                pct(cl_hit, cl),
+            );
+            t_files += files;
+            t_sites += sites;
+            t_hit += hit;
+            t_cl += cl;
+            t_cl_hit += cl_hit;
+        }
+        println!(
+            "{:22} files={t_files:5} sites={t_sites:5} classified={t_hit:5} ({:2}%)  \
+             clauses={t_cl:5} classified={t_cl_hit:5} ({:2}%)",
+            "TOTAL",
+            pct(t_hit, t_sites),
+            pct(t_cl_hit, t_cl),
+        );
+        // A sweep that found nothing measures nothing; it must not read as a clean result.
+        assert!(t_sites > 0, "no condition sites found under {}", root.display());
     }
 
     /// A floor, not a target. The classifier deliberately answers `Unknown` for anything it

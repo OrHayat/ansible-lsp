@@ -78,6 +78,16 @@ pub struct Args {
     pub dyn_kwargs: Option<Box<Expr>>,
 }
 
+impl Args {
+    /// No arguments of any kind — `x is defined` rather than `x is divisibleby 3`.
+    pub fn is_empty(&self) -> bool {
+        self.args.is_empty()
+            && self.kwargs.is_empty()
+            && self.dyn_args.is_none()
+            && self.dyn_kwargs.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
