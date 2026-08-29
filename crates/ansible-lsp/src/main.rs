@@ -332,6 +332,21 @@ fn cached_definitions_in(
 
 /// Drop every cache entry that read `file` (via the reverse map), plus one keyed by `file`
 /// itself — so editing a playbook OR any file it includes recomputes precisely.
+/// Drop the memoized `.j2` -> render-site map when a YAML file changes.
+///
+/// Wholesale, and keyed on nothing: any task file may gain or lose a `template:` task, and a
+/// map from templates to call sites has no way to say which templates that touches without
+/// recomputing the thing being invalidated. Coarse on purpose — **editing a `.j2` never lands
+/// here**, so the per-keystroke case this cache exists for stays warm.
+fn invalidate_render_sites(state: &State, file: &Path) {
+    if Backend::is_template_file(file) {
+        return;
+    }
+    if let Ok(mut c) = state.render_sites.lock() {
+        c.clear();
+    }
+}
+
 fn invalidate_var_cache(slot: &Mutex<VarCache>, file: &Path) {
     let f = canon(file);
     let Ok(mut cache) = slot.lock() else {
@@ -380,6 +395,21 @@ struct State {
     startup_note: Mutex<String>,
     /// True while a workspace scan runs — a second trigger during one would double-publish.
     scanning: AtomicBool,
+    /// `.j2` -> the tasks that render it, memoized.
+    ///
+    /// `render_sites` walks and reads the whole workspace, and the server asks for it on every
+    /// diagnostic publish and every jump inside a template. Measured on a generated tree at the
+    /// scale the tickets cite: **42 ms at 731 files, 156 ms at 3000** — per keystroke, which is
+    /// not a cost an editor can pay. The breakdown says why a cache and not a faster walk: at
+    /// 3000 files the directory walk is 5 ms and *reading* the files is 75 ms, so there is no
+    /// version of this that is cheap to redo.
+    ///
+    /// Cleared wholesale whenever a YAML file changes, because any of them may add or remove a
+    /// `template:` task. That is coarse and it is the right coarseness here: **editing a `.j2`
+    /// never touches YAML**, so the case that hurts — typing in a template — keeps the cache
+    /// warm, and the case that clears it pays once. T-012's watcher and T-020's reverse index
+    /// are where a precise version would live.
+    render_sites: Mutex<HashMap<PathBuf, std::sync::Arc<Vec<resolve::RenderSite>>>>,
     /// The variable-index cache (T-055), owned rather than process-global (T-201).
     ///
     /// Every reader reaches it through this `Arc<State>`, including the detached workspace
@@ -595,7 +625,7 @@ impl State {
         // the wrong pair invents tags that are not there, and this function is the one that
         // turns that into a red squiggle — so it has to ask.
         let root = self.roots.lock().ok().and_then(|r| r.first().cloned());
-        let sites = Backend::render_sites_for(&path, root.as_deref(), &ctx);
+        let sites = Backend::render_sites_cached(self, &path, root.as_deref(), &ctx);
         let d = Backend::template_delimiters_for(&sites);
         let mut out = Self::template_diagnostics_in(&text, &ctx.config.jinja2_extensions, &d);
         // Only when the file renders: an include that names nothing is not worth saying on a
@@ -925,11 +955,17 @@ impl Backend {
     ///
     /// Ordered by call site first, then the location-derived path that applies whoever renders
     /// the template, so the commonest answer leads.
-    fn template_definitions_at(text: &str, pos: Position, path: &Path, root: Option<&Path>) -> Vec<Location> {
+    fn template_definitions_at(
+        state: &State,
+        text: &str,
+        pos: Position,
+        path: &Path,
+        root: Option<&Path>,
+    ) -> Vec<Location> {
         let doc = Document::new(text.to_string());
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         let ctx = FileContext::discover(path);
-        let sites = Self::render_sites_for(path, root, &ctx);
+        let sites = Self::render_sites_cached(state, path, root, &ctx);
         let d = Self::template_delimiters_for(&sites);
         let Ok(refs) = jinja::references(text, &d) else { return Vec::new() };
         let Some(r) = refs.into_iter().find(|r| r.span.start <= byte && byte <= r.span.end)
@@ -958,6 +994,27 @@ impl Backend {
             Some(r) => resolve::render_sites(path, &r, &StdFs),
             None => Vec::new(),
         }
+    }
+
+    /// [`render_sites_for`](Self::render_sites_for) through [`State::render_sites`]. Every
+    /// request path goes through this one, so there is a single place the cache can be wrong.
+    fn render_sites_cached(
+        state: &State,
+        path: &Path,
+        root: Option<&Path>,
+        ctx: &FileContext,
+    ) -> std::sync::Arc<Vec<resolve::RenderSite>> {
+        let key = canon(path);
+        if let Ok(c) = state.render_sites.lock() {
+            if let Some(hit) = c.get(&key) {
+                return hit.clone();
+            }
+        }
+        let computed = std::sync::Arc::new(Self::render_sites_for(path, root, ctx));
+        if let Ok(mut c) = state.render_sites.lock() {
+            c.insert(key, computed.clone());
+        }
+        computed
     }
 
     /// [`resolve::delimiters_for_sites`], kept as a method so the call sites here read the
@@ -3157,6 +3214,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         if let Ok(path) = uri.to_file_path() {
             invalidate_var_cache(&self.state.var_cache, &path);
+            invalidate_render_sites(&self.state, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), p.text_document.text);
@@ -3174,6 +3232,7 @@ impl LanguageServer for Backend {
         // include it), so the next analyse recomputes with the new content.
         if let Ok(path) = uri.to_file_path() {
             invalidate_var_cache(&self.state.var_cache, &path);
+            invalidate_render_sites(&self.state, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), change.text);
@@ -3185,6 +3244,7 @@ impl LanguageServer for Backend {
         if let Ok(path) = p.text_document.uri.to_file_path() {
             // The buffer is gone, so every later answer must come from disk again.
             invalidate_var_cache(&self.state.var_cache, &path);
+            invalidate_render_sites(&self.state, &path);
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.remove(&p.text_document.uri);
@@ -3212,7 +3272,8 @@ impl LanguageServer for Backend {
         // references live in `{% include %}` rather than in any YAML key.
         if Self::is_template_file(&path) {
             let root = self.state.roots.lock().ok().and_then(|r| r.first().cloned());
-            let hits = Self::template_definitions_at(&text, pos, &path, root.as_deref());
+            let hits =
+                Self::template_definitions_at(&self.state, &text, pos, &path, root.as_deref());
             return Ok((!hits.is_empty()).then(|| GotoDefinitionResponse::Array(hits)));
         }
         let doc = Document::new(text);
@@ -3335,6 +3396,7 @@ async fn main() {
             docs: Mutex::new(HashMap::new()),
             roots: Mutex::new(Vec::new()),
             flagged: Mutex::new(HashSet::new()),
+            render_sites: Default::default(),
             mutations: Mutex::new(HashMap::new()),
             settings: Mutex::new(Settings::default()),
             inventory: Mutex::new(Vec::new()),
@@ -5218,6 +5280,86 @@ mod tests {
         assert!(with_sites >= 4, "only {with_sites} demo templates have a call site");
     }
 
+    /// The render-site cache: hit, and the two invalidation rules that make it safe.
+    ///
+    /// The cache exists because `render_sites` reads the whole workspace and the server asks
+    /// per keystroke. Its safety rests entirely on the invalidation, so both halves are
+    /// asserted — a YAML change clears it, and a `.j2` change does not, which is the whole
+    /// reason typing in a template stays fast.
+    #[tokio::test]
+    async fn the_render_site_cache_survives_j2_edits_and_not_yaml_ones() {
+        use tower_lsp::LanguageServer;
+        let root = ansible_core::testing::project(
+            "render-site-cache",
+            "[defaults]
+",
+            &[
+                ("templates/t.j2", "{% include 'p.j2' %}
+"),
+                ("templates/p.j2", "leaf
+"),
+                ("play.yml", "- hosts: all
+  tasks:
+    - template: {src: t.j2, dest: /x}
+"),
+            ],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let tpl = root.join("templates/t.j2");
+        let ctx = ansible_core::workspace::FileContext::discover(&tpl);
+
+        let n = |s: &super::State| s.render_sites.lock().unwrap().len();
+        assert_eq!(n(&state), 0, "starts empty");
+
+        let sites = super::Backend::render_sites_cached(&state, &tpl, Some(&root), &ctx);
+        assert_eq!(sites.len(), 1, "play.yml renders it");
+        assert_eq!(n(&state), 1, "and the answer was kept");
+
+        // A `.j2` edit must NOT clear it — this is the per-keystroke case the cache is for.
+        async fn edit(
+            service: &tower_lsp::LspService<super::Backend>,
+            path: std::path::PathBuf,
+            text: &str,
+        ) {
+            use tower_lsp::LanguageServer;
+            service
+                .inner()
+                .did_change(tower_lsp::lsp_types::DidChangeTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::VersionedTextDocumentIdentifier {
+                        uri: tower_lsp::lsp_types::Url::from_file_path(path).unwrap(),
+                        version: 2,
+                    },
+                    content_changes: vec![
+                        tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                            range: None,
+                            range_length: None,
+                            text: text.to_string(),
+                        },
+                    ],
+                })
+                .await;
+        }
+        // Asserted by identity, not by map size. `did_change` ends in `publish_diagnostics`,
+        // which for a `.j2` asks for the render sites again and refills the cache — so the
+        // size is 1 either way and a size assertion here could not fail. The `Arc` is the same
+        // allocation only if the entry was never dropped.
+        let before = super::Backend::render_sites_cached(&state, &tpl, Some(&root), &ctx);
+        edit(&service, root.join("templates/t.j2"), "{% include 'p.j2' %}x
+").await;
+        let after = super::Backend::render_sites_cached(&state, &tpl, Some(&root), &ctx);
+        assert!(
+            std::sync::Arc::ptr_eq(&before, &after),
+            "a .j2 edit recomputed the render sites — the per-keystroke case is not cached"
+        );
+
+        // A YAML edit must clear it: that file may have gained or lost a `template:` task.
+        edit(&service, root.join("play.yml"), "- hosts: all
+  tasks: []
+").await;
+        assert_eq!(n(&state), 0, "a YAML edit must clear the cache");
+    }
+
     /// The candidates box. `demo/templates/common.j2` holds one `{% include "shared.j2" %}`
     /// and is rendered from three places; ansible-core 2.21.2 gives a different file in each,
     /// measured. So the answer is three locations, not one, and the editor shows a picker.
@@ -6873,6 +7015,7 @@ mod tests {
             docs: std::sync::Mutex::new(std::collections::HashMap::new()),
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: std::sync::Mutex::new(std::collections::HashSet::new()),
+            render_sites: Default::default(),
             mutations: std::sync::Mutex::new(std::collections::HashMap::new()),
             settings: std::sync::Mutex::new(Default::default()),
             inventory: std::sync::Mutex::new(Vec::new()),
@@ -7752,6 +7895,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -7929,6 +8073,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(vec![root.to_path_buf()]),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -7999,6 +8144,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8177,6 +8323,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(Vec::new()),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8281,6 +8428,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(vec![root.clone()]),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),
@@ -8497,6 +8645,7 @@ mod tests {
             docs: Default::default(),
             roots: std::sync::Mutex::new(vec![a.clone(), b.clone()]),
             flagged: Default::default(),
+            render_sites: Default::default(),
             mutations: Default::default(),
             settings: Default::default(),
             inventory: Default::default(),

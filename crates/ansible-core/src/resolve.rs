@@ -916,6 +916,14 @@ pub fn render_sites(template: &Path, root: &Path, fs: &dyn Fs) -> Vec<RenderSite
     let mut out = Vec::new();
     for task_file in crate::workspace::yaml_files_in(root, fs) {
         let Some(text) = fs.read(&task_file) else { continue };
+        // Parsing dominates the walk, and most files cannot possibly hold a `template:` task.
+        // `src` is the only spelling that produces a `TemplateSrc` — the `src:` key, or `src=`
+        // in the k=v form — so a file without those three bytes cannot contribute one. A
+        // substring test, not a parse: sound because the extractor itself requires the key,
+        // which `a_file_without_src_cannot_name_a_template` pins.
+        if !text.contains("src") {
+            continue;
+        }
         let doc = crate::parse::Document::new(text);
         let Some(nodes) = doc.parse() else { continue };
         let extracted = crate::references::extract(&nodes);
@@ -3207,6 +3215,44 @@ mod tests {
         // The control: a plain relative target is not skipped.
         assert_eq!(resolve_template_include("m.j2", &tpl, &ctx, &StdFs).status, Status::Resolved);
     }
+    /// The substring guard in `render_sites` is sound only because the extractor itself
+    /// requires the key. Pinned, because the guard is a silent one: get it wrong and call
+    /// sites go missing with no error anywhere.
+    #[test]
+    fn a_file_without_src_cannot_name_a_template() {
+        // Every spelling that DOES produce one contains `src`.
+        for yaml in [
+            "- ansible.builtin.template:
+    src: a.j2
+    dest: /x
+",
+            "- template: src=a.j2 dest=/x
+",
+            "- template:
+    src: a.j2
+    dest: /x
+",
+        ] {
+            assert!(yaml.contains("src"), "{yaml:?}");
+            let nodes = crate::parse::Document::new(yaml.to_string()).parse().expect("parses");
+            let refs = crate::references::extract(&nodes).refs;
+            assert!(
+                refs.iter().any(|r| r.kind == ReferenceKind::TemplateSrc),
+                "{yaml:?} names no template"
+            );
+        }
+        // And a `template:` task with no `src` names nothing, so skipping it costs nothing.
+        let no_src = "- ansible.builtin.template:
+    dest: /x
+";
+        assert!(!no_src.contains("src"));
+        let nodes = crate::parse::Document::new(no_src.to_string()).parse().expect("parses");
+        assert!(!crate::references::extract(&nodes)
+            .refs
+            .iter()
+            .any(|r| r.kind == ReferenceKind::TemplateSrc));
+    }
+
 }
 
 #[cfg(test)]
@@ -3261,6 +3307,71 @@ mod perf {
             }
         }
         s
+    }
+
+    /// What `render_sites` costs, because it walks and parses the whole workspace and the
+    /// language server calls it on every diagnostic publish and every jump inside a `.j2`.
+    ///
+    /// Sized from the repo the tickets cite: ~731 YAML files. Generated rather than vendored,
+    /// with a dial — `PROFILE_FILES=3000` to push it.
+    #[test]
+    #[ignore = "profiling aid: PROFILE_FILES=731 cargo test perf_render_sites -- --ignored --nocapture"]
+    fn perf_render_sites() {
+        let n: usize = std::env::var("PROFILE_FILES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(731);
+        let mut files: Vec<(String, String)> = Vec::new();
+        for i in 0..n {
+            // One in ten renders a template, which is roughly the real density.
+            let body = if i % 10 == 0 {
+                format!(
+                    "- name: t{i}
+  ansible.builtin.template:
+    src: t{i}.j2
+    dest: /tmp/{i}
+"
+                )
+            } else {
+                format!("- name: t{i}
+  ansible.builtin.debug:
+    msg: \"{i}\"
+")
+            };
+            files.push((format!("roles/r{}/tasks/f{i}.yml", i % 40), body));
+        }
+        files.push(("templates/t0.j2".into(), "{% include 'p.j2' %}".into()));
+        let owned: Vec<(&str, &str)> =
+            files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let root = crate::testing::project("perf-render-sites", "[defaults]
+", &owned);
+        let tpl = root.join("templates/t0.j2");
+
+        let t = Instant::now();
+        let walked = crate::workspace::yaml_files_in(&root, &StdFs);
+        println!("walk alone:                  {:?}  ({} files)", t.elapsed(), walked.len());
+
+        let t = Instant::now();
+        let mut read = 0usize;
+        for f in &walked {
+            if StdFs.read(f).is_some() {
+                read += 1;
+            }
+        }
+        println!("walk + read:                 {:?}  ({read} read)", t.elapsed());
+
+        let t = Instant::now();
+        let sites = render_sites(&tpl, &root, &StdFs);
+        let once = t.elapsed();
+        println!("render_sites over {n} files: {once:?}  ({} sites)", sites.len());
+
+        // The server calls it per keystroke, so the number that matters is the repeat.
+        let t = Instant::now();
+        for _ in 0..5 {
+            let _ = render_sites(&tpl, &root, &StdFs);
+        }
+        println!("x5:                          {:?}", t.elapsed());
+        println!("per call:                    {:?}", t.elapsed() / 5);
     }
 
     /// Sized from a real repo rather than from one machine's home dir (T-077). The largest

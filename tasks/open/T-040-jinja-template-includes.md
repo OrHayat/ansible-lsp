@@ -504,14 +504,46 @@ limit is the worst shape this can take, and only a test naming all three files c
 pin — and rule 3 says that belongs in one place, so `delimiters_for_sites` lives beside
 `render_sites` rather than in the language server.
 
+## Progress: the render-site walk is cached, because it was a per-keystroke workspace scan
+
+`render_sites` reads and parses the whole workspace, and the server asks for it on every
+diagnostic publish and every jump inside a `.j2` — so the previous commit shipped a full scan
+per keystroke. Measured on a generated tree at the scale the tickets cite:
+
+| files | per call |
+| --- | --- |
+| 731 | 42 ms |
+| 3000 | 156 ms |
+
+Linear, and not in the place a first guess would put it. At 3000 files the **directory walk is
+6 ms** and **reading the files is 75 ms** — so there is no version of this that is cheap to
+redo, and skipping work per call cannot fix it. A substring guard (`src` must appear before a
+file is parsed at all) took ~20% and is worth keeping, but the answer is a cache.
+
+`State::render_sites`, cleared wholesale whenever a YAML file changes. Coarse deliberately:
+any task file may gain or lose a `template:` task, and a map from templates to call sites
+cannot say which templates that touches without recomputing the thing being invalidated.
+It is the *right* coarseness because **editing a `.j2` never touches YAML**, so the case that
+hurts stays warm and the case that clears it pays once.
+
+### The cache test could not fail, and the size assertion is why
+
+"A `.j2` edit must not clear the cache" was asserted as `cache.len() == 1` after the edit.
+It passes either way: `did_change` ends in `publish_diagnostics`, which for a `.j2` asks for the
+render sites again and refills the entry it just dropped. Removing the guard under test left it
+green. Rule 2 — the probe could not produce the other answer.
+
+It asserts `Arc::ptr_eq` now: same allocation, or the entry was dropped and rebuilt. That
+version fails the moment the guard goes, naming the per-keystroke case in its message.
+
 ### Still to do here
 
 - **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped
   (`Document::is_suppressed`), and a `.j2` has no YAML comments. A `{# noqa: template-syntax #}`
   spelling belongs with T-146's centralisation rather than beside it.
-- **`render_sites` is uncached and walks the workspace per request.** Fine for one open
-  template, wrong for a scan. The general inverse of the reference graph is [[T-020]]'s, and
-  this is deliberately not it — one kind, one direction. Revisit when T-020 lands.
+- **the render-site cache is cleared by any YAML edit**, so a repo where task files are edited
+  constantly pays the full walk often. A precise invalidation needs the inbound edges [[T-020]]
+  builds and the watcher [[T-012]] provides; revisit when either lands.
 - `line_statement_prefix` / `line_comment_prefix`: the header now *sets* them, the lexer
   still ignores them — the sixth lexer state is unbuilt
 
