@@ -190,14 +190,43 @@ T-184 shape, since 1571 real templates are 8.6 MB of JSON.
 `find_end` splits `{% if x == '%}' %}` into `statement " if x == '"` + `data "' %}ok"`, and
 both the checked-in corpus and the tree gate fail on it.
 
+## Progress: the statement forms are in
+
+`jinja::statement` reads a `{% … %}` body and `check` walks a whole template with a tag stack.
+All nine measured rows are refused and — the control that makes that mean something — the
+*repaired* form of each is accepted, so a reader that simply refused everything would not pass.
+
+The four target-naming tags are read through the one `parse_expression` call upstream uses.
+Silence is asserted where it is owed: a dynamic `{% include some_var %}` names nothing, and
+neither does a reference inside `{% raw %}`, inside `{# #}`, or inside a string.
+
+### Against `find_referenced_templates`, the oracle this ticket named
+
+**1558 real templates from the pinned trees, 54 literal references, 0 differences, and 0
+falsely refused** — that last number is the one that matters, because a false "this will not
+render" is the worst answer this feature can give.
+
+Two things the corpus found that reading the grammar had not:
+
+- **`{% include ['a.j2', 'b.j2'] %}`** names *both*, tried in order. A list is not a dynamic
+  name, and upstream reports both; the first version reported neither.
+- **`{% set x %}…{% endset %}`** is real. `set` is standalone with a top-level `=` and a block
+  without one, and treating it as always-standalone reported a live kubespray template as
+  broken. Depth matters in that test: the `=` in `{% set x = f(a=1) %}` is a keyword argument.
+
+Seen red: accepting unknown tags fails two tests, and dropping the unclosed-block check at
+end of template fails two more.
+
 ### Still to do here
 
-- the 14 statement forms, and `parse_statements`' end-token bookkeeping — without them there
-  is no unknown-tag diagnostic and no include target
-- `line_statement_prefix` / `line_comment_prefix`: the fields exist on `Delimiters` and the
-  scanner does not read them yet
-- `trim_blocks` / `lstrip_blocks`, which Ansible's `template:` module defaults differently from
-  jinja2 and which move `Data` boundaries again — **not yet measured**
+- **resolution** — extraction names a template, it does not find the file. The search path is
+  call-site-dependent (the Traps section), so this is the candidates problem, not a lookup.
+- a `demo/` include-chain fixture: `demo/` currently has **no `.j2` files at all**, so the
+  differential's demo control cannot come back non-zero yet
+- the unknown-tag diagnostic must go silent when `DEFAULT_JINJA2_EXTENSIONS` is non-empty
+- `line_statement_prefix` / `line_comment_prefix`: fields exist on `Delimiters`, unread
+- `trim_blocks` / `lstrip_blocks`, which Ansible's `template:` module defaults differently
+  from jinja2 and which move `Data` boundaries — **not yet measured**
 - reading the delimiters from the module parameters and the `#jinja2:` header, rather than
   taking them as an argument
 
@@ -207,7 +236,7 @@ both the checked-in corpus and the tree gate fail on it.
 - [ ] a missing include warns; a templated include name stays silent
 - [ ] multi-context templates offer all candidate resolutions rather than guessing one
 - [ ] a `.j2` include-chain fixture is pinned
-- [ ] all 14 statement forms parse, with `{% raw %}` and `{# #}` handled in the lexer, and the
+- [x] all 14 statement forms parse, with `{% raw %}` and `{# #}` handled in the lexer, and the
       `%}`-in-a-string and `%}`-inside-brackets cases asserted
 - [ ] a `.j2` that will not render is diagnosed, with the nine measured rows above as the test,
       and silent when `DEFAULT_JINJA2_EXTENSIONS` is non-empty

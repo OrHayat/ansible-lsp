@@ -41,6 +41,22 @@ pub fn parse(src: &str) -> Result<Expr, Error> {
     Ok(expr)
 }
 
+/// One expression from an existing token stream, plus where it stopped.
+///
+/// A statement is a tag name, then an expression, then modifiers — `{% include 'a.j2' ignore
+/// missing %}` — so its parser has to read *an* expression rather than a whole input. Upstream
+/// is the same shape: `parse_include` calls `self.parse_expression()` and then keeps reading
+/// the same stream. [`parse`] is that call plus an end-of-stream check.
+pub(super) fn expression_at(
+    src: &str,
+    toks: &[Token],
+    pos: usize,
+) -> Result<(Expr, usize), Error> {
+    let mut p = Parser { src, toks, pos, depth: 0 };
+    let expr = p.parse_expression()?;
+    Ok((expr, p.pos))
+}
+
 /// How deep the recursive descent may go before it refuses.
 ///
 /// Not a style choice — without it, `"("*40 + "1" + ")"*40` **overflows the stack and aborts

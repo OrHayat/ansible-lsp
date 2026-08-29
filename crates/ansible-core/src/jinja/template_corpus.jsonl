@@ -1,44 +1,44 @@
-{"src": "{% raw %}{% include 'x.j2' %}{% endraw %}", "parse_err": null, "blocks": [["data", "{% include 'x.j2' %}"]]}
-{"src": "{# {% include 'x.j2' %} #}", "parse_err": null, "blocks": [["comment", " {% include 'x.j2' %} "]]}
-{"src": "{% if x == '%}' %}ok{% endif %}", "parse_err": null, "blocks": [["statement", " if x == '%}' "], ["data", "ok"], ["statement", " endif "]]}
-{"src": "{% if x == \"%}\" %}ok{% endif %}", "parse_err": null, "blocks": [["statement", " if x == \"%}\" "], ["data", "ok"], ["statement", " endif "]]}
-{"src": "{% set xs = [1, 2] %}", "parse_err": null, "blocks": [["statement", " set xs = [1, 2] "]]}
-{"src": "a  {%- if x -%}  b  {%- endif -%}  c", "parse_err": null, "blocks": [["data", "a"], ["statement", " if x "], ["data", "b"], ["statement", " endif "], ["data", "c"]]}
-{"src": "a  {%+ if x +%}  b  {% endif %}  c", "parse_err": null, "blocks": [["data", "a  "], ["statement", " if x "], ["data", "  b  "], ["statement", " endif "], ["data", "  c"]]}
-{"src": "a {{- x -}} b", "parse_err": null, "blocks": [["data", "a"], ["expression", " x "], ["data", "b"]]}
-{"src": "a {#- c -#} b", "parse_err": null, "blocks": [["data", "a"], ["comment", " c "], ["data", "b"]]}
-{"src": "{% raw %}{% endraw %}", "parse_err": null, "blocks": []}
-{"src": "{% raw %}a{% endraw %}b{% raw %}c{% endraw %}", "parse_err": null, "blocks": [["data", "a"], ["data", "b"], ["data", "c"]]}
-{"src": "{%- raw -%}  x  {%- endraw -%}", "parse_err": null, "blocks": [["data", "x"]]}
-{"src": "{% raw %}{% raw %}{% endraw %}", "parse_err": null, "blocks": [["data", "{% raw %}"]]}
-{"src": "{# a #}{# b #}", "parse_err": null, "blocks": [["comment", " a "], ["comment", " b "]]}
-{"src": "{##}", "parse_err": null, "blocks": [["comment", ""]]}
-{"src": "{# unclosed", "parse_err": "Missing end of comment tag", "lex_err": "Missing end of comment tag"}
-{"src": "{% if x %}", "parse_err": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'.", "blocks": [["statement", " if x "]]}
-{"src": "{{ x", "parse_err": "unexpected end of template, expected 'end of print statement'.", "blocks": []}
-{"src": "{% for x in xs %}", "parse_err": "Unexpected end of template. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.", "blocks": [["statement", " for x in xs "]]}
-{"src": "{% set a = '{{' %}", "parse_err": null, "blocks": [["statement", " set a = '{{' "]]}
-{"src": "{% set a = '{%' %}", "parse_err": null, "blocks": [["statement", " set a = '{%' "]]}
-{"src": "{{ '}}' }}", "parse_err": null, "blocks": [["expression", " '}}' "]]}
-{"src": "", "parse_err": null, "blocks": []}
-{"src": "no tags at all", "parse_err": null, "blocks": [["data", "no tags at all"]]}
-{"src": "{{}}", "parse_err": "Expected an expression, got 'end of print statement'", "blocks": [["expression", ""]]}
-{"src": "{%%}", "parse_err": "tag name expected", "blocks": [["statement", ""]]}
-{"src": "{{ xs[1] }}", "parse_err": null, "blocks": [["expression", " xs[1] "]]}
-{"src": "{{ {'a': 1} }}", "parse_err": null, "blocks": [["expression", " {'a': 1} "]]}
-{"src": "{{ f(a, [1, 2], {'k': 'v'}) }}", "parse_err": null, "blocks": [["expression", " f(a, [1, 2], {'k': 'v'}) "]]}
-{"src": "{% extends 'base.j2' %}", "parse_err": null, "blocks": [["statement", " extends 'base.j2' "]]}
-{"src": "{% include 'partials/header.j2' %}", "parse_err": null, "blocks": [["statement", " include 'partials/header.j2' "]]}
-{"src": "{% import 'macros.j2' as m %}", "parse_err": null, "blocks": [["statement", " import 'macros.j2' as m "]]}
-{"src": "{% from 'macros.j2' import a, b as c %}", "parse_err": null, "blocks": [["statement", " from 'macros.j2' import a, b as c "]]}
-{"src": "{% include some_var %}", "parse_err": null, "blocks": [["statement", " include some_var "]]}
-{"src": "{% include ['a.j2', 'b.j2'] %}", "parse_err": null, "blocks": [["statement", " include ['a.j2', 'b.j2'] "]]}
-{"src": "{% include 'a.j2' ignore missing %}", "parse_err": null, "blocks": [["statement", " include 'a.j2' ignore missing "]]}
-{"src": "{% include 'a.j2' with context %}", "parse_err": null, "blocks": [["statement", " include 'a.j2' with context "]]}
-{"src": "line one\n{% if x %}\n  body\n{% endif %}\nline two", "parse_err": null, "blocks": [["data", "line one\n"], ["statement", " if x "], ["data", "\n  body\n"], ["statement", " endif "], ["data", "\nline two"]]}
-{"src": "{{\n  x\n}}", "parse_err": null, "blocks": [["expression", "\n  x\n"]]}
-{"src": "Before\n{{ fail() }}\nAfter\n", "parse_err": null, "blocks": [["data", "Before\n"], ["expression", " fail() "], ["data", "\nAfter\n"]]}
-{"src": "\u6587\u5b57\u5316\u3051\n", "parse_err": null, "blocks": [["data", "\u6587\u5b57\u5316\u3051\n"]]}
-{"src": "Foo\n{% for item in broken %}\n  ...\n{% endif %}\n", "parse_err": "Encountered unknown tag 'endif'. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.", "blocks": [["data", "Foo\n"], ["statement", " for item in broken "], ["data", "\n  ...\n"], ["statement", " endif "], ["data", "\n"]]}
-{"src": "BAR\n", "parse_err": null, "blocks": [["data", "BAR\n"]]}
-{"src": "FOO\n", "parse_err": null, "blocks": [["data", "FOO\n"]]}
+{"src": "{% raw %}{% include 'x.j2' %}{% endraw %}", "parse_err": null, "refs": [], "blocks": [["data", "{% include 'x.j2' %}"]]}
+{"src": "{# {% include 'x.j2' %} #}", "parse_err": null, "refs": [], "blocks": [["comment", " {% include 'x.j2' %} "]]}
+{"src": "{% if x == '%}' %}ok{% endif %}", "parse_err": null, "refs": [], "blocks": [["statement", " if x == '%}' "], ["data", "ok"], ["statement", " endif "]]}
+{"src": "{% if x == \"%}\" %}ok{% endif %}", "parse_err": null, "refs": [], "blocks": [["statement", " if x == \"%}\" "], ["data", "ok"], ["statement", " endif "]]}
+{"src": "{% set xs = [1, 2] %}", "parse_err": null, "refs": [], "blocks": [["statement", " set xs = [1, 2] "]]}
+{"src": "a  {%- if x -%}  b  {%- endif -%}  c", "parse_err": null, "refs": [], "blocks": [["data", "a"], ["statement", " if x "], ["data", "b"], ["statement", " endif "], ["data", "c"]]}
+{"src": "a  {%+ if x +%}  b  {% endif %}  c", "parse_err": null, "refs": [], "blocks": [["data", "a  "], ["statement", " if x "], ["data", "  b  "], ["statement", " endif "], ["data", "  c"]]}
+{"src": "a {{- x -}} b", "parse_err": null, "refs": [], "blocks": [["data", "a"], ["expression", " x "], ["data", "b"]]}
+{"src": "a {#- c -#} b", "parse_err": null, "refs": [], "blocks": [["data", "a"], ["comment", " c "], ["data", "b"]]}
+{"src": "{% raw %}{% endraw %}", "parse_err": null, "refs": [], "blocks": []}
+{"src": "{% raw %}a{% endraw %}b{% raw %}c{% endraw %}", "parse_err": null, "refs": [], "blocks": [["data", "a"], ["data", "b"], ["data", "c"]]}
+{"src": "{%- raw -%}  x  {%- endraw -%}", "parse_err": null, "refs": [], "blocks": [["data", "x"]]}
+{"src": "{% raw %}{% raw %}{% endraw %}", "parse_err": null, "refs": [], "blocks": [["data", "{% raw %}"]]}
+{"src": "{# a #}{# b #}", "parse_err": null, "refs": [], "blocks": [["comment", " a "], ["comment", " b "]]}
+{"src": "{##}", "parse_err": null, "refs": [], "blocks": [["comment", ""]]}
+{"src": "{# unclosed", "parse_err": "Missing end of comment tag", "refs": null, "lex_err": "Missing end of comment tag"}
+{"src": "{% if x %}", "parse_err": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'.", "refs": null, "blocks": [["statement", " if x "]]}
+{"src": "{{ x", "parse_err": "unexpected end of template, expected 'end of print statement'.", "refs": null, "blocks": []}
+{"src": "{% for x in xs %}", "parse_err": "Unexpected end of template. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.", "refs": null, "blocks": [["statement", " for x in xs "]]}
+{"src": "{% set a = '{{' %}", "parse_err": null, "refs": [], "blocks": [["statement", " set a = '{{' "]]}
+{"src": "{% set a = '{%' %}", "parse_err": null, "refs": [], "blocks": [["statement", " set a = '{%' "]]}
+{"src": "{{ '}}' }}", "parse_err": null, "refs": [], "blocks": [["expression", " '}}' "]]}
+{"src": "", "parse_err": null, "refs": [], "blocks": []}
+{"src": "no tags at all", "parse_err": null, "refs": [], "blocks": [["data", "no tags at all"]]}
+{"src": "{{}}", "parse_err": "Expected an expression, got 'end of print statement'", "refs": null, "blocks": [["expression", ""]]}
+{"src": "{%%}", "parse_err": "tag name expected", "refs": null, "blocks": [["statement", ""]]}
+{"src": "{{ xs[1] }}", "parse_err": null, "refs": [], "blocks": [["expression", " xs[1] "]]}
+{"src": "{{ {'a': 1} }}", "parse_err": null, "refs": [], "blocks": [["expression", " {'a': 1} "]]}
+{"src": "{{ f(a, [1, 2], {'k': 'v'}) }}", "parse_err": null, "refs": [], "blocks": [["expression", " f(a, [1, 2], {'k': 'v'}) "]]}
+{"src": "{% extends 'base.j2' %}", "parse_err": null, "refs": ["base.j2"], "blocks": [["statement", " extends 'base.j2' "]]}
+{"src": "{% include 'partials/header.j2' %}", "parse_err": null, "refs": ["partials/header.j2"], "blocks": [["statement", " include 'partials/header.j2' "]]}
+{"src": "{% import 'macros.j2' as m %}", "parse_err": null, "refs": ["macros.j2"], "blocks": [["statement", " import 'macros.j2' as m "]]}
+{"src": "{% from 'macros.j2' import a, b as c %}", "parse_err": null, "refs": ["macros.j2"], "blocks": [["statement", " from 'macros.j2' import a, b as c "]]}
+{"src": "{% include some_var %}", "parse_err": null, "refs": [null], "blocks": [["statement", " include some_var "]]}
+{"src": "{% include ['a.j2', 'b.j2'] %}", "parse_err": null, "refs": ["a.j2", "b.j2"], "blocks": [["statement", " include ['a.j2', 'b.j2'] "]]}
+{"src": "{% include 'a.j2' ignore missing %}", "parse_err": null, "refs": ["a.j2"], "blocks": [["statement", " include 'a.j2' ignore missing "]]}
+{"src": "{% include 'a.j2' with context %}", "parse_err": null, "refs": ["a.j2"], "blocks": [["statement", " include 'a.j2' with context "]]}
+{"src": "line one\n{% if x %}\n  body\n{% endif %}\nline two", "parse_err": null, "refs": [], "blocks": [["data", "line one\n"], ["statement", " if x "], ["data", "\n  body\n"], ["statement", " endif "], ["data", "\nline two"]]}
+{"src": "{{\n  x\n}}", "parse_err": null, "refs": [], "blocks": [["expression", "\n  x\n"]]}
+{"src": "Before\n{{ fail() }}\nAfter\n", "parse_err": null, "refs": [], "blocks": [["data", "Before\n"], ["expression", " fail() "], ["data", "\nAfter\n"]]}
+{"src": "\u6587\u5b57\u5316\u3051\n", "parse_err": null, "refs": [], "blocks": [["data", "\u6587\u5b57\u5316\u3051\n"]]}
+{"src": "Foo\n{% for item in broken %}\n  ...\n{% endif %}\n", "parse_err": "Encountered unknown tag 'endif'. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.", "refs": null, "blocks": [["data", "Foo\n"], ["statement", " for item in broken "], ["data", "\n  ...\n"], ["statement", " endif "], ["data", "\n"]]}
+{"src": "BAR\n", "parse_err": null, "refs": [], "blocks": [["data", "BAR\n"]]}
+{"src": "FOO\n", "parse_err": null, "refs": [], "blocks": [["data", "FOO\n"]]}

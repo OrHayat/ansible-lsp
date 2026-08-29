@@ -20,7 +20,7 @@ import json
 import pathlib
 import sys
 
-from jinja2 import Environment
+from jinja2 import Environment, meta
 
 # `keep_trailing_newline` is False in stock jinja2 and True in the thing we model. Measured on
 # ansible-core 2.21.2: a template file ending `hello {{ name }}\n` renders to `hello world\n`,
@@ -131,13 +131,25 @@ def parse_error(src):
         return str(e).splitlines()[0]
 
 
+def referenced(src):
+    """`jinja2.meta.find_referenced_templates`, the ready-made oracle for T-040.
+
+    Yields `None` for a name it cannot resolve statically -- a dynamic `{% include var %}` --
+    which is the same answer this port gives by refusing to call it a reference.
+    """
+    try:
+        return list(meta.find_referenced_templates(env.parse(src)))
+    except Exception:  # noqa: BLE001 - a template that does not parse names nothing
+        return None
+
+
 def row(src):
     src = src.replace("\r\n", "\n").replace("\r", "\n")
     # Two oracles, because they answer different questions. `lex` gives the block split; it is
     # lazy and simply stops on an unterminated tag, emitting nothing and raising nothing --
     # `'{{ x'` comes back as no tokens at all. `parse` is the one that says whether the
     # template renders, and on that same input it says exactly what this port says.
-    out = {"src": src, "parse_err": parse_error(src)}
+    out = {"src": src, "parse_err": parse_error(src), "refs": referenced(src)}
     try:
         out["blocks"] = blocks(src)
     except Exception as e:  # noqa: BLE001 - any refusal is a refusal
