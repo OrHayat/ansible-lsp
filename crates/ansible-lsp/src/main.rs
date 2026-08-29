@@ -657,25 +657,10 @@ impl State {
     /// that renders it runs on the target, so this is the one diagnostic here that the
     /// runtime cannot give in time to help — it arrives at deploy, on the managed host.
     ///
-    /// Delimiters are the default pair for now; reading them from the `template:` module's
-    /// parameters and from a `#jinja2:` header is still T-040's, and until then a template
-    /// that overrides them is read with the wrong ones.
-    fn template_diagnostics_for(text: &str, extensions: &[String]) -> Vec<Diagnostic> {
-        Self::template_diagnostics_in(text, extensions, &jinja::Delimiters::default())
-    }
-
-    /// [`template_diagnostics_for`](Self::template_diagnostics_for) with the call site's
-    /// delimiters, which a `#jinja2:` header in the file then overrides.
-    fn template_diagnostics_in(
-        text: &str,
-        extensions: &[String],
-        d: &jinja::Delimiters,
-    ) -> Vec<Diagnostic> {
-        Self::template_diagnostics_at(text, extensions, d, true)
-    }
-
-    /// [`template_diagnostics_in`](Self::template_diagnostics_in) with `root` saying whether
-    /// this file's own `#jinja2:` header applies — false for one that is only ever included.
+    /// `d` is the grammar the file is read with and `root` says whether its own `#jinja2:`
+    /// header applies — false for one that is only ever included. **One entry, no wrappers**:
+    /// the convenience versions that used to sit here were called by tests and by nothing
+    /// else, so those tests were exercising a path the server had stopped taking.
     fn template_diagnostics_at(
         text: &str,
         extensions: &[String],
@@ -1044,26 +1029,11 @@ impl Backend {
         computed
     }
 
-    /// [`resolve::delimiters_for_sites`], kept as a method so the call sites here read the
-    /// same as the rest of this impl.
-    fn template_delimiters_for(sites: &[resolve::RenderSite]) -> jinja::Delimiters {
-        resolve::delimiters_for_sites(sites)
-    }
-
-    /// The grammar a template is read with, and whether its own `#jinja2:` header counts.
+    /// The grammar a template is read with, memoized in [`State::template_grammars`].
     ///
-    /// Not `template_delimiters_for` alone: a partial that no task names inherits its
-    /// includer's delimiters, and its own header is inert. Measured — see
+    /// Not the call sites' delimiters alone: a partial that no task names inherits its
+    /// includer's, and its own header is inert. Measured — see
     /// [`resolve::effective_delimiters`].
-    fn template_grammar(path: &Path, root: Option<&Path>, ctx: &FileContext) -> (jinja::Delimiters, bool) {
-        let root = root.map(Path::to_path_buf).or_else(|| ctx.project_root.clone());
-        match root {
-            Some(r) => resolve::effective_delimiters(path, &r, &StdFs),
-            None => (jinja::Delimiters::default(), true),
-        }
-    }
-
-    /// [`template_grammar`](Self::template_grammar) through [`State::template_grammars`].
     fn template_grammar_cached(
         state: &State,
         path: &Path,
@@ -5513,7 +5483,9 @@ mod tests {
     #[test]
     fn a_template_that_will_not_render_is_one_error_and_its_repair_is_none() {
         use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
-        let one = |src: &str| super::State::template_diagnostics_for(src, &[]);
+        let one = |src: &str| {
+            super::State::template_diagnostics_at(src, &[], &ansible_core::jinja::Delimiters::default(), true)
+        };
         for (broken, repaired) in [
             ("{% for x in xs %}{{ x }}", "{% for x in xs %}{{ x }}{% endfor %}"),
             ("{% if a %}x{% endfor %}", "{% if a %}x{% endif %}"),
@@ -5546,15 +5518,16 @@ mod tests {
     fn a_configured_jinja_extension_silences_the_template_diagnostic() {
         let src = "{% for i in [1,2,3] %}{% if i == 2 %}{% break %}{% endif %}{{ i }}{% endfor %}";
         // The control: with no extension it is reported, and reported as the unknown tag.
-        let bare = super::State::template_diagnostics_for(src, &[]);
+        let d = ansible_core::jinja::Delimiters::default();
+        let bare = super::State::template_diagnostics_at(src, &[], &d, true);
         assert_eq!(bare.len(), 1, "{bare:?}");
         assert!(bare[0].message.contains("break"), "{}", bare[0].message);
         let loaded = ["jinja2.ext.loopcontrols".to_string()];
-        assert!(super::State::template_diagnostics_for(src, &loaded).is_empty());
+        assert!(super::State::template_diagnostics_at(src, &loaded, &d, true).is_empty());
         // Not only the unknown-tag class: `preprocess` reaches everything, so the gate is
         // the whole file.
-        assert_eq!(super::State::template_diagnostics_for("{{ x }", &[]).len(), 1);
-        assert!(super::State::template_diagnostics_for("{{ x }", &loaded).is_empty());
+        assert_eq!(super::State::template_diagnostics_at("{{ x }", &[], &d, true).len(), 1);
+        assert!(super::State::template_diagnostics_at("{{ x }", &loaded, &d, true).is_empty());
     }
 
     /// Rule 4: exactly the three demo templates labelled BAD get a `template-syntax` ERROR,
@@ -5598,11 +5571,12 @@ mod tests {
             let ctx = ansible_core::workspace::FileContext::discover(path);
             let sites = super::Backend::render_sites_for(path, Some(&demo), &ctx);
             let (d, is_root) = grammar_of(&grammars, path);
-            if !super::State::template_diagnostics_for(&text, &[]).is_empty() {
+            let plain = ansible_core::jinja::Delimiters::default();
+            if !super::State::template_diagnostics_at(&text, &[], &plain, true).is_empty() {
                 default_flagged
                     .push(path.file_name().unwrap().to_string_lossy().to_string());
             }
-            let diags = super::State::template_diagnostics_in(&text, &[], &d);
+            let diags = super::State::template_diagnostics_at(&text, &[], &d, is_root);
             if !diags.is_empty() {
                 flagged.push((
                     path.file_name().unwrap().to_string_lossy().to_string(),
@@ -5625,7 +5599,13 @@ mod tests {
         let inherited = demo.join("templates/partials/inherited.j2");
         let text = std::fs::read_to_string(&inherited).unwrap();
         assert!(
-            super::State::template_diagnostics_for(&text, &[]).is_empty(),
+            super::State::template_diagnostics_at(
+                &text,
+                &[],
+                &ansible_core::jinja::Delimiters::default(),
+                true
+            )
+            .is_empty(),
             "the fixture stopped being fine on its own bytes"
         );
 

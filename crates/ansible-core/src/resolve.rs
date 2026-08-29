@@ -973,7 +973,7 @@ pub fn all_render_sites(root: &Path, fs: &dyn Fs) -> HashMap<PathBuf, Vec<Render
 /// task in an included file gets `[<that file's dir>, <playbook_dir>]`.
 fn rendering_search_path(ctx: &crate::workspace::FileContext) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
-    let mut push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
+    let push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
         if !roots.contains(&p) {
             roots.push(p);
         }

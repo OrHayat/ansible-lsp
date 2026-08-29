@@ -9,7 +9,7 @@
   },
   "main": "./src/extension.js",
   "scripts": {
-    "test": "node test/webview.js"
+    "test": "node test/webview.js && node test/selector.js"
   },
   "activationEvents": [
     "onLanguage:ansible",

@@ -665,6 +665,47 @@ The fix is one line of intent — re-queue on a change rather than only on a fir
 it converges: once a file is on the defaults, further disagreement resolves to the defaults
 again and the equality arm stops the walk.
 
+## Progress: run against the real binary, and the client selector pinned
+
+The editor half was the last unverified piece and it is two questions, not one.
+
+**Does the server do the right thing?** Driven through the real
+`target/release/ansible-lsp.exe` over LSP stdio against `demo/` — `initialize`, `didOpen` per
+template, `textDocument/definition` — rather than through the test harness:
+
+| file | published |
+| --- | --- |
+| `broken.conf.j2` | `[template-syntax]` line 8, `unknown tag 'forr'` |
+| `broken_include.conf.j2` | `[missing-template]` line 14, `partials/nowhere.j2` |
+| `partials/inherited.j2` | `[template-syntax]` line 10, `unknown tag 'notatag'` |
+| `overridden.conf.j2`, `module_delims.j2`, `app.conf.j2` | silent |
+
+and go-to-definition on `common.j2`'s one include returned all **three** `shared.j2` files.
+
+**Does the editor tell it?** That probe cannot say — the script sent the `didOpen` itself, so
+it proves the server answers when told and not that VS Code will tell it. `client/test/selector.js`
+covers that half: it runs the real `activate` with `LanguageClient` replaced by a recorder,
+reads the selector actually built, and matches every `.j2` in `demo/` through `minimatch`,
+which is what a `DocumentFilter.pattern` resolves through.
+
+Seen red both ways — drop the glob filter and every demo template goes unmatched; widen it to
+`**/*` and the control fires instead, because YAML must arrive by its *language* filter and not
+by the template glob. The first attempt at that control edited a path that did not exist and
+printed green on an unchanged file; rule 5's "a break that did not apply is not a break", met
+again.
+
+What is still not covered by anything here: whether VS Code *activates* the extension in a
+given workspace. `activationEvents` carries `workspaceContains:**/*.j2`, and only an editor can
+confirm it fires.
+
+### The wrappers the tests were calling had stopped being the code
+
+`template_diagnostics_for` / `_in` and `template_delimiters_for` / `template_grammar` went dead
+when the real paths moved to the cached and grammar-aware versions, and `dead_code` named all
+four. They were still what several tests called — so those tests were exercising a path the
+server no longer takes, which is the failure `client/test/webview.js` was written for one layer
+down. Deleted, and the tests repointed at `template_diagnostics_at`, the entry the server uses.
+
 ### Still to do here
 
 - **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped

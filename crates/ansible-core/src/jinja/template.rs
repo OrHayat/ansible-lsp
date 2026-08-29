@@ -395,7 +395,7 @@ impl<'a> Scanner<'a> {
     fn next_delimiter(&self) -> Option<(usize, State)> {
         let rest = &self.src[self.i..];
         let mut best: Option<(usize, usize, State)> = None;
-        let mut consider = |at: usize, len: usize, state: State, best: &mut Option<_>| {
+        let consider = |at: usize, len: usize, state: State, best: &mut Option<_>| {
             // Upstream sorts its rules by prefix length, longest first, so at one position the
             // longer delimiter wins — that is what keeps `##` a line comment when `#` is also
             // a line statement prefix.
