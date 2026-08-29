@@ -116,11 +116,19 @@ pub enum Verdict {
         negated: bool,
         matches_default: bool,
     },
-    /// `mode in ['a', 'b']`
+    /// `mode in ['a', 'b']`. `matches_default` is whether the *defaulted* value satisfies the
+    /// membership, i.e. whether this runs when the variable is unset — `Some(false)` for a
+    /// guard whose default does not satisfy it, and `None` when there is no guard at all.
+    ///
+    /// The two are not interchangeable and that is why this is not a `bool`. Unguarded, an
+    /// unset variable is a **fatal error rather than a skip** (measured on 2.21.2), so neither
+    /// this verdict nor its inverse runs by default — `None` must stay `None` through
+    /// [`invert`], where `Some(false)` becomes `Some(true)`.
     WhenIn {
         var: VarRef,
         values: Vec<String>,
         negated: bool,
+        matches_default: Option<bool>,
     },
     /// `x is defined` / `x is not defined`. Statically this is the interesting one:
     /// if `x` is defined nowhere in the workspace, the branch can never be taken.
@@ -165,12 +173,17 @@ impl Verdict {
                 (false, false) => format!("runs only if {var} = {value}"),
                 (false, true) => format!("runs only if {var} changes from {value}"),
             },
-            Verdict::WhenIn { var, values, negated } => {
+            Verdict::WhenIn { var, values, negated, matches_default } => {
                 let list = values.join(", ");
-                if *negated {
-                    format!("runs unless {var} is one of [{list}]")
-                } else {
-                    format!("runs only if {var} is one of [{list}]")
+                // `matches_default` picks the framing and `negated` picks the direction, the
+                // same split [`Verdict::WhenEquals`] uses. "Runs unless" is this module's
+                // wording for *runs by default*, so it is only ever correct for `Some(true)`
+                // — T-213 was that phrase on a condition that does not run by default.
+                match (matches_default, negated) {
+                    (Some(true), false) => format!("runs unless {var} leaves [{list}]"),
+                    (Some(true), true) => format!("runs unless {var} is one of [{list}]"),
+                    (_, false) => format!("runs only if {var} is one of [{list}]"),
+                    (_, true) => format!("runs only if {var} is not one of [{list}]"),
                 }
             }
             Verdict::RequiresDefined { var, negated: false } => {
@@ -208,7 +221,7 @@ impl Verdict {
             Verdict::UnlessCleared { var } => format!("{var} not false"),
             Verdict::WhenEquals { var, value, negated: false, .. } => format!("{var} = {value}"),
             Verdict::WhenEquals { var, value, negated: true, .. } => format!("{var} != {value}"),
-            Verdict::WhenIn { var, values, negated } => format!(
+            Verdict::WhenIn { var, values, negated, .. } => format!(
                 "{var} {}in [{}]",
                 if *negated { "not " } else { "" },
                 values.join(", ")
@@ -247,8 +260,8 @@ impl Verdict {
                 Verdict::WhenEquals { var: b, value: y, negated: false, .. },
             ) => a == b && x != y,
             (
-                Verdict::WhenIn { var: a, values: x, negated: false },
-                Verdict::WhenIn { var: b, values: y, negated: false },
+                Verdict::WhenIn { var: a, values: x, negated: false, .. },
+                Verdict::WhenIn { var: b, values: y, negated: false, .. },
             ) => a == b && !x.iter().any(|v| y.contains(v)),
             (
                 Verdict::RequiresDefined { var: a, negated: p },
@@ -905,7 +918,7 @@ fn classify_expr(src: &str, e: &Expr) -> Verdict {
                 // `mode in ['a', 'b']` / `mode not in [...]`
                 CmpOp::In | CmpOp::NotIn => {
                     let negated = matches!(op, CmpOp::NotIn);
-                    let Some((var, _, filters)) = strip_guards(src, expr) else {
+                    let Some((var, dflt, filters)) = strip_guards(src, expr) else {
                         return Verdict::Unknown;
                     };
                     if !filters.is_empty() {
@@ -915,7 +928,8 @@ fn classify_expr(src: &str, e: &Expr) -> Verdict {
                     if values.is_empty() {
                         return Verdict::Unknown;
                     }
-                    Verdict::WhenIn { var, values, negated }
+                    let matches_default = dflt.map(|d| values.contains(&d) != negated);
+                    Verdict::WhenIn { var, values, negated, matches_default }
                 }
                 _ => Verdict::Unknown,
             }
@@ -952,9 +966,13 @@ fn invert(v: Verdict) -> Verdict {
             negated: !negated,
             matches_default: !matches_default,
         },
-        Verdict::WhenIn { var, values, negated } => {
-            Verdict::WhenIn { var, values, negated: !negated }
-        }
+        Verdict::WhenIn { var, values, negated, matches_default } => Verdict::WhenIn {
+            var,
+            values,
+            negated: !negated,
+            // `None` is "unset is an error", which the inverse does not change.
+            matches_default: matches_default.map(|m| !m),
+        },
         Verdict::RequiresDefined { var, negated } => {
             Verdict::RequiresDefined { var, negated: !negated }
         }
@@ -1275,7 +1293,31 @@ mod tests {
             "skip_x | ansible.builtin.d(false)",
             "skip_x|d(false)|bool",
         ] {
-            assert_eq!(classify(spelling), want, "{spelling:?}");
+            let got = classify(spelling);
+            assert_eq!(got, want, "{spelling:?}");
+            // Both rendering surfaces, not just the verdict: a spelling that classified but
+            // rendered differently would still be a difference the user sees (rule 3).
+            assert_eq!(got.label(), want.label(), "{spelling:?} label");
+            assert_eq!(got.requirement(), want.requirement(), "{spelling:?} requirement");
+        }
+
+        // A second arm, so the alias is not pinned to one verdict.
+        let truthy = classify("skip_x | default(true)");
+        assert_eq!(truthy, Verdict::UnlessCleared { var: "skip_x".into() });
+        for spelling in ["skip_x | d(true)", "skip_x | ansible.builtin.d(true)"] {
+            assert_eq!(classify(spelling), truthy, "{spelling:?}");
+        }
+
+        // The guard that must not have widened: `d`/`default` are aliases of one filter, and
+        // recognising them says nothing about any other name in the same position. A filter
+        // this module has no model for still refuses, whatever it is called.
+        for unknown in [
+            "skip_x | frobnicate(false)",
+            "skip_x | ansible.builtin.frobnicate(false)",
+            "skip_x | dd(false)",
+            "skip_x | default_if_none(false)",
+        ] {
+            assert_eq!(classify(unknown), Verdict::Unknown, "{unknown:?}");
         }
     }
 
@@ -1388,6 +1430,92 @@ mod tests {
         assert_ne!(classify("x | default('') == 'https://get'"), Verdict::Unknown);
     }
 
+    /// T-213. The four `(matches_default, negated)` framings, each pinned to what
+    /// ansible-core 2.21.2 actually does with the variable unset:
+    ///
+    /// | condition | unset |
+    /// | --- | --- |
+    /// | `x \| d("a") in ["b"]` | skipping |
+    /// | `x \| d("a") in ["a","b"]` | **ran** |
+    /// | `x \| d("a") not in ["a","b"]` | skipping |
+    /// | `x \| d("a") not in ["b"]` | **ran** |
+    /// | `x in ["a"]` | **fatal** — `x` is undefined |
+    /// | `x not in ["a"]` | **fatal** — `x` is undefined |
+    ///
+    /// The last two are why `matches_default` is an `Option`: unguarded, *neither* direction
+    /// runs when unset, so `Some(false)` would be a different claim than the truth.
+    #[test]
+    fn a_membership_test_is_framed_by_whether_it_runs_unset() {
+        let cases: &[(&str, Option<bool>, &str)] = &[
+            ("x | d('a') in ['b']", Some(false), "runs only if x is one of [b]"),
+            ("x | d('a') in ['a', 'b']", Some(true), "runs unless x leaves [a, b]"),
+            ("x | d('a') not in ['a', 'b']", Some(false), "runs only if x is not one of [a, b]"),
+            ("x | d('a') not in ['b']", Some(true), "runs unless x is one of [b]"),
+            ("x in ['a']", None, "runs only if x is one of [a]"),
+            ("x not in ['a']", None, "runs only if x is not one of [a]"),
+        ];
+        for (cond, want_default, want_label) in cases {
+            let v = classify(cond);
+            let Verdict::WhenIn { matches_default, .. } = &v else {
+                panic!("{cond:?} did not classify as a membership test: {v:?}");
+            };
+            assert_eq!(matches_default, want_default, "{cond:?}");
+            assert_eq!(v.label().as_deref(), Some(*want_label), "{cond:?}");
+        }
+        // The rule the wording carries, stated once rather than trusted to six strings:
+        // "runs unless" is this module's phrase for *runs by default*, so it must appear
+        // only where the measured answer above is "ran".
+        for (cond, want_default, want_label) in cases {
+            assert_eq!(
+                want_label.starts_with("runs unless"),
+                *want_default == Some(true),
+                "{cond:?} is framed as running by default and is not, or the reverse"
+            );
+        }
+    }
+
+    /// T-213's three corpus conditions, verbatim from `debops` — the only membership tests in
+    /// the eight pinned trees whose default is itself in the list, and the ones that shipped
+    /// "runs only if" for a task that runs by default.
+    #[test]
+    fn the_corpus_conditions_that_run_by_default_say_so() {
+        for cond in [
+            "item.state | d('present') in ['present', 'absent']",
+            "item.state | d('directory') in ['directory', 'absent']",
+            "item.state | d('mounted') in ['mounted', 'present', 'unmounted']",
+        ] {
+            let v = classify(cond);
+            assert!(
+                matches!(v, Verdict::WhenIn { matches_default: Some(true), .. }),
+                "{cond:?}: {v:?}"
+            );
+            let label = v.label().expect("classifies");
+            assert!(label.starts_with("runs unless"), "{cond:?}: {label}");
+        }
+        // The control: drop the default's membership and the framing has to flip back, or
+        // the fix is just "always say runs unless" rather than a reading of the condition.
+        let v = classify("item.state | d('present') in ['absent']");
+        assert!(matches!(v, Verdict::WhenIn { matches_default: Some(false), .. }), "{v:?}");
+        assert_eq!(v.label().as_deref(), Some("runs only if item.state is one of [absent]"));
+    }
+
+    /// `None` is not `Some(false)`, and the difference only shows through `invert`. An
+    /// unguarded membership test is a fatal error when unset, so negating it does not make it
+    /// run by default — where a guard whose default misses the list does exactly that.
+    #[test]
+    fn inverting_a_membership_test_keeps_the_unguarded_case_unguarded() {
+        let unguarded = classify("not (x in ['a'])");
+        assert!(matches!(unguarded, Verdict::WhenIn { matches_default: None, .. }), "{unguarded:?}");
+        assert_eq!(unguarded.label().as_deref(), Some("runs only if x is not one of [a]"));
+
+        let guarded = classify("not (x | d('a') in ['b'])");
+        assert!(
+            matches!(guarded, Verdict::WhenIn { matches_default: Some(true), .. }),
+            "{guarded:?}"
+        );
+        assert_eq!(guarded.label().as_deref(), Some("runs unless x is one of [b]"));
+    }
+
     /// The tree can represent far more than the old matcher could, and that is exactly why
     /// the reach has to be pinned: growing it is a decision, not a side effect. These are the
     /// shapes that *do* classify, one per arm.
@@ -1413,11 +1541,13 @@ mod tests {
                 },
             ),
             (
+                // The default is itself in the list, so this runs when `m` is unset (T-213).
                 "m | default('a') in ['a', 'b']",
                 WhenIn {
                     var: "m".into(),
                     values: vec!["a".into(), "b".into()],
                     negated: false,
+                    matches_default: Some(true),
                 },
             ),
         ];
@@ -1583,11 +1713,14 @@ mod tests {
                 var: "ap_operation".into(),
                 values: vec!["snapshot-expose".into(), "snapshot-unexpose".into()],
                 negated: false,
+                matches_default: None,
             }
         );
         assert!(v.label().unwrap().starts_with("runs only if ap_operation is one of"));
+        // Unguarded, so an unset `mode` is a fatal error and not a skip — measured on
+        // 2.21.2. "Runs unless" would claim it runs by default, which it does not (T-213).
         let neg = classify("mode not in ['a', 'b']");
-        assert!(neg.label().unwrap().starts_with("runs unless mode is one of"));
+        assert_eq!(neg.label().as_deref(), Some("runs only if mode is not one of [a, b]"));
         assert!(classify("mode in ['a']").excludes(&classify("mode in ['b']")));
     }
 
