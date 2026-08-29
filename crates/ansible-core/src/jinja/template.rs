@@ -79,6 +79,10 @@ enum State {
     Comment,
     Statement,
     Expression,
+    /// `line_statement_prefix` — the rest of the line is a `{% … %}` body.
+    LineStatement,
+    /// `line_comment_prefix` — the rest of the line is a `{# … #}` body.
+    LineComment,
 }
 
 struct Scanner<'a> {
@@ -288,6 +292,14 @@ impl<'a> Scanner<'a> {
                 State::Comment => self.scan_comment()?,
                 State::Statement => self.scan_statement()?,
                 State::Expression => self.scan_expression()?,
+                State::LineStatement => {
+                    let n = self.d.line_statement_prefix.as_ref().map_or(0, String::len);
+                    self.scan_line_statement(n)?
+                }
+                State::LineComment => {
+                    let n = self.d.line_comment_prefix.as_ref().map_or(0, String::len);
+                    self.scan_line_comment(n)?
+                }
                 State::Data => unreachable!("`next_delimiter` never reports data"),
             }
         }
@@ -363,6 +375,18 @@ impl<'a> Scanner<'a> {
     fn next_delimiter(&self) -> Option<(usize, State)> {
         let rest = &self.src[self.i..];
         let mut best: Option<(usize, usize, State)> = None;
+        let mut consider = |at: usize, len: usize, state: State, best: &mut Option<_>| {
+            // Upstream sorts its rules by prefix length, longest first, so at one position the
+            // longer delimiter wins — that is what keeps `##` a line comment when `#` is also
+            // a line statement prefix.
+            let better = match best {
+                None => true,
+                Some((b_at, b_len, _)) => at < *b_at || (at == *b_at && len > *b_len),
+            };
+            if better {
+                *best = Some((at, len, state));
+            }
+        };
         for (lit, state) in [
             (&self.d.comment_start, State::Comment),
             (&self.d.block_start, State::Statement),
@@ -372,18 +396,126 @@ impl<'a> Scanner<'a> {
                 continue;
             }
             if let Some(at) = rest.find(lit.as_str()) {
-                let better = match &best {
-                    None => true,
-                    Some((b_at, b_len, _)) => at < *b_at || (at == *b_at && lit.len() > *b_len),
-                };
-                if better {
-                    best = Some((at, lit.len(), state));
-                }
+                consider(at, lit.len(), state, &mut best);
+            }
+        }
+        // The two line rules are *additional*: with `line_statement_prefix` set, `{% %}` keeps
+        // working and a prefix in the middle of a line is ordinary text. Measured on 2.21.2.
+        if let Some(p) = &self.d.line_statement_prefix {
+            if let Some((from, _)) = self.find_line_prefix(p, false) {
+                consider(from - self.i, p.len(), State::LineStatement, &mut best);
+            }
+        }
+        if let Some(p) = &self.d.line_comment_prefix {
+            if let Some((from, _)) = self.find_line_prefix(p, true) {
+                consider(from - self.i, p.len(), State::LineComment, &mut best);
             }
         }
         best.map(|(at, _, state)| (self.i + at, state))
     }
 
+    /// The next occurrence of a line prefix that upstream's rule would match, as an absolute
+    /// offset. The two rules differ and both are ported literally from `compile_rules`:
+    ///
+    /// - statement: `^[ \t\v]*<prefix>`
+    /// - comment:   `(?:^|(?<=\S))[^\S\r\n]*<prefix>`
+    ///
+    /// So a statement prefix must open its line, with only blanks before it — which is why
+    /// `not a statement: this line has a # in the middle` survives verbatim, measured. A
+    /// comment prefix also matches after a non-blank, which is how `host = {{ h }} ## note`
+    /// works.
+    fn find_line_prefix(&self, prefix: &str, comment: bool) -> Option<(usize, usize)> {
+        if prefix.is_empty() {
+            return None;
+        }
+        let bytes = self.src.as_bytes();
+        let mut from = self.i;
+        while let Some(rel) = self.src[from..].find(prefix) {
+            let at = from + rel;
+            // Walk back over blanks. The vertical tab is in upstream's class for the
+            // statement rule and not in the comment's; neither appears in a real template,
+            // so the same walk serves both.
+            let mut j = at;
+            while j > 0 && matches!(bytes[j - 1], b' ' | b'\t' | 0x0b) {
+                j -= 1;
+            }
+            let at_line_start = j == 0 || bytes[j - 1] == b'\n';
+            // The comment rule's second branch: preceded by a non-blank on the same line,
+            // with blanks between, or touching one directly.
+            let prev_is_text = |k: usize| {
+                k > 0 && !matches!(bytes[k - 1], b'\n' | b' ' | b'\t' | 0x0b)
+            };
+            let after_non_blank = comment && (prev_is_text(j) || prev_is_text(at));
+            if at_line_start || after_non_blank {
+                // The token starts at the blanks, not at the prefix: upstream's regex opens
+                // with a horizontal-whitespace class, so the run before the marker belongs
+                // to the tag and never reaches a `Data` block. Measured: a line-statement
+                // prefix indented under a line of text leaves that line's `Data` ending at
+                // its own newline, with the indent swallowed by the tag.
+                return Some((j, at));
+            }
+            from = at + 1;
+        }
+        None
+    }
+
+    /// `line_statement_begin` runs to `\s*(\n|$)` — the rest of the line is the tag body,
+    /// and there is no closing delimiter to find or to fail on.
+    ///
+    /// That end rule is greedier than it looks and it was measured, not assumed:
+    /// `# for x in y\\n\\n\\nbody` leaves `Data` as `body`, because `\s*` swallows the whole
+    /// blank run and backtracks to the last newline in it. Trailing spaces on the tag's own
+    /// line go the same way, so they are not part of `inner`.
+    fn scan_line_statement(&mut self, prefix_len: usize) -> Result<(), Error> {
+        let start = self.i;
+        let open = self.prefix_end(start, prefix_len);
+        let eol = self.src[open..].find('\n').map_or(self.src.len(), |r| open + r);
+        let body = self.src[open..eol].trim_end();
+        let bytes = self.src.as_bytes();
+        // Consume the blank run after the line, up to and including its last newline.
+        let mut k = eol;
+        let mut last_nl = None;
+        while k < self.src.len() && bytes[k].is_ascii_whitespace() {
+            if bytes[k] == b'\n' {
+                last_nl = Some(k);
+            }
+            k += 1;
+        }
+        let after = last_nl.map_or(eol, |n| n + 1);
+        self.out.push(Block {
+            kind: Kind::Statement,
+            span: Span { start, end: after },
+            inner: Span { start: open, end: open + body.len() },
+        });
+        self.i = after;
+        Ok(())
+    }
+
+    /// `line_comment_begin` runs to `(?=\n|$)`, and does **not** eat the newline —
+    /// upstream's rule is a lookahead, so the line break survives into the following data.
+    fn scan_line_comment(&mut self, prefix_len: usize) -> Result<(), Error> {
+        let start = self.i;
+        let open = self.prefix_end(start, prefix_len);
+        let close = self.src[open..].find('\n').map_or(self.src.len(), |r| open + r);
+        self.out.push(Block {
+            kind: Kind::Comment,
+            span: Span { start, end: close },
+            inner: Span { start: open, end: close },
+        });
+        self.i = close;
+        Ok(())
+    }
+
+    /// Where a line tag's body begins: past the blank run the token opened with, then past
+    /// the prefix itself.
+    fn prefix_end(&self, start: usize, prefix_len: usize) -> usize {
+        let bytes = self.src.as_bytes();
+        let mut k = start;
+        while k < self.src.len() && matches!(bytes[k], b' ' | b'\t' | 0x0b) {
+            k += 1;
+        }
+        (k + prefix_len).min(self.src.len())
+    }
     /// The content of a tag with its whitespace-control markers removed. Upstream keeps `-`
     /// and `+` in the *delimiter* token, so a statement parser never sees them; `inner` here
     /// means the same thing.
@@ -419,8 +551,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// `{# … #}`. Its own state, so nothing inside it is a tag. jinja2 does not nest comments
-    /// — the first `#}` closes it — and neither does this.
     fn scan_comment(&mut self) -> Result<(), Error> {
         let start = self.i;
         let open = start + self.d.comment_start.len();
@@ -683,6 +813,130 @@ mod tests {
         // "no illegal gap found" cannot pass by never meeting one.
         assert!(raw_gaps > 0, "no raw tag in the corpus, so that half is untested");
         assert!(dash_gaps > 0, "no `-` marker in the corpus, so that half is untested");
+    }
+
+    // ------------------------------------------------- line statements and line comments
+
+    /// The sixth and seventh lexer states, against jinja2 3.1.6's own split.
+    ///
+    /// `line_statement_prefix` and `line_comment_prefix` are ordinary `TemplateOverrides`
+    /// fields, so a `#jinja2:` header can turn them on and a `.j2` using them was, until this,
+    /// read as one flat run of text — every include in it invisible. Worse than invisible in
+    /// one shape: mixing is legal, so a `{% if %}` closed by a `# endif` looked like an
+    /// unclosed block and earned a `template-syntax` error on a template that renders.
+    ///
+    /// Live-verified on ansible-core 2.21.2 through a `#jinja2:` header before the goldens
+    /// were taken: `# for` / `# endfor` loops run, `##` comments vanish from the output, `{% %}`
+    /// keeps working beside them, and a `#` in the middle of a line stays text.
+    #[test]
+    fn line_statements_and_comments_split_as_jinja2_splits_them() {
+        let d = Delimiters {
+            line_statement_prefix: Some("#".into()),
+            line_comment_prefix: Some("##".into()),
+            ..Delimiters::default()
+        };
+        let corpus = include_str!("line_corpus.jsonl");
+        let mut checked = 0;
+        for line in corpus.lines().filter(|l| !l.trim().is_empty()) {
+            let row: Value = serde_json::from_str(line).expect("corpus line parses");
+            let src = row["src"].as_str().expect("every row has a source");
+            let want: Vec<(String, String)> = row["blocks"]
+                .as_array()
+                .expect("every row has blocks")
+                .iter()
+                .map(|b| {
+                    (b[0].as_str().unwrap().to_string(), b[1].as_str().unwrap().to_string())
+                })
+                .collect();
+            let got: Vec<(String, String)> = blocks(src, &d)
+                .unwrap_or_else(|e| panic!("{src:?} refused: {}", e.msg))
+                .into_iter()
+                .map(|b| {
+                    let kind = match b.kind {
+                        Kind::Data => "data",
+                        Kind::Comment => "comment",
+                        Kind::Statement => "statement",
+                        Kind::Expression => "expression",
+                    };
+                    (kind.to_string(), b.inner.slice(src).to_string())
+                })
+                .collect();
+            assert_eq!(got, want, "{src:?}");
+            checked += 1;
+        }
+        assert!(checked >= 18, "only {checked} rows");
+    }
+
+    /// The control that stops the two states being additive noise: with the prefixes **unset**
+    /// — which is the default and every template in the wild — the same sources are plain
+    /// text, and a `#` never means anything.
+    #[test]
+    fn without_the_prefixes_a_hash_is_just_a_hash() {
+        let d = Delimiters::default();
+        let src = "# for h in xs
+host = {{ h }}   ## note
+# endfor
+";
+        let got: Vec<Kind> = blocks(src, &d).expect("splits").into_iter().map(|b| b.kind).collect();
+        assert_eq!(got, [Kind::Data, Kind::Expression, Kind::Data], "{got:?}");
+        // And with them set, the same source is six — statement, data, expression, comment,
+        // data, statement — so the assertion above is about the setting rather than about the
+        // source having nothing in it.
+        let on = Delimiters {
+            line_statement_prefix: Some("#".into()),
+            line_comment_prefix: Some("##".into()),
+            ..Delimiters::default()
+        };
+        let kinds: Vec<Kind> =
+            blocks(src, &on).expect("splits").into_iter().map(|b| b.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                Kind::Statement,
+                Kind::Data,
+                Kind::Expression,
+                Kind::Comment,
+                Kind::Data,
+                Kind::Statement
+            ]
+        );
+    }
+
+    /// A `#jinja2:` header turning them on, end to end — the path a real template takes.
+    #[test]
+    fn a_header_can_turn_line_statements_on() {
+        let src = "#jinja2: line_statement_prefix:\"#\"
+# include \"partials/a.j2\"
+";
+        let (bs, d) = document(src, &Delimiters::default()).expect("splits");
+        assert_eq!(d.line_statement_prefix.as_deref(), Some("#"));
+        assert_eq!(bs.len(), 1);
+        assert_eq!(bs[0].kind, Kind::Statement);
+        // And it is a real reference, not just a block: this is the include that used to be
+        // invisible.
+        let refs = super::super::references(src, &Delimiters::default()).expect("renders");
+        assert_eq!(refs.iter().map(|r| r.template.as_str()).collect::<Vec<_>>(), ["partials/a.j2"]);
+    }
+
+    /// The false positive this closes. Mixing the two spellings is legal — measured, a
+    /// template with both renders — so a `{% if %}` closed by a `# endif` must not read as an
+    /// unclosed block.
+    #[test]
+    fn a_block_opened_with_braces_can_be_closed_by_a_line_statement() {
+        let d = Delimiters {
+            line_statement_prefix: Some("#".into()),
+            ..Delimiters::default()
+        };
+        let src = "{% if x %}
+body
+# endif
+";
+        assert!(super::super::references(src, &d).is_ok(), "{:?}", super::super::references(src, &d));
+        // The control: read with the prefix unset — which is what we did before this — the
+        // same template is a refusal, and that refusal was the false positive.
+        let bare = super::super::references(src, &Delimiters::default());
+        assert!(bare.is_err(), "the control no longer reproduces the false positive");
+        assert!(bare.unwrap_err().msg.contains("endif"));
     }
 
     // ------------------------------------------------------------- the `#jinja2:` header

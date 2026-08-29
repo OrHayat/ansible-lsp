@@ -1,0 +1,26 @@
+#jinja2: line_statement_prefix:"#", line_comment_prefix:"##"
+## GOOD — the sixth and seventh lexer states. A line opening with `#` (blanks allowed before
+## it) is a statement; `##` runs to end of line and vanishes. Both are ordinary
+## `TemplateOverrides` fields, so this header is all it takes to change the grammar.
+## MEASURED THE HARD WAY — this include names `partials/plain.j2` and not
+## `partials/header.j2`, which every other template here uses. `header.j2` opens with
+## `# rendered for {{ inventory_hostname }}`, and under THIS file's delimiters that leading
+## `#` makes it a line statement: ansible fails the render with
+## `Encountered unknown tag 'rendered'`. The delimiters belong to the whole render, not to
+## the file that declares them, so a partial written for the default grammar can become
+## unparseable purely by who includes it.
+# include "partials/plain.j2"
+# for h in ["alpha", "beta"]
+host = {{ h }}   ## this trailing comment is stripped from the output
+# endfor
+
+{# GOOD — mixing is legal and measured: a block opened with braces can be closed by a line
+   statement. Before the line states existed we read this as an unclosed `{% if %}` and put a
+   `template-syntax` ERROR on a template ansible renders fine. #}
+{% if true %}
+mixed = yes
+# endif
+
+## NO HINT — a `#` in the middle of a line is not a statement: the rule is anchored to the
+## start of the line, so this next line survives verbatim.
+not a statement: there is a # in the middle of this line

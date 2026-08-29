@@ -657,6 +657,10 @@ mod tests {
                 "templates/broken_include.conf.j2",
                 &["partials/nowhere.j2", "partials/nowhere.j2", "partials/header.j2"],
             ),
+            // Line statements, turned on by its own `#jinja2:` header. The include is a
+            // `# include` line, not a `{% %}` tag, so this row is zero if the sixth lexer
+            // state is not built.
+            ("templates/line_statements.conf.j2", &["partials/plain.j2"]),
             ("templates/macros.j2", &[]),
             // No `#jinja2:` header: its delimiters come from the TASK that renders it. Read
             // with the defaults it is refused as `unknown tag 'notatag'` — the false positive
@@ -677,6 +681,7 @@ mod tests {
                 &["partials/site.j2", "partials/header.j2", "partials/absent.j2"],
             ),
             ("templates/partials/header.j2", &[]),
+            ("templates/partials/plain.j2", &[]),
             ("templates/shared.j2", &[]),
         ];
 
@@ -744,7 +749,7 @@ mod tests {
                 named += 1;
             }
         }
-        assert_eq!(named, 7, "the demo renders seven templates by name");
+        assert_eq!(named, 8, "the demo renders eight templates by name");
         // The control: the walk still finds the references that were already working, so the
         // count above is about `src:` and not about a walk that found everything.
         let text = std::fs::read_to_string(demo.join("templates_chain.yml")).expect("demo file");

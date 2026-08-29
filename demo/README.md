@@ -24,7 +24,7 @@ mic key on this Mac).
 | `complex_keys.yml` | a mapping/sequence as a mapping key — parses clean, never loads in Ansible; usually an unquoted template that needed quotes (T-168) |
 | `duplicate_keys.yml` | duplicate mapping keys at play level, in `vars:` and in a task — valid YAML, first value silently discarded (T-102, not yet flagged) |
 | `plays/duplicate_keys_json.yml` | the same mistake in JSON, where Ansible's own check never runs |
-| `templates_chain.yml` + `templates/` | a `.j2` include chain — all four target-naming tags, the shapes that name nothing, templates that will not render, delimiters overridden by a `#jinja2:` header and by the rendering task, an include that reaches nothing, and one include line that offers all three files it could mean (T-040) |
+| `templates_chain.yml` + `templates/` | a `.j2` include chain — all four target-naming tags, the shapes that name nothing, templates that will not render, delimiters overridden by a `#jinja2:` header, by the rendering task and by line statements, an include that reaches nothing, and one include line that offers all three files it could mean (T-040) |
 
 Prefixes are consistent: **GOOD** resolves or is analysed, **BAD** is deliberately broken,
 **NOT YET FLAGGED** is a fixture that landed ahead of its rule,

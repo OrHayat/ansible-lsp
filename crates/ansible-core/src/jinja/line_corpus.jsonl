@@ -1,0 +1,18 @@
+{"src": "# for h in xs\nhost = {{ h }}\n# endfor\n", "blocks": [["statement", " for h in xs"], ["data", "host = "], ["expression", " h "], ["data", "\n"], ["statement", " endfor"]]}
+{"src": "   # for h in xs\n{{ h }}\n   # endfor\n", "blocks": [["statement", " for h in xs"], ["expression", " h "], ["data", "\n"], ["statement", " endfor"]]}
+{"src": "{% for h in xs %}\n{{ h }}\n{% endfor %}\nnot a statement: a # in the middle\n", "blocks": [["statement", " for h in xs "], ["data", "\n"], ["expression", " h "], ["data", "\n"], ["statement", " endfor "], ["data", "\nnot a statement: a # in the middle\n"]]}
+{"src": "# for h in xs\n{{ h }}   ## trailing comment\n## whole line comment\n# endfor\n", "blocks": [["statement", " for h in xs"], ["expression", " h "], ["comment", " trailing comment"], ["data", "\n"], ["comment", " whole line comment"], ["data", "\n"], ["statement", " endfor"]]}
+{"src": "# include 'a.j2'\n", "blocks": [["statement", " include 'a.j2'"]]}
+{"src": "# extends 'base.j2'\n", "blocks": [["statement", " extends 'base.j2'"]]}
+{"src": "text ## comment\nmore\n", "blocks": [["data", "text"], ["comment", " comment"], ["data", "\nmore\n"]]}
+{"src": "##only\n", "blocks": [["comment", "only"], ["data", "\n"]]}
+{"src": "# if x\na\n# else\nb\n# endif\n", "blocks": [["statement", " if x"], ["data", "a\n"], ["statement", " else"], ["data", "b\n"], ["statement", " endif"]]}
+{"src": "no prefixes here at all\n", "blocks": [["data", "no prefixes here at all\n"]]}
+{"src": "a # b ## c\n", "blocks": [["data", "a # b"], ["comment", " c"], ["data", "\n"]]}
+{"src": "# set x = 1\n{{ x }}\n", "blocks": [["statement", " set x = 1"], ["expression", " x "], ["data", "\n"]]}
+{"src": "# for h in xs\n{{ h }}\n# endfor", "blocks": [["statement", " for h in xs"], ["expression", " h "], ["data", "\n"], ["statement", " endfor"]]}
+{"src": "# for x in y\n\n\nbody\n", "blocks": [["statement", " for x in y"], ["data", "body\n"]]}
+{"src": "# for x in y   \nbody\n", "blocks": [["statement", " for x in y"], ["data", "body\n"]]}
+{"src": "a\t## c\n", "blocks": [["data", "a"], ["comment", " c"], ["data", "\n"]]}
+{"src": "  ## c\n", "blocks": [["comment", " c"], ["data", "\n"]]}
+{"src": "x\n  # if a\nb\n", "blocks": [["data", "x\n"], ["statement", " if a"], ["data", "b\n"]]}

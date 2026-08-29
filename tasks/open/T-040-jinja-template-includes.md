@@ -536,6 +536,56 @@ green. Rule 2 — the probe could not produce the other answer.
 It asserts `Arc::ptr_eq` now: same allocation, or the entry was dropped and rebuilt. That
 version fails the moment the guard goes, naming the per-keystroke case in its message.
 
+## Progress: the sixth and seventh lexer states
+
+`line_statement_prefix` and `line_comment_prefix` are read now, not merely stored. The header
+work put values in those fields and the lexer ignored them, which is the worst of the two
+states — a template using line statements was one flat run of `Data` with every include in it
+invisible.
+
+**And one shape was a false positive, not just silence.** Mixing is legal: a `{% if %}` closed
+by a `# endif` renders fine, and we called it an unclosed block and put a `template-syntax`
+ERROR on it. `a_block_opened_with_braces_can_be_closed_by_a_line_statement` pins both halves,
+the second being the control that reproduces the old error with the prefix unset.
+
+Ported from `compile_rules`, and the two rules are not the same:
+
+| | regex |
+| --- | --- |
+| statement | `^[ \t\v]*<prefix>` |
+| comment | `(?:^\|(?<=\S))[^\S\r\n]*<prefix>` |
+
+So a statement must open its line and a comment may also follow text — which is why
+`host = {{ h }}  ## note` works and `a # in the middle` stays text. Rules are tried
+longest-prefix-first, upstream's `sorted(reverse=True)`, which is what keeps `##` a comment
+when `#` is also a statement prefix.
+
+Two end rules, both measured rather than read:
+
+- the statement's `\s*(\n|$)` is greedier than it looks: `# for x in y\n\n\nbody` leaves
+  `Data` as `body`, because `\s*` swallows the blank run and backtracks to its last newline.
+  Trailing spaces on the tag's own line go the same way.
+- the comment's `(?=\n|$)` is a lookahead, so the newline survives into the following data.
+
+Both tokens also **open at the blank run**, not at the prefix, so an indented `# endfor`
+leaves no stray `Data` behind it.
+
+Gate: 18 rows in `line_corpus.jsonl` from jinja2 3.1.6 with both prefixes set, block for block,
+plus a control asserting that with the prefixes **unset** — the default, and every template in
+the wild — a `#` means nothing at all.
+
+### The demo fixture failed first, and the failure is the interesting part
+
+`line_statements.conf.j2` originally included `partials/header.j2` like every other template
+here. Ansible refused the render: **`Encountered unknown tag 'rendered'`**. That partial opens
+`# rendered for {{ inventory_hostname }}`, and under the includer's delimiters the leading `#`
+makes it a line statement.
+
+This is the "delimiters belong to the whole render" note from the header work, met as a real
+failure rather than a footnote: **a partial written for the default grammar can become
+unparseable purely by who includes it.** The fixture includes `partials/plain.j2` instead and
+records why at the line.
+
 ### Still to do here
 
 - **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped
@@ -544,8 +594,9 @@ version fails the moment the guard goes, naming the per-keystroke case in its me
 - **the render-site cache is cleared by any YAML edit**, so a repo where task files are edited
   constantly pays the full walk often. A precise invalidation needs the inbound edges [[T-020]]
   builds and the watcher [[T-012]] provides; revisit when either lands.
-- `line_statement_prefix` / `line_comment_prefix`: the header now *sets* them, the lexer
-  still ignores them — the sixth lexer state is unbuilt
+- **a template is still read with its own delimiters when included by one whose differ.** The
+  demo shows the failure (`partials/header.j2` under a line-statement includer); resolving an
+  include and re-reading the target has to carry the includer's delimiters into it.
 
 ## Done when
 
