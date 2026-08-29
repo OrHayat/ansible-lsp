@@ -24,7 +24,7 @@
 //! this module's own failure mode reintroduced by the fix for it.
 
 use super::ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
-use super::lexer::{self, Error, Kind, Token};
+use super::lexer::{self, Cause, Error, Kind, Token};
 use crate::parse::Span;
 
 /// Parse one Jinja expression.
@@ -36,7 +36,7 @@ pub fn parse(src: &str) -> Result<Expr, Error> {
     let mut p = Parser { src, toks: &toks, pos: 0, depth: 0 };
     let expr = p.parse_expression()?;
     if p.current().kind != Kind::Eof {
-        return Err(p.fail_here("chunk after expression"));
+        return Err(Error { cause: Cause::Trailing, ..p.fail_here("chunk after expression") });
     }
     Ok(expr)
 }
@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
     fn enter(&mut self) -> Result<(), Error> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
-            return Err(self.fail_here("expression nests too deeply"));
+            return Err(Error { cause: Cause::Depth, ..self.fail_here("expression nests too deeply") });
         }
         Ok(())
     }
@@ -135,8 +135,15 @@ impl<'a> Parser<'a> {
         self.depth -= 1;
     }
 
+    /// `Eof` and `Parse` are the same refusal worded differently, but they are not the same
+    /// event: one means the input ran out, the other means a token was wrong. Deriving it
+    /// from the cursor rather than from each call site means no site can get it wrong.
     fn fail_here(&self, msg: &str) -> Error {
-        Error { msg: msg.to_string(), span: self.current().span }
+        let cause = match self.current().kind {
+            Kind::Eof => Cause::Eof,
+            _ => Cause::Parse,
+        };
+        Error { msg: msg.to_string(), span: self.current().span, cause }
     }
 
     /// A node covers from the first token consumed to the last. `pos` has already moved past
@@ -848,6 +855,11 @@ mod tests {
     /// Most of the refusal rows are statement bodies harvested from `{% %}`, which are
     /// correctly not expressions. Both sides must refuse the same inputs, so the bad paths
     /// are differential too rather than merely exercised.
+    ///
+    /// Refusals are compared on *stage*, not on message text. Upstream's wording is Python
+    /// prose this port does not reproduce, but which stage gave up — the tokeniser, the parser
+    /// on a token, the parser at end of input, or the trailing-input check — is a behavioural
+    /// claim, and 472 of 476 refusals agree on it exactly.
     /// Inputs jinja2 accepts and this parser refuses, each with the reason. Refusing where
     /// upstream answers is legal only when it is *declared*: a refusal not on this list fails
     /// the differential, and the list's length is asserted so it cannot grow unnoticed into
@@ -868,6 +880,7 @@ mod tests {
     fn the_whole_corpus_parses_exactly_as_jinja2_does() {
         let corpus = include_str!("parser_corpus.jsonl");
         let (mut ok, mut refused) = (0, 0);
+        let mut stage_diffs: Vec<(String, String, &str)> = Vec::new();
         let mut declared = 0;
 
         for line in corpus.lines().filter(|l| !l.trim().is_empty()) {
@@ -885,9 +898,39 @@ mod tests {
                 (Ok(got), None) => {
                     panic!("{src:?} must be refused, but produced {:?}", dump(&got))
                 }
-                (Err(_), None) => refused += 1,
+                (Err(e), None) => {
+                    let want = row["cause"].as_str().expect("every refusal names a stage");
+                    let got = match e.cause {
+                        Cause::Lex => "lex",
+                        Cause::Eof => "eof",
+                        Cause::Parse => "parse",
+                        Cause::Trailing => "trailing",
+                        Cause::Depth => "depth",
+                    };
+                    if got != want {
+                        stage_diffs.push((src.to_string(), want.to_string(), got));
+                    }
+                    refused += 1;
+                }
             }
         }
+        // Eager tokenising can only move a refusal *earlier* — into the lexer — because the
+        // whole input is scanned before the parser runs. jinja2 pulls tokens lazily and stops
+        // as soon as the parser is satisfied, so a lexical fault after that point is one it
+        // never reaches. Both refuse either way; only the stage moves, and it can only move
+        // one direction. A disagreement in any other direction is a real divergence.
+        for (src, want, got) in &stage_diffs {
+            assert_eq!(
+                *got, "lex",
+                "{src:?}: jinja2 said {want}, we said {got} — not explained by eager lexing"
+            );
+        }
+        assert_eq!(
+            stage_diffs.len(),
+            4,
+            "{} inputs refuse at a different stage, not 4 — the eager/lazy set moved",
+            stage_diffs.len()
+        );
         assert!(ok > 600, "only {ok} trees compared — corpus regenerated wrong?");
         assert!(refused > 400, "only {refused} refusals — the bad paths left the corpus");
         // Every declared divergence must actually occur, or it is stale and hiding nothing.
@@ -1155,6 +1198,9 @@ mod tests {
         for (label, src) in cases {
             let e = parse(&src).expect_err("must be refused");
             assert_eq!(e.msg, "expression nests too deeply", "{label}");
+            // Ours alone, so it must never be reported as one of the stages the corpus
+            // compares — a ceiling hit is not a claim about what jinja2 does with this input.
+            assert_eq!(e.cause, Cause::Depth, "{label}");
         }
     }
 

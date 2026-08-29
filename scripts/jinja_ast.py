@@ -18,6 +18,7 @@ ansible-core's `when:` goes through (`_engine.py:379`).
 import json
 import pathlib
 import sys
+import traceback
 
 from jinja2 import Environment, nodes
 from jinja2.parser import Parser
@@ -77,20 +78,38 @@ def dump(v):
     return v
 
 
+def cause(exc, parser):
+    """Which stage gave up, decided structurally rather than by reading the message.
+
+    Upstream raises `TemplateSyntaxError` from both stages, so the text cannot tell them
+    apart -- and neither can the filename: `TokenStream.expect` is defined in `lexer.py`, so
+    every *parser* refusal has a `lexer.py` frame too. The tokeniser proper is `tokeniter`
+    and `wrap`, so the frame *function* is what separates them.
+    """
+    frames = traceback.extract_tb(exc.__traceback__)
+    if any(f.name in ("tokeniter", "wrap") for f in frames):
+        return "lex"
+    try:
+        return "eof" if parser.stream.current.type == "eof" else "parse"
+    except Exception:  # noqa: BLE001 - the stream itself is what blew up
+        return "lex"
+
+
 def row(src):
     src = src.replace("\r\n", "\n").replace("\r", "\n")
+    p = None
     try:
         p = Parser(env, src, state="variable")
         tree = p.parse_expression()
         # `compile_expression` refuses anything left over rather than returning a shorter
         # answer. Without this, `foo bar` would be recorded as a tree for `foo`.
         if not p.stream.eos:
-            return {"src": src, "err": "chunk after expression"}
+            return {"src": src, "err": "chunk after expression", "cause": "trailing"}
         return {"src": src, "ast": dump(tree)}
     except ValueError as e:
         return {"src": src, "skip": str(e)}
     except Exception as e:  # noqa: BLE001 - any refusal is a refusal
-        return {"src": src, "err": str(e).splitlines()[0]}
+        return {"src": src, "err": str(e).splitlines()[0], "cause": cause(e, p)}
 
 
 def main():

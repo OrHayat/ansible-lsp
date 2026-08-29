@@ -81,6 +81,28 @@ pub struct Token {
 pub struct Error {
     pub msg: String,
     pub span: Span,
+    pub cause: Cause,
+}
+
+/// Why the refusal happened, as opposed to how it is worded. Upstream's message text is not
+/// something this port reproduces — it is Python prose — but *which stage gave up* is a real
+/// behavioural claim, and the corpus compares it. A refusal that moves from `Parse` to `Lex`
+/// means the two implementations stopped reading at different points, which is a divergence
+/// even when both say "no".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// The tokeniser refused: a character, escape or literal it cannot represent.
+    Lex,
+    /// The parser reached the end of the input still expecting more.
+    Eof,
+    /// The parser refused a token that is present.
+    Parse,
+    /// The expression parsed, but did not consume the whole input — Ansible's own
+    /// "chunk after expression" check.
+    Trailing,
+    /// Ours alone: the nesting ceiling in `parser::MAX_DEPTH`. Python raises `RecursionError`
+    /// here, which is not a `TemplateSyntaxError`, so this never matches an upstream refusal.
+    Depth,
 }
 
 /// `operators` from `lexer.py`, longest-first. Upstream sorts by `-len(x)` when building the
@@ -145,6 +167,7 @@ pub fn tokens(src: &str) -> Result<Vec<Token>, Error> {
             return Err(Error {
                 msg: format!("unexpected char {c:?}"),
                 span: Span { start: i, end: i + c.len_utf8() },
+                cause: Cause::Lex,
             });
         };
         out.push(Token { kind, span: Span { start, end } });
@@ -332,6 +355,7 @@ pub fn int_value(src: &str, span: Span) -> Result<i64, Error> {
     i64::from_str_radix(&digits.replace('_', ""), radix).map_err(|_| Error {
         msg: format!("integer literal out of range: {text}"),
         span,
+        cause: Cause::Lex,
     })
 }
 
@@ -341,6 +365,7 @@ pub fn float_value(src: &str, span: Span) -> Result<f64, Error> {
     text.replace('_', "").parse().map_err(|_| Error {
         msg: format!("invalid float literal: {text}"),
         span,
+        cause: Cause::Lex,
     })
 }
 
@@ -420,6 +445,7 @@ pub fn string_value(src: &str, span: Span) -> Result<String, Error> {
                 return Err(Error {
                     msg: "\\N{...} escapes are not supported".into(),
                     span,
+                    cause: Cause::Lex,
                 });
             }
             // Python leaves an unknown escape alone, backslash included.
@@ -443,12 +469,14 @@ fn hex_escape(
         let d = it.next().and_then(|c| c.to_digit(16)).ok_or_else(|| Error {
             msg: format!("truncated {label} escape"),
             span,
+            cause: Cause::Lex,
         })?;
         v = v * 16 + d;
     }
     char::from_u32(v).ok_or_else(|| Error {
         msg: format!("invalid {label} escape"),
         span,
+        cause: Cause::Lex,
     })
 }
 

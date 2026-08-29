@@ -16,5 +16,5 @@ mod lexer;
 mod parser;
 
 pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
-pub use lexer::Error;
+pub use lexer::{Cause, Error};
 pub use parser::parse;

@@ -1,7 +1,7 @@
-{"err": "unexpected 'end of template'", "src": ""}
-{"err": "unexpected 'end of template'", "src": "   "}
-{"err": "unexpected char '!' at 0", "src": "!x"}
-{"err": "chunk after expression", "src": "\"\n            \"pluralize count"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": ""}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "   "}
+{"cause": "lex", "err": "unexpected char '!' at 0", "src": "!x"}
+{"cause": "trailing", "err": "chunk after expression", "src": "\"\n            \"pluralize count"}
 {"ast": {"t": "Const", "value": " + name + "}, "src": "\" + name + \""}
 {"ast": {"args": [{"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"items": [{"t": "Const", "value": "b"}, {"t": "Const", "value": "A"}, {"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "t": "List"}, "t": "Filter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "join", "node": {"t": "Const", "value": ""}, "t": "Getattr"}, "t": "Call"}, "src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique(true))"}
 {"ast": {"args": [{"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"items": [{"t": "Const", "value": "b"}, {"t": "Const", "value": "A"}, {"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "t": "List"}, "t": "Filter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "join", "node": {"t": "Const", "value": ""}, "t": "Getattr"}, "t": "Call"}, "src": "\"\".join([\"b\", \"A\", \"a\", \"b\"]|unique)"}
@@ -20,13 +20,13 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "FOO\tBAR"}, "t": "Filter"}, "src": "\"FOO\\tBAR\"|title"}
 {"ast": {"args": [{"t": "Const", "value": 7}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "truncate", "node": {"t": "Const", "value": "Joel is a slug"}, "t": "Filter"}, "src": "\"Joel is a slug\"|truncate(7, true)"}
 {"ast": {"t": "Const", "value": "\u2668"}, "src": "\"\\N{HOT SPRINGS}\""}
-{"err": "unexpected char '\"' at 0", "src": "\"also unterminated"}
+{"cause": "lex", "err": "unexpected char '\"' at 0", "src": "\"also unterminated"}
 {"ast": {"args": [{"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"t": "Const", "value": "a{0.__class__}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{0.__class__}b\".format(42)"}
 {"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"t": "Const", "value": "a{0.foo}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{0.foo}b\".format({\"foo\": 42})"}
 {"ast": {"args": [{"items": [{"key": {"t": "Const", "value": "x"}, "t": "Pair", "value": {"t": "Const", "value": 42}}], "t": "Dict"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format_map", "node": {"t": "Const", "value": "a{x.__class__}b"}, "t": "Getattr"}, "t": "Call"}, "src": "\"a{x.__class__}b\".format_map({\"x\":42})"}
-{"err": "unexpected end of template, expected ','.", "src": "\"a{x.foo}b\".format_map({\"x\":{\"foo\": 42"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "\"a{x.foo}b\".format_map({\"x\":{\"foo\": 42"}
 {"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "b"}, "t": "Test"}, "src": "\"b\" is in \"foo\""}
-{"err": "unexpected end of template, expected ','.", "src": "\"baz\" is in {\"bar\": 1"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "\"baz\" is in {\"bar\": 1"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "f bar f"}, "t": "Filter"}, "src": "\"f bar f\"|title"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo   bar"}, "t": "Filter"}, "src": "\"foo   bar\"|title"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo (bar)"}, "t": "Filter"}, "src": "\"foo (bar)\"|title"}
@@ -42,12 +42,12 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo http://www.example.com/ bar"}, "t": "Filter"}, "src": "\"foo http://www.example.com/ bar\"|urlize"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "target", "t": "Keyword", "value": {"t": "Const", "value": "_blank"}}], "name": "urlize", "node": {"t": "Const", "value": "foo http://www.example.com/ bar"}, "t": "Filter"}, "src": "\"foo http://www.example.com/ bar\"|urlize(target=\"_blank\")"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "urlize", "node": {"t": "Const", "value": "foo mailto:email@example.com bar"}, "t": "Filter"}, "src": "\"foo mailto:email@example.com bar\"|urlize"}
-{"err": "expected token 'name', got 'string'", "src": "\"foo tel:+1-514-555-1234 ftp://localhost bar\"|'\n            'urlize(extra_schemes=[\"tel:\", \"ftp:\"])"}
+{"cause": "parse", "err": "expected token 'name', got 'string'", "src": "\"foo tel:+1-514-555-1234 ftp://localhost bar\"|'\n            'urlize(extra_schemes=[\"tel:\", \"ftp:\"])"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "title", "node": {"t": "Const", "value": "foo {bar}"}, "t": "Filter"}, "src": "\"foo {bar}\"|title"}
 {"ast": {"t": "Const", "value": "foobarbaz"}, "src": "\"foo\" \"bar\" \"baz\""}
 {"ast": {"expr1": {"t": "Const", "value": "foo"}, "expr2": null, "t": "CondExpr", "test": {"t": "Const", "value": false}}, "src": "\"foo\" if false"}
 {"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is in \"foo\""}
-{"err": "unexpected end of template, expected ','.", "src": "\"foo\" is in {\"foo\": 1"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "\"foo\" is in {\"foo\": 1"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lower", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is lower"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"t": "Const", "value": "foo"}, "t": "Test"}, "src": "\"foo\" is upper"}
 {"ast": {"args": [{"t": "Const", "value": 9}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "center", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "src": "\"foo\"|center(9)"}
@@ -63,37 +63,37 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "first", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "indent", "node": {"t": "Const", "value": "jinja"}, "t": "Filter"}, "src": "\"jinja\"|indent(first=true)"}
 {"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "in", "node": {"t": "Const", "value": "o"}, "t": "Test"}, "src": "\"o\" is in \"foo\""}
 {"ast": {"args": [{"name": "not_here", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": "format"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "attr", "node": {"t": "Const", "value": "{0.__call__.__builtins__[__import__]}"}, "t": "Filter"}, "t": "Call"}, "src": "\"{0.__call__.__builtins__[__import__]}\"\n                  | attr(\"format\")(not_here)"}
-{"err": "unexpected '%'", "src": "% block test %"}
-{"err": "unexpected '%'", "src": "% elif a == {i} %"}
-{"err": "unexpected '%'", "src": "% else %"}
-{"err": "unexpected '%'", "src": "% endblock %"}
-{"err": "unexpected '%'", "src": "% endblock test %"}
-{"err": "unexpected '%'", "src": "% endfor %"}
-{"err": "unexpected '%'", "src": "% endif %"}
-{"err": "unexpected '%'", "src": "% for i in seq %"}
-{"err": "unexpected '%'", "src": "% if a == 0 %"}
-{"err": "unexpected '%'", "src": "% import \"bar\" as bar{i} with context %"}
-{"err": "unexpected '%'", "src": "% set a{i}, b{i}, c{i} = tuple_var{i} %"}
-{"err": "unexpected '%'", "src": "% {op} 'base' %"}
-{"err": "unexpected char \"'\" at 0", "src": "'\n                    \"super()"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% block test %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% elif a == {i} %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% else %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% endblock %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% endblock test %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% endfor %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% endif %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% for i in seq %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% if a == 0 %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% import \"bar\" as bar{i} with context %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% set a{i}, b{i}, c{i} = tuple_var{i} %"}
+{"cause": "parse", "err": "unexpected '%'", "src": "% {op} 'base' %"}
+{"cause": "lex", "err": "unexpected char \"'\" at 0", "src": "'\n                    \"super()"}
 {"ast": {"args": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "format", "node": {"t": "Const", "value": "%s|%s"}, "t": "Filter"}, "src": "'%s|%s'|format('a', 'b')"}
 {"ast": {"t": "Const", "value": "%}"}, "src": "'%}'"}
 {"ast": {"expr": {"t": "Const", "value": ""}, "ops": [{"expr": {"t": "Const", "value": null}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "'' == None"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"t": "Const", "value": "<\">&"}, "t": "Filter"}, "src": "'<\">&'|escape"}
 {"ast": {"t": "Const", "value": "<testing>"}, "src": "'<testing>'"}
-{"err": "unknown Unicode character name", "src": "'\\N{NOPE}'"}
-{"err": "truncated \\uXXXX escape", "src": "'\\u26'"}
+{"cause": "lex", "err": "unknown Unicode character name", "src": "'\\N{NOPE}'"}
+{"cause": "lex", "err": "truncated \\uXXXX escape", "src": "'\\u26'"}
 {"ast": {"t": "Const", "value": "a\nb"}, "src": "'a\nb'"}
 {"ast": {"t": "Const", "value": "a\nb"}, "src": "'a\nb'"}
-{"err": "truncated \\uXXXX escape", "src": "'a' '\\u26'"}
+{"cause": "lex", "err": "truncated \\uXXXX escape", "src": "'a' '\\u26'"}
 {"ast": {"t": "Const", "value": "all"}, "src": "'all'"}
-{"err": "chunk after expression", "src": "'a{i}': l_0_a{i}, 'b{i}': l_0_b{i}, 'c{i}': l_0_c{i"}
-{"err": "chunk after expression", "src": "'a{i}': l_1_a{i}, 'b{i}': l_1_b{i}, 'c{i}': l_1_c{i"}
+{"cause": "trailing", "err": "chunk after expression", "src": "'a{i}': l_0_a{i}, 'b{i}': l_0_b{i}, 'c{i}': l_0_c{i"}
+{"cause": "trailing", "err": "chunk after expression", "src": "'a{i}': l_1_a{i}, 'b{i}': l_1_b{i}, 'c{i}': l_1_c{i"}
 {"ast": {"t": "Const", "value": "a|b"}, "src": "'a|b'"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "pprint", "node": {"t": "Const", "value": "b\u00e4r"}, "t": "Filter"}, "src": "'b\u00e4r'|pprint"}
 {"ast": {"expr1": {"t": "Const", "value": "foo"}, "expr2": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "t": "CondExpr", "test": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "t": "Not"}}, "src": "'foo' if x is not defined else x|f"}
 {"ast": {"expr": {"t": "Const", "value": "foo"}, "ops": [{"expr": {"name": "missing", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "src": "'foo' in missing"}
-{"err": "chunk after expression", "src": "'foo': item}|upper}{% endfor %}\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == \"{'FOO': 0}{'FOO': 1}{'FOO': 2}\"\n\n    def test_comments(self, env):\n        env = Environment(\"<!--\", \"-->\", \"{\", \"}\")\n        tmpl = env.from_string(\n            \"\"\"\\\n<ul>\n<!--- for item in seq -->\n  <li>{item}</li>\n<!--- endfor -->\n</ul>\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == (\n            \"<ul>\\n  <li>0</li>\\n  <li>1</li>\\n  <li>2</li>\\n</ul>\"\n        )\n\n    def test_string_escapes(self, env):\n        for char in \"\\0\", \"\\u2668\", \"\\xe4\", \"\\t\", \"\\r\", \"\\n\":\n            tmpl = env.from_string(f\"{{{{ {char!r}"}
+{"cause": "trailing", "err": "chunk after expression", "src": "'foo': item}|upper}{% endfor %}\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == \"{'FOO': 0}{'FOO': 1}{'FOO': 2}\"\n\n    def test_comments(self, env):\n        env = Environment(\"<!--\", \"-->\", \"{\", \"}\")\n        tmpl = env.from_string(\n            \"\"\"\\\n<ul>\n<!--- for item in seq -->\n  <li>{item}</li>\n<!--- endfor -->\n</ul>\"\"\"\n        )\n        assert tmpl.render(seq=list(range(3))) == (\n            \"<ul>\\n  <li>0</li>\\n  <li>1</li>\\n  <li>2</li>\\n</ul>\"\n        )\n\n    def test_string_escapes(self, env):\n        for char in \"\\0\", \"\\u2668\", \"\\xe4\", \"\\t\", \"\\r\", \"\\n\":\n            tmpl = env.from_string(f\"{{{{ {char!r}"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "pprint", "node": {"t": "Const", "value": "foo"}, "t": "Filter"}, "src": "'foo'|pprint"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reverse", "node": {"t": "Const", "value": "foobar"}, "t": "Filter"}, "t": "Filter"}, "src": "'foobar'|reverse|join"}
 {"ast": {"t": "Const", "value": "hello"}, "src": "'hello'"}
@@ -101,7 +101,7 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "width", "t": "Keyword", "value": {"t": "Const", "value": ">>> "}}, {"key": "first", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "indent", "node": {"t": "Const", "value": "jinja\nflask"}, "t": "Filter"}, "src": "'jinja\\nflask'|indent(width='>>> ', first=True)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"t": "Const", "value": "static"}, "t": "Filter"}, "src": "'static'|customfilter"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "some", "t": "Keyword", "value": {"t": "Const", "value": "stuff"}}], "name": "testing", "node": {"t": "Const", "value": "test"}, "t": "Filter"}, "src": "'test'|testing(some='stuff')"}
-{"err": "unexpected char \"'\" at 0", "src": "'unterminated"}
+{"cause": "lex", "err": "unexpected char \"'\" at 0", "src": "'unterminated"}
 {"ast": {"left": {"args": [{"t": "Const", "value": "(us-east-1|ap-northeast-1)\n            "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "matching", "node": {"t": "Const", "value": "us-west-1"}, "t": "Test"}, "right": {"args": [{"t": "Const", "value": "(dev|stage)"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "matching", "node": {"t": "Const", "value": "stage"}, "t": "Test"}, "t": "Or"}, "src": "'us-west-1' is matching '(us-east-1|ap-northeast-1)'\"\n            \" or 'stage' is matching '(dev|stage)'"}
 {"ast": {"expr1": {"t": "Const", "value": "x"}, "expr2": null, "t": "CondExpr", "test": {"name": "c", "t": "Name"}}, "src": "'x' if c"}
 {"ast": {"t": "Const", "value": "{{"}, "src": "'{{'"}
@@ -112,35 +112,35 @@
 {"ast": {"args": [{"t": "Const", "value": 42}, {"t": "Const", "value": "<foo>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "format", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "safe", "node": {"t": "Const", "value": "a{}b{}"}, "t": "Filter"}, "t": "Getattr"}, "t": "Call"}, "src": "(\"a{}b{}\"|safe).format(42, \"<foo>\")"}
 {"ast": {"nodes": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "b"}, {"t": "Const", "value": "c"}], "t": "Concat"}, "src": "('a' ~ 'b' ~ 'c')"}
 {"ast": {"items": [], "t": "Tuple"}, "src": "()"}
-{"err": "unexpected 'end of template'", "src": "(1 +"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "(1 +"}
 {"ast": {"left": {"left": {"t": "Const", "value": 1}, "right": {"left": {"t": "Const", "value": 1}, "right": {"t": "Const", "value": 2}, "t": "Mul"}, "t": "Add"}, "right": {"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 2}, "t": "Div"}, "t": "Sub"}, "src": "(1 + 1 * 2) - 3 / 2"}
-{"err": "expected token ')', got 'integer'", "src": "(1 2)"}
+{"cause": "parse", "err": "expected token ')', got 'integer'", "src": "(1 2)"}
 {"ast": {"attr": "bar", "node": {"expr1": {"t": "Const", "value": 1}, "expr2": null, "t": "CondExpr", "test": {"t": "Const", "value": false}}, "t": "Getattr"}, "src": "(1 if false).bar"}
-{"err": "unexpected 'end of template'", "src": "(1,"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "(1,"}
 {"ast": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}, "src": "(1, 2)"}
 {"ast": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}], "t": "Tuple"}, "src": "(1, 2,)"}
 {"ast": {"items": [{"t": "Const", "value": 1}], "t": "Tuple"}, "src": "(1,)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "from_json", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "last", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": "equalto"}, {"t": "Const", "value": ""}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"args": [{"items": [{"t": "Const", "value": "{}"}], "t": "List"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"attr": "stdout_lines", "node": {"name": "_beacon_result", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "(_beacon_result.stdout_lines | default(['{}']))\n      | reject('equalto', '')\n      | list\n      | last\n      | from_json"}
 {"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"args": [{"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "add_each", "node": {"name": "a", "t": "Name"}, "t": "Filter"}, "t": "Getitem"}, "src": "(a|add_each(2))[1:]"}
 {"ast": {"left": {"left": {"t": "Const", "value": true}, "right": {"t": "Const", "value": false}, "t": "And"}, "right": {"left": {"left": {"t": "Const", "value": false}, "right": {"t": "Const", "value": true}, "t": "And"}, "right": {"node": {"t": "Const", "value": false}, "t": "Not"}, "t": "And"}, "t": "Or"}, "src": "(true and false) or (false and true) and not false"}
-{"err": "unexpected 'end of template'", "src": "+"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "+"}
 {"ast": {"node": {"name": "endif", "t": "Name"}, "t": "Pos"}, "src": "+ endif"}
-{"err": "chunk after expression", "src": "+ if True"}
+{"cause": "trailing", "err": "chunk after expression", "src": "+ if True"}
 {"ast": {"node": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "t": "Pos"}, "src": "+-x"}
 {"ast": {"node": {"t": "Const", "value": 1}, "t": "Pos"}, "src": "+1"}
 {"ast": {"node": {"t": "Const", "value": 3}, "t": "Pos"}, "src": "+3"}
 {"ast": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "src": "+x"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "d", "node": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "t": "Filter"}, "src": "+x | d"}
-{"err": "unexpected 'end of template'", "src": "-"}
-{"err": "unexpected 'end of template'", "src": "- [1,2] -"}
-{"err": "unexpected 'end of template'", "src": "- item -"}
-{"err": "unexpected 'end of template'", "src": "- item(2) -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "-"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- [1,2] -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- item -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- item(2) -"}
 {"ast": {"node": {"args": [{"attr": "children", "node": {"name": "page", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "loop", "t": "Name"}, "t": "Call"}, "t": "Neg"}, "src": "- loop(page.children)"}
-{"err": "unexpected 'end of template'", "src": "- wrapper -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- wrapper -"}
 {"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "wrapper", "t": "Name"}, "t": "Call"}, "t": "Neg"}, "src": "- wrapper()"}
 {"ast": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "src": "- x"}
-{"err": "unexpected 'end of template'", "src": "- x -"}
-{"err": "unexpected 'end of template'", "src": "- x()[1] -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- x -"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "- x()[1] -"}
 {"ast": {"node": {"name": "y", "t": "Name"}, "t": "Neg"}, "src": "- y"}
 {"ast": {"node": {"node": {"name": "x", "t": "Name"}, "t": "Pos"}, "t": "Neg"}, "src": "-+x"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "t": "Filter"}, "src": "-1|abs"}
@@ -149,16 +149,16 @@
 {"ast": {"node": {"arg": {"t": "Const", "value": "bar"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Neg"}, "src": "-foo[\"bar\"]"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"node": {"arg": {"t": "Const", "value": "bar"}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Neg"}, "t": "Filter"}, "src": "-foo[\"bar\"]|abs"}
 {"ast": {"left": {"node": {"name": "x", "t": "Name"}, "t": "Neg"}, "right": {"t": "Const", "value": 2}, "t": "Pow"}, "src": "-x ** 2"}
-{"err": "unexpected '.'", "src": ".5"}
+{"cause": "parse", "err": "unexpected '.'", "src": ".5"}
 {"ast": {"expr1": {"t": "Const", "value": 0}, "expr2": {"t": "Const", "value": 1}, "t": "CondExpr", "test": {"t": "Const", "value": true}}, "src": "0 if true else 1"}
 {"ast": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "greaterthan", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is greaterthan 1"}
 {"ast": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lessthan", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is lessthan 1"}
 {"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"t": "Const", "value": 0}, "t": "Test"}, "src": "0 is sameas false"}
-{"err": "chunk after expression", "src": "007"}
-{"err": "chunk after expression", "src": "01"}
-{"err": "chunk after expression", "src": "0b2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "007"}
+{"cause": "trailing", "err": "chunk after expression", "src": "01"}
+{"cause": "trailing", "err": "chunk after expression", "src": "0b2"}
 {"ast": {"t": "Const", "value": 1}, "src": "0b_1"}
-{"err": "chunk after expression", "src": "0x_"}
+{"cause": "trailing", "err": "chunk after expression", "src": "0x_"}
 {"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "1 < 2 < 3"}
 {"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 2}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 3}, "op": "lt", "t": "Operand"}, {"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "1 < 2 < 3 > 0"}
 {"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"t": "Const", "value": 1}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "1 == 1"}
@@ -171,9 +171,9 @@
 {"ast": {"args": [{"t": "Const", "value": 0}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "lessthan", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is lessthan 0"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "odd", "node": {"t": "Const", "value": 1}, "t": "Test"}, "src": "1 is odd"}
 {"ast": {"expr": {"t": "Const", "value": 1}, "ops": [{"expr": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "t": "List"}, "op": "notin", "t": "Operand"}], "t": "Compare"}, "src": "1 not in [1, 2, 3]"}
-{"err": "chunk after expression", "src": "1,"}
-{"err": "chunk after expression", "src": "1, 2"}
-{"err": "chunk after expression", "src": "1.5e"}
+{"cause": "trailing", "err": "chunk after expression", "src": "1,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "1, 2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "1.5e"}
 {"ast": {"attr": "e3", "node": {"t": "Const", "value": 1}, "t": "Getattr"}, "src": "1.e3"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000000}, "t": "Filter"}, "src": "1000000000000|filesizeformat"}
 {"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000000000000}, "t": "Filter"}, "src": "1000000000000|filesizeformat(true)"}
@@ -185,8 +185,8 @@
 {"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 1000}, "t": "Filter"}, "src": "1000|filesizeformat(true)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 100}, "t": "Filter"}, "src": "100|filesizeformat"}
 {"ast": {"args": [{"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "filesizeformat", "node": {"t": "Const", "value": 100}, "t": "Filter"}, "src": "100|filesizeformat(true)"}
-{"err": "chunk after expression", "src": "1_000_"}
-{"err": "chunk after expression", "src": "1__0"}
+{"cause": "trailing", "err": "chunk after expression", "src": "1_000_"}
+{"cause": "trailing", "err": "chunk after expression", "src": "1__0"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "abs", "node": {"t": "Const", "value": 1}, "t": "Filter"}, "src": "1|abs"}
 {"ast": {"left": {"left": {"left": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 3}, "t": "Mul"}, "right": {"left": {"t": "Const", "value": 4}, "right": {"t": "Const", "value": 2}, "t": "Mod"}, "t": "Add"}, "right": {"t": "Const", "value": 1}, "t": "Add"}, "right": {"t": "Const", "value": 2}, "t": "Sub"}, "src": "2 * 3 + 4 % 2 + 1 - 2"}
 {"ast": {"expr": {"left": {"t": "Const", "value": 2}, "right": {"t": "Const", "value": 2}, "t": "Add"}, "ops": [{"expr": {"t": "Const", "value": 5}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "2 + 2 == 5"}
@@ -233,9 +233,9 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "case_sensitive", "t": "Keyword", "value": {"t": "Const", "value": true}}], "name": "min", "node": {"items": [{"t": "Const", "value": "a"}, {"t": "Const", "value": "B"}], "t": "List"}, "t": "Filter"}, "src": "[\"a\", \"B\"]|min(case_sensitive=true)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "upper", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "first", "node": {"items": [{"t": "Const", "value": "<foo>"}, {"t": "Const", "value": "<bar>"}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "['<foo>', '<bar>']|first|upper|escape"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sort", "node": {"items": [{"t": "Const", "value": "foo"}, {"t": "Const", "value": "Bar"}, {"t": "Const", "value": "blah"}], "t": "List"}, "t": "Filter"}, "src": "['foo', 'Bar', 'blah']|sort"}
-{"err": "unexpected 'end of template'", "src": "[1 +"}
-{"err": "expected token ',', got 'integer'", "src": "[1 2]"}
-{"err": "unexpected 'end of template'", "src": "[1,"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "[1 +"}
+{"cause": "parse", "err": "expected token ',', got 'integer'", "src": "[1 2]"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "[1,"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}, {"t": "Const", "value": 6}], "t": "List"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5, 6]|sum"}
 {"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5]|reject(\"odd\")|join(\"|\")"}
 {"ast": {"args": [{"t": "Const", "value": "|"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [{"t": "Const", "value": "odd"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "select", "node": {"items": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}, {"t": "Const", "value": 4}, {"t": "Const", "value": 5}], "t": "List"}, "t": "Filter"}, "t": "Filter"}, "src": "[1, 2, 3, 4, 5]|select(\"odd\")|join(\"|\")"}
@@ -265,38 +265,38 @@
 {"ast": {"name": "_beacon_mode", "t": "Name"}, "src": "_beacon_mode"}
 {"ast": {"name": "a", "t": "Name"}, "src": "a"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "ne", "t": "Operand"}], "t": "Compare"}, "src": "a != b"}
-{"err": "unexpected 'end of template'", "src": "a *"}
-{"err": "unexpected 'end of template'", "src": "a **"}
-{"err": "unexpected 'end of template'", "src": "a +"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a *"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a **"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a +"}
 {"ast": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "Add"}, "src": "a + b"}
 {"ast": {"left": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "Add"}, "right": {"name": "c", "t": "Name"}, "t": "Add"}, "src": "a + b + c"}
-{"err": "unexpected 'end of template'", "src": "a //"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a //"}
 {"ast": {"left": {"name": "a", "t": "Name"}, "right": {"name": "b", "t": "Name"}, "t": "FloorDiv"}, "src": "a // b"}
-{"err": "unexpected 'end of template'", "src": "a <"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a <"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "lt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "a < b < c"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "lteq", "t": "Operand"}], "t": "Compare"}, "src": "a <= b"}
-{"err": "chunk after expression", "src": "a = b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "a = b"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "lt", "t": "Operand"}], "t": "Compare"}, "src": "a > b < c"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gt", "t": "Operand"}, {"expr": {"name": "c", "t": "Name"}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "a > b > c"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "gteq", "t": "Operand"}], "t": "Compare"}, "src": "a >= b"}
-{"err": "unexpected 'end of template'", "src": "a and"}
-{"err": "unexpected 'end of template'", "src": "a if"}
-{"err": "unexpected 'end of template'", "src": "a if b else"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a and"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a if"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a if b else"}
 {"ast": {"expr1": {"name": "a", "t": "Name"}, "expr2": {"name": "c", "t": "Name"}, "t": "CondExpr", "test": {"name": "b", "t": "Name"}}, "src": "a if b else c"}
 {"ast": {"expr1": {"name": "a", "t": "Name"}, "expr2": {"expr1": {"name": "c", "t": "Name"}, "expr2": {"name": "e", "t": "Name"}, "t": "CondExpr", "test": {"name": "d", "t": "Name"}}, "t": "CondExpr", "test": {"name": "b", "t": "Name"}}, "src": "a if b else c if d else e"}
-{"err": "unexpected 'end of template'", "src": "a in"}
-{"err": "unexpected 'end of template'", "src": "a not in"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a in"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a not in"}
 {"ast": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "notin", "t": "Operand"}], "t": "Compare"}, "src": "a not in b"}
-{"err": "unexpected 'end of template'", "src": "a or"}
-{"err": "unexpected 'end of template'", "src": "a ~"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a or"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "a ~"}
 {"ast": {"nodes": [{"name": "a", "t": "Name"}, {"name": "b", "t": "Name"}], "t": "Concat"}, "src": "a ~ b"}
-{"err": "unexpected char '#' at 1", "src": "a#b"}
-{"err": "unexpected char '$' at 1", "src": "a$b"}
+{"cause": "lex", "err": "unexpected char '#' at 1", "src": "a#b"}
+{"cause": "lex", "err": "unexpected char '$' at 1", "src": "a$b"}
 {"ast": {"arg": {"t": "Const", "value": 0}, "node": {"name": "a", "t": "Name"}, "t": "Getitem"}, "src": "a.0"}
 {"ast": {"attr": "b", "node": {"name": "a", "t": "Name"}, "t": "Getattr"}, "src": "a.b"}
 {"ast": {"attr": "d", "node": {"attr": "c", "node": {"attr": "b", "node": {"name": "a", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "t": "Getattr"}, "src": "a.b.c.d"}
-{"err": "chunk after expression", "src": "a; b"}
-{"err": "unexpected char '@' at 1", "src": "a@b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "a; b"}
+{"cause": "lex", "err": "unexpected char '@' at 1", "src": "a@b"}
 {"ast": {"name": "a_control", "t": "Name"}, "src": "a_control"}
 {"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": null, "stop": null, "t": "Slice"}, "node": {"args": [{"name": "a", "t": "Name"}, {"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "add_each", "t": "Name"}, "t": "Call"}, "t": "Getitem"}, "src": "add_each(a, 2)[1:]"}
 {"ast": {"name": "ansible_playbook_python", "t": "Name"}, "src": "ansible_playbook_python"}
@@ -310,13 +310,13 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "customfilter", "node": {"name": "arg", "t": "Name"}, "t": "Filter"}, "src": "arg|customfilter"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "async_func", "t": "Name"}, "t": "Call"}, "src": "async_func()"}
 {"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "async_func", "t": "Name"}, "t": "Call"}, "right": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "normal_func", "t": "Name"}, "t": "Call"}, "t": "Add"}, "src": "async_func() + normal_func()"}
-{"err": "chunk after expression", "src": "autoescape ae"}
-{"err": "chunk after expression", "src": "autoescape false"}
-{"err": "chunk after expression", "src": "autoescape foo"}
-{"err": "chunk after expression", "src": "autoescape true"}
-{"err": "chunk after expression", "src": "autoescape val"}
+{"cause": "trailing", "err": "chunk after expression", "src": "autoescape ae"}
+{"cause": "trailing", "err": "chunk after expression", "src": "autoescape false"}
+{"cause": "trailing", "err": "chunk after expression", "src": "autoescape foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "autoescape true"}
+{"cause": "trailing", "err": "chunk after expression", "src": "autoescape val"}
 {"ast": {"name": "a\u00b7", "t": "Name"}, "src": "a\u00b7"}
-{"err": "unexpected char '\ud83d\udc0d' at 1", "src": "a\ud83d\udc0d"}
+{"cause": "lex", "err": "unexpected char '\ud83d\udc0d' at 1", "src": "a\ud83d\udc0d"}
 {"ast": {"name": "b", "t": "Name"}, "src": "b"}
 {"ast": {"name": "bar", "t": "Name"}, "src": "bar"}
 {"ast": {"left": {"name": "bar", "t": "Name"}, "right": {"name": "foo", "t": "Name"}, "t": "Add"}, "src": "bar + foo"}
@@ -327,47 +327,47 @@
 {"ast": {"args": [{"name": "foo", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "bar", "t": "Name"}, "t": "Test"}, "src": "bar is eq foo"}
 {"ast": {"name": "base_url", "t": "Name"}, "src": "base_url"}
 {"ast": {"name": "baz", "t": "Name"}, "src": "baz"}
-{"err": "chunk after expression", "src": "block b"}
-{"err": "chunk after expression", "src": "block block1"}
-{"err": "chunk after expression", "src": "block block2"}
-{"err": "chunk after expression", "src": "block block3"}
-{"err": "chunk after expression", "src": "block block4"}
-{"err": "chunk after expression", "src": "block block5"}
-{"err": "chunk after expression", "src": "block body"}
-{"err": "chunk after expression", "src": "block body scoped"}
-{"err": "chunk after expression", "src": "block content"}
-{"err": "chunk after expression", "src": "block data"}
-{"err": "chunk after expression", "src": "block data \"\n                    \""}
-{"err": "chunk after expression", "src": "block foo"}
-{"err": "chunk after expression", "src": "block foo-bar-baz"}
-{"err": "chunk after expression", "src": "block inner_box"}
-{"err": "chunk after expression", "src": "block intro"}
-{"err": "chunk after expression", "src": "block item"}
-{"err": "chunk after expression", "src": "block item \"\n                    \"required required"}
-{"err": "chunk after expression", "src": "block item \"\n                    \"scoped scoped"}
-{"err": "chunk after expression", "src": "block item required scoped"}
-{"err": "chunk after expression", "src": "block item scoped"}
-{"err": "chunk after expression", "src": "block item scoped required"}
-{"err": "chunk after expression", "src": "block outer_box"}
-{"err": "chunk after expression", "src": "block test"}
-{"err": "chunk after expression", "src": "block testing scoped"}
-{"err": "chunk after expression", "src": "block title"}
-{"err": "chunk after expression", "src": "block useless"}
-{"err": "chunk after expression", "src": "block x"}
-{"err": "chunk after expression", "src": "block x required"}
-{"err": "chunk after expression", "src": "block y"}
-{"err": "chunk after expression", "src": "block y scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block block1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block block2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block block3"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block block4"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block block5"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block body"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block body scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block content"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block data"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block data \"\n                    \""}
+{"cause": "trailing", "err": "chunk after expression", "src": "block foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block foo-bar-baz"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block inner_box"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block intro"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item \"\n                    \"required required"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item \"\n                    \"scoped scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item required scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block item scoped required"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block outer_box"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block test"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block testing scoped"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block title"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block useless"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block x"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block x required"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block y"}
+{"cause": "trailing", "err": "chunk after expression", "src": "block y scoped"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "blub", "t": "Name"}, "t": "Call"}, "src": "blub()"}
 {"ast": {"name": "break", "t": "Name"}, "src": "break"}
 {"ast": {"name": "c", "t": "Name"}, "src": "c"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "calc", "t": "Name"}, "t": "Call"}, "src": "calc()"}
-{"err": "chunk after expression", "src": "call do_something()"}
-{"err": "chunk after expression", "src": "call test()"}
-{"err": "chunk after expression", "src": "call x()"}
-{"err": "chunk after expression", "src": "call(data) test()"}
-{"err": "chunk after expression", "src": "call(user) dump_users(list_of_user)"}
-{"err": "chunk after expression", "src": "call(value, href) detail(icon, value, href)"}
-{"err": "invalid syntax for function call expression", "src": "call(x, y=1, z) a()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call do_something()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call test()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call x()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call(data) test()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call(user) dump_users(list_of_user)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "call(value, href) detail(icon, value, href)"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "call(x, y=1, z) a()"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "callableclass", "t": "Name"}, "t": "Call"}, "src": "callableclass()"}
 {"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "caller", "t": "Name"}, "t": "Test"}, "t": "Not"}, "src": "caller is not defined"}
 {"ast": {"args": [{"t": "Const", "value": "data"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "caller", "t": "Name"}, "t": "Call"}, "src": "caller('data')"}
@@ -406,31 +406,31 @@
 {"ast": {"name": "demo_override", "t": "Name"}, "src": "demo_override"}
 {"ast": {"expr": {"attr": "rc", "node": {"name": "demo_result", "t": "Name"}, "t": "Getattr"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "ne", "t": "Operand"}], "t": "Compare"}, "src": "demo_result.rc != 0"}
 {"ast": {"name": "deploy_region", "t": "Name"}, "src": "deploy_region"}
-{"err": "chunk after expression", "src": "do items.append(loop.index0 ~ char)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "do items.append(loop.index0 ~ char)"}
 {"ast": {"name": "dyn", "t": "Name"}, "src": "dyn"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "items", "node": {"name": "d", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "d|items|list"}
 {"ast": {"name": "e", "t": "Name"}, "src": "e"}
 {"ast": {"name": "elif", "t": "Name"}, "src": "elif"}
-{"err": "chunk after expression", "src": "elif False"}
-{"err": "chunk after expression", "src": "elif b"}
-{"err": "chunk after expression", "src": "elif c == d"}
-{"err": "chunk after expression", "src": "elif true"}
-{"err": "chunk after expression", "src": "elif y is defined"}
+{"cause": "trailing", "err": "chunk after expression", "src": "elif False"}
+{"cause": "trailing", "err": "chunk after expression", "src": "elif b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "elif c == d"}
+{"cause": "trailing", "err": "chunk after expression", "src": "elif true"}
+{"cause": "trailing", "err": "chunk after expression", "src": "elif y is defined"}
 {"ast": {"name": "else", "t": "Name"}, "src": "else"}
 {"ast": {"name": "endautoescape", "t": "Name"}, "src": "endautoescape"}
 {"ast": {"name": "endblock", "t": "Name"}, "src": "endblock"}
-{"err": "chunk after expression", "src": "endblock foo"}
-{"err": "chunk after expression", "src": "endblock y"}
+{"cause": "trailing", "err": "chunk after expression", "src": "endblock foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "endblock y"}
 {"ast": {"name": "endcall", "t": "Name"}, "src": "endcall"}
 {"ast": {"name": "endfilter", "t": "Name"}, "src": "endfilter"}
 {"ast": {"name": "endfor", "t": "Name"}, "src": "endfor"}
 {"ast": {"name": "endif", "t": "Name"}, "src": "endif"}
-{"err": "unexpected char '\\\\' at 7", "src": "endif %\\\\}.*?\n(jinja2\\\\.exceptions\\\\.)?TemplateSyntaxError: Encountered unknown tag 'endif'. Jinja \\\nwas looking for the following tags: 'endfor' or 'else'. The innermost block that needs \\\nto be closed is 'for'.\n    \"\"\",\n        )\n\n    def test_regular_syntax_error(self, fs_env):\n        def test():\n            raise TemplateSyntaxError(\"wtf\", 42)\n\n        self.assert_traceback_matches(\n            test,\n            r\"\"\"\n  File \".*debug.pyc?\", line \\d+, in test\n    raise TemplateSyntaxError\\(\"wtf\", 42\\)(\n    \\^{36})?\n(jinja2\\.exceptions\\.)?TemplateSyntaxError: wtf\n  line 42\"\"\",\n        )\n\n    def test_pickleable_syntax_error(self, fs_env):\n        original = TemplateSyntaxError(\"bad template\", 42, \"test\", \"test.txt\")\n        unpickled = pickle.loads(pickle.dumps(original))\n        assert str(original) == str(unpickled)\n        assert original.name == unpickled.name\n\n    def test_include_syntax_error_source(self, filesystem_loader):\n        e = Environment(\n            loader=ChoiceLoader(\n                [\n                    filesystem_loader,\n                    DictLoader({\"inc\": \"a\\n{% include 'syntaxerror.html'"}
-{"err": "unexpected 'end of template'", "src": "endif +"}
+{"cause": "lex", "err": "unexpected char '\\\\' at 7", "src": "endif %\\\\}.*?\n(jinja2\\\\.exceptions\\\\.)?TemplateSyntaxError: Encountered unknown tag 'endif'. Jinja \\\nwas looking for the following tags: 'endfor' or 'else'. The innermost block that needs \\\nto be closed is 'for'.\n    \"\"\",\n        )\n\n    def test_regular_syntax_error(self, fs_env):\n        def test():\n            raise TemplateSyntaxError(\"wtf\", 42)\n\n        self.assert_traceback_matches(\n            test,\n            r\"\"\"\n  File \".*debug.pyc?\", line \\d+, in test\n    raise TemplateSyntaxError\\(\"wtf\", 42\\)(\n    \\^{36})?\n(jinja2\\.exceptions\\.)?TemplateSyntaxError: wtf\n  line 42\"\"\",\n        )\n\n    def test_pickleable_syntax_error(self, fs_env):\n        original = TemplateSyntaxError(\"bad template\", 42, \"test\", \"test.txt\")\n        unpickled = pickle.loads(pickle.dumps(original))\n        assert str(original) == str(unpickled)\n        assert original.name == unpickled.name\n\n    def test_include_syntax_error_source(self, filesystem_loader):\n        e = Environment(\n            loader=ChoiceLoader(\n                [\n                    filesystem_loader,\n                    DictLoader({\"inc\": \"a\\n{% include 'syntaxerror.html'"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "endif +"}
 {"ast": {"name": "endmacro", "t": "Name"}, "src": "endmacro"}
 {"ast": {"name": "endoverlay", "t": "Name"}, "src": "endoverlay"}
 {"ast": {"name": "endraw", "t": "Name"}, "src": "endraw"}
-{"err": "unexpected 'end of template'", "src": "endraw +"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "endraw +"}
 {"ast": {"name": "endscope", "t": "Name"}, "src": "endscope"}
 {"ast": {"name": "endset", "t": "Name"}, "src": "endset"}
 {"ast": {"name": "endtrans", "t": "Name"}, "src": "endtrans"}
@@ -438,70 +438,70 @@
 {"ast": {"name": "endwith", "t": "Name"}, "src": "endwith"}
 {"ast": {"name": "env", "t": "Name"}, "src": "env"}
 {"ast": {"name": "env_name", "t": "Name"}, "src": "env_name"}
-{"err": "chunk after expression", "src": "extends \"a\""}
-{"err": "chunk after expression", "src": "extends \"b\""}
-{"err": "chunk after expression", "src": "extends \"base\""}
-{"err": "chunk after expression", "src": "extends \"base.html\""}
-{"err": "chunk after expression", "src": "extends \"default.html\""}
-{"err": "chunk after expression", "src": "extends \"header\""}
-{"err": "chunk after expression", "src": "extends \"layout\""}
-{"err": "chunk after expression", "src": "extends \"layout.html\""}
-{"err": "chunk after expression", "src": "extends \"level1\""}
-{"err": "chunk after expression", "src": "extends \"level2\""}
-{"err": "chunk after expression", "src": "extends \"level3\""}
-{"err": "chunk after expression", "src": "extends \"main\""}
-{"err": "chunk after expression", "src": "extends \"parent.html\""}
-{"err": "chunk after expression", "src": "extends 'default'"}
-{"err": "chunk after expression", "src": "extends 'default.html'"}
-{"err": "chunk after expression", "src": "extends 'default1'"}
-{"err": "chunk after expression", "src": "extends 'default2'"}
-{"err": "chunk after expression", "src": "extends 'details.html'"}
-{"err": "chunk after expression", "src": "extends 'layout.html'"}
-{"err": "chunk after expression", "src": "extends 'level1'"}
-{"err": "chunk after expression", "src": "extends 'level2'"}
-{"err": "chunk after expression", "src": "extends 'standard.html'"}
-{"err": "expected name or number", "src": "extends ..."}
-{"err": "chunk after expression", "src": "extends default"}
-{"err": "chunk after expression", "src": "extends t"}
-{"err": "unexpected 'end of template'", "src": "f(*"}
-{"err": "unexpected 'end of template'", "src": "f(**"}
-{"err": "invalid syntax for function call expression", "src": "f(**a, **b)"}
-{"err": "invalid syntax for function call expression", "src": "f(**k, *a)"}
-{"err": "invalid syntax for function call expression", "src": "f(**k, a=1)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"a\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"b\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"base\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"base.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"default.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"header\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"layout\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"layout.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"level1\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"level2\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"level3\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"main\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends \"parent.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'default'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'default.html'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'default1'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'default2'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'details.html'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'layout.html'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'level1'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'level2'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends 'standard.html'"}
+{"cause": "parse", "err": "expected name or number", "src": "extends ..."}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends default"}
+{"cause": "trailing", "err": "chunk after expression", "src": "extends t"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "f(*"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "f(**"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(**a, **b)"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(**k, *a)"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(**k, a=1)"}
 {"ast": {"args": [], "dyn_args": {"name": "a", "t": "Name"}, "dyn_kwargs": {"name": "k", "t": "Name"}, "kwargs": [], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(*a, **k)"}
-{"err": "invalid syntax for function call expression", "src": "f(*a, *b)"}
-{"err": "invalid syntax for function call expression", "src": "f(*a, 1)"}
-{"err": "unexpected 'end of template'", "src": "f(1 +"}
-{"err": "expected token ',', got 'integer'", "src": "f(1 2)"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(*a, *b)"}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(*a, 1)"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "f(1 +"}
+{"cause": "parse", "err": "expected token ',', got 'integer'", "src": "f(1 2)"}
 {"ast": {"args": [{"name": "a", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "b", "t": "Keyword", "value": {"t": "Const", "value": 1}}], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(a, b=1)"}
 {"ast": {"args": [{"name": "a", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "f", "t": "Name"}, "t": "Call"}, "src": "f(a,)"}
-{"err": "unexpected 'end of template'", "src": "f(a="}
-{"err": "invalid syntax for function call expression", "src": "f(a=1, 2)"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "f(a="}
+{"cause": "parse", "err": "invalid syntax for function call expression", "src": "f(a=1, 2)"}
 {"ast": {"attr": "baz", "node": {"name": "f", "t": "Name"}, "t": "Getattr"}, "src": "f.baz"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "fail", "t": "Name"}, "t": "Call"}, "src": "fail()"}
 {"ast": {"t": "Const", "value": false}, "src": "false"}
 {"ast": {"left": {"t": "Const", "value": false}, "right": {"t": "Const", "value": true}, "t": "Or"}, "src": "false or true"}
 {"ast": {"args": [{"t": "Const", "value": "no"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"t": "Const", "value": false}, "t": "Filter"}, "src": "false|default('no')"}
 {"ast": {"args": [{"t": "Const", "value": "no"}, {"t": "Const", "value": true}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"t": "Const", "value": false}, "t": "Filter"}, "src": "false|default('no', true)"}
-{"err": "chunk after expression", "src": "filter lower|escape"}
-{"err": "chunk after expression", "src": "filter upper|replace('FOO', 'foo')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "filter lower|escape"}
+{"cause": "trailing", "err": "chunk after expression", "src": "filter upper|replace('FOO', 'foo')"}
 {"ast": {"name": "foo", "t": "Name"}, "src": "foo"}
-{"err": "chunk after expression", "src": "foo bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "foo bar"}
 {"ast": {"args": [{"left": {"t": "Const", "value": 3}, "right": {"t": "Const", "value": 4}, "t": "Mul"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq (3 * 4)"}
 {"ast": {"args": [{"t": "Const", "value": 0}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq 0"}
 {"ast": {"args": [{"t": "Const", "value": 12}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "eq", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is eq 12"}
 {"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is sameas false"}
 {"ast": {"args": [{"t": "Const", "value": null}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "foo", "t": "Name"}, "t": "Test"}, "src": "foo is sameas none"}
-{"err": "You cannot chain multiple tests with is", "src": "foo is string is sequence"}
+{"cause": "parse", "err": "You cannot chain multiple tests with is", "src": "foo is string is sequence"}
 {"ast": {"args": [{"t": "Const", "value": "a"}], "dyn_args": {"items": [{"t": "Const", "value": "b"}], "t": "List"}, "dyn_kwargs": {"items": [{"key": {"t": "Const", "value": "g"}, "t": "Pair", "value": {"t": "Const", "value": "h"}}], "t": "Dict"}, "kwargs": [{"key": "c", "t": "Keyword", "value": {"t": "Const", "value": "d"}}, {"key": "e", "t": "Keyword", "value": {"t": "Const", "value": "f"}}], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo('a', c='d', e='f', *['b'], **{'g': 'h'})"}
 {"ast": {"attr": "__name__", "node": {"attr": "__class__", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "t": "Getattr"}, "t": "Getattr"}, "src": "foo().__class__.__name__"}
 {"ast": {"args": [{"t": "Const", "value": 42}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(42)"}
 {"ast": {"args": [{"t": "Const", "value": 5}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(5)"}
 {"ast": {"args": [{"left": {"name": "x", "t": "Name"}, "right": {"t": "Const", "value": 1}, "t": "Sub"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(x - 1)"}
 {"ast": {"args": [{"name": "x", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "foo", "t": "Name"}, "t": "Call"}, "src": "foo(x)"}
-{"err": "expected name or number", "src": "foo."}
+{"cause": "eof", "err": "expected name or number", "src": "foo."}
 {"ast": {"arg": {"t": "Const", "value": 5}, "node": {"arg": {"t": "Const", "value": 5}, "node": {"name": "foo", "t": "Name"}, "t": "Getitem"}, "t": "Getitem"}, "src": "foo.5.5"}
-{"err": "chunk after expression", "src": "foo.5e3"}
+{"cause": "trailing", "err": "chunk after expression", "src": "foo.5e3"}
 {"ast": {"attr": "__class__", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "src": "foo.__class__"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "__subclasses__", "node": {"attr": "__class__", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Getattr"}, "t": "Call"}, "src": "foo.__class__.__subclasses__()"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "_foo", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "foo._foo()"}
@@ -531,104 +531,104 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "X"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "foo|slice(3, 'X')|list"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "striptags", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|striptags"}
 {"ast": {"args": [{"name": "chars", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "trim", "node": {"name": "foo", "t": "Name"}, "t": "Filter"}, "src": "foo|trim(chars)"}
-{"err": "chunk after expression", "src": "for _, g in gs"}
-{"err": "chunk after expression", "src": "for a, b, c in [[1, 2, 3]]"}
-{"err": "chunk after expression", "src": "for c in s"}
-{"err": "chunk after expression", "src": "for cell in row"}
-{"err": "chunk after expression", "src": "for char in \"foo\""}
-{"err": "chunk after expression", "src": "for city, items in users|groupby('city', default='NY')"}
-{"err": "chunk after expression", "src": "for f in p.fields recursive"}
-{"err": "chunk after expression", "src": "for foo, bar in seq"}
-{"err": "chunk after expression", "src": "for foo, bar.baz in seq"}
-{"err": "chunk after expression", "src": "for grouper, list in [('a', 1), ('a', 2), ('b', 1)]|groupby(0)"}
-{"err": "chunk after expression", "src": "for grouper, list in [{'foo': 1, 'bar': 2},\n                                  {'foo': 2, 'bar': 3},\n                                  {'foo': 1, 'bar': 1},\n                                  {'foo': 3, 'bar': 4}]|groupby('foo')"}
-{"err": "chunk after expression", "src": "for grouper, list in items()|groupby('foo')"}
-{"err": "chunk after expression", "src": "for grouper, list in items()|groupby(0)"}
-{"err": "chunk after expression", "src": "for i in (1, 2)"}
-{"err": "chunk after expression", "src": "for i in [\"foo\", \"bar\"]"}
-{"err": "chunk after expression", "src": "for i in [1, 2, 3]"}
-{"err": "chunk after expression", "src": "for i in items"}
-{"err": "chunk after expression", "src": "for i in lst|reverse"}
-{"err": "chunk after expression", "src": "for i in range(0, 10)"}
-{"err": "chunk after expression", "src": "for i in range(1)"}
-{"err": "chunk after expression", "src": "for i in range(3)"}
-{"err": "chunk after expression", "src": "for idx in range(2)"}
-{"err": "chunk after expression", "src": "for item in (1, 2, 3, 4)"}
-{"err": "chunk after expression", "src": "for item in [1, 2, 3, 4]"}
-{"err": "chunk after expression", "src": "for item in [1, 2, 3]"}
-{"err": "chunk after expression", "src": "for item in [1, 2]"}
-{"err": "chunk after expression", "src": "for item in [1]"}
-{"err": "chunk after expression", "src": "for item in [1] if loop.index\n                                      == 0"}
-{"err": "chunk after expression", "src": "for item in []"}
-{"err": "chunk after expression", "src": "for item in broken"}
-{"err": "chunk after expression", "src": "for item in foo"}
-{"err": "chunk after expression", "src": "for item in foo recursive"}
-{"err": "chunk after expression", "src": "for item in iter"}
-{"err": "chunk after expression", "src": "for item in none"}
-{"err": "chunk after expression", "src": "for item in range(10) if item is even"}
-{"err": "chunk after expression", "src": "for item in range(total)"}
-{"err": "chunk after expression", "src": "for item in seq"}
-{"err": "chunk after expression", "src": "for item in seq recursive"}
-{"err": "chunk after expression", "src": "for item in x"}
-{"err": "chunk after expression", "src": "for item.attribute in seq"}
-{"err": "chunk after expression", "src": "for k, v in kvs"}
-{"err": "chunk after expression", "src": "for k, vs in data|groupby('k', case_sensitive=cs)"}
-{"err": "chunk after expression", "src": "for loop in seq"}
-{"err": "chunk after expression", "src": "for n in [[1,2,3], [3,4,5], [5,6,7]]"}
-{"err": "chunk after expression", "src": "for none in seq"}
-{"err": "chunk after expression", "src": "for num1 in range(5)"}
-{"err": "chunk after expression", "src": "for num2 in range(10)"}
-{"err": "chunk after expression", "src": "for p in foo"}
-{"err": "chunk after expression", "src": "for p in foo recursive"}
-{"err": "chunk after expression", "src": "for page in [site.root] if page.url != this recursive"}
-{"err": "chunk after expression", "src": "for page in items if page.url != this"}
-{"err": "chunk after expression", "src": "for row in table"}
-{"err": "chunk after expression", "src": "for s in seq"}
-{"err": "chunk after expression", "src": "for test_var in [\"test_content\"]"}
-{"err": "chunk after expression", "src": "for user in users"}
-{"err": "chunk after expression", "src": "for value in values recursive"}
-{"err": "chunk after expression", "src": "for x in"}
-{"err": "chunk after expression", "src": "for x in ['one', 'foo'] | select('foo')"}
-{"err": "chunk after expression", "src": "for x in [1, 2, 3]"}
-{"err": "chunk after expression", "src": "for x in [1,2,3]"}
-{"err": "chunk after expression", "src": "for x in a.b[:1]"}
-{"err": "chunk after expression", "src": "for x in a['b']['c']"}
-{"err": "chunk after expression", "src": "for x in foo,"}
-{"err": "chunk after expression", "src": "for x in foo, bar"}
-{"err": "chunk after expression", "src": "for x in list"}
-{"err": "chunk after expression", "src": "for x in range(4)"}
-{"err": "chunk after expression", "src": "for x in range(5)"}
-{"err": "chunk after expression", "src": "for x in rng"}
-{"err": "chunk after expression", "src": "for x in seq"}
-{"err": "chunk after expression", "src": "for x in value"}
-{"err": "chunk after expression", "src": "for x in x.y"}
-{"err": "chunk after expression", "src": "for x in x.y recursive"}
-{"err": "chunk after expression", "src": "for x in y"}
-{"err": "chunk after expression", "src": "for y in seq"}
-{"err": "chunk after expression", "src": "for year, list in articles()|groupby('date.year')"}
-{"err": "chunk after expression", "src": "for year, list in articles|groupby('date.year')"}
-{"err": "chunk after expression", "src": "from \"foo\" import"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar with context,"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar,"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, baz"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, baz with context"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, baz, with context"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, with context"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, with with context"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar, with, context"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar,,"}
-{"err": "chunk after expression", "src": "from \"foo\" import bar,, with context"}
-{"err": "chunk after expression", "src": "from \"foo\" import,"}
-{"err": "chunk after expression", "src": "from \"include\" import test"}
-{"err": "chunk after expression", "src": "from \"module\" import test"}
-{"err": "chunk after expression", "src": "from \"module\" import test with context"}
-{"err": "chunk after expression", "src": "from \"module\" import test without context"}
-{"err": "chunk after expression", "src": "from \"test.html\" import a, b as c"}
-{"err": "chunk after expression", "src": "from 'a' import x with context"}
-{"err": "chunk after expression", "src": "from 'helpers.html' import foo with context"}
-{"err": "chunk after expression", "src": "from 'macro' import m"}
-{"err": "chunk after expression", "src": "from 'module' import nothing"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for _, g in gs"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for a, b, c in [[1, 2, 3]]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for c in s"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for cell in row"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for char in \"foo\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "for city, items in users|groupby('city', default='NY')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for f in p.fields recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for foo, bar in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for foo, bar.baz in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for grouper, list in [('a', 1), ('a', 2), ('b', 1)]|groupby(0)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for grouper, list in [{'foo': 1, 'bar': 2},\n                                  {'foo': 2, 'bar': 3},\n                                  {'foo': 1, 'bar': 1},\n                                  {'foo': 3, 'bar': 4}]|groupby('foo')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for grouper, list in items()|groupby('foo')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for grouper, list in items()|groupby(0)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in (1, 2)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in [\"foo\", \"bar\"]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in [1, 2, 3]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in items"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in lst|reverse"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in range(0, 10)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in range(1)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for i in range(3)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for idx in range(2)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in (1, 2, 3, 4)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in [1, 2, 3, 4]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in [1, 2, 3]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in [1, 2]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in [1]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in [1] if loop.index\n                                      == 0"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in []"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in broken"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in foo recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in iter"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in none"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in range(10) if item is even"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in range(total)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in seq recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item in x"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for item.attribute in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for k, v in kvs"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for k, vs in data|groupby('k', case_sensitive=cs)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for loop in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for n in [[1,2,3], [3,4,5], [5,6,7]]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for none in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for num1 in range(5)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for num2 in range(10)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for p in foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for p in foo recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for page in [site.root] if page.url != this recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for page in items if page.url != this"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for row in table"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for s in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for test_var in [\"test_content\"]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for user in users"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for value in values recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in ['one', 'foo'] | select('foo')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in [1, 2, 3]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in [1,2,3]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in a.b[:1]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in a['b']['c']"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in foo,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in foo, bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in list"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in range(4)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in range(5)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in rng"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in value"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in x.y"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in x.y recursive"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for x in y"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for y in seq"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for year, list in articles()|groupby('date.year')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "for year, list in articles|groupby('date.year')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar with context,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, baz"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, baz with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, baz, with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, with with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar, with, context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar,,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import bar,, with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"foo\" import,"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"include\" import test"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"module\" import test"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"module\" import test with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"module\" import test without context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from \"test.html\" import a, b as c"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from 'a' import x with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from 'helpers.html' import foo with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from 'macro' import m"}
+{"cause": "trailing", "err": "chunk after expression", "src": "from 'module' import nothing"}
 {"ast": {"name": "from_inventory", "t": "Name"}, "src": "from_inventory"}
 {"ast": {"args": [{"t": "Const", "value": "foo"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "name", "t": "Keyword", "value": {"t": "Const", "value": "\n            <test>"}}], "node": {"name": "gettext", "t": "Name"}, "t": "Call"}, "src": "gettext(\"foo\", name='\n            '\"<test>\")"}
 {"ast": {"args": [{"t": "Const", "value": " Hello  \n  World"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "gettext", "t": "Name"}, "t": "Call"}, "src": "gettext(' Hello  \\n  World')"}
@@ -662,59 +662,59 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "i", "t": "Name"}, "t": "Call"}, "src": "i()"}
 {"ast": {"name": "icon", "t": "Name"}, "src": "icon"}
 {"ast": {"name": "if", "t": "Name"}, "src": "if"}
-{"err": "chunk after expression", "src": "if True"}
-{"err": "chunk after expression", "src": "if True +"}
-{"err": "chunk after expression", "src": "if a"}
-{"err": "chunk after expression", "src": "if b"}
-{"err": "chunk after expression", "src": "if caller"}
-{"err": "chunk after expression", "src": "if caller is undefined"}
-{"err": "chunk after expression", "src": "if default"}
-{"err": "chunk after expression", "src": "if expr"}
-{"err": "chunk after expression", "src": "if f.rec"}
-{"err": "chunk after expression", "src": "if false"}
-{"err": "chunk after expression", "src": "if foo"}
-{"err": "chunk after expression", "src": "if item % 2 == 0"}
-{"err": "chunk after expression", "src": "if item == 1"}
-{"err": "chunk after expression", "src": "if item > 2"}
-{"err": "chunk after expression", "src": "if item.b"}
-{"err": "chunk after expression", "src": "if kvs"}
-{"err": "chunk after expression", "src": "if l"}
-{"err": "chunk after expression", "src": "if loop.last"}
-{"err": "chunk after expression", "src": "if not loop.last"}
-{"err": "chunk after expression", "src": "if object1.subproperty1 is eq object2.subproperty2"}
-{"err": "chunk after expression", "src": "if true"}
-{"err": "chunk after expression", "src": "if value"}
-{"err": "chunk after expression", "src": "if x == v"}
-{"err": "chunk after expression", "src": "if x > 1"}
-{"err": "chunk after expression", "src": "if x is defined"}
-{"err": "chunk after expression", "src": "if x is not defined"}
-{"err": "chunk after expression", "src": "if y \"\n            \"is defined"}
-{"err": "chunk after expression", "src": "import \"meh.html\" as meh"}
-{"err": "chunk after expression", "src": "import \"module\" as m"}
-{"err": "chunk after expression", "src": "import \"module\" as m with context"}
-{"err": "chunk after expression", "src": "import \"module\" as m without context"}
-{"err": "chunk after expression", "src": "include \"header\""}
-{"err": "chunk after expression", "src": "include \"header\" with context"}
-{"err": "chunk after expression", "src": "include \"header\" without context"}
-{"err": "chunk after expression", "src": "include \"inc\""}
-{"err": "chunk after expression", "src": "include \"include.html\""}
-{"err": "chunk after expression", "src": "include \"missing\""}
-{"err": "chunk after expression", "src": "include \"missing\" ignore missing ' + extra + \""}
-{"err": "chunk after expression", "src": "include \"muh.html\""}
-{"err": "chunk after expression", "src": "include \"o_printer\""}
-{"err": "chunk after expression", "src": "include 'item'"}
-{"err": "chunk after expression", "src": "include 'x.html'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if True"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if True +"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if a"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if caller"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if caller is undefined"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if default"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if expr"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if f.rec"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if false"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if item % 2 == 0"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if item == 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if item > 2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if item.b"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if kvs"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if l"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if loop.last"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if not loop.last"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if object1.subproperty1 is eq object2.subproperty2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if true"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if value"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if x == v"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if x > 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if x is defined"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if x is not defined"}
+{"cause": "trailing", "err": "chunk after expression", "src": "if y \"\n            \"is defined"}
+{"cause": "trailing", "err": "chunk after expression", "src": "import \"meh.html\" as meh"}
+{"cause": "trailing", "err": "chunk after expression", "src": "import \"module\" as m"}
+{"cause": "trailing", "err": "chunk after expression", "src": "import \"module\" as m with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "import \"module\" as m without context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"header\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"header\" with context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"header\" without context"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"inc\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"include.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"missing\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"missing\" ignore missing ' + extra + \""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"muh.html\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include \"o_printer\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "include 'item'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include 'x.html'"}
 {"ast": {"args": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "include", "t": "Name"}, "t": "Call"}, "src": "include (\"foo.html\", \"bar.html\")"}
 {"ast": {"args": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}, {"name": "foo", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "include", "t": "Name"}, "t": "Call"}, "src": "include (\"foo.html\", \"bar.html\", foo)"}
 {"ast": {"arg": {"items": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}, {"name": "foo", "t": "Name"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"foo.html\", \"bar.html\", foo]"}
 {"ast": {"arg": {"items": [{"t": "Const", "value": "foo.html"}, {"t": "Const", "value": "bar.html"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"foo.html\", \"bar.html\"]"}
 {"ast": {"arg": {"items": [{"t": "Const", "value": "missing"}, {"t": "Const", "value": "header"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"missing\", \"header\"]"}
 {"ast": {"arg": {"items": [{"t": "Const", "value": "missing"}, {"t": "Const", "value": "missing2"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [\"missing\", \"missing2\"]"}
-{"err": "chunk after expression", "src": "include [\"missing\", \"missing2\"] ignore missing"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include [\"missing\", \"missing2\"] ignore missing"}
 {"ast": {"arg": {"items": [{"name": "x", "t": "Name"}, {"t": "Const", "value": "header"}], "t": "Tuple"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [x, \"header\"]"}
 {"ast": {"arg": {"name": "x", "t": "Name"}, "node": {"name": "include", "t": "Name"}, "t": "Getitem"}, "src": "include [x]"}
-{"err": "chunk after expression", "src": "include helper"}
-{"err": "chunk after expression", "src": "include x"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include helper"}
+{"cause": "trailing", "err": "chunk after expression", "src": "include x"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "inner", "t": "Name"}, "t": "Call"}, "src": "inner()"}
 {"ast": {"name": "inventory_hostname", "t": "Name"}, "src": "inventory_hostname"}
 {"ast": {"name": "it", "t": "Name"}, "src": "it"}
@@ -731,7 +731,7 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": 3}, {"t": "Const", "value": "X"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "slice", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "t": "Filter"}, "src": "items()|slice(3, 'X')|list"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "items()|sum"}
 {"ast": {"args": [{"t": "Const", "value": "value"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sum", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "items", "t": "Name"}, "t": "Call"}, "t": "Filter"}, "src": "items()|sum('value')"}
-{"err": "expected token 'name', got 'string'", "src": "items|\" + name + '(attribute=\"value\")"}
+{"cause": "parse", "err": "expected token 'name', got 'string'", "src": "items|\" + name + '(attribute=\"value\")"}
 {"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "src": "items|join(', ')"}
 {"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "join", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "name"}}], "name": "map", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "items|map(attribute='name')|join(', ')"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "unique", "node": {"args": [{"t": "Const", "value": "=="}, {"t": "Const", "value": "z"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "reject", "node": {"name": "items", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Filter"}, "src": "items|reject('==', 'z')|unique|list"}
@@ -772,42 +772,42 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m()"}
 {"ast": {"args": [{"t": "Const", "value": 1}, {"t": "Const", "value": 2}, {"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "m", "t": "Name"}, "t": "Call"}, "src": "m(1, 2, 3)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "test", "node": {"name": "m", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "m.test()"}
-{"err": "chunk after expression", "src": "macro __private()"}
-{"err": "chunk after expression", "src": "macro a()"}
-{"err": "chunk after expression", "src": "macro bar()"}
-{"err": "chunk after expression", "src": "macro baz()"}
-{"err": "chunk after expression", "src": "macro blub()"}
-{"err": "chunk after expression", "src": "macro detail(icon, value)"}
-{"err": "chunk after expression", "src": "macro do_something()"}
-{"err": "chunk after expression", "src": "macro dump_users(users)"}
-{"err": "chunk after expression", "src": "macro foo(a, b)"}
-{"err": "chunk after expression", "src": "macro foo(x)"}
-{"err": "chunk after expression", "src": "macro i()"}
-{"err": "chunk after expression", "src": "macro inner()"}
-{"err": "chunk after expression", "src": "macro item(a)"}
-{"err": "chunk after expression", "src": "macro level1(data1)"}
-{"err": "chunk after expression", "src": "macro level2(data2)"}
-{"err": "chunk after expression", "src": "macro link_detail(icon, value, href)"}
-{"err": "chunk after expression", "src": "macro m()"}
-{"err": "chunk after expression", "src": "macro m(a, b, c='c', d='d')"}
-{"err": "chunk after expression", "src": "macro m(a, b=1, c)"}
-{"err": "chunk after expression", "src": "macro m(a, b=x, x=23)"}
-{"err": "chunk after expression", "src": "macro magic(x)"}
-{"err": "chunk after expression", "src": "macro meh(x)"}
-{"err": "chunk after expression", "src": "macro my_macro()"}
-{"err": "chunk after expression", "src": "macro notthere()"}
-{"err": "chunk after expression", "src": "macro outer()"}
-{"err": "chunk after expression", "src": "macro outer(o)"}
-{"err": "chunk after expression", "src": "macro say_hello(name)"}
-{"err": "chunk after expression", "src": "macro test()"}
-{"err": "chunk after expression", "src": "macro test(a, b, c=get_int())"}
-{"err": "chunk after expression", "src": "macro test(foo)"}
-{"err": "chunk after expression", "src": "macro toplevel()"}
-{"err": "chunk after expression", "src": "macro wrapper()"}
-{"err": "chunk after expression", "src": "macro x()"}
-{"err": "chunk after expression", "src": "macro x(caller)"}
-{"err": "chunk after expression", "src": "macro x(caller=none)"}
-{"err": "chunk after expression", "src": "macro x(l)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro __private()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro a()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro bar()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro baz()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro blub()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro detail(icon, value)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro do_something()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro dump_users(users)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro foo(a, b)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro foo(x)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro i()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro inner()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro item(a)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro level1(data1)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro level2(data2)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro link_detail(icon, value, href)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro m()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro m(a, b, c='c', d='d')"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro m(a, b=1, c)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro m(a, b=x, x=23)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro magic(x)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro meh(x)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro my_macro()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro notthere()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro outer()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro outer(o)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro say_hello(name)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro test()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro test(a, b, c=get_int())"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro test(foo)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro toplevel()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro wrapper()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro x()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro x(caller)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro x(caller=none)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "macro x(l)"}
 {"ast": {"args": [{"name": "ns", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "magic", "t": "Name"}, "t": "Call"}, "src": "magic(ns)"}
 {"ast": {"name": "missing", "t": "Name"}, "src": "missing"}
 {"ast": {"left": {"name": "missing", "t": "Name"}, "right": {"t": "Const", "value": 1}, "t": "Sub"}, "src": "missing - 1"}
@@ -829,12 +829,12 @@
 {"ast": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "network_ready", "t": "Name"}, "t": "Filter"}, "src": "network_ready | default(false)"}
 {"ast": {"args": [{"t": "Const", "value": "%(num)s apple"}, {"t": "Const", "value": "%(num)s apples"}, {"name": "apples", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "ngettext", "t": "Name"}, "t": "Call"}, "src": "ngettext(\"%(num)s apple\", \"%(num)s apples\", apples)"}
 {"ast": {"attr": "stdout", "node": {"name": "nginx_state", "t": "Name"}, "t": "Getattr"}, "src": "nginx_state.stdout"}
-{"err": "chunk after expression", "src": "no such element: int object['missing']"}
+{"cause": "trailing", "err": "chunk after expression", "src": "no such element: int object['missing']"}
 {"ast": {"t": "Const", "value": null}, "src": "none"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"t": "Const", "value": null}, "t": "Test"}, "src": "none is defined"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [{"t": "Const", "value": "upper"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "map", "node": {"t": "Const", "value": null}, "t": "Filter"}, "t": "Filter"}, "src": "none|map(\"upper\")|list"}
-{"err": "unexpected 'end of template'", "src": "not"}
-{"err": "unexpected 'end of template'", "src": "not ("}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "not"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "not ("}
 {"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "bool", "node": {"args": [{"t": "Const", "value": false}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "default", "node": {"name": "skip_x", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "t": "Not"}, "src": "not (skip_x | default(false) | bool)"}
 {"ast": {"node": {"expr": {"t": "Const", "value": 42}, "ops": [{"expr": {"name": "bar", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "t": "Not"}, "src": "not 42 in bar"}
 {"ast": {"node": {"expr": {"name": "a", "t": "Name"}, "ops": [{"expr": {"name": "b", "t": "Name"}, "op": "in", "t": "Operand"}], "t": "Compare"}, "t": "Not"}, "src": "not a in b"}
@@ -843,7 +843,7 @@
 {"ast": {"name": "not_in_any_inventory", "t": "Name"}, "src": "not_in_any_inventory"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "nothing", "t": "Name"}, "t": "Call"}, "src": "nothing()"}
 {"ast": {"args": [{"t": "Const", "value": "babel"}, {"t": "Const", "value": "%(users)s user"}, {"t": "Const", "value": "%(users)s users"}, {"name": "users", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "npgettext", "t": "Name"}, "t": "Call"}, "src": "npgettext(\"babel\", \"%(users)s user\", \"%(users)s users\", users)"}
-{"err": "unexpected char \"'\" at 53", "src": "npgettext(\"fruit\", \"%(num)s apple\", \"%(num)s apples\",'\n    \" apples)"}
+{"cause": "lex", "err": "unexpected char \"'\" at 53", "src": "npgettext(\"fruit\", \"%(num)s apple\", \"%(num)s apples\",'\n    \" apples)"}
 {"ast": {"args": [{"name": "not_here", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "run", "node": {"name": "ns", "t": "Name"}, "t": "Filter"}, "src": "ns | run(not_here)"}
 {"ast": {"attr": "a", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.a"}
 {"ast": {"attr": "b", "node": {"name": "ns", "t": "Name"}, "t": "Getattr"}, "src": "ns.b"}
@@ -867,7 +867,7 @@
 {"ast": {"name": "play_scoped", "t": "Name"}, "src": "play_scoped"}
 {"ast": {"name": "playbook_dir", "t": "Name"}, "src": "playbook_dir"}
 {"ast": {"name": "pluralize", "t": "Name"}, "src": "pluralize"}
-{"err": "chunk after expression", "src": "pluralize bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "pluralize bar"}
 {"ast": {"name": "pod_label", "t": "Name"}, "src": "pod_label"}
 {"ast": {"name": "pod_namespace", "t": "Name"}, "src": "pod_namespace"}
 {"ast": {"name": "port_count", "t": "Name"}, "src": "port_count"}
@@ -876,7 +876,7 @@
 {"ast": {"attr": "stdout", "node": {"arg": {"t": "Const", "value": 0}, "node": {"attr": "results", "node": {"name": "r", "t": "Name"}, "t": "Getattr"}, "t": "Getitem"}, "t": "Getattr"}, "src": "r.results[0].stdout"}
 {"ast": {"expr": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "length", "node": {"attr": "stdout", "node": {"name": "r", "t": "Name"}, "t": "Getattr"}, "t": "Filter"}, "ops": [{"expr": {"t": "Const", "value": 0}, "op": "gt", "t": "Operand"}], "t": "Compare"}, "src": "r.stdout | length > 0"}
 {"ast": {"name": "raw", "t": "Name"}, "src": "raw"}
-{"err": "unexpected 'end of template'", "src": "raw +"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "raw +"}
 {"ast": {"name": "region", "t": "Name"}, "src": "region"}
 {"ast": {"name": "result_name", "t": "Name"}, "src": "result_name"}
 {"ast": {"name": "retries_left", "t": "Name"}, "src": "retries_left"}
@@ -884,72 +884,72 @@
 {"ast": {"attr": "index", "node": {"name": "rowloop", "t": "Name"}, "t": "Getattr"}, "src": "rowloop.index"}
 {"ast": {"args": [{"t": "Const", "value": "<blink>foo</blink>"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "say_hello", "t": "Name"}, "t": "Call"}, "src": "say_hello(\"<blink>foo</blink>\")"}
 {"ast": {"args": [{"t": "Const", "value": "Peter"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "say_hello", "t": "Name"}, "t": "Call"}, "src": "say_hello('Peter')"}
-{"err": "chunk after expression", "src": "scope a=1, b=2, c=b, d=e, e=5"}
+{"cause": "trailing", "err": "chunk after expression", "src": "scope a=1, b=2, c=b, d=e, e=5"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "b", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.b()"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "foo", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.foo()"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "x", "node": {"name": "self", "t": "Name"}, "t": "Getattr"}, "t": "Call"}, "src": "self.x()"}
 {"ast": {"name": "service_port", "t": "Name"}, "src": "service_port"}
-{"err": "chunk after expression", "src": "set\n                ns = namespace(run=\"{0.__call__.__builtins__[__import__]}\".format)"}
-{"err": "chunk after expression", "src": "set a = \" xxx \""}
-{"err": "chunk after expression", "src": "set a = 1"}
-{"err": "chunk after expression", "src": "set a = 2"}
-{"err": "chunk after expression", "src": "set a = 3"}
-{"err": "chunk after expression", "src": "set a = 42"}
-{"err": "chunk after expression", "src": "set b = \" yy \""}
-{"err": "chunk after expression", "src": "set caller = 42"}
-{"err": "chunk after expression", "src": "set foo"}
-{"err": "chunk after expression", "src": "set foo = \"foo\""}
-{"err": "chunk after expression", "src": "set foo = 'bar'"}
-{"err": "chunk after expression", "src": "set foo = 0"}
-{"err": "chunk after expression", "src": "set foo = 1"}
-{"err": "chunk after expression", "src": "set foo = 41"}
-{"err": "chunk after expression", "src": "set foo = 42"}
-{"err": "chunk after expression", "src": "set foo = foo"}
-{"err": "chunk after expression", "src": "set foo | myfilter(a) | trim | length | string"}
-{"err": "chunk after expression", "src": "set foo | trim"}
-{"err": "chunk after expression", "src": "set foo | trim | length | string"}
-{"err": "chunk after expression", "src": "set foo.bar = 1"}
-{"err": "chunk after expression", "src": "set foo['bar'] = 1"}
-{"err": "chunk after expression", "src": "set foobar = 42"}
-{"err": "chunk after expression", "src": "set hello = 1"}
-{"err": "chunk after expression", "src": "set i = 1"}
-{"err": "chunk after expression", "src": "set i = 24"}
-{"err": "chunk after expression", "src": "set i = 42"}
-{"err": "chunk after expression", "src": "set i = idx"}
-{"err": "chunk after expression", "src": "set i = loop.index0"}
-{"err": "chunk after expression", "src": "set item = 42"}
-{"err": "chunk after expression", "src": "set items = []"}
-{"err": "chunk after expression", "src": "set j = loop.index"}
-{"err": "chunk after expression", "src": "set n=[1,2,3,4,5]"}
-{"err": "chunk after expression", "src": "set ns = namespace()"}
-{"err": "chunk after expression", "src": "set ns = namespace(a=12, b=36)"}
-{"err": "chunk after expression", "src": "set ns = namespace(d, self=37)"}
-{"err": "chunk after expression", "src": "set ns = namespace(foo=\"Bar\")"}
-{"err": "chunk after expression", "src": "set ns = namespace(found=false)"}
-{"err": "chunk after expression", "src": "set ns.a = 13"}
-{"err": "chunk after expression", "src": "set ns.a, ns.b = ns.a + 1, ns.b + 1"}
-{"err": "chunk after expression", "src": "set ns.b = 42"}
-{"err": "chunk after expression", "src": "set ns.bar"}
-{"err": "chunk after expression", "src": "set ns.bar = '42'"}
-{"err": "chunk after expression", "src": "set ns.bar = 'hi'"}
-{"err": "chunk after expression", "src": "set ns.found = true"}
-{"err": "chunk after expression", "src": "set output"}
-{"err": "chunk after expression", "src": "set rowloop = loop"}
-{"err": "chunk after expression", "src": "set test_var=\"test_content\""}
-{"err": "chunk after expression", "src": "set true = 42"}
-{"err": "chunk after expression", "src": "set var = 42"}
-{"err": "chunk after expression", "src": "set variable = 42"}
-{"err": "chunk after expression", "src": "set wrapper = \"<FOO>\""}
-{"err": "chunk after expression", "src": "set x"}
-{"err": "chunk after expression", "src": "set x = \" {% str"}
-{"err": "chunk after expression", "src": "set x = \"<x>\""}
-{"err": "chunk after expression", "src": "set x = 1"}
-{"err": "chunk after expression", "src": "set x = 2"}
-{"err": "chunk after expression", "src": "set x = 42"}
-{"err": "chunk after expression", "src": "set x = 9"}
-{"err": "chunk after expression", "src": "set x = item"}
-{"err": "chunk after expression", "src": "set x.b = 37"}
-{"err": "chunk after expression", "src": "set z = 99"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set\n                ns = namespace(run=\"{0.__call__.__builtins__[__import__]}\".format)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set a = \" xxx \""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set a = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set a = 2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set a = 3"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set a = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set b = \" yy \""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set caller = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = \"foo\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = 'bar'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = 0"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = 41"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo = foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo | myfilter(a) | trim | length | string"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo | trim"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo | trim | length | string"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo.bar = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foo['bar'] = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set foobar = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set hello = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set i = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set i = 24"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set i = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set i = idx"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set i = loop.index0"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set item = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set items = []"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set j = loop.index"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set n=[1,2,3,4,5]"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns = namespace()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns = namespace(a=12, b=36)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns = namespace(d, self=37)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns = namespace(foo=\"Bar\")"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns = namespace(found=false)"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.a = 13"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.a, ns.b = ns.a + 1, ns.b + 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.b = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.bar = '42'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.bar = 'hi'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set ns.found = true"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set output"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set rowloop = loop"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set test_var=\"test_content\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set true = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set var = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set variable = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set wrapper = \"<FOO>\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = \" {% str"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = \"<x>\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = 1"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = 2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = 42"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = 9"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x = item"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set x.b = 37"}
+{"cause": "trailing", "err": "chunk after expression", "src": "set z = 99"}
 {"ast": {"name": "shared_endpoint", "t": "Name"}, "src": "shared_endpoint"}
 {"ast": {"name": "shared_timeout", "t": "Name"}, "src": "shared_timeout"}
 {"ast": {"expr": {"name": "skip_demo", "t": "Name"}, "ops": [{"expr": {"t": "Const", "value": false}, "op": "eq", "t": "Operand"}], "t": "Compare"}, "src": "skip_demo == false"}
@@ -971,20 +971,20 @@
 {"ast": {"left": {"name": "the_foo", "t": "Name"}, "right": {"name": "x", "t": "Name"}, "t": "Add"}, "src": "the_foo + x"}
 {"ast": {"name": "topic", "t": "Name"}, "src": "topic"}
 {"ast": {"name": "trans", "t": "Name"}, "src": "trans"}
-{"err": "chunk after expression", "src": "trans 'fruit' num=apples"}
-{"err": "chunk after expression", "src": "trans count=num"}
-{"err": "chunk after expression", "src": "trans foo"}
-{"err": "chunk after expression", "src": "trans foo=\"42\""}
-{"err": "chunk after expression", "src": "trans foo=42, count=2"}
-{"err": "chunk after expression", "src": "trans notrimmed"}
-{"err": "chunk after expression", "src": "trans num=3"}
-{"err": "chunk after expression", "src": "trans num=apples"}
-{"err": "chunk after expression", "src": "trans num=count"}
-{"err": "chunk after expression", "src": "trans trimmed"}
-{"err": "chunk after expression", "src": "trans trimmed = 'world'"}
-{"err": "chunk after expression", "src": "trans trimmed x=\"world\""}
-{"err": "chunk after expression", "src": "trans user_count"}
-{"err": "chunk after expression", "src": "trans user_count=get_user_count()"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans 'fruit' num=apples"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans count=num"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans foo"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans foo=\"42\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans foo=42, count=2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans notrimmed"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans num=3"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans num=apples"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans num=count"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans trimmed"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans trimmed = 'world'"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans trimmed x=\"world\""}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans user_count"}
+{"cause": "trailing", "err": "chunk after expression", "src": "trans user_count=get_user_count()"}
 {"ast": {"name": "trimmed", "t": "Name"}, "src": "trimmed"}
 {"ast": {"t": "Const", "value": true}, "src": "true"}
 {"ast": {"left": {"t": "Const", "value": true}, "right": {"t": "Const", "value": false}, "t": "And"}, "src": "true and false"}
@@ -1029,50 +1029,50 @@
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "var", "t": "Name"}, "t": "Filter"}, "src": "var|f"}
 {"ast": {"args": [{"t": "Const", "value": ", "}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "v"}}], "name": "join", "node": {"name": "vs", "t": "Name"}, "t": "Filter"}, "src": "vs|join(', ', attribute='v')"}
 {"ast": {"name": "which", "t": "Name"}, "src": "which"}
-{"err": "chunk after expression", "src": "wibble bar"}
-{"err": "chunk after expression", "src": "with a=1, b=2, c=b, d=e, e=5"}
-{"err": "chunk after expression", "src": "with a=42, b=23"}
-{"err": "chunk after expression", "src": "with x = 2"}
+{"cause": "trailing", "err": "chunk after expression", "src": "wibble bar"}
+{"cause": "trailing", "err": "chunk after expression", "src": "with a=1, b=2, c=b, d=e, e=5"}
+{"cause": "trailing", "err": "chunk after expression", "src": "with a=42, b=23"}
+{"cause": "trailing", "err": "chunk after expression", "src": "with x = 2"}
 {"ast": {"name": "x", "t": "Name"}, "src": "x"}
 {"ast": {"left": {"name": "x", "t": "Name"}, "right": {"node": {"t": "Const", "value": 2}, "t": "Neg"}, "t": "Pow"}, "src": "x ** -2"}
-{"err": "unexpected 'end of template'", "src": "x =="}
-{"err": "unexpected end of template, expected 'name'.", "src": "x is"}
-{"err": "expected token 'name', got 'integer'", "src": "x is a.1"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x =="}
+{"cause": "eof", "err": "unexpected end of template, expected 'name'.", "src": "x is"}
+{"cause": "parse", "err": "expected token 'name', got 'integer'", "src": "x is a.1"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "ansible.builtin.defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is ansible.builtin.defined"}
-{"err": "unexpected 'end of template'", "src": "x is defined and"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x is defined and"}
 {"ast": {"left": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "right": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "y", "t": "Name"}, "t": "Test"}, "t": "Not"}, "t": "And"}, "src": "x is defined and y is not defined"}
-{"err": "unexpected end of template, expected ','.", "src": "x is defined(1"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "x is defined(1"}
 {"ast": {"args": [{"t": "Const", "value": 3}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "divisibleby", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is divisibleby 3"}
-{"err": "unexpected 'end of template'", "src": "x is divisibleby("}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x is divisibleby("}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escaped", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is escaped"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is f"}
-{"err": "unexpected end of template, expected 'name'.", "src": "x is not"}
+{"cause": "eof", "err": "unexpected end of template, expected 'name'.", "src": "x is not"}
 {"ast": {"node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "t": "Not"}, "src": "x is not defined"}
-{"err": "expected name or number", "src": "x is sameas foo."}
+{"cause": "eof", "err": "expected name or number", "src": "x is sameas foo."}
 {"ast": {"args": [{"attr": "bar", "node": {"name": "foo", "t": "Name"}, "t": "Getattr"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "sameas", "node": {"name": "x", "t": "Name"}, "t": "Test"}, "src": "x is sameas foo.bar"}
-{"err": "unexpected end of template, expected 'name'.", "src": "x |"}
-{"err": "expected token 'name', got 'integer'", "src": "x | a.1"}
+{"cause": "eof", "err": "unexpected end of template, expected 'name'.", "src": "x |"}
+{"cause": "parse", "err": "expected token 'name', got 'integer'", "src": "x | a.1"}
 {"ast": {"args": [{"t": "Const", "value": "v"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "ansible.builtin.default", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x | ansible.builtin.default('v')"}
-{"err": "unexpected 'end of template'", "src": "x | default("}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x | default("}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x()"}
 {"ast": {"args": [{"name": "l", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x(l)"}
 {"ast": {"args": [{"name": "n", "t": "Name"}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"name": "x", "t": "Name"}, "t": "Call"}, "src": "x(n)"}
-{"err": "expected name or number", "src": "x."}
+{"cause": "eof", "err": "expected name or number", "src": "x."}
 {"ast": {"arg": {"t": "Const", "value": 1}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x.1"}
 {"ast": {"arg": {"t": "Const", "value": 99999999999999999999999999}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x.99999999999999999999999999"}
 {"ast": {"attr": "__class__", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.__class__"}
 {"ast": {"attr": "bar", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.bar"}
 {"ast": {"attr": "foo", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.foo"}
 {"ast": {"attr": "title", "node": {"name": "x", "t": "Name"}, "t": "Getattr"}, "src": "x.title"}
-{"err": "unexpected end of template, expected ','.", "src": "x.y(1"}
-{"err": "unexpected 'end of template'", "src": "x["}
-{"err": "unexpected end of template, expected ','.", "src": "x['a'"}
-{"err": "unexpected 'end of template'", "src": "x[1 +"}
-{"err": "expected token ',', got 'integer'", "src": "x[1 2]"}
-{"err": "unexpected 'end of template'", "src": "x[1:"}
-{"err": "unexpected 'end of template'", "src": "x[1:2:"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "x.y(1"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x["}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "x['a'"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x[1 +"}
+{"cause": "parse", "err": "expected token ',', got 'integer'", "src": "x[1 2]"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x[1:"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x[1:2:"}
 {"ast": {"arg": {"t": "Const", "value": 99999999999999999999999999}, "node": {"name": "x", "t": "Name"}, "t": "Getitem"}, "src": "x[99999999999999999999999999]"}
-{"err": "unexpected 'end of template'", "src": "x[:"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "x[:"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "list", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [{"key": "attribute", "t": "Keyword", "value": {"t": "Const", "value": "x"}}], "name": "map", "node": {"name": "xs", "t": "Name"}, "t": "Filter"}, "t": "Filter"}, "src": "xs | map(attribute='x') | list"}
 {"ast": {"arg": {"items": [{"start": {"t": "Const", "value": 1}, "step": null, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, {"t": "Const", "value": 3}], "t": "Tuple"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:2, 3]"}
 {"ast": {"arg": {"start": {"t": "Const", "value": 1}, "step": {"node": {"t": "Const", "value": 1}, "t": "Neg"}, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[1:2:-1]"}
@@ -1082,7 +1082,7 @@
 {"ast": {"arg": {"start": null, "step": null, "stop": {"t": "Const", "value": 2}, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[:2]"}
 {"ast": {"arg": {"start": null, "step": {"t": "Const", "value": 2}, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[::2]"}
 {"ast": {"arg": {"start": null, "step": null, "stop": null, "t": "Slice"}, "node": {"name": "xs", "t": "Name"}, "t": "Getitem"}, "src": "xs[:]"}
-{"err": "unexpected end of template, expected ','.", "src": "x|d(1)(2"}
+{"cause": "eof", "err": "unexpected end of template, expected ','.", "src": "x|d(1)(2"}
 {"ast": {"args": [{"t": "Const", "value": 2}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"args": [{"t": "Const", "value": 1}], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "d", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "t": "Call"}, "src": "x|d(1)(2)"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "src": "x|f"}
 {"ast": {"expr1": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "x", "t": "Name"}, "t": "Filter"}, "expr2": {"t": "Const", "value": "foo"}, "t": "CondExpr", "test": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "defined", "node": {"name": "x", "t": "Name"}, "t": "Test"}}, "src": "x|f if x is defined else 'foo'"}
@@ -1093,13 +1093,13 @@
 {"ast": {"name": "year", "t": "Name"}, "src": "year"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "f", "node": {"name": "y", "t": "Name"}, "t": "Filter"}, "src": "y|f"}
 {"ast": {"name": "z", "t": "Name"}, "src": "z"}
-{"err": "unexpected char \"'\" at 17", "src": "{\"foo\": \"<test>\"}'\n            \"|xmlattr|escape"}
+{"cause": "lex", "err": "unexpected char \"'\" at 17", "src": "{\"foo\": \"<test>\"}'\n            \"|xmlattr|escape"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "escape", "node": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": "<test>"}}], "t": "Dict"}, "t": "Filter"}, "t": "Filter"}, "src": "{\"foo\": \"<test>\"}|xmlattr|escape"}
-{"err": "unexpected '%'", "src": "{%"}
-{"err": "unexpected end of template, expected ':'.", "src": "{'a'"}
-{"err": "unexpected 'end of template'", "src": "{'a':"}
-{"err": "expected token ',', got 'string'", "src": "{'a': 1 'b': 2}"}
-{"err": "unexpected 'end of template'", "src": "{'a': 1 +"}
+{"cause": "parse", "err": "unexpected '%'", "src": "{%"}
+{"cause": "eof", "err": "unexpected end of template, expected ':'.", "src": "{'a'"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "{'a':"}
+{"cause": "parse", "err": "expected token ',', got 'string'", "src": "{'a': 1 'b': 2}"}
+{"cause": "eof", "err": "unexpected 'end of template'", "src": "{'a': 1 +"}
 {"ast": {"arg": {"t": "Const", "value": "a"}, "node": {"items": [{"key": {"t": "Const", "value": "a"}, "t": "Pair", "value": {"t": "Const", "value": 1}}], "t": "Dict"}, "t": "Getitem"}, "src": "{'a': 1}['a']"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": 42}}, {"key": {"t": "Const", "value": "bar"}, "t": "Pair", "value": {"t": "Const", "value": 23}}, {"key": {"t": "Const", "value": "fish"}, "t": "Pair", "value": {"t": "Const", "value": null}}, {"key": {"t": "Const", "value": "\n            spam"}, "t": "Pair", "value": {"name": "missing", "t": "Name"}}, {"key": {"t": "Const", "value": "blub:blub"}, "t": "Pair", "value": {"t": "Const", "value": "<?>"}}], "t": "Dict"}, "t": "Filter"}, "src": "{'foo': 42, 'bar': 23, 'fish': none, \"\n            \"'spam': missing, 'blub:blub': '<?>'}|xmlattr"}
 {"ast": {"attr": "foo", "node": {"items": [{"key": {"t": "Const", "value": "foo"}, "t": "Pair", "value": {"t": "Const", "value": "bar"}}], "t": "Dict"}, "t": "Getattr"}, "src": "{'foo':'bar'}.foo"}
@@ -1108,19 +1108,19 @@
 {"ast": {"items": [{"key": {"t": "Const", "value": 1}, "t": "Pair", "value": {"t": "Const", "value": 2}}], "t": "Dict"}, "src": "{1: 2,}"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "node": {"attr": "clear", "node": {"items": [{"key": {"t": "Const", "value": 1}, "t": "Pair", "value": {"t": "Const", "value": 2}}], "t": "Dict"}, "t": "Getattr"}, "t": "Call"}, "src": "{1:2}.clear()"}
 {"ast": {"args": [], "dyn_args": null, "dyn_kwargs": null, "kwargs": [], "name": "xmlattr", "node": {"items": [{"key": {"name": "key", "t": "Name"}, "t": "Pair", "value": {"t": "Const", "value": "my_class"}}], "t": "Dict"}, "t": "Filter"}, "src": "{key: 'my_class'}|xmlattr"}
-{"err": "expected token 'name', got '{'", "src": "{{ 2 is {op}"}
-{"err": "expected token ':', got '}'", "src": "{{ foo({sig})"}
-{"err": "expected token ':', got '}'", "src": "{{ foo|dictsort({args})"}
-{"err": "expected token ':', got 'value'", "src": "{{ undefined value printed: {undefined_hint}"}
-{"err": "expected token ':', got '}'", "src": "{{ {a} {op} {b}"}
-{"err": "expected token ':', got '}'", "src": "{{ {const.lower()}"}
-{"err": "expected token ':', got '}'", "src": "{{ {const.upper()}"}
-{"err": "expected token ':', got '}'", "src": "{{ {const}"}
-{"err": "expected token ':', got '}'", "src": "{{ {expr}"}
-{"err": "expected token ':', got '}'", "src": "{{ {i}|filter{i}"}
-{"err": "expected token ':', got '}'", "src": "{{ {op}"}
-{"err": "expected token ':', got '}'", "src": "{{ {test}"}
-{"err": "expected token ':', got '}'", "src": "{{ {value}"}
-{"err": "unexpected 'end of print statement'", "src": "}}"}
-{"err": "Invalid character in identifier", "src": "\u00b7"}
-{"err": "unexpected char '\ud83d\udc0d' at 0", "src": "\ud83d\udc0da"}
+{"cause": "parse", "err": "expected token 'name', got '{'", "src": "{{ 2 is {op}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ foo({sig})"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ foo|dictsort({args})"}
+{"cause": "parse", "err": "expected token ':', got 'value'", "src": "{{ undefined value printed: {undefined_hint}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {a} {op} {b}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {const.lower()}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {const.upper()}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {const}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {expr}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {i}|filter{i}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {op}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {test}"}
+{"cause": "parse", "err": "expected token ':', got '}'", "src": "{{ {value}"}
+{"cause": "parse", "err": "unexpected 'end of print statement'", "src": "}}"}
+{"cause": "lex", "err": "Invalid character in identifier", "src": "\u00b7"}
+{"cause": "lex", "err": "unexpected char '\ud83d\udc0d' at 0", "src": "\ud83d\udc0da"}
