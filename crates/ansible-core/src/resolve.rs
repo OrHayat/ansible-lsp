@@ -1160,28 +1160,28 @@ pub fn template_grammars(root: &Path, fs: &dyn Fs) -> HashMap<PathBuf, TemplateG
         for r in &refs {
             for hit in template_include_candidates(&r.template, &file, &ctx, &sites, fs) {
                 let key = same_file_key(&hit, fs);
-                match out.get(&key) {
+                let settled = match out.get(&key) {
                     // A root's own grammar is never overwritten by an includer's.
-                    Some(g) if g.root => {}
-                    Some(g) if g.delimiters == d => {}
+                    Some(g) if g.root => continue,
+                    // Already carries this grammar: nothing to say and nothing below it
+                    // changes either.
+                    Some(g) if g.delimiters == d => continue,
                     // Reached from two roots that disagree: no single answer.
-                    Some(_) => {
-                        out.insert(
-                            key,
-                            TemplateGrammar {
-                                delimiters: crate::jinja::Delimiters::default(),
-                                root: false,
-                            },
-                        );
-                    }
-                    None => {
-                        out.insert(
-                            key,
-                            TemplateGrammar { delimiters: d.clone(), root: false },
-                        );
-                        queue.push((hit, d.clone()));
-                    }
-                }
+                    Some(_) => crate::jinja::Delimiters::default(),
+                    None => d.clone(),
+                };
+                out.insert(
+                    key,
+                    TemplateGrammar { delimiters: settled.clone(), root: false },
+                );
+                // Re-queued even when this file already had a grammar, because a conflict
+                // discovered here has to reach everything below it. Recording it only at the
+                // file where the two roots meet leaves the grandchildren on whichever root
+                // happened to arrive first — two answers about one render, and which one you
+                // got depended on directory order. This converges: once a file is on the
+                // defaults, any further disagreement resolves to the defaults again and the
+                // `==` arm above stops the walk.
+                queue.push((hit, settled));
             }
         }
     }
@@ -3285,6 +3285,120 @@ mod tests {
         assert_eq!(first(&out, ReferenceKind::Module).status, Status::Skipped);
     }
 
+    /// Three levels, where the middle one is **included only** and declares its own include
+    /// in the grammar it inherits. If the graph pass reads each file in the default grammar
+    /// rather than its inherited one, the `# include` in the middle is invisible and the leaf
+    /// never gets a grammar at all.
+    #[test]
+    fn a_grammar_reaches_a_grandchild_through_an_included_only_parent() {
+        let root = crate::testing::project(
+            "grammar-depth",
+            "[defaults]
+",
+            &[
+                (
+                    "play.yml",
+                    "- hosts: all
+  tasks:
+    - template: {src: top.j2, dest: /x}
+",
+                ),
+                ("templates/top.j2", "#jinja2: line_statement_prefix:\"#\"
+# include \"mid.j2\"
+"),
+                // Written in the INHERITED grammar: a line statement, invisible if this file
+                // is read with the defaults.
+                ("templates/mid.j2", "# include \"leaf.j2\"
+"),
+                ("templates/leaf.j2", "leaf
+"),
+            ],
+        );
+        let g = template_grammars(&root, &StdFs);
+        let of = |rel: &str| {
+            let p = root.join(rel).canonicalize().unwrap();
+            g.get(&p).cloned()
+        };
+        let top = of("templates/top.j2").expect("top has a grammar");
+        assert!(top.root, "a task names it");
+        assert_eq!(top.delimiters.line_statement_prefix.as_deref(), Some("#"));
+
+        let mid = of("templates/mid.j2").expect("mid is reached from top");
+        assert!(!mid.root, "nothing names it, so its own header would be inert");
+        assert_eq!(mid.delimiters.line_statement_prefix.as_deref(), Some("#"));
+
+        let leaf = of("templates/leaf.j2")
+            .expect("leaf is reached through an included-only parent");
+        assert_eq!(leaf.delimiters.line_statement_prefix.as_deref(), Some("#"));
+
+        // The control: a template nothing reaches keeps the defaults, so the assertions above
+        // are about propagation and not about everything getting the same answer.
+        let root2 = crate::testing::project(
+            "grammar-depth-control",
+            "[defaults]
+",
+            &[("templates/lonely.j2", "lonely
+")],
+        );
+        let g2 = template_grammars(&root2, &StdFs);
+        assert!(g2.is_empty(), "{g2:?}");
+    }
+
+    /// Two roots with different grammars reaching one shared partial, which itself includes
+    /// a grandchild. The shared file has no single answer and must fall back to the defaults
+    /// — and so must everything below it.
+    ///
+    /// **Run both ways round**, because the first version of this test passed by accident.
+    /// The walk pops a stack, so which root is visited first follows directory order; with
+    /// the plain root first the conflict was recorded at the shared file and the grandchild
+    /// quietly kept the other root's grammar. Same tree, opposite filenames, different
+    /// answer — which is the bug, and a single-order test cannot see it.
+    #[test]
+    fn a_grammar_conflict_propagates_past_the_file_it_happens_at() {
+        fn probe(name: &str, ls_root: &str, plain_root: &str) {
+            let play = format!(
+                "- hosts: all\n  tasks:\n    - template: {{src: {ls_root}, dest: /x}}\n",
+            ) + &format!("    - template: {{src: {plain_root}, dest: /y}}\n");
+            let ls = format!(
+                "#jinja2: line_statement_prefix:\"#\"\n{{% include \"mid.j2\" %}}\n",
+            );
+            let plain = "{% include \"mid.j2\" %}\n";
+            let root = crate::testing::project(
+                name,
+                "[defaults]\n",
+                &[
+                    ("play.yml", &play),
+                    (&format!("templates/{ls_root}"), &ls),
+                    (&format!("templates/{plain_root}"), plain),
+                    ("templates/mid.j2", "{% include \"leaf.j2\" %}\n"),
+                    ("templates/leaf.j2", "leaf\n"),
+                ],
+            );
+            let g = template_grammars(&root, &StdFs);
+            let of = |rel: &str| {
+                let p = root.join(rel).canonicalize().unwrap();
+                g.get(&p).cloned().unwrap_or_else(|| panic!("{rel} has no grammar"))
+            };
+            // The control: the two roots really do disagree.
+            let ls_g = of(&format!("templates/{ls_root}"));
+            assert_eq!(ls_g.delimiters.line_statement_prefix.as_deref(), Some("#"), "{name}");
+            let plain_g = of(&format!("templates/{plain_root}"));
+            assert_eq!(plain_g.delimiters.line_statement_prefix, None, "{name}");
+            // The shared file, and everything under it, has no single answer.
+            assert_eq!(
+                of("templates/mid.j2").delimiters.line_statement_prefix,
+                None,
+                "{name}: mid"
+            );
+            assert_eq!(
+                of("templates/leaf.j2").delimiters.line_statement_prefix,
+                None,
+                "{name}: leaf"
+            );
+        }
+        probe("grammar-conflict-ls-last", "z_ls.j2", "a_plain.j2");
+        probe("grammar-conflict-ls-first", "a_ls.j2", "z_plain.j2");
+    }
     /// The search-path order, against the shape measured on ansible-core 2.21.2. A role
     /// template renders from its own role in every case anyone writes, so the role's
     /// `templates/` comes first — which is what the demo's three-way `shared.j2` shows, and

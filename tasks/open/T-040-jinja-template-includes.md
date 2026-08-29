@@ -637,6 +637,34 @@ nothing, because no test covered a header in an included file — the behaviour 
 against ansible and never asserted. `an_included_files_own_header_is_inert` covers it, and the
 mutation fails it now.
 
+## Progress: the grammar walk is a fixed point, and one item above was never true
+
+**The "residual limit" recorded last round does not exist.** It described the discarded
+`template_includers` design — reading each candidate in the default grammar — and was carried
+into the ticket without being re-checked after the one-pass rewrite, which already reads every
+file in the grammar it inherits. `a_grammar_reaches_a_grandchild_through_an_included_only_parent`
+is the assertion: a root with `line_statement_prefix:"#"`, a middle file that nothing names and
+that declares `# include "leaf.j2"` in the inherited grammar, and the leaf gets the grammar.
+Seen red by reading the body with the defaults instead.
+
+A ticket bullet is a claim like any other, and this one had never been run.
+
+### The bug that *was* there, and the test that first missed it
+
+A file reached from two roots that disagree falls back to the defaults — but that verdict was
+recorded only at the file where the two met. Everything below it kept whichever root's grammar
+arrived first, so one render had two answers and which one you got depended on **directory
+order**: the walk pops a stack, so the last root alphabetically is visited first.
+
+The first version of the test passed. Not because the code was right — because the fixture's
+filenames happened to give the harmless order. Renaming the two roots so the non-default one
+sorts last turned it red immediately. It now runs the same tree **both ways round** and asserts
+the same answer, which is the actual property: the result must not depend on directory order.
+
+The fix is one line of intent — re-queue on a change rather than only on a first sighting — and
+it converges: once a file is on the defaults, further disagreement resolves to the defaults
+again and the equality arm stops the walk.
+
 ### Still to do here
 
 - **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped
@@ -645,9 +673,6 @@ mutation fails it now.
 - **the render-site cache is cleared by any YAML edit**, so a repo where task files are edited
   constantly pays the full walk often. A precise invalidation needs the inbound edges [[T-020]]
   builds and the watcher [[T-012]] provides; revisit when either lands.
-- **an included-only file's own includes are read in the default grammar** while the graph is
-  being built, so an edge it declares in an inherited non-default grammar is missed. Closing it
-  means solving the graph as a fixed point rather than in one downward pass.
 
 ## Done when
 
