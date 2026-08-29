@@ -14,6 +14,7 @@ use ansible_core::config::DuplicateDictKey;
 use ansible_core::expressions;
 use ansible_core::fs::{Counting, Fs, StdFs};
 use ansible_core::include_target;
+use ansible_core::jinja;
 use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::attributes;
 use ansible_core::complex_key;
@@ -528,6 +529,122 @@ impl State {
         }
     }
 
+    /// Include targets that reach no file from any task that renders this template.
+    ///
+    /// **Only reportable now that the call sites are visible**, and it was held back until
+    /// they were. A target absent from the template's own search path may still be supplied by
+    /// a caller's `ansible_search_path`, so warning from the template alone would fire on
+    /// repos that work. With every `template:` task that renders this file in hand, "no
+    /// candidate anywhere" is a real claim.
+    ///
+    /// Still conservative in three places, each of which would otherwise be a false positive:
+    /// a template with **no** call site we can find is left alone entirely (it may be rendered
+    /// from a file we cannot see, or by something other than `template:`); a dynamic target
+    /// names nothing and is silent by construction; and `{% include ... ignore missing %}` is
+    /// legal by design — ansible renders it as empty rather than failing.
+    fn missing_include_diagnostics(
+        text: &str,
+        path: &Path,
+        ctx: &FileContext,
+        sites: &[resolve::RenderSite],
+        d: &jinja::Delimiters,
+    ) -> Vec<Diagnostic> {
+        if sites.is_empty() {
+            return Vec::new();
+        }
+        let Ok(refs) = jinja::references(text, d) else { return Vec::new() };
+        let doc = Document::new(text.to_string());
+        refs.iter()
+            .filter(|r| !r.ignore_missing)
+            .filter(|r| {
+                resolve::template_include_candidates(&r.template, path, ctx, sites, &StdFs)
+                    .is_empty()
+            })
+            .map(|r| {
+                let (sl, sc) = doc.byte_to_lsp(r.span.start);
+                let (el, ec) = doc.byte_to_lsp(r.span.end);
+                Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("missing-template".into())),
+                    // Ansible's own wording, so the message a user gets here and the one
+                    // they get from a failed run are searchable as the same thing. Measured
+                    // on 2.21.2: `Error rendering template: '<name>' not found in search
+                    // paths: '<dir>', ...`.
+                    message: format!(
+                        "`{}` not found in the search paths of any task that renders this                          template. Ansible reports it as `Error rendering template` when the                          task runs on the target, not at parse time.",
+                        r.template
+                    ),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// A `.j2` never goes down the YAML path. It is not YAML, so `unparseable` would fire on
+    /// every one of them — the diagnostic would be true about the bytes and a lie about the
+    /// file, which is exactly the kind of confident wrong answer this project exists not to
+    /// give. Ansible reads these with `env.from_string`, so we do too.
+    fn template_diagnostics(&self, uri: &Url) -> Vec<Diagnostic> {
+        let (Some(text), Ok(path)) = (self.text_of(uri), uri.to_file_path()) else {
+            return Vec::new();
+        };
+        let ctx = FileContext::discover(&path);
+        // The delimiters come from whichever task renders this file. Reading a template with
+        // the wrong pair invents tags that are not there, and this function is the one that
+        // turns that into a red squiggle — so it has to ask.
+        let root = self.roots.lock().ok().and_then(|r| r.first().cloned());
+        let sites = Backend::render_sites_for(&path, root.as_deref(), &ctx);
+        let d = Backend::template_delimiters_for(&sites);
+        let mut out = Self::template_diagnostics_in(&text, &ctx.config.jinja2_extensions, &d);
+        // Only when the file renders: an include that names nothing is not worth saying on a
+        // template that will not parse at all.
+        if out.is_empty() && ctx.config.jinja2_extensions.is_empty() {
+            out.extend(Self::missing_include_diagnostics(&text, &path, &ctx, &sites, &d));
+        }
+        out
+    }
+
+    /// The template half of [`unparseable_diagnostic`](Self::unparseable_diagnostic): one
+    /// ERROR when the file will not render. Ansible does not parse a template until the task
+    /// that renders it runs on the target, so this is the one diagnostic here that the
+    /// runtime cannot give in time to help — it arrives at deploy, on the managed host.
+    ///
+    /// Delimiters are the default pair for now; reading them from the `template:` module's
+    /// parameters and from a `#jinja2:` header is still T-040's, and until then a template
+    /// that overrides them is read with the wrong ones.
+    fn template_diagnostics_for(text: &str, extensions: &[String]) -> Vec<Diagnostic> {
+        Self::template_diagnostics_in(text, extensions, &jinja::Delimiters::default())
+    }
+
+    /// [`template_diagnostics_for`](Self::template_diagnostics_for) with the call site's
+    /// delimiters, which a `#jinja2:` header in the file then overrides.
+    fn template_diagnostics_in(
+        text: &str,
+        extensions: &[String],
+        d: &jinja::Delimiters,
+    ) -> Vec<Diagnostic> {
+        let Some(e) = jinja::will_not_render(text, d, extensions) else {
+            return Vec::new();
+        };
+        let doc = Document::new(text.to_string());
+        let (sl, sc) = doc.byte_to_lsp(e.span.start);
+        let (el, ec) = doc.byte_to_lsp(e.span.end.max(e.span.start + 1));
+        vec![Diagnostic {
+            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String("template-syntax".into())),
+            message: format!(
+                "{} — this template will not render. Ansible does not parse a template \
+                 until the task that renders it runs, so this fails on the target host.",
+                e.msg
+            ),
+            ..Default::default()
+        }]
+    }
+
     /// One ERROR at the parse-error position when an open file isn't valid YAML. The parser
     /// matches Ansible (libyaml), so this is invalid for Ansible too — a play that loads the
     /// file will fail. Empty when the file is fine, isn't open, or is `# noqa`-suppressed.
@@ -788,7 +905,76 @@ impl Backend {
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
     /// unsupported kinds stay silent — a warning you can't trust is worse than none.
+    /// Extensions the server reads as Jinja rather than YAML. Ansible does not require any
+    /// of them — `template: src=x` renders whatever `x` is — but the editor has only the
+    /// filename to go on, and these three are the spellings that mean "template" in practice.
+    const TEMPLATE_EXTENSIONS: &'static [&'static str] = &["j2", "jinja", "jinja2"];
+
+    fn is_template_file(path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| Self::TEMPLATE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+    }
+
+    /// Every file the `{% include %}` target under the cursor could reach.
+    ///
+    /// **All of them, not one.** The search path belongs to the task doing the rendering, so a
+    /// template rendered from two roles has two answers and neither is wrong — `demo/`'s
+    /// `common.j2` has three. The editor shows a picker when there is more than one, which is
+    /// the T-029-shaped answer T-040 asked for: offer the candidates rather than guess.
+    ///
+    /// Ordered by call site first, then the location-derived path that applies whoever renders
+    /// the template, so the commonest answer leads.
+    fn template_definitions_at(text: &str, pos: Position, path: &Path, root: Option<&Path>) -> Vec<Location> {
+        let doc = Document::new(text.to_string());
+        let byte = doc.lsp_to_byte(pos.line, pos.character);
+        let ctx = FileContext::discover(path);
+        let sites = Self::render_sites_for(path, root, &ctx);
+        let d = Self::template_delimiters_for(&sites);
+        let Ok(refs) = jinja::references(text, &d) else { return Vec::new() };
+        let Some(r) = refs.into_iter().find(|r| r.span.start <= byte && byte <= r.span.end)
+        else {
+            return Vec::new();
+        };
+        resolve::template_include_candidates(&r.template, path, &ctx, &sites, &StdFs)
+            .into_iter()
+            .filter_map(|p| {
+                Some(Location {
+                    uri: Url::from_file_path(p).ok()?,
+                    range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                })
+            })
+            .collect()
+    }
+
+    /// The tasks that render `path`, or none when there is no workspace root to search.
+    fn render_sites_for(
+        path: &Path,
+        root: Option<&Path>,
+        ctx: &FileContext,
+    ) -> Vec<resolve::RenderSite> {
+        let root = root.map(Path::to_path_buf).or_else(|| ctx.project_root.clone());
+        match root {
+            Some(r) => resolve::render_sites(path, &r, &StdFs),
+            None => Vec::new(),
+        }
+    }
+
+    /// [`resolve::delimiters_for_sites`], kept as a method so the call sites here read the
+    /// same as the rest of this impl.
+    fn template_delimiters_for(sites: &[resolve::RenderSite]) -> jinja::Delimiters {
+        resolve::delimiters_for_sites(sites)
+    }
+
     async fn publish_diagnostics(&self, uri: &Url) {
+        // Before the YAML path, not inside it: a template is a different grammar, not a
+        // broken document of this one.
+        if uri.to_file_path().is_ok_and(|p| Self::is_template_file(&p)) {
+            let diags = self.state.template_diagnostics(uri);
+            self.state.track(uri, &diags);
+            self.client.publish_diagnostics(uri.clone(), diags, None).await;
+            return;
+        }
         let Some(a) = self.state.analyze(uri) else {
             // No analysis means the file didn't parse. Since the parser now matches Ansible's
             // (libyaml), a parse failure is a real one — a play that loads this file will
@@ -1003,6 +1189,11 @@ impl Backend {
             .filter(|(r, _)| {
                 r.kind != ReferenceKind::ImportPlaybook || r.playbook_entry
             })
+            // `template: src:` navigates but does not warn. The reference exists so T-040 can
+            // link a `.j2` to the tasks that render it; the missing-file verdict on `src:` is
+            // T-015's, and it is held behind that ticket's corpus gate — 385 `src:` values in
+            // one real tree, and a wave of new warnings is exactly what that gate is for.
+            .filter(|(r, _)| r.kind != ReferenceKind::TemplateSrc)
             .filter(|(r, res)| !a.doc.is_suppressed(r.span.start, rule_id_for(r, res)))
             .map(|(r, res)| Diagnostic {
                 range: range_of(r.span),
@@ -3017,6 +3208,13 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        // Same fork as `publish_diagnostics`: a `.j2` is a different grammar, and its
+        // references live in `{% include %}` rather than in any YAML key.
+        if Self::is_template_file(&path) {
+            let root = self.state.roots.lock().ok().and_then(|r| r.first().cloned());
+            let hits = Self::template_definitions_at(&text, pos, &path, root.as_deref());
+            return Ok((!hits.is_empty()).then(|| GotoDefinitionResponse::Array(hits)));
+        }
         let doc = Document::new(text);
         // Unparseable is expected, not an error: strict YAML 1.2 rejects files the
         // PyYAML Ansible uses accepts. Return nothing rather than guessing.
@@ -4876,6 +5074,323 @@ mod tests {
             .collect();
         let keys: Vec<&str> = msgs.iter().map(|m| m.split('\'').nth(1).unwrap()).collect();
         assert_eq!(keys, ["tasks_from", "becom_user", "register", "gather_facts"], "{msgs:?}");
+    }
+
+    /// Go-to-definition inside a `.j2`, through the real handler, over the demo's own chain —
+    /// so the fixture and the feature are pinned by one test.
+    ///
+    /// The role row is the one carrying an ordering claim: `common.j2` sits at play level and
+    /// its `{% include "shared.j2" %}` has three answers, but from a template *inside*
+    /// `edge-proxy` the role's own copy is what a render picks. Measured on 2.21.2.
+    #[tokio::test]
+    async fn an_include_target_in_a_demo_template_jumps_to_the_file_ansible_finds() {
+        use tower_lsp::LanguageServer;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let service = lsp_service(scan_state(&demo));
+
+        async fn jump(
+            service: &tower_lsp::LspService<super::Backend>,
+            path: &std::path::Path,
+            needle: &str,
+        ) -> Option<std::path::PathBuf> {
+            let text = std::fs::read_to_string(path).expect("demo template");
+            let doc = super::Document::new(text.clone());
+            let byte = text.find(needle).unwrap_or_else(|| panic!("{needle:?} not in {path:?}"))
+                + needle.len() / 2;
+            let (line, col) = doc.byte_to_lsp(byte);
+            let uri = tower_lsp::lsp_types::Url::from_file_path(path).unwrap();
+            service
+                .inner()
+                .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentItem {
+                        uri: uri.clone(),
+                        language_id: "jinja".into(),
+                        version: 1,
+                        text,
+                    },
+                })
+                .await;
+            let params = tower_lsp::lsp_types::GotoDefinitionParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
+                    position: tower_lsp::lsp_types::Position::new(line, col),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            };
+            match service.inner().goto_definition(params).await.expect("no error") {
+                Some(tower_lsp::lsp_types::GotoDefinitionResponse::Array(v)) if !v.is_empty() => {
+                    // Canonicalised on both sides: on Windows `demo` comes back with the
+                    // \\?\\ prefix and the URI round-trip does not.
+                    Some(v[0].uri.to_file_path().unwrap().canonicalize().unwrap())
+                }
+                _ => None,
+            }
+        }
+
+        let app = demo.join("templates/app.conf.j2");
+        for (needle, want) in [
+            ("\"base.conf.j2\"", "templates/base.conf.j2"),
+            ("\"macros.j2\" as m", "templates/macros.j2"),
+            ("\"partials/header.j2\"", "templates/partials/header.j2"),
+            ("\"optional.conf.j2\"", "templates/optional.conf.j2"),
+        ] {
+            assert_eq!(
+                jump(&service, &app, needle).await,
+                Some(demo.join(want)),
+                "jumping from {needle}"
+            );
+        }
+
+        // `common.j2` is deliberately NOT asserted here: it has three call sites and three
+        // answers, which is `one_include_rendered_three_ways_offers_all_three_files`.
+
+        // Silence where it is owed: a dynamic target names nothing, so there is nothing to
+        // jump to, and a literal that resolves to no file does not invent one.
+        let optional = demo.join("templates/optional.conf.j2");
+        assert_eq!(jump(&service, &optional, "tuning_file").await, None);
+        assert_eq!(jump(&service, &optional, "\"partials/absent.j2\"").await, None);
+        // The control, on the same file: a target that does exist still jumps, so the two
+        // `None`s above are about those targets and not about this file being unreadable.
+        assert_eq!(
+            jump(&service, &optional, "\"partials/header.j2\"").await,
+            Some(demo.join("templates/partials/header.j2")),
+        );
+    }
+
+    /// The missing-include warning: exactly one demo template has an unreachable target, and
+    /// the two silences beside it on the same file are what make the rule safe to ship.
+    ///
+    /// Held back until the call sites were visible, and this is why: the verdict is "no
+    /// candidate on the search path of any task that renders this file", which cannot be
+    /// asked from the template alone.
+    #[test]
+    fn the_demo_flags_the_unreachable_include_and_nothing_else() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "j2") {
+                    out.push(p);
+                }
+            }
+        }
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let mut paths = Vec::new();
+        walk(&demo, &mut paths);
+        paths.sort();
+        let mut flagged: Vec<(String, String)> = Vec::new();
+        let mut with_sites = 0;
+        for path in &paths {
+            let text = std::fs::read_to_string(path).expect("demo template");
+            let ctx = ansible_core::workspace::FileContext::discover(path);
+            let sites = super::Backend::render_sites_for(path, Some(&demo), &ctx);
+            if !sites.is_empty() {
+                with_sites += 1;
+            }
+            let d = super::Backend::template_delimiters_for(&sites);
+            for diag in super::State::missing_include_diagnostics(&text, path, &ctx, &sites, &d)
+            {
+                flagged.push((
+                    path.file_name().unwrap().to_string_lossy().to_string(),
+                    diag.message,
+                ));
+            }
+        }
+        assert_eq!(flagged.len(), 1, "{flagged:?}");
+        assert_eq!(flagged[0].0, "broken_include.conf.j2");
+        assert!(flagged[0].1.contains("partials/nowhere.j2"), "{}", flagged[0].1);
+        // The control on the same file: `ignore missing` names the SAME absent target and is
+        // silent, and the target that exists is silent. One warning, not three.
+        let broken = demo.join("templates/broken_include.conf.j2");
+        let text = std::fs::read_to_string(&broken).unwrap();
+        // Counted on the tag, not the bare name: the fixture's comments quote the name too.
+        assert_eq!(
+            text.matches("{% include \"partials/nowhere.j2\"").count(),
+            2,
+            "the fixture must still have BOTH spellings, or the `ignore missing` silence is              not being tested"
+        );
+
+        // The other control: several demo templates DO have call sites, so "one warning"
+        // is not "the walk found no call sites anywhere and reported nothing".
+        assert!(with_sites >= 4, "only {with_sites} demo templates have a call site");
+    }
+
+    /// The candidates box. `demo/templates/common.j2` holds one `{% include "shared.j2" %}`
+    /// and is rendered from three places; ansible-core 2.21.2 gives a different file in each,
+    /// measured. So the answer is three locations, not one, and the editor shows a picker.
+    #[tokio::test]
+    async fn one_include_rendered_three_ways_offers_all_three_files() {
+        use tower_lsp::LanguageServer;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let service = lsp_service(scan_state(&demo));
+        let path = demo.join("templates/common.j2");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = super::Document::new(text.clone());
+        let byte = text.find("\"shared.j2\"").expect("the include is still there") + 2;
+        let (line, col) = doc.byte_to_lsp(byte);
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        service
+            .inner()
+            .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "jinja".into(),
+                    version: 1,
+                    text,
+                },
+            })
+            .await;
+        let got = service
+            .inner()
+            .goto_definition(tower_lsp::lsp_types::GotoDefinitionParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
+                    position: tower_lsp::lsp_types::Position::new(line, col),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .await
+            .expect("no error");
+        let mut files: Vec<String> = match got {
+            Some(tower_lsp::lsp_types::GotoDefinitionResponse::Array(v)) => v
+                .into_iter()
+                .map(|l| {
+                    let p = l.uri.to_file_path().unwrap().canonicalize().unwrap();
+                    p.strip_prefix(&demo).unwrap().to_string_lossy().replace('\\', "/")
+                })
+                .collect(),
+            other => panic!("expected an array, got {other:?}"),
+        };
+        files.sort();
+        assert_eq!(
+            files,
+            [
+                "roles/edge-cache/templates/shared.j2",
+                "roles/edge-proxy/templates/shared.j2",
+                "templates/shared.j2",
+            ],
+            "one include line, three call sites, three answers"
+        );
+    }
+
+    /// T-040's nine measured rows, through the surface a user sees. Every one is a template
+    /// jinja2 3.1.6 refuses, so every one must come back as exactly one `template-syntax`
+    /// ERROR — and the repaired form of each must come back clean, which is the control that
+    /// stops "refuse everything" from passing.
+    #[test]
+    fn a_template_that_will_not_render_is_one_error_and_its_repair_is_none() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let one = |src: &str| super::State::template_diagnostics_for(src, &[]);
+        for (broken, repaired) in [
+            ("{% for x in xs %}{{ x }}", "{% for x in xs %}{{ x }}{% endfor %}"),
+            ("{% if a %}x{% endfor %}", "{% if a %}x{% endif %}"),
+            ("{% forr x in xs %}{% endforr %}", "{% for x in xs %}{% endfor %}"),
+            ("{% include 'a.j2' %}{% endif %}", "{% include 'a.j2' %}"),
+            ("{% macro m(a,) %}{% endmacro %}", "{% macro m(a) %}{% endmacro %}"),
+            ("{% set x = %}", "{% set x = 1 %}"),
+            ("{% for x in %}{% endfor %}", "{% for x in xs %}{% endfor %}"),
+            ("{% raw %}{% include 'x.j2' %}", "{% raw %}{% include 'x.j2' %}{% endraw %}"),
+            ("{{ x }", "{{ x }}"),
+        ] {
+            let got = one(broken);
+            assert_eq!(got.len(), 1, "{broken:?} produced {got:?}");
+            assert_eq!(got[0].severity, Some(DiagnosticSeverity::ERROR));
+            assert!(matches!(&got[0].code, Some(NumberOrString::String(s)) if s == "template-syntax"));
+            assert!(one(repaired).is_empty(), "{repaired:?} was flagged: {:?}", one(repaired));
+        }
+    }
+
+    /// The `DEFAULT_JINJA2_EXTENSIONS` gate T-040 requires. An extension registers tags, and
+    /// `Extension.preprocess` can rewrite the source before it is lexed at all, so with one
+    /// configured no refusal of ours is safe to report.
+    ///
+    /// Live-measured on ansible-core 2.21.2, which is what makes this a gate and not a
+    /// precaution: `{% for i in [1,2,3] %}{% if i == 2 %}{% break %}{% endif %}{{ i }}{% endfor %}`
+    /// is `Encountered unknown tag 'break'` by default and renders `1` under
+    /// `ANSIBLE_JINJA2_EXTENSIONS=jinja2.ext.loopcontrols` (and under the same value written
+    /// as `[defaults] jinja2_extensions`).
+    #[test]
+    fn a_configured_jinja_extension_silences_the_template_diagnostic() {
+        let src = "{% for i in [1,2,3] %}{% if i == 2 %}{% break %}{% endif %}{{ i }}{% endfor %}";
+        // The control: with no extension it is reported, and reported as the unknown tag.
+        let bare = super::State::template_diagnostics_for(src, &[]);
+        assert_eq!(bare.len(), 1, "{bare:?}");
+        assert!(bare[0].message.contains("break"), "{}", bare[0].message);
+        let loaded = ["jinja2.ext.loopcontrols".to_string()];
+        assert!(super::State::template_diagnostics_for(src, &loaded).is_empty());
+        // Not only the unknown-tag class: `preprocess` reaches everything, so the gate is
+        // the whole file.
+        assert_eq!(super::State::template_diagnostics_for("{{ x }", &[]).len(), 1);
+        assert!(super::State::template_diagnostics_for("{{ x }", &loaded).is_empty());
+    }
+
+    /// Rule 4: exactly the two demo templates labelled BAD get a `template-syntax` ERROR, and
+    /// every other demo template is labelled as one that renders. Both halves asserted, so the
+    /// rule cannot start firing elsewhere unnoticed.
+    ///
+    /// `overridden.conf.j2` is the row that earns the `#jinja2:` reader: it contains a
+    /// `{% notatag %}` that is ordinary text under its own delimiters and an unknown tag under
+    /// the default ones. Stop reading the header and it joins the flagged list — a red squiggle
+    /// on a template ansible renders without complaint.
+    #[test]
+    fn the_demo_flags_the_two_bad_templates_and_no_other() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "j2") {
+                    out.push(p);
+                }
+            }
+        }
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let mut paths = Vec::new();
+        walk(&demo, &mut paths);
+        assert!(paths.len() > 5, "the demo walk found no templates");
+        let mut flagged = Vec::new();
+        let mut default_flagged = Vec::new();
+        for path in &paths {
+            let text = std::fs::read_to_string(path).expect("demo template");
+            // Through the call-site link, as the server does: the delimiters a template is
+            // read with can live in the task that renders it.
+            let ctx = ansible_core::workspace::FileContext::discover(path);
+            let sites = super::Backend::render_sites_for(path, Some(&demo), &ctx);
+            let d = super::Backend::template_delimiters_for(&sites);
+            if !super::State::template_diagnostics_for(&text, &[]).is_empty() {
+                default_flagged
+                    .push(path.file_name().unwrap().to_string_lossy().to_string());
+            }
+            let diags = super::State::template_diagnostics_in(&text, &[], &d);
+            if !diags.is_empty() {
+                flagged.push((
+                    path.file_name().unwrap().to_string_lossy().to_string(),
+                    diags[0].message.clone(),
+                ));
+            }
+        }
+        flagged.sort();
+        let names: Vec<&str> = flagged.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["bad_header.conf.j2", "broken.conf.j2"], "{flagged:?}");
+        assert!(flagged[0].1.contains("nosuchkey"), "{}", flagged[0].1);
+        assert!(flagged[1].1.contains("forr"), "{}", flagged[1].1);
+
+        // The control, and the reason the link exists: read with the DEFAULT delimiters,
+        // `module_delims.j2` is a false positive — its `{% notatag %}` is text only because
+        // the task that renders it moved the block delimiters. Ansible renders it `ok`.
+        default_flagged.sort();
+        assert!(
+            default_flagged.contains(&"module_delims.j2".to_string()),
+            "the fixture stopped exercising the call-site delimiters: {default_flagged:?}"
+        );
+        // Every `.j2` in the demo is routed as a template, never as broken YAML.
+        assert!(paths.iter().all(|p| super::Backend::is_template_file(p)));
+        assert!(!super::Backend::is_template_file(&demo.join("playbook.yml")));
     }
 
     /// T-100 per T-010: the rule fires on code ansible-core accepts, so a role that really
@@ -7353,6 +7868,55 @@ mod tests {
     // The cache is the observable, not the notifications: this pins the one line
     // (`&st.var_cache` at the spawn) that makes the scan share the server's index instead of
     // building a private one. Nothing else in the suite can see that line.
+
+    /// Through the real `did_open`, because "the pure function returns a diagnostic" and
+    /// "opening the file produces one" are different claims, and only the second is what a
+    /// user gets. The routing under test is `publish_diagnostics` taking the template branch:
+    /// a `.j2` is not YAML, so without it every template in a repo would come back
+    /// `unparseable` — true about the bytes, a lie about the file.
+    #[tokio::test]
+    async fn opening_a_broken_template_flags_it_and_a_good_one_does_not() {
+        use tower_lsp::LanguageServer;
+        let root = ansible_core::testing::project(
+            "j2-did-open",
+            "[defaults]
+",
+            &[
+                ("templates/bad.j2", "{% forr x in xs %}{% endforr %}
+"),
+                ("templates/good.j2", "{% for x in xs %}{{ x }}{% endfor %}
+"),
+            ],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let open = |rel: &str, text: &str| {
+            let uri = tower_lsp::lsp_types::Url::from_file_path(root.join(rel)).unwrap();
+            let text = text.to_string();
+            async {
+                service
+                    .inner()
+                    .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                        text_document: tower_lsp::lsp_types::TextDocumentItem {
+                            uri: uri.clone(),
+                            language_id: "jinja".into(),
+                            version: 1,
+                            text,
+                        },
+                    })
+                    .await;
+                uri
+            }
+        };
+        let bad = open("templates/bad.j2", "{% forr x in xs %}{% endforr %}
+").await;
+        let good = open("templates/good.j2", "{% for x in xs %}{{ x }}{% endfor %}
+").await;
+        let flagged = state.flagged.lock().unwrap().clone();
+        assert!(flagged.contains(&bad), "the broken template was not flagged");
+        // The control that matters: a template is never reported merely for not being YAML.
+        assert!(!flagged.contains(&good), "a template that renders was flagged anyway");
+    }
 
     fn lsp_service(state: std::sync::Arc<super::State>) -> tower_lsp::LspService<super::Backend> {
         let (service, _socket) =

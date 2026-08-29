@@ -1,0 +1,91 @@
+# T-040 — a `.j2` include chain, and where this tool stands on it today.
+#
+# `templates/app.conf.j2` is the root. It uses all four target-naming tags, so between it and
+# `templates/optional.conf.j2` the fixture holds every shape the extractor has to get right:
+#
+#   extends "base.conf.j2"                 a literal target
+#   import  "macros.j2" as m               the same file under two spellings
+#   from    "macros.j2" import listen_line
+#   include "partials/header.j2"           a literal target one directory down
+#   include ["a.j2", "b.j2"]               a list names BOTH, tried in order
+#   include "…" ignore missing             still a reference; the modifier is about rendering
+#   include tuning_file                    a runtime value names nothing — silence, not a guess
+#   {% raw %} / {# … #} / '%}' in a string names nothing; all three are lexer states
+#
+# What the tool does with these files today:
+#
+#   * BAD — `templates/bad_header.conf.j2` gets a `template-syntax` ERROR for its `#jinja2:`
+#     header, quoting ansible's own words: `Invalid '#jinja2:' override key 'nosuchkey'.`
+#   * BAD — `templates/broken.conf.j2` gets a `template-syntax` ERROR. No task below renders
+#     it, and that is the point: this playbook runs `ok` on ansible-core 2.21.2 with that
+#     file sitting there, because a template is not parsed until the task that renders it
+#     runs on the target. The runtime does report it — at deploy. We report it while you type.
+#   * GOOD — an `{% include %}`/`{% import %}`/`{% extends %}` target inside a `.j2` is now
+#     clickable: it resolves against ansible's own search path, role `templates/` first.
+#   * GOOD — `templates/common.j2` offers ALL THREE `shared.j2` files. One include line, three
+#     tasks that render the file, three answers, and the editor shows a picker rather than
+#     guessing. That link comes from `src:` being a reference now.
+#   * GOOD — `templates/module_delims.j2` has no `#jinja2:` header; its delimiters are the ones
+#     the task below passes, and it is read with them.
+#   * BAD — `templates/broken_include.conf.j2` names a file on no search path of any task that
+#     renders it: one `missing-template` WARNING. The same target with `ignore missing` beside
+#     it stays silent, because absence is legal there.
+#   * NO HINT — `src:` navigates but never warns. The missing-file verdict on `src:` is T-015's,
+#     behind that ticket's corpus gate.
+#   * GOOD — `templates/overridden.conf.j2` carries a `#jinja2:` header and is read with the
+#     delimiters it names, so the `{% notatag %}` in it is text and stays quiet. Read with the
+#     default delimiters it would be a red squiggle on a template ansible renders fine.
+#   * Silent, on purpose, if `jinja2_extensions` is set in `ansible.cfg`: an extension can
+#     rewrite a template before it is lexed, so no refusal of ours is safe to report then.
+#
+# Extraction is pinned by `demo_templates_name_exactly_what_jinja2_names` in
+# `jinja/statement.rs` — the reference set of every `.j2` here, name for name, against
+# `jinja2.meta.find_referenced_templates`.
+- name: render the template chain
+  hosts: localhost
+  gather_facts: false
+  vars:
+    app_name: demo
+    app_port: 8080
+    app_env: prod
+    tuning_file: partials/header.j2 # the runtime value the `{% include %}` in optional.conf.j2 gets
+  roles:
+    - edge-proxy # renders templates/common.j2 -> roles/edge-proxy/templates/shared.j2
+    - edge-cache # renders the same file       -> roles/edge-cache/templates/shared.j2
+  tasks:
+    # `templates/broken_include.conf.j2` is deliberately NOT rendered by any task: its
+    # include names a file that does not exist, and the failure only happens at render time.
+    # It still needs a call site for us to know its search path, so it is named here in a
+    # task that never runs.
+    - name: never runs, but gives broken_include.conf.j2 a call site
+      ansible.builtin.template:
+        src: broken_include.conf.j2
+        dest: /tmp/never.conf
+      when: false
+
+    - name: the chain root, five references deep
+      ansible.builtin.template:
+        src: app.conf.j2
+        dest: /tmp/app.conf
+
+    - name: the same common.j2 the two roles rendered, from play level
+      ansible.builtin.template:
+        src: common.j2 # -> templates/shared.j2, the third answer for one include line
+        dest: /tmp/common.conf
+
+    - name: a template whose delimiters live in this task, not in the file
+      ansible.builtin.template:
+        src: module_delims.j2
+        dest: /tmp/module_delims.conf
+        block_start_string: "<%"
+        block_end_string: "%>"
+        variable_start_string: "[["
+        variable_end_string: "]]"
+
+    - name: a template that brings its own delimiters
+      ansible.builtin.template:
+        # `templates/overridden.conf.j2` opens with a `#jinja2:` header. Rendering it here is
+        # what makes its GOOD label a measured claim rather than a hope: the `{% notatag %}`
+        # inside it is text, and the play stays green.
+        src: overridden.conf.j2
+        dest: /tmp/overridden.conf

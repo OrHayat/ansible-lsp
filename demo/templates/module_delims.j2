@@ -1,0 +1,13 @@
+{# GOOD — this file carries no `#jinja2:` header. Its delimiters come from the TASK that
+   renders it, which passes `block_start_string: "<%"` and friends
+   (`plugins/action/template.py:125-134`). So the grammar of this file is written in another
+   file, and reading it needs the link from here back to `templates_chain.yml`. #}
+<% if inventory_hostname is defined %>
+host = [[ inventory_hostname ]]
+<% endif %>
+
+{# NO HINT — with the block delimiters moved by the task, this is ordinary text and the file
+   renders it verbatim. Read with the default `{% %}` we would call `notatag` an unknown tag
+   and squiggle a template that works. Same trap as the `#jinja2:` header, one file further
+   away. #}
+{% notatag %}

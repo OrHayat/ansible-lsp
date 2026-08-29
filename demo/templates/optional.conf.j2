@@ -1,0 +1,24 @@
+{# T-040 — every way of writing an include that is not one plain literal. Each comment says
+   what `find_referenced_templates` reports, which is what this project must report too. #}
+
+{# NAMES BOTH: a list is not a dynamic name. Jinja tries the entries in order and renders the
+   first that exists; upstream reports every entry, so both are references. #}
+{% include ["partials/site.j2", "partials/header.j2"] %}
+
+{# NAMES ONE: `ignore missing` makes an absent target legal, and it is still a reference —
+   the modifier changes what happens at render, not what the tag points at. #}
+{% include "partials/absent.j2" ignore missing %}
+
+{# NAMES NOTHING: the target is a runtime value. There is no file to judge, so the answer is
+   silence rather than a guess — the standing trade everywhere in this codebase. #}
+{% include tuning_file %}
+
+{# NAMES NOTHING: `raw` is a lexer state, so its body is literal text and not a tag at all. #}
+{% raw %}{% include "partials/header.j2" %}{% endraw %}
+
+{# NAMES NOTHING, and this line is why the lexer has a comment state:
+   {% include "partials/header.j2" %} #}
+
+{# ONE TAG, NOT TWO: the `%}` is inside a string, so it does not end the tag. A `{%`-search
+   splits this line and reports the rest of it as template data. #}
+{% if app_env == '%}' %}# unreachable unless app_env really is that string{% endif %}

@@ -6,8 +6,7 @@
 
 ## Problem
 
-`.j2` templates are treated as leaves — the LSP resolves `template: src=foo.j2` (T-015) but
-stops at the file. Real templates pull in others:
+`.j2` templates are treated as leaves. Real templates pull in others:
 
 ```jinja
 {% extends "base.conf.j2" %}
@@ -16,6 +15,11 @@ stops at the file. Real templates pull in others:
 ```
 
 Template-heavy repos have deep include chains, and a broken include is invisible until render.
+
+Nothing navigates *into* a template today, and nothing navigates *to* one either: `src:` is
+T-015's and T-015 is open, so the `src:` values in `demo/templates_chain.yml` are dead. This
+ticket said the opposite — "the LSP resolves `template: src=foo.j2` (T-015)" — which was read
+off the ticket number rather than run.
 
 ## Approach
 
@@ -217,33 +221,316 @@ Two things the corpus found that reading the grammar had not:
 Seen red: accepting unknown tags fails two tests, and dropping the unclosed-block check at
 end of template fails two more.
 
+## Progress: the demo fixture is in
+
+`demo/templates_chain.yml` plus `demo/templates/` — the demo tree had **no `.j2` files at all**,
+so the differential's demo control could not come back non-zero. It can now, and
+`demo_templates_name_exactly_what_jinja2_names` is it: the exact reference set of every demo
+template, name for name, against `find_referenced_templates` on 3.1.6 run over those same files.
+That test is the rule-4 pin for the fixture's labels as well as the control.
+
+The fixture is a working playbook, not a pile of strings: `ansible-playbook templates_chain.yml`
+runs `ok=4 failed=0` on ansible-core 2.21.2, so nothing in it is a shape Ansible would reject.
+
+`templates/broken.conf.j2` sits in `templates/` unrendered by any task, and the play still runs
+`ok` — this ticket's central claim, re-measured inside our own demo rather than in a scratch
+tree. It is marked **NOT YET FLAGGED**, since the parse is in and the diagnostic is not.
+
+### One template, three answers — measured, and it settles box 3
+
+`templates/common.j2` is a single file containing `{% include "shared.j2" %}`, rendered from
+three places. On 2.21.2:
+
+| rendered from | `shared.j2` resolves to |
+| --- | --- |
+| `roles/edge-proxy` | `roles/edge-proxy/templates/shared.j2` |
+| `roles/edge-cache` | `roles/edge-cache/templates/shared.j2` |
+| a play-level task | `templates/shared.j2` |
+
+The Traps section said the search path is call-site-dependent; this is that, run. Note what it
+rules out: the resolution does not follow the file the include is *written in*, so there is no
+"resolve relative to the template's own directory" shortcut that gets this right. Go-to-definition
+on that line has three answers, which is why box 3 is the candidates UX and not a lookup.
+
+Seen red: making the dynamic `{% include tuning_file %}` literal, repairing `broken.conf.j2`'s
+tag, and hiding the `templates/` directories each fail the pin at a different assertion.
+
+## Progress: the diagnostic ships
+
+`template-syntax`, one ERROR on a `.j2` that will not render. `jinja::will_not_render` is the
+core half; `State::template_diagnostics_for` is the message; `publish_diagnostics` takes the
+template branch **before** the YAML path.
+
+That ordering is the part with a false positive behind it, and the control shows it: with the
+branch disabled, `templates/good.j2` — a template that renders fine — comes back `unparseable`.
+True about the bytes, a lie about the file. A `.j2` is not broken YAML, it is a different
+grammar, so it never reaches the YAML reader at all.
+
+Tested through `did_open`, not only as a pure function: "the function returns a diagnostic" and
+"opening the file produces one" are different claims and only the second is what a user gets.
+The nine measured rows each produce exactly one ERROR **and their repaired forms produce none**,
+which is the control that stops a reader that refuses everything from passing.
+
+### The extensions gate is wider than the ticket said, and measured
+
+The ticket asked for the *unknown-tag* diagnostic to go quiet when extensions are configured.
+It has to be the whole file. `jinja2.ext.Extension.preprocess` rewrites the source **before**
+lexing and may return anything, so with an extension loaded no refusal of ours is safe to
+report — `{{ x }` included, which has nothing to do with tags.
+
+Measured on ansible-core 2.21.2, both spellings, one template each way:
+
+| | `{% for i in [1,2,3] %}{% if i == 2 %}{% break %}{% endif %}{{ i }}{% endfor %}` |
+| --- | --- |
+| default | `Encountered unknown tag 'break'`, fatal at render |
+| `ANSIBLE_JINJA2_EXTENSIONS=jinja2.ext.loopcontrols` | renders `1` |
+| `[defaults] jinja2_extensions = jinja2.ext.loopcontrols` | renders `1` |
+
+`AnsibleConfig::jinja2_extensions` reads both, env beating the file. Default is `[]`, so the
+default case is the one that speaks; the key is deprecated as of 2.23.
+
+### The client had to be told templates exist
+
+`.j2` reached no document selector — the client registered `ansible` and `yaml` only, so the
+server never saw a template. Now `{ scheme: "file", pattern: "**/*.{j2,jinja,jinja2}" }`, by
+glob rather than by language id: VS Code ships no id for `.j2`, so which one a template arrives
+under depends on whichever other extension claimed it. **Not run in the editor** — the routing
+is pinned by the `did_open` test, the selector change is not.
+
+## Progress: `trim_blocks` / `lstrip_blocks`, measured — and deliberately not modelled
+
+The unmeasured item. Ansible's `template:` module defaults `trim_blocks: True`; stock jinja2
+defaults it `False`. Measured on 2.21.2 byte-for-byte with `od`, and **both surfaces agree** —
+a `set_fact` on the same string renders identically, so it is the templar's default and not a
+module quirk:
+
+| source `A
+{% if true %}
+B
+{% endif %}
+C
+` | rendered |
+| --- | --- |
+| module default | `A
+B
+C
+` |
+| `trim_blocks: false` | `A
+
+B
+
+C
+` |
+| `lstrip_blocks` default (false) | leading spaces before a tag survive |
+| `lstrip_blocks: true` | they do not |
+
+They are not modelled, and that is a decision rather than an omission. Both drop bytes from the
+*rendered output*; modelling them would drop those bytes from our **spans**, which index the
+file the user is editing, and a span that does not cover the source is a squiggle in the wrong
+place.
+
+That is only safe because neither changes anything this crate reports. Probed against jinja2
+3.1.6 over **20,010 templates** (20,000 generated from statement/data/whitespace-control
+combinations, plus every `demo/*.j2`) under all four `(trim, lstrip)` combinations: the parse
+verdict and the reference set **never differed once**, while the block split differed on 13,286
+— so the probe was thoroughly able to see a difference and there was none where it matters.
+
+`nothing_goes_missing_from_a_template_but_raw_tags_and_marked_whitespace` keeps it that way.
+Note what that invariant is *not*: "every byte is in a block" is already false, because a `-`
+marker shrinks the neighbouring `Data` span and this port follows jinja2 in doing so. The line
+is between whitespace dropped because the **template says to** and whitespace dropped because
+of a **setting somewhere else**. Seen red by simulating `trim_blocks` in
+`apply_whitespace_control`: it names the exact byte.
+
+## Progress: the `#jinja2:` header is read
+
+`jinja::header` and `jinja::document`. `references` now goes through `document`, so a header
+changes what the whole crate sees.
+
+**This one closes a live false positive**, which is why it came before resolution. With block
+delimiters overridden, `{% notatag %}` is ordinary text — measured, the file renders
+`yes{% notatag %}`. Read with the default delimiters we called it an unknown tag and put a red
+`template-syntax` ERROR on a template ansible renders without complaint. The demo carries that
+exact file, and with the header reader disabled it joins the flagged list — that is the control.
+
+Read from `_jinja_bits.py:76` (the marker) and `:162-192` (the reader), then run:
+
+| rule | measured on 2.21.2 |
+| --- | --- |
+| `startswith`, so the header is the **first byte** of the file | with a blank line above it, ansible renders the header out verbatim and the override never applies |
+| the header line is **removed** before lexing | so spans must be measured from the body — `blocks_from` takes an offset instead of the caller slicing the string |
+| the header **beats the module parameters** for fields it names | header `[% %]` won over a task passing `variable_start_string: "<<"`; both the module pair and the default pair stayed literal |
+| `split(',')`, then `split(':', 1)`, key `strip()`ed, value through `ast.literal_eval` | both spacing spellings render |
+
+Five refusals, each measured verbatim as `Task failed: Syntax error in template: <this>` and
+each reproduced word for word, down to Python's `repr` quoting:
+
+- `Invalid '#jinja2:' override key 'nosuchkey'.`
+- ``Missing key-value separator `:` in '#jinja2:' override pair ' variable_start_string"[%"'.``
+- `Empty '#jinja2:' override pair not allowed.`
+- `Block, variable and comment start strings must be different.`
+- `Missing newline after '#jinja2:' override.`
+
+The repaired form of each is accepted, so a reader that refused every header would not pass.
+
+### The oracle has a limit, and the demo now shows it
+
+`find_referenced_templates` knows nothing about `#jinja2:` — it is ansible's, not jinja's. On
+`demo/templates/overridden.conf.j2` upstream with default delimiters says
+`Encountered unknown tag 'notatag'`; given the header's delimiters and the header line removed
+it agrees with us on `partials/header.j2`. So the differential oracle holds for header-less
+templates only, and the demo pin says so at the row rather than in a footnote.
+
+### One more thing the render turned up
+
+The overridden delimiters belong to the **whole render**, not to the file carrying the header.
+`partials/header.j2` is written with the default `{{ }}` and is pulled into `overridden.conf.j2`;
+its `{{ inventory_hostname }}` comes out **literal** while `[% inventory_hostname %]` in the
+includer renders. One include chain, two delimiter sets, and only the includer's win. Anything
+that later resolves and re-reads an included template has to carry the includer's delimiters
+into it rather than reading it fresh.
+
+## Progress: include targets resolve, and go-to-definition works inside a `.j2`
+
+`resolve::template_search_path` and `resolve::resolve_template_include`, with
+`Backend::template_definition_at` behind `goto_definition` — the same fork
+`publish_diagnostics` takes, because a `.j2` has no YAML key to hang a reference on.
+
+### The search path, measured rather than assumed
+
+`plugins/action/template.py:104-113` builds it as
+
+```text
+searchpath = ansible_search_path + [loader._basedir, dirname(source)]
+then each p becomes  p/templates,  p
+```
+
+and `ansible_search_path` is the include chain of the **task doing the rendering**. Printed
+from four places on 2.21.2:
+
+| rendered from | `ansible_search_path` |
+| --- | --- |
+| a role's `tasks/main.yml` | `[<role>, <role>/tasks, <playbook_dir>]` |
+| a file that role includes | the same |
+| a play-level task | `[<playbook_dir>]` |
+| a task file included from `sub/` | `[<playbook_dir>/sub, <playbook_dir>]` |
+
+**This corrects something written above.** The Traps section says the search path is
+call-site-dependent, and it is — but the Progress note on the demo fixture went further and
+said there is no "resolve relative to the template's own directory" answer. There is:
+`dirname(source)` is appended for **every** caller, so a hit under the template's own directory
+is reachable no matter who renders it. That is the one entry that is not a guess, and it is
+what makes a jump sound.
+
+The role and project entries are the location-derived rest — right for a role template
+including from its own role, and incomplete for a template rendered from a role it does not
+live in, whose `templates/` would come first and shadow ours. So the jump means *"a file this
+include reaches"*, not yet *"the file this include reaches"*. Box 3 stays open on purpose.
+
+De-duplicated, and upstream is not: for a role template `dirname(source)` is `<role>/templates`,
+which the role entry already contributed. First match wins either way, so dropping the repeat
+changes no answer and makes the candidate list readable in a diagnostic.
+
+### Controls
+
+Seen red four ways, each on a different assertion: dropping the role entry, dropping the
+`dirname(source)` entry, and disabling the `.j2` fork in `goto_definition`.
+
+The `dirname(source)` control needed the fixture fixed first — it was written under
+`<root>/templates`, where the **project-root entry finds the sibling anyway**, so the test
+passed with the entry removed. Rule 2: it could not have failed for the reason it claimed. The
+fixture now lives at `deploy/tpl/`, outside every other root, and the mutation fails it.
+
+## Progress: the call-site link, and the three boxes that were waiting on it
+
+`template: src:` is a reference now (`ReferenceKind::TemplateSrc`), and
+`resolve::render_sites` inverts it: given a `.j2`, every `template:` task that renders it,
+each with the search path *that task* gives it and any delimiters it passes. Three things that
+had no way to be right suddenly do.
+
+**This is a slice of [[T-015]], taken deliberately and kept narrow.** Only `template:` is in
+the table. `slurp`, `fetch` and `file` take a path on the managed host, where checking for a
+local file warns about correct code, and T-015 owns that table. The reference is also **not
+diagnosed** — `src:` navigates and never warns, because the missing-file verdict on `src:` is
+T-015's and belongs behind its corpus gate over 385 real `src:` values.
+
+### Candidates, not a guess
+
+`demo/templates/common.j2` holds one `{% include "shared.j2" %}` and is rendered from three
+places. Go-to-definition returns **three** locations and the editor shows a picker. Ordered by
+task file so the list is the same on every machine — a directory walk's order is not, and with
+several call sites there is no "right" first answer to prefer.
+
+### Delimiters from the rendering task
+
+The `template:` module's six delimiter parameters, read off the task and applied to the file.
+A `#jinja2:` header still beats them (measured). Sites that **disagree** fall back to the
+defaults rather than picking a winner: reading a template with the wrong delimiters is how a
+working file gets a red squiggle, and that hazard is the whole reason this half exists.
+
+`demo/templates/module_delims.j2` is the fixture and its own control — read with the default
+delimiters it is a false positive (`unknown tag 'notatag'`), and the demo test asserts *both*
+that it is clean through the link and that it would be flagged without it.
+
+### The missing-include warning, finally soundable
+
+Held back one round on purpose, and this is what unblocked it: the verdict is "no candidate on
+the search path of **any** task that renders this file", which cannot be asked from the
+template alone. Conservative in three places, each otherwise a false positive — a template with
+no call site we can find is left alone, a dynamic target names nothing, and `ignore missing` is
+legal by design. `ignore_missing` is now recorded on `jinja::Reference` rather than merely
+tolerated by the parser.
+
+Measured on 2.21.2, and it confirms the search-path construction exactly, duplication included:
+
+```text
+Error rendering template: 'partials/nowhere.j2' not found in search paths:
+'<demo>/templates', '<demo>', '<demo>/templates', '<demo>', '<demo>/templates/templates',
+'<demo>/templates'
+```
+
+That is `[playbook_dir, basedir, dirname(source)]`, each doubled — the repeats are ansible's.
+
+### Two things the work turned up
+
+**A path-form bug that read as a feature limit.** The first candidates run came back with one
+answer instead of three, and it looked like the documented limitation rather than a defect: the
+editor hands over `C:\x\y.j2` while the workspace walk yields `\?\C:\x\y.j2` for the same
+file, so the call-site match found nothing and the location-derived fallback quietly answered
+alone. Comparison goes through `Fs::canonical` now. A wrong answer that looks like a known
+limit is the worst shape this can take, and only a test naming all three files caught it.
+
+**The delimiter rule moved onto the data.** Two readers need it — the diagnostic and the demo
+pin — and rule 3 says that belongs in one place, so `delimiters_for_sites` lives beside
+`render_sites` rather than in the language server.
+
 ### Still to do here
 
-- **resolution** — extraction names a template, it does not find the file. The search path is
-  call-site-dependent (the Traps section), so this is the candidates problem, not a lookup.
-- a `demo/` include-chain fixture: `demo/` currently has **no `.j2` files at all**, so the
-  differential's demo control cannot come back non-zero yet
-- the unknown-tag diagnostic must go silent when `DEFAULT_JINJA2_EXTENSIONS` is non-empty
-- `line_statement_prefix` / `line_comment_prefix`: fields exist on `Delimiters`, unread
-- `trim_blocks` / `lstrip_blocks`, which Ansible's `template:` module defaults differently
-  from jinja2 and which move `Data` boundaries — **not yet measured**
-- reading the delimiters from the module parameters and the `#jinja2:` header, rather than
-  taking them as an argument
+- **`# noqa` for `template-syntax`** — suppression is YAML-comment shaped
+  (`Document::is_suppressed`), and a `.j2` has no YAML comments. A `{# noqa: template-syntax #}`
+  spelling belongs with T-146's centralisation rather than beside it.
+- **`render_sites` is uncached and walks the workspace per request.** Fine for one open
+  template, wrong for a scan. The general inverse of the reference graph is [[T-020]]'s, and
+  this is deliberately not it — one kind, one direction. Revisit when T-020 lands.
+- `line_statement_prefix` / `line_comment_prefix`: the header now *sets* them, the lexer
+  still ignores them — the sixth lexer state is unbuilt
 
 ## Done when
 
-- [ ] literal `{% include/import/from/extends %}` targets resolve inside `.j2` files
-- [ ] a missing include warns; a templated include name stays silent
-- [ ] multi-context templates offer all candidate resolutions rather than guessing one
-- [ ] a `.j2` include-chain fixture is pinned
+- [x] literal `{% include/import/from/extends %}` targets resolve inside `.j2` files
+- [x] a missing include warns; a templated include name stays silent
+- [x] multi-context templates offer all candidate resolutions rather than guessing one
+- [x] a `.j2` include-chain fixture is pinned
 - [x] all 14 statement forms parse, with `{% raw %}` and `{# #}` handled in the lexer, and the
       `%}`-in-a-string and `%}`-inside-brackets cases asserted
-- [ ] a `.j2` that will not render is diagnosed, with the nine measured rows above as the test,
+- [x] a `.j2` that will not render is diagnosed, with the nine measured rows above as the test,
       and silent when `DEFAULT_JINJA2_EXTENSIONS` is non-empty
-- [ ] overridden delimiters are honoured — both the module parameters and a `#jinja2:` header
-- [ ] a differential gate against `jinja2.meta.find_referenced_templates` over the `.j2` files
+- [x] overridden delimiters are honoured — both the `#jinja2:` header and the module
+      parameters
+- [x] a differential gate against `jinja2.meta.find_referenced_templates` over the `.j2` files
       of the pinned corpus trees, in the T-184 shape: env-gated, `#[ignore]`d, printing every
-      hit, with a `demo/` control that must come back non-zero
+      hit, with a `demo/` control that must come back non-zero — `references_corpus_gate` is
+      the gate, `demo_templates_name_exactly_what_jinja2_names` is the control
 
 Docs: https://jinja.palletsprojects.com/en/latest/templates/#import ·
 https://docs.ansible.com/ansible/latest/playbook_guide/playbook_pathing.html

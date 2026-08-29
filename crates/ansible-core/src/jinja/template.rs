@@ -96,10 +96,182 @@ struct Scanner<'a> {
 /// Refuses rather than guesses: an unclosed tag, comment or `{% raw %}` is an error, because
 /// each is a template that will not render and saying so is the point (T-040).
 pub fn blocks(src: &str, d: &Delimiters) -> Result<Vec<Block>, Error> {
-    let mut s = Scanner { src, d, i: 0, out: Vec::new(), trim_next_data: false };
+    blocks_from(src, d, 0)
+}
+
+/// [`blocks`] starting at a byte offset, for a template whose `#jinja2:` header has already
+/// been read. Upstream *removes* that line before lexing (`_jinja_bits.py:170`); starting the
+/// scanner past it is the same split with spans that still index the file on disk, which is
+/// what a diagnostic has to point at.
+fn blocks_from(src: &str, d: &Delimiters, start: usize) -> Result<Vec<Block>, Error> {
+    let mut s = Scanner { src, d, i: start, out: Vec::new(), trim_next_data: false };
     s.run()?;
     s.apply_whitespace_control();
     Ok(s.out)
+}
+
+/// `#jinja2:`, ansible-core's per-template delimiter override
+/// (`_jinja_bits.py:76` for the marker, `:162-192` for the reader).
+///
+/// The prefix is matched with `startswith`, so it is the **first byte of the file** — a blank
+/// line above it and it is ordinary text. Measured on 2.21.2: with the header on line 2 it is
+/// rendered out verbatim and the delimiters it names never take effect.
+///
+/// Field precedence, also measured: **the header beats the `template:` module's parameters**
+/// for the fields it names. Upstream is `dataclasses.replace(self, **override_kwargs)` with
+/// `self` already carrying the module kwargs, so fields the header does not name keep the
+/// module's value — hence `base` here rather than a fresh default.
+#[derive(Debug, Clone)]
+pub struct Header {
+    /// Delimiters in effect for the body.
+    pub delimiters: Delimiters,
+    /// Where the body starts: one past the header's newline, or 0 with no header.
+    pub body: usize,
+}
+
+/// Every key `TemplateOverrides` accepts (`_jinja_bits.py:105-116`). The six delimiters and
+/// the two line prefixes change what we read; the last four change only the rendered bytes,
+/// so they are validated as keys and otherwise ignored — see
+/// `nothing_goes_missing_from_a_template_but_raw_tags_and_marked_whitespace` for why
+/// `trim_blocks` in particular is not modelled.
+const OVERRIDE_KEYS: &[&str] = &[
+    "block_start_string",
+    "block_end_string",
+    "variable_start_string",
+    "variable_end_string",
+    "comment_start_string",
+    "comment_end_string",
+    "line_statement_prefix",
+    "line_comment_prefix",
+    "trim_blocks",
+    "lstrip_blocks",
+    "newline_sequence",
+    "keep_trailing_newline",
+];
+
+const JINJA2_OVERRIDE: &str = "#jinja2:";
+
+/// Read the `#jinja2:` header, if there is one. Every refusal below is measured verbatim on
+/// ansible-core 2.21.2 — each is a template that fails at render on the target host, which is
+/// exactly the class of fault worth saying at edit time.
+pub fn header(src: &str, base: &Delimiters) -> Result<Header, Error> {
+    if !src.starts_with(JINJA2_OVERRIDE) {
+        return Ok(Header { delimiters: base.clone(), body: 0 });
+    }
+    let Some(eol) = src.find('\n') else {
+        return Err(Error {
+            msg: "Missing newline after '#jinja2:' override.".into(),
+            span: Span { start: 0, end: src.len() },
+            cause: Cause::Parse,
+        });
+    };
+    let line = &src[JINJA2_OVERRIDE.len()..eol];
+    let mut d = base.clone();
+    let mut at = JINJA2_OVERRIDE.len();
+    for pair in line.split(',') {
+        let span = Span { start: at, end: at + pair.len() };
+        at += pair.len() + 1;
+        if pair.trim().is_empty() {
+            return Err(Error {
+                msg: "Empty '#jinja2:' override pair not allowed.".into(),
+                span,
+                cause: Cause::Parse,
+            });
+        }
+        let Some(colon) = pair.find(':') else {
+            return Err(Error {
+                msg: format!(
+                    "Missing key-value separator `:` in '#jinja2:' override pair {}.",
+                    py_repr(pair)
+                ),
+                span,
+                cause: Cause::Parse,
+            });
+        };
+        let key = pair[..colon].trim();
+        if !OVERRIDE_KEYS.contains(&key) {
+            return Err(Error {
+                msg: format!("Invalid '#jinja2:' override key {}.", py_repr(key)),
+                span,
+                cause: Cause::Parse,
+            });
+        }
+        let raw = pair[colon + 1..].trim();
+        let Some(value) = literal(raw) else {
+            // `ast.literal_eval` is what upstream runs here; anything it would refuse is a
+            // template that does not render, and we do not model the whole of Python.
+            return Err(Error {
+                msg: format!("Invalid value {} for '#jinja2:' override key {}.", py_repr(raw), py_repr(key)),
+                span,
+                cause: Cause::Parse,
+            });
+        };
+        match key {
+            "block_start_string" => d.block_start = value,
+            "block_end_string" => d.block_end = value,
+            "variable_start_string" => d.variable_start = value,
+            "variable_end_string" => d.variable_end = value,
+            "comment_start_string" => d.comment_start = value,
+            "comment_end_string" => d.comment_end = value,
+            "line_statement_prefix" => d.line_statement_prefix = Some(value),
+            "line_comment_prefix" => d.line_comment_prefix = Some(value),
+            // Render-shaping only; validated as a key and otherwise none of our business.
+            _ => {}
+        }
+    }
+    // `_post_validate`: the three start strings must all differ, or nothing can tell a tag
+    // from a print from a comment.
+    if d.block_start == d.variable_start
+        || d.variable_start == d.comment_start
+        || d.block_start == d.comment_start
+    {
+        return Err(Error {
+            msg: "Block, variable and comment start strings must be different.".into(),
+            span: Span { start: 0, end: eol },
+            cause: Cause::Parse,
+        });
+    }
+    Ok(Header { delimiters: d, body: eol + 1 })
+}
+
+/// Python's `repr` for the strings these messages quote, so the wording matches
+/// ansible-core's byte for byte — the messages above are measured, and a message that is
+/// nearly right is a message someone cannot search for.
+fn py_repr(s: &str) -> String {
+    if s.contains('\'') && !s.contains('\"') {
+        format!("\"{s}\"")
+    } else {
+        format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+}
+
+/// The subset of `ast.literal_eval` a header value can be: a quoted string, or `None`. The
+/// booleans and the newline literal belong to keys we ignore, so they are accepted and
+/// discarded rather than parsed into anything.
+fn literal(raw: &str) -> Option<String> {
+    let b = raw.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        let inner = &raw[1..raw.len() - 1];
+        // A quote inside the literal means it is not one simple string, which upstream would
+        // read and we will not guess at.
+        if inner.as_bytes().contains(&b[0]) {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    match raw {
+        "None" | "True" | "False" => Some(String::new()),
+        _ => None,
+    }
+}
+
+/// [`blocks`] for a whole template file: read the `#jinja2:` header, then split the body with
+/// whatever delimiters came out of it. `base` is what the `template:` module's parameters say,
+/// or [`Delimiters::default`] when nothing does.
+pub fn document(src: &str, base: &Delimiters) -> Result<(Vec<Block>, Delimiters), Error> {
+    let h = header(src, base)?;
+    let bs = blocks_from(src, &h.delimiters, h.body)?;
+    Ok((bs, h.delimiters))
 }
 
 impl<'a> Scanner<'a> {
@@ -417,6 +589,231 @@ mod tests {
 
     fn err(src: &str) -> Error {
         blocks(src, &Delimiters::default()).expect_err("must be refused")
+    }
+
+    /// **Why `trim_blocks` and `lstrip_blocks` are deliberately not modelled here**, which
+    /// T-040 listed as unmeasured and now is not.
+    ///
+    /// Measured on ansible-core 2.21.2, byte-for-byte with `od`. Ansible's `template:` module
+    /// defaults `trim_blocks: True` where stock jinja2 defaults it `False`, and both surfaces
+    /// agree — a `set_fact` on the same string renders the same way, so this is the templar's
+    /// default and not a module quirk:
+    ///
+    /// | source `A\n{% if true %}\nB\n{% endif %}\nC\n` | rendered |
+    /// | --- | --- |
+    /// | module default | `A\nB\nC\n` |
+    /// | `trim_blocks: false` | `A\n\nB\n\nC\n` |
+    /// | `lstrip_blocks` default (false) | leading spaces before a tag survive |
+    /// | `lstrip_blocks: true` | they do not |
+    ///
+    /// Both settings drop bytes from the *rendered output*. Modelling them here would drop
+    /// those bytes from our **spans**, which index the file the user is editing — a span that
+    /// does not cover the source is a squiggle in the wrong place. So they are not modelled,
+    /// and the golden corpus stays on a `trim_blocks=False` environment on purpose.
+    ///
+    /// That is only safe because neither setting changes anything we report. Probed against
+    /// jinja2 3.1.6 over 20,010 templates (20,000 generated from statement/data/whitespace
+    /// -control combinations, plus every `demo/*.j2`) under all four `(trim, lstrip)`
+    /// combinations: **the parse verdict and the reference set never differed once**, while
+    /// the block split differed on 13,286 of them — so the probe was thoroughly able to see a
+    /// difference and there was none to see in the two things this crate answers.
+    ///
+    /// The invariant asserted below is what keeps it that way, and it is *not* "every byte is
+    /// in a block" — that is already false, because a `-` marker shrinks the neighbouring
+    /// `Data` span and this port follows jinja2 in doing so. The line is between whitespace
+    /// dropped because the **template says to** (`{%-`, `-%}`, written right there) and
+    /// whitespace dropped because of a **setting somewhere else**. So: a gap between blocks is
+    /// either a raw tag, or whitespace next to an explicit `-` marker. Nothing else may go
+    /// missing. Implement `trim_blocks` here — a newline swallowed after a plain `%}` — and
+    /// this fails.
+    #[test]
+    fn nothing_goes_missing_from_a_template_but_raw_tags_and_marked_whitespace() {
+        let d = Delimiters::default();
+        let corpus = include_str!("template_corpus.jsonl");
+        let mut checked = 0;
+        let (mut raw_gaps, mut dash_gaps) = (0, 0);
+        for line in corpus.lines().filter(|l| !l.trim().is_empty()) {
+            let row: Value = serde_json::from_str(line).expect("corpus line parses");
+            let src = row["src"].as_str().expect("every row has a source");
+            let Ok(bs) = blocks(src, &d) else { continue };
+            let mut at = 0usize;
+            let mut prev: Option<&Block> = None;
+            for b in &bs {
+                assert!(b.span.start >= at, "blocks overlap in {src:?}");
+                if b.span.start > at {
+                    let gap = &src[at..b.span.start];
+                    // A raw gap is the tag plus whatever whitespace its own `-` markers
+                    // stripped, so trim before deciding which kind of gap this is.
+                    let core = gap.trim();
+                    let raw_tag = core.starts_with(&d.block_start)
+                        && core.ends_with(&d.block_end)
+                        && core.contains("raw");
+                    if raw_tag {
+                        raw_gaps += 1;
+                    } else {
+                        // Whitespace, and only because a `-` marker in the template asked
+                        // for it — on the tag before the gap or the one after.
+                        let after_dash = prev.is_some_and(|p| {
+                            let s = &src[p.span.start..p.span.end];
+                            s.ends_with(&format!("-{}", d.block_end))
+                                || s.ends_with(&format!("-{}", d.variable_end))
+                                || s.ends_with(&format!("-{}", d.comment_end))
+                        });
+                        let before_dash = {
+                            let s = &src[b.span.start..b.span.end];
+                            s.starts_with(&format!("{}-", d.block_start))
+                                || s.starts_with(&format!("{}-", d.variable_start))
+                                || s.starts_with(&format!("{}-", d.comment_start))
+                        };
+                        assert!(
+                            gap.trim().is_empty() && (after_dash || before_dash),
+                            "byte {at} of {src:?} went missing with no `-` marker asking                              for it: {gap:?}"
+                        );
+                        dash_gaps += 1;
+                    }
+                }
+                at = b.span.end;
+                prev = Some(b);
+            }
+            assert!(at <= src.len());
+            checked += 1;
+        }
+        assert!(checked > 30, "only {checked} templates checked");
+        // The controls: the corpus really does contain both shapes that leave a gap, so
+        // "no illegal gap found" cannot pass by never meeting one.
+        assert!(raw_gaps > 0, "no raw tag in the corpus, so that half is untested");
+        assert!(dash_gaps > 0, "no `-` marker in the corpus, so that half is untested");
+    }
+
+    // ------------------------------------------------------------- the `#jinja2:` header
+
+    fn doc(src: &str) -> Vec<(Kind, String)> {
+        document(src, &Delimiters::default())
+            .expect("splits")
+            .0
+            .into_iter()
+            .map(|b| (b.kind, b.inner.slice(src).to_string()))
+            .collect()
+    }
+
+    fn header_err(src: &str) -> String {
+        document(src, &Delimiters::default()).expect_err("must be refused").msg
+    }
+
+    const VAR_HEADER: &str =
+        "#jinja2: variable_start_string:\"[%\", variable_end_string:\"%]\"\n";
+    const BLOCK_HEADER: &str = "#jinja2: block_start_string:\"<%\", block_end_string:\"%>\"\n";
+
+    /// The header replaces the delimiters it names, and the defaults stop working — measured
+    /// on ansible-core 2.21.2, where this exact file renders `WORLD and {{ not_a_var }}`:
+    /// the `[% %]` pair is live and `{{ not_a_var }}` survives as literal text. That second
+    /// half is the control, and a strong one — `not_a_var` is undefined, so had the default
+    /// pair still been live the render would have failed rather than printed it.
+    #[test]
+    fn a_jinja2_header_replaces_the_delimiters_it_names() {
+        let src = format!("{VAR_HEADER}[% name %] and {{{{ not_a_var }}}}\n");
+        assert_eq!(
+            doc(&src),
+            [
+                (Kind::Expression, " name ".to_string()),
+                (Kind::Data, " and {{ not_a_var }}\n".to_string()),
+            ]
+        );
+        // The header line itself is not a block: upstream removes it before lexing.
+        assert!(!doc(&src).iter().any(|(_, s)| s.contains("#jinja2")));
+    }
+
+    /// The row that makes this worth doing at all. With block delimiters overridden,
+    /// `{% notatag %}` is ordinary text — measured, the file renders `yes{% notatag %}`.
+    /// Read with the default delimiters we would call `notatag` an unknown tag and put a red
+    /// `template-syntax` squiggle on a template that works.
+    #[test]
+    fn an_overridden_block_delimiter_makes_a_stray_tag_ordinary_text() {
+        let body = "<% if true %>yes<% endif %>{% notatag %}\n";
+        let got = doc(&format!("{BLOCK_HEADER}{body}"));
+        assert_eq!(got[0], (Kind::Statement, " if true ".to_string()));
+        assert!(
+            got.iter().any(|(k, s)| *k == Kind::Data && s.contains("{% notatag %}")),
+            "{got:?}"
+        );
+        // The control: the same body without the header IS a refusal, so the header is doing
+        // the work rather than the tag being harmless.
+        assert!(super::super::references(body, &Delimiters::default()).is_err());
+    }
+
+    /// `startswith`, so the header is the first byte of the file. Measured: with a blank line
+    /// above it, ansible renders the header out verbatim and `[% name %]` stays literal.
+    #[test]
+    fn a_jinja2_header_below_the_first_line_is_ordinary_text() {
+        let got = doc(&format!("\n{VAR_HEADER}[% name %]\n"));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, Kind::Data);
+        assert!(got[0].1.contains("#jinja2"), "{got:?}");
+        assert!(got[0].1.contains("[% name %]"), "the override never took effect: {got:?}");
+    }
+
+    /// Spacing is whatever `split(',')` and `strip()` allow. Both spellings measured rendering
+    /// `WORLD` on 2.21.2.
+    #[test]
+    fn header_pairs_tolerate_the_spacing_ansible_tolerates() {
+        for src in [
+            "#jinja2: variable_start_string:\"[%\", variable_end_string:\"%]\"\n[% name %]\n",
+            "#jinja2:variable_start_string:\"[%\" ,variable_end_string:\"%]\"\n[% name %]\n",
+        ] {
+            assert_eq!(doc(src)[0], (Kind::Expression, " name ".to_string()), "{src:?}");
+        }
+    }
+
+    /// Every way a header is rejected, each message measured verbatim on ansible-core 2.21.2
+    /// as `Task failed: Syntax error in template: <this>`. Each is a template that fails at
+    /// render on the target host, so each is worth saying at edit time.
+    #[test]
+    fn every_measured_header_refusal_is_refused_with_ansibles_words() {
+        for (src, want) in [
+            ("#jinja2: nosuchkey:\"x\"\nhi\n", "Invalid '#jinja2:' override key 'nosuchkey'."),
+            (
+                "#jinja2: variable_start_string\"[%\"\nhi\n",
+                "Missing key-value separator `:` in '#jinja2:' override pair \
+                 ' variable_start_string\"[%\"'.",
+            ),
+            (
+                "#jinja2: variable_start_string:\"[%\", , variable_end_string:\"%]\"\nhi\n",
+                "Empty '#jinja2:' override pair not allowed.",
+            ),
+            (
+                "#jinja2: variable_start_string:\"{%\"\nhi\n",
+                "Block, variable and comment start strings must be different.",
+            ),
+            (
+                "#jinja2: variable_start_string:\"[%\"",
+                "Missing newline after '#jinja2:' override.",
+            ),
+        ] {
+            assert_eq!(header_err(src), want, "{src:?}");
+        }
+        // The control: the repaired form of each is accepted, so a reader that refused every
+        // header would not pass this.
+        for ok in [
+            "#jinja2: variable_start_string:\"[%\"\nhi\n",
+            "#jinja2: variable_start_string:\"[%\", variable_end_string:\"%]\"\nhi\n",
+            "#jinja2: trim_blocks:False\nhi\n",
+            "#jinja2: line_statement_prefix:\"#\"\nhi\n",
+        ] {
+            assert!(document(ok, &Delimiters::default()).is_ok(), "{ok:?}");
+        }
+    }
+
+    /// Spans still index the file on disk, header and all. Upstream removes the header line
+    /// before lexing, so a port that lexed the remainder in isolation would report every
+    /// diagnostic one line high — which is why `blocks_from` takes an offset instead of the
+    /// caller slicing the string.
+    #[test]
+    fn a_header_does_not_shift_the_spans_of_the_body() {
+        let src = format!("{VAR_HEADER}[% name %]\n");
+        let (bs, _) = document(&src, &Delimiters::default()).expect("splits");
+        let e = bs.iter().find(|b| b.kind == Kind::Expression).expect("one expression");
+        assert_eq!(&src[e.span.start..e.span.end], "[% name %]");
+        assert_eq!(src[..e.span.start].matches('\n').count(), 1, "line 2, not line 1");
     }
 
     // ------------------------------------------------------------------ the four traps

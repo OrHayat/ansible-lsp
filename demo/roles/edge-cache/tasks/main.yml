@@ -1,0 +1,7 @@
+# T-040 — the same template as edge-proxy renders, from a different role, resolving its
+# include to a different file. Live-measured on ansible-core 2.21.2.
+- name: render the shared template from edge-cache
+  ansible.builtin.template:
+    # NO HINT: `src:` is not resolved yet — T-015.
+    src: common.j2
+    dest: /tmp/edge-cache.conf

@@ -1,0 +1,21 @@
+{# T-040 — the root of the include chain. All four target-naming tags, each with a literal
+   target, which is exactly what `jinja2.meta.find_referenced_templates` reports:
+
+       extends base.conf.j2 · import macros.j2 · from macros.j2 · include partials/header.j2
+       · include optional.conf.j2
+
+   Ansible never parses this file at playbook-parse time; a broken tag here is a run-time
+   failure on the target host. `broken.conf.j2` is that case. #}
+{% extends "base.conf.j2" %}
+{% import "macros.j2" as m %}
+{% from "macros.j2" import listen_line %}
+
+{% block header %}
+{% include "partials/header.j2" %}
+{% endblock %}
+
+{% block body %}
+{{ listen_line(app_port | default(8080)) }}
+{{ m.upstream('web') }}
+{% include "optional.conf.j2" %}
+{% endblock %}

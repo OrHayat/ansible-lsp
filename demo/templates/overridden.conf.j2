@@ -1,0 +1,18 @@
+#jinja2: block_start_string:"<%", block_end_string:"%>", variable_start_string:"[%", variable_end_string:"%]"
+{# GOOD — the `#jinja2:` header replaces the delimiters for this file only. Ansible reads it
+   (`_jinja_bits.py:76,162-192`); it must be the very first byte, and it beats anything the
+   `template:` module passes. Both measured on ansible-core 2.21.2. #}
+<% include "partials/header.j2" %>
+server [% inventory_hostname %];
+
+{# Measured, and not obvious: the overridden delimiters belong to the whole render, not to
+   this file. `partials/header.j2` is written with the default `{{ }}` and is pulled in here,
+   so its `{{ inventory_hostname }}` comes out LITERAL — `# rendered for {{ inventory_hostname }}`
+   — while `[% inventory_hostname %]` above renders. One template, two delimiter sets, and
+   only the includer's win. #}
+
+{# NO HINT — with the block delimiters moved, this is ordinary text, and the file renders it
+   verbatim. Read with the default `{% %}` we would call `notatag` an unknown tag and put a
+   red squiggle on a template that works. That false positive is the reason the header is
+   read at all. #}
+{% notatag %}

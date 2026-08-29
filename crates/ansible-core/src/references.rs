@@ -20,6 +20,18 @@ pub enum ReferenceKind {
     /// `include_vars:` `dir:` target — a directory, resolved by `_set_root_dir` to one
     /// computed path; navigation targets are the files it loads.
     IncludeVarsDir,
+    /// `template:` `src:` — the local `.j2` a task renders.
+    ///
+    /// **Only `template:`.** `src:` means a different thing per module and T-015 owns the
+    /// full table: `slurp`, `fetch` and `file` take a path on the *managed host*, where
+    /// checking for a local file would warn about correct code. Anything not named here
+    /// produces no reference at all, which costs navigation and never invents a warning.
+    ///
+    /// This kind exists for T-040 — a template's include targets, delimiters and candidate
+    /// resolutions are all properties of the task that renders it, and nothing else links the
+    /// two. It is deliberately **not diagnosed**: the missing-file verdict on `src:` is
+    /// T-015's, behind its corpus gate.
+    TemplateSrc,
     /// A play-level `vars_files:` entry — a vars file loaded at play start. A nested list
     /// is first-match-wins: each alternative is its own reference (`grouped`), plus one
     /// group reference spanning the list that owns the missing/resolved verdict.
@@ -33,6 +45,14 @@ pub struct Reference {
     /// Jinja expression present, so the target is only knowable at runtime.
     pub templated: bool,
     pub span: Span,
+    /// For `TemplateSrc`: the delimiters this task passes as module parameters
+    /// (`plugins/action/template.py:125-134`). `None` when it passes none, which is almost
+    /// always — boxed so the common case costs a pointer rather than eight `String`s.
+    ///
+    /// A `#jinja2:` header in the template itself **beats** these for the fields it names;
+    /// measured on 2.21.2, where a header's `[% %]` won over a task passing
+    /// `variable_start_string: "<<"`.
+    pub template_delimiters: Option<Box<crate::jinja::Delimiters>>,
     /// For `TasksFrom`: the role it belongs to, read from the same mapping node.
     pub role: Option<String>,
     /// For `Role`: the same include carried a `tasks_from`, so `tasks/main.yml` is
@@ -117,6 +137,7 @@ impl Reference {
             value: value.to_string(),
             templated: value.contains("{{"),
             span,
+            template_delimiters: None,
             role: None,
             has_tasks_from: false,
             conditional: false,
@@ -321,6 +342,42 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
 
 /// The reference(s) a task's module implies: an include target, a role + `tasks_from`, or
 /// a bare FQCN module.
+/// The six delimiter parameters the `template:` module takes
+/// (`plugins/action/template.py:125-134`). `None` when the task passes none of them, so a
+/// caller can tell "no override" from "override to the defaults" without comparing eight
+/// strings.
+///
+/// The other three template-only parameters — `trim_blocks`, `lstrip_blocks` and
+/// `newline_sequence` — are read by ansible and deliberately not by us: measured over 20,010
+/// templates, they change the rendered bytes and never the parse verdict or the reference set
+/// (see `jinja::template`).
+fn template_delimiters(args: &Node) -> Option<crate::jinja::Delimiters> {
+    let get = |k: &str| match args.get(k) {
+        Some(Node::Scalar { value, .. }) if !value.contains("{{") => Some(value.clone()),
+        _ => None,
+    };
+    let fields = [
+        ("block_start_string", 0),
+        ("block_end_string", 1),
+        ("variable_start_string", 2),
+        ("variable_end_string", 3),
+        ("comment_start_string", 4),
+        ("comment_end_string", 5),
+    ];
+    let read: Vec<Option<String>> = fields.iter().map(|(k, _)| get(k)).collect();
+    if read.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut d = crate::jinja::Delimiters::default();
+    if let Some(v) = read[0].clone() { d.block_start = v; }
+    if let Some(v) = read[1].clone() { d.block_end = v; }
+    if let Some(v) = read[2].clone() { d.variable_start = v; }
+    if let Some(v) = read[3].clone() { d.variable_end = v; }
+    if let Some(v) = read[4].clone() { d.comment_start = v; }
+    if let Some(v) = read[5].clone() { d.comment_end = v; }
+    Some(d)
+}
+
 fn module_refs(a: &Action, out: &mut Vec<Reference>) {
     match crate::keywords::core_action(&a.name) {
         "include_tasks" | "import_tasks" => {
@@ -361,6 +418,26 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
             if let Some(Node::Scalar { value: from, span }) = tasks_from {
                 let mut r = Reference::new(ReferenceKind::TasksFrom, from, *span);
                 r.role = name.map(|(n, _)| n);
+                out.push(r);
+            }
+        }
+
+        // T-040's link, not T-015's feature. See `ReferenceKind::TemplateSrc`.
+        "template" => {
+            let src = match &a.args {
+                // The k=v spelling: `template: src=x.j2 dest=/etc/x`.
+                Node::Scalar { value, span } => crate::splitter::parse_kv(value, false)
+                    .ok()
+                    .and_then(|kv| kv.get("src").map(|s| (s.to_string(), *span))),
+                Node::Mapping { .. } => match a.args.get("src") {
+                    Some(Node::Scalar { value, span }) => Some((value.clone(), *span)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((value, span)) = src {
+                let mut r = Reference::new(ReferenceKind::TemplateSrc, &value, span);
+                r.template_delimiters = template_delimiters(&a.args).map(Box::new);
                 out.push(r);
             }
         }

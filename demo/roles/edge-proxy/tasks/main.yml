@@ -1,0 +1,8 @@
+# T-040 — renders `templates/common.j2`, which lives at play level and is not this role's
+# file. Its `{% include "shared.j2" %}` still resolves to THIS role's templates/ — the search
+# path follows the rendering task, not the template.
+- name: render the shared template from edge-proxy
+  ansible.builtin.template:
+    # NO HINT: `src:` is not resolved yet — T-015 is open, so no `src:` anywhere navigates.
+    src: common.j2
+    dest: /tmp/edge-proxy.conf

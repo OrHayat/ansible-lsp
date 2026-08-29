@@ -78,6 +78,16 @@ pub struct AnsibleConfig {
     /// default — makes an unknown task attribute a load error, false downgrades it to
     /// `Ignoring invalid attribute`. Task-level only; plays and blocks stay fatal. T-107.
     pub invalid_task_attribute_failed: bool,
+    /// `DEFAULT_JINJA2_EXTENSIONS` — ini `[defaults] jinja2_extensions`, env
+    /// `ANSIBLE_JINJA2_EXTENSIONS`, `type: list`, default `[]`, deprecated as of 2.23. An
+    /// extension registers tags, so with one loaded a tag outside jinja's fourteen is legal
+    /// and the unknown-tag diagnostic must go quiet (T-040).
+    ///
+    /// Measured on ansible-core 2.21.2, both spellings, with the same template both ways:
+    /// `{% for i in [1,2,3] %}{% if i == 2 %}{% break %}{% endif %}{{ i }}{% endfor %}` is
+    /// `Encountered unknown tag 'break'` by default and renders `1` under
+    /// `jinja2.ext.loopcontrols`.
+    pub jinja2_extensions: Vec<String>,
 }
 
 /// Hand-written for one field: `invalid_task_attribute_failed` defaults *true*, which
@@ -95,6 +105,7 @@ impl Default for AnsibleConfig {
             network_group_modules: None,
             duplicate_dict_key: DuplicateDictKey::default(),
             invalid_task_attribute_failed: true,
+            jinja2_extensions: Vec::new(),
         }
     }
 }
@@ -203,6 +214,7 @@ impl AnsibleConfig {
                 "network_group_modules" => {
                     cfg.network_group_modules = Some(name_list(&value));
                 }
+                "jinja2_extensions" => cfg.jinja2_extensions = name_list(&value),
                 "duplicate_dict_key" => {
                     if let Some(v) = DuplicateDictKey::parse(&value) {
                         cfg.duplicate_dict_key = v;
@@ -243,6 +255,9 @@ impl AnsibleConfig {
             .or_else(|| env.var("HOME").map(|h| PathBuf::from(h).join(".ansible")));
         if let Some(v) = env.var("ANSIBLE_NETWORK_GROUP_MODULES") {
             cfg.network_group_modules = Some(name_list(v));
+        }
+        if let Some(v) = env.var("ANSIBLE_JINJA2_EXTENSIONS") {
+            cfg.jinja2_extensions = name_list(v);
         }
         // Note the spelling: the env var is DUPLICATE_YAML_DICT_KEY, the ini key is not.
         if let Some(v) = env.var("ANSIBLE_DUPLICATE_YAML_DICT_KEY").and_then(DuplicateDictKey::parse)
@@ -572,6 +587,36 @@ mod tests {
         assert_eq!(roles[0], PathBuf::from("/home/t/ansible/roles"));
         assert_eq!(roles[1], root.join("roles"), "`./` is project-root relative");
         assert!(cfg.collections_path.expect("set").contains(&root.join("collections")));
+    }
+
+    /// `DEFAULT_JINJA2_EXTENSIONS` — the key that decides whether T-040's template
+    /// diagnostic is allowed to speak at all, so both spellings are read and the env one
+    /// wins. Live-verified on ansible-core 2.21.2 with `ansible-config dump`:
+    /// `DEFAULT_JINJA2_EXTENSIONS(/tmp/extprobe/ansible.cfg) = ['jinja2.ext.loopcontrols']`.
+    #[test]
+    fn the_jinja_extensions_key_is_read_from_both_the_cfg_and_the_env() {
+        // The default is `[]`, which is what lets the diagnostic fire at all.
+        let bare = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).load();
+        assert!(bare.jinja2_extensions.is_empty());
+
+        let ini = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]
+jinja2_extensions = jinja2.ext.loopcontrols
+"))
+            .load();
+        assert_eq!(ini.jinja2_extensions, ["jinja2.ext.loopcontrols"]);
+
+        // A list, comma-separated and trimmed, and the env var replaces the file's value.
+        let both = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]
+jinja2_extensions = jinja2.ext.debug
+"))
+            .env(&EnvMap::from_pairs(&[(
+                "ANSIBLE_JINJA2_EXTENSIONS",
+                "jinja2.ext.i18n, jinja2.ext.do",
+            )]))
+            .load();
+        assert_eq!(both.jinja2_extensions, ["jinja2.ext.i18n", "jinja2.ext.do"]);
     }
 
     /// T-072, moved from its own single-test binary when `EnvMap` made env injectable.

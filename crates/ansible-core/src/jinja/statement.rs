@@ -64,6 +64,10 @@ pub struct Reference {
     /// The span of the literal, for go-to-definition.
     pub span: Span,
     pub tag: RefTag,
+    /// `{% include ... ignore missing %}` — an absent target is legal by design and ansible
+    /// renders nothing rather than failing, so it must never be reported as a miss. Only
+    /// `include` takes the modifier; the other three tags leave this false.
+    pub ignore_missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +118,11 @@ fn opener_of(end_tag: &str) -> Option<&'static str> {
 
 fn continuation_openers(tag: &str) -> Option<&'static [&'static str]> {
     CONTINUATIONS.iter().find(|(c, _)| *c == tag).map(|(_, o)| *o)
+}
+
+/// A token's own text, for the bare-name modifiers that follow an expression.
+fn slice(body: &str, span: Span) -> &str {
+    body.get(span.start..span.end).unwrap_or("")
 }
 
 fn err(msg: impl Into<String>, span: Span) -> Error {
@@ -275,7 +284,13 @@ fn standalone_references(
         _ => return Ok(Vec::new()),
     };
 
-    let (expr, _) = expression(body, toks, rest, shift)?;
+    let (expr, next) = expression(body, toks, rest, shift)?;
+    // `include EXPR [ignore missing] [with|without context]` — the modifiers follow the
+    // expression as bare names, so reading them is a scan of what is left.
+    let ignore_missing = ref_tag == RefTag::Include
+        && toks[next..]
+            .windows(2)
+            .any(|w| slice(body, w[0].span) == "ignore" && slice(body, w[1].span) == "missing");
     // A dynamic name is not a reference. Upstream's `find_referenced_templates` yields `None`
     // for one, and staying silent is this ticket's rule too.
     //
@@ -284,13 +299,13 @@ fn standalone_references(
     // and stays quiet about the rest, which is also what upstream does.
     Ok(match expr.kind {
         ExprKind::Const(Const::Str(s)) => {
-            vec![Reference { template: s, span: shift(expr.span), tag: ref_tag }]
+            vec![Reference { template: s, span: shift(expr.span), tag: ref_tag, ignore_missing }]
         }
         ExprKind::List(items) => items
             .into_iter()
             .filter_map(|e| match e.kind {
                 ExprKind::Const(Const::Str(s)) => {
-                    Some(Reference { template: s, span: shift(e.span), tag: ref_tag })
+                    Some(Reference { template: s, span: shift(e.span), tag: ref_tag, ignore_missing })
                 }
                 _ => None,
             })
@@ -380,8 +395,30 @@ pub fn check(src: &str, blocks: &[Block]) -> Result<Vec<Reference>, Error> {
 
 /// Every template this source references, or the reason it will not render.
 pub fn references(src: &str, d: &Delimiters) -> Result<Vec<Reference>, Error> {
-    let blocks = template::blocks(src, d)?;
+    // `document`, not `blocks`: a `#jinja2:` header can change every delimiter in the file,
+    // and reading the body with the wrong ones invents tags that are not there. `d` is what
+    // the `template:` module's parameters say, which the header then overrides.
+    let (blocks, _) = template::document(src, d)?;
     check(src, &blocks)
+}
+
+/// The one thing a `.j2` file can be told today: it will not render. `Some(e)` is a template
+/// `env.parse` also refuses, so the task that renders it fails on the target — and Ansible
+/// does not find out until then, because a template is never parsed at playbook-parse time.
+/// That gap is the whole reason to say it here.
+///
+/// **Silent when any Jinja extension is configured**, and not only for the tags one adds.
+/// `jinja2.ext.Extension.preprocess` rewrites the source *before* lexing and may return
+/// anything, so with an extension loaded no refusal of ours is safe to report — not just the
+/// unknown-tag ones. Measured on ansible-core 2.21.2, both the ini key and the env var:
+/// `{% break %}` is `Encountered unknown tag 'break'` by default and renders under
+/// `jinja2.ext.loopcontrols`. `DEFAULT_JINJA2_EXTENSIONS` defaults to `[]`, so the default
+/// case is the one that speaks.
+pub fn will_not_render(src: &str, d: &Delimiters, extensions: &[String]) -> Option<Error> {
+    if !extensions.is_empty() {
+        return None;
+    }
+    references(src, d).err()
 }
 
 #[cfg(test)]
@@ -454,6 +491,15 @@ mod tests {
         assert_eq!(names("{% from 'macros.j2' import a, b as c %}"), ["macros.j2"]);
         // The modifiers do not change the target.
         assert_eq!(names("{% include 'a.j2' ignore missing %}"), ["a.j2"]);
+        // `ignore missing` is recorded, not just tolerated: an absent target is legal by
+        // design there, and nothing may report it as a miss.
+        assert!(refs("{% include 'a.j2' ignore missing %}")[0].ignore_missing);
+        assert!(!refs("{% include 'a.j2' %}")[0].ignore_missing);
+        assert!(!refs("{% extends 'a.j2' %}")[0].ignore_missing);
+        // The modifier belongs to the include, not to the file: a second include on the same
+        // line without it is still reportable.
+        let two = refs("{% include 'a.j2' ignore missing %}{% include 'b.j2' %}");
+        assert_eq!((two[0].ignore_missing, two[1].ignore_missing), (true, false));
         assert_eq!(names("{% include 'a.j2' with context %}"), ["a.j2"]);
         assert_eq!(names("{% include 'a.j2' without context %}"), ["a.j2"]);
     }
@@ -540,6 +586,177 @@ mod tests {
         // The control: a tag that really is not one of the fourteen is reported.
         assert!(refusal("{% frobnicate %}").contains("frobnicate"));
         assert!(refusal("{% endfrobnicate %}").contains("frobnicate"));
+    }
+
+    /// Every `.j2` under `demo/`, sorted by its path relative to the demo root.
+    fn demo_templates() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "j2") {
+                    out.push(p);
+                }
+            }
+        }
+        let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let mut paths = Vec::new();
+        walk(&demo, &mut paths);
+        let mut out: Vec<(String, String)> = paths
+            .into_iter()
+            .map(|p| {
+                let rel =
+                    p.strip_prefix(&demo).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                (rel, std::fs::read_to_string(&p).expect("demo template"))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// The delimiters the server would read this template with — from the tasks that render
+    /// it. Reading the demo any other way tests a path no user takes.
+    fn delims(root: &std::path::Path, template: &std::path::Path) -> Delimiters {
+        let sites = crate::resolve::render_sites(template, root, &crate::fs::StdFs);
+        crate::resolve::delimiters_for_sites(&sites)
+    }
+
+    /// The `demo/` control T-040 asks for, and the pin rule 4 asks for: the fixture's
+    /// comments are claims about what we extract, so the exact reference set of every demo
+    /// template is asserted here. The right-hand column is
+    /// `jinja2.meta.find_referenced_templates` on 3.1.6 run over these same files, including
+    /// the `None` it yields for the dynamic `{% include tuning_file %}` — a name we must not
+    /// invent.
+    ///
+    /// The fixture is also a working playbook: `templates_chain.yml` runs `ok=4 failed=0` on
+    /// ansible-core 2.21.2, and the three same-named `shared.j2` files come out different,
+    /// which is what makes `common.j2` the candidates problem rather than a lookup.
+    #[test]
+    fn demo_templates_name_exactly_what_jinja2_names() {
+        let want: &[(&str, &[&str])] = &[
+            ("roles/edge-cache/templates/shared.j2", &[]),
+            ("roles/edge-proxy/templates/shared.j2", &[]),
+            (
+                "templates/app.conf.j2",
+                &[
+                    "base.conf.j2",
+                    "macros.j2",
+                    "macros.j2",
+                    "partials/header.j2",
+                    "optional.conf.j2",
+                ],
+            ),
+            ("templates/base.conf.j2", &[]),
+            ("templates/common.j2", &["shared.j2"]),
+            // The missing-include fixture. Both spellings of the absent target are still
+            // *references* — extraction says what the template names, and whether the file
+            // exists is the resolver's question, not this one's.
+            (
+                "templates/broken_include.conf.j2",
+                &["partials/nowhere.j2", "partials/nowhere.j2", "partials/header.j2"],
+            ),
+            ("templates/macros.j2", &[]),
+            // No `#jinja2:` header: its delimiters come from the TASK that renders it. Read
+            // with the defaults it is refused as `unknown tag 'notatag'` — the false positive
+            // the call-site link exists to prevent — so the pin below reads every demo
+            // template the way the server does, through `render_sites`.
+            ("templates/module_delims.j2", &[]),
+            // Read with its own `#jinja2:` delimiters. jinja2 is **not** the oracle for this
+            // one: `find_referenced_templates` knows nothing about the header, so with the
+            // default delimiters it calls the file `unknown tag 'notatag'` — the exact false
+            // positive the header reader exists to prevent. Given the header's delimiters and
+            // the header line removed, upstream agrees on `partials/header.j2`.
+            ("templates/overridden.conf.j2", &["partials/header.j2"]),
+            (
+                "templates/optional.conf.j2",
+                // Two names out of one list-valued include, because a list is not a dynamic
+                // name. The dynamic include contributes nothing, and neither do the
+                // `{% raw %}`, comment and `'%}'`-in-a-string rows.
+                &["partials/site.j2", "partials/header.j2", "partials/absent.j2"],
+            ),
+            ("templates/partials/header.j2", &[]),
+            ("templates/shared.j2", &[]),
+        ];
+
+        let demo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let found = demo_templates();
+        // Non-zero is the whole point of a control: an empty demo tree passes everything
+        // below by vacuity, and did until this fixture existed.
+        assert!(!found.is_empty(), "demo has no .j2 files, so this control measures nothing");
+        let names: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
+        let mut expected: Vec<&str> = want
+            .iter()
+            .map(|(p, _)| *p)
+            .chain(["templates/broken.conf.j2", "templates/bad_header.conf.j2"])
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(names, expected, "the demo template set changed");
+
+        let mut literal = 0;
+        for (rel, src) in &found {
+            // The two files that must not render, each refused for its own measured reason.
+            if let Some(want_msg) = match rel.as_str() {
+                "templates/broken.conf.j2" => Some("forr"),
+                "templates/bad_header.conf.j2" => Some("nosuchkey"),
+                _ => None,
+            } {
+                let msg = match references(src, &delims(&demo_root, &demo_root.join(rel))) {
+                    Err(e) => e.msg,
+                    Ok(r) => panic!("{rel} must not render, but we accepted it: {r:?}"),
+                };
+                assert!(msg.contains(want_msg), "{rel}: {msg}");
+                continue;
+            }
+            let (_, theirs) = want.iter().find(|(p, _)| p == rel).expect("listed above");
+            let ours = references(src, &delims(&demo_root, &demo_root.join(rel)))
+                .unwrap_or_else(|e| panic!("{rel} must render, but we refuse it: {}", e.msg));
+            let mine: Vec<&str> = ours.iter().map(|r| r.template.as_str()).collect();
+            assert_eq!(mine, *theirs, "{rel}");
+            literal += mine.len();
+        }
+        assert!(literal > 5, "only {literal} references — the fixture stopped exercising this");
+    }
+
+    /// The other claim the fixture makes, and rule 4 says a label is a claim: every `src:` in
+    /// it now **navigates**, and none of them **warns**.
+    ///
+    /// This test used to assert the opposite — `src:` was not a reference at all — and it is
+    /// what caught the change: adding `ReferenceKind::TemplateSrc` turned it red, which is
+    /// how the demo's `NO HINT` comments got rewritten instead of quietly going stale.
+    #[test]
+    fn the_demo_src_values_navigate_and_do_not_warn() {
+        let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let mut named = 0;
+        for rel in [
+            "templates_chain.yml",
+            "roles/edge-proxy/tasks/main.yml",
+            "roles/edge-cache/tasks/main.yml",
+        ] {
+            let text = std::fs::read_to_string(demo.join(rel)).expect("demo file");
+            let nodes = crate::parse::Document::new(text).parse().expect("parses");
+            let extracted = crate::references::extract(&nodes);
+            for r in extracted.refs.iter().filter(|r| {
+                r.kind == crate::references::ReferenceKind::TemplateSrc
+            }) {
+                assert!(r.value.ends_with(".j2"), "{rel}: {:?}", r.value);
+                named += 1;
+            }
+        }
+        assert_eq!(named, 7, "the demo renders seven templates by name");
+        // The control: the walk still finds the references that were already working, so the
+        // count above is about `src:` and not about a walk that found everything.
+        let text = std::fs::read_to_string(demo.join("templates_chain.yml")).expect("demo file");
+        let nodes = crate::parse::Document::new(text).parse().expect("parses");
+        let extracted = crate::references::extract(&nodes);
+        let roles: Vec<&str> = extracted
+            .refs
+            .iter()
+            .filter(|r| r.kind == crate::references::ReferenceKind::Role)
+            .map(|r| r.value.as_str())
+            .collect();
+        assert_eq!(roles, ["edge-proxy", "edge-cache"]);
     }
 
     /// Against `jinja2.meta.find_referenced_templates`, the oracle T-040 names. Upstream

@@ -13,7 +13,9 @@
   },
   "activationEvents": [
     "onLanguage:ansible",
-    "onLanguage:yaml"
+    "onLanguage:yaml",
+    "onLanguage:jinja",
+    "workspaceContains:**/*.j2"
   ],
   "contributes": {
     "commands": [

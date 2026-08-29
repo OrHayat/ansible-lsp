@@ -51,6 +51,30 @@ Search order per the resolution table: `template` -> role `templates/` -> `<play
 Also: `dest:` is *always* remote and must never be treated as a reference. Worth an explicit
 test so nobody adds it later by pattern-matching on "path-shaped argument".
 
+## Partly done: the `template:` row, taken by T-040
+
+T-040 needed the `.j2` -> rendering-task link and nothing else could supply it, so
+`ReferenceKind::TemplateSrc` landed there. What exists now:
+
+- `template:` `src:` is a reference, both the mapping and the `src=x dest=y` k=v spelling
+- it **resolves**, in this ticket's stated order: role `templates/`, `<playbook_dir>/templates/`,
+  role dir, playbook dir, then the task file's own directory
+- it **navigates** — go-to-definition on a `src:` value
+- `resolve::render_sites` inverts it: every `template:` task that renders a given `.j2`
+
+What is deliberately **not** done, and is still all of this ticket's risk:
+
+- **no diagnostic.** `TemplateSrc` is filtered out of `diagnostics_of` explicitly. The
+  missing-file verdict on `src:` is this ticket's and belongs behind the corpus gate below —
+  385 `src:` values in one real tree is exactly the shape that produces a warning wave.
+- **no table.** Only `template:` is recognised. Every other module's `src:` produces no
+  reference at all, which is this ticket's own rule ("anything not in the table is unknown and
+  never diagnosed") reached by having no table rather than by having one.
+- `copy:`, the remote modules, `unarchive`'s `remote_src:`, and the `dest:` guard are untouched.
+
+So the first Done-when row is half true and stays unticked: `template:` navigates, `copy:` does
+not, and neither warns.
+
 ## Re-run the magic-variable survey when this lands
 
 `scan` prints `VARIABLES USED IN TEMPLATED PATHS`. Today it shows 11 distinct variables,

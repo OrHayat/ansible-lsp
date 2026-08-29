@@ -792,6 +792,10 @@ function activate(context) {
       documentSelector: [
         { scheme: "file", language: "ansible" },
         { scheme: "file", language: "yaml" },
+        // By glob, not by language id: VS Code ships no id for `.j2`, so which one a
+        // template arrives under depends on whichever other extension claimed it. The
+        // filename is the only thing we can rely on. T-040.
+        { scheme: "file", pattern: "**/*.{j2,jinja,jinja2}" },
       ],
       // A function, not a value: evaluated on every (re)start, so `ansibleLsp.restart`
       // picks up current settings instead of replaying the activation-time snapshot.

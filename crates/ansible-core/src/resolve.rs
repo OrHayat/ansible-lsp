@@ -464,6 +464,32 @@ impl<'a> Resolver<'a> {
                 )
             }
 
+            // `template: src:`. The search order is the `template` row of T-015's table —
+            // role `templates/`, then the playbook dir's, then the bare dirs — and it is the
+            // same list `template_search_path` builds, minus the entries that only exist
+            // once a template is *being* rendered. Kept here rather than reusing that
+            // function because this one starts from the task, which knows its own role.
+            ReferenceKind::TemplateSrc => {
+                let mut bases: Vec<PathBuf> = Vec::new();
+                if let Some(role) = &ctx.role_dir {
+                    bases.push(role.join("templates"));
+                }
+                if let Some(root) = &ctx.project_root {
+                    bases.push(root.join("templates"));
+                }
+                if let Some(role) = &ctx.role_dir {
+                    bases.push(role.clone());
+                }
+                if let Some(root) = &ctx.project_root {
+                    bases.push(root.clone());
+                }
+                bases.push(ctx.file_dir.clone());
+                Resolution::from_candidates(
+                    unique(bases.iter().map(|b| normalise(&b.join(&r.value)))),
+                    fs,
+                )
+            }
+
             // Relative to the importing playbook, then the project root. No role or
             // collection paths apply at play level.
             ReferenceKind::ImportPlaybook => {
@@ -839,6 +865,282 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
         skip_reason: None,
         directory: None,
     }
+}
+
+/// A path in a form two spellings of the same file agree on.
+///
+/// [`Fs::canonical`] when the file is there — it settles the `\?\` prefix, `..` segments and
+/// Windows case — and the lexical normalisation otherwise, so a candidate that does not exist
+/// still compares sanely. Not [`Fs::same_file`], which answers `false` when either side is
+/// missing; this needs a *key*, including for paths nothing is at yet.
+///
+/// The editor hands over `C:\x\y.j2` while the workspace walk yields `\\?\C:\x\y.j2` for the
+/// same file. Comparing those textually finds no call sites at all, which is how the
+/// three-candidate case first came back with one.
+
+fn same_file_key(p: &Path, fs: &dyn Fs) -> PathBuf {
+    fs.canonical(p).unwrap_or_else(|| normalise(p))
+}
+
+/// One `template:` task that renders a given `.j2`, and the two things about it a template
+/// cannot know on its own.
+#[derive(Debug, Clone)]
+pub struct RenderSite {
+    /// The task file the `template:` task is written in.
+    pub task_file: PathBuf,
+    /// Span of the `src:` value, so a candidate can be attributed to the line that causes it.
+    pub span: crate::parse::Span,
+    /// The search path this call site gives the template — the whole reason to look for call
+    /// sites at all. Built from the *task's* context, not the template's.
+    pub search_path: Vec<PathBuf>,
+    /// Delimiters this task passes as module parameters. `None` when it passes none, which is
+    /// the overwhelmingly common case and lets a caller skip the merge entirely.
+    pub delimiters: Option<crate::jinja::Delimiters>,
+}
+
+/// Every `template:` task in `root` that renders `template`.
+///
+/// This is the `.j2` -> task link T-040 needs and could not have: a template's search path,
+/// its delimiters and its candidate resolutions are all properties of the task that renders
+/// it, and until `src:` became a reference there was nothing joining the two.
+///
+/// Whole-workspace and uncached on purpose for now — it answers an editor request about one
+/// open template, not a scan. The general inverse of the reference graph is T-020's, and this
+/// is deliberately *not* it: one kind, one direction, no bookkeeping to keep fresh.
+pub fn render_sites(template: &Path, root: &Path, fs: &dyn Fs) -> Vec<RenderSite> {
+    // Compared canonically, not textually. The editor hands over `C:\x\y.j2` while the
+    // workspace walk yields `\\?\C:\x\y.j2` for the same file, and a `==` on those two
+    // silently finds no call sites at all — which is exactly how this first came back with one
+    // candidate instead of three.
+    let target = same_file_key(template, fs);
+    let mut out = Vec::new();
+    for task_file in crate::workspace::yaml_files_in(root, fs) {
+        let Some(text) = fs.read(&task_file) else { continue };
+        let doc = crate::parse::Document::new(text);
+        let Some(nodes) = doc.parse() else { continue };
+        let extracted = crate::references::extract(&nodes);
+        if !extracted.refs.iter().any(|r| r.kind == ReferenceKind::TemplateSrc) {
+            continue;
+        }
+        let ctx = crate::workspace::FileContext::discover_with(&task_file, fs, |r| {
+            crate::config::AnsibleConfig::builder(r).fs(fs).load()
+        });
+        let resolver = Resolver { fs, in_playbook: extracted.in_playbook, ..Resolver::default() };
+        for r in extracted.refs.iter().filter(|r| r.kind == ReferenceKind::TemplateSrc) {
+            let res = resolver.resolve(r, &ctx);
+            if !res.targets.iter().any(|p| same_file_key(p, fs) == target) {
+                continue;
+            }
+            out.push(RenderSite {
+                task_file: task_file.clone(),
+                span: r.span,
+                search_path: rendering_search_path(&ctx),
+                delimiters: r.template_delimiters.as_deref().cloned(),
+            });
+        }
+    }
+    // Sorted by task file, so the candidate order a user sees is the same on every machine.
+    // A directory walk's order is not, and with several call sites there is no "right" first
+    // answer to prefer — stable beats arbitrary.
+    out.sort_by(|a, b| (&a.task_file, a.span.start).cmp(&(&b.task_file, b.span.start)));
+    out
+}
+
+/// The search path a task gives whatever it renders: `ansible_search_path` for that task,
+/// then the playbook dir, each doubled as `<p>/templates` then `<p>`
+/// (`plugins/action/template.py:104-113`). `dirname(source)` is appended by the caller, since
+/// it belongs to the template rather than to the site.
+///
+/// Measured shape of `ansible_search_path` on 2.21.2: a role task gets
+/// `[<role>, <role>/tasks, <playbook_dir>]`, a play-level task gets `[<playbook_dir>]`, and a
+/// task in an included file gets `[<that file's dir>, <playbook_dir>]`.
+fn rendering_search_path(ctx: &crate::workspace::FileContext) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
+        if !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+    if let Some(role) = &ctx.role_dir {
+        push(role.clone(), &mut roots);
+        push(role.join("tasks"), &mut roots);
+    } else {
+        // Not in a role: the including file's own directory leads the chain.
+        push(ctx.file_dir.clone(), &mut roots);
+    }
+    if let Some(root) = &ctx.project_root {
+        push(root.clone(), &mut roots);
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in roots.into_iter().flat_map(|p| [p.join("templates"), p]) {
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+/// Where jinja looks for an `{% include %}`/`{% import %}`/`{% extends %}` target, in
+/// Ansible's own order.
+///
+/// `plugins/action/template.py:104-113` builds it as
+///
+/// ```text
+/// searchpath = ansible_search_path + [loader._basedir, dirname(source)]
+/// then each p becomes  p/templates,  p
+/// ```
+///
+/// and `ansible_search_path` is the include chain of the **task doing the rendering**.
+/// Measured on ansible-core 2.21.2 by printing it from four places:
+///
+/// | rendered from | `ansible_search_path` |
+/// | --- | --- |
+/// | a role's `tasks/main.yml` | `[<role>, <role>/tasks, <playbook_dir>]` |
+/// | a file that role includes | the same |
+/// | a play-level task | `[<playbook_dir>]` |
+/// | a task file included from `sub/` | `[<playbook_dir>/sub, <playbook_dir>]` |
+///
+/// **So this is a function of the call site, and a template has as many search paths as it
+/// has callers.** What a `.j2` on its own can supply is the tail of that list, which is the
+/// part that does not vary: `dirname(source)` is appended for every caller, so a hit under the
+/// template's own directory is reachable no matter who renders it. The role and project
+/// entries below are the location-derived guess at the rest — right for the ordinary case of a
+/// role template including from its own role, and *incomplete* for a template rendered from a
+/// role it does not live in, whose `templates/` would come first and shadow ours. `demo/`
+/// carries that case as `templates/common.j2`; naming the winner there needs the `.j2` → task
+/// link, which is T-015's, and until it exists this list is candidates rather than an answer.
+pub fn template_search_path(template: &Path, ctx: &crate::workspace::FileContext) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let push = |p: PathBuf, roots: &mut Vec<PathBuf>| {
+        if !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+    // The rendering task's own chain, as far as the template's location reveals it: a
+    // template under `<role>/templates/` is one this role renders in every case anyone
+    // writes, and `ansible_search_path` then opens with `<role>` and `<role>/tasks`.
+    if let Some(role) = &ctx.role_dir {
+        push(role.clone(), &mut roots);
+        push(role.join("tasks"), &mut roots);
+    }
+    // `loader._basedir` — the playbook's directory. The project root stands in for it, the
+    // same substitution the rest of this crate makes (T-096).
+    if let Some(root) = &ctx.project_root {
+        push(root.clone(), &mut roots);
+    }
+    // Appended for every caller, so this one is not a guess.
+    if let Some(dir) = template.parent() {
+        push(dir.to_path_buf(), &mut roots);
+    }
+    // Upstream does not de-duplicate, and for a role template it genuinely repeats:
+    // `dirname(source)` is `<role>/templates`, which the role entry already contributed. First
+    // match wins either way, so dropping the repeat changes nothing about which file is found
+    // and makes the candidate list something a person can read in a diagnostic.
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in roots.into_iter().flat_map(|p| [p.join("templates"), p]) {
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+/// The delimiters to read a template with, given the tasks that render it.
+///
+/// One site, or several that agree: use them. Several that **disagree**: fall back to the
+/// defaults and stay quiet rather than pick a winner — reading a template with the wrong
+/// delimiters invents tags that are not there, which is how a working file gets a red
+/// squiggle. A `#jinja2:` header in the template beats whatever comes back here, and
+/// `jinja::document` applies it on top (measured on 2.21.2).
+///
+/// Here rather than in the language server because two readers need the same answer — the
+/// diagnostic and the demo pin — and two callers deciding it separately is how they end up
+/// disagreeing about the same file.
+pub fn delimiters_for_sites(sites: &[RenderSite]) -> crate::jinja::Delimiters {
+    let mut found: Option<&crate::jinja::Delimiters> = None;
+    for d in sites.iter().filter_map(|s| s.delimiters.as_ref()) {
+        match found {
+            None => found = Some(d),
+            Some(seen) if seen == d => {}
+            Some(_) => return crate::jinja::Delimiters::default(),
+        }
+    }
+    found.cloned().unwrap_or_default()
+}
+
+/// Every distinct file an include target could reach, across every task that renders the
+/// template — the candidates box T-040 kept open.
+///
+/// One template rendered from two roles has two answers and neither is wrong: the search path
+/// belongs to the rendering task. `demo/templates/common.j2` is the fixture, with three call
+/// sites and three different `shared.j2` files.
+///
+/// Ordered so the caller can present it: the sites' own order first, then the location-derived
+/// fallback that applies whoever renders it. Duplicates collapse, so a template with five call
+/// sites that all agree yields one candidate rather than five.
+pub fn template_include_candidates(
+    target: &str,
+    template: &Path,
+    ctx: &crate::workspace::FileContext,
+    sites: &[RenderSite],
+    fs: &dyn Fs,
+) -> Vec<PathBuf> {
+    if target.is_empty() || target.starts_with('/') || target.split('/').any(|s| s == "..") {
+        return Vec::new();
+    }
+    let join = |dir: &Path| target.split('/').fold(dir.to_path_buf(), |acc, s| acc.join(s));
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for site in sites {
+        for d in &site.search_path {
+            if !dirs.contains(d) {
+                dirs.push(d.clone());
+            }
+        }
+    }
+    // `dirname(source)` is appended for every caller, and the location-derived path is what a
+    // template with no call site we can see still gets.
+    for d in template_search_path(template, ctx) {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    // De-duplicated on the canonical key, not the literal path: a call site's search path and
+    // the location-derived one reach the same file by two spellings, and comparing those
+    // textually offers the reader the same file twice.
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for hit in dirs.iter().map(|d| join(d)).filter(|p| fs.is_file(p)) {
+        let key = same_file_key(&hit, fs);
+        if !seen.contains(&key) {
+            seen.push(key);
+            out.push(normalise(&hit));
+        }
+    }
+    out
+}
+
+/// Resolve one literal `{% include %}` target against [`template_search_path`]. First match
+/// wins, as everywhere else — jinja's `FileSystemLoader` takes the first path that exists and
+/// says nothing about the rest.
+///
+/// A target is a relative path with `/` separators (jinja's own convention, and what
+/// `find_referenced_templates` reports), so it is joined rather than re-split.
+pub fn resolve_template_include(
+    target: &str,
+    template: &Path,
+    ctx: &crate::workspace::FileContext,
+    fs: &dyn Fs,
+) -> Resolution {
+    // Jinja refuses to leave the search root, so a target that climbs out is not a reference
+    // to anything we should point at.
+    if target.is_empty() || target.starts_with('/') || target.split('/').any(|s| s == "..") {
+        return Resolution::skipped(SkipReason::NotInWorkspace);
+    }
+    let candidates: Vec<PathBuf> = template_search_path(template, ctx)
+        .into_iter()
+        .map(|dir| target.split('/').fold(dir, |acc, seg| acc.join(seg)))
+        .collect();
+    Resolution::from_candidates(candidates, fs)
 }
 
 pub fn vars_files_candidates(entry: &str, file_dir: &Path) -> Vec<PathBuf> {
@@ -2822,6 +3124,88 @@ mod tests {
             &fs,
         );
         assert_eq!(first(&out, ReferenceKind::Module).status, Status::Skipped);
+    }
+
+    /// The search-path order, against the shape measured on ansible-core 2.21.2. A role
+    /// template renders from its own role in every case anyone writes, so the role's
+    /// `templates/` comes first — which is what the demo's three-way `shared.j2` shows, and
+    /// what a play-level guess would get wrong.
+    #[test]
+    fn a_role_template_searches_its_own_role_before_the_project() {
+        let root = crate::testing::project(
+            "tpl-search",
+            "[defaults]\n",
+            &[("roles/r/tasks/main.yml", "[]"), ("roles/r/templates/a.j2", "x"), ("templates/a.j2", "y")],
+        );
+        let tpl = root.join("roles/r/templates/a.j2");
+        let ctx = crate::workspace::FileContext::discover(&tpl);
+        let path = template_search_path(&tpl, &ctx);
+        let rel: Vec<String> = path
+            .iter()
+                .map(|p| p.strip_prefix(&root).unwrap_or(p).to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            rel,
+            [
+                "roles/r/templates",
+                "roles/r",
+                "roles/r/tasks/templates",
+                "roles/r/tasks",
+                "templates",
+                "",
+                // `dirname(source)/templates`. `dirname(source)` itself is
+                // `roles/r/templates`, already first, so the de-duplication drops it.
+                "roles/r/templates/templates",
+            ],
+            "each root doubled as <p>/templates then <p>, role first"
+        );
+        // And the resolution follows it: the role's own copy wins over the project's.
+        let res = resolve_template_include("a.j2", &tpl, &ctx, &StdFs);
+        assert_eq!(res.status, Status::Resolved);
+        assert_eq!(res.targets, [root.join("roles/r/templates/a.j2")]);
+        // The control: delete the role copy and the project one is found instead, so the
+        // assertion above is about order rather than about only one file existing.
+        std::fs::remove_file(root.join("roles/r/templates/a.j2")).unwrap();
+        let res = resolve_template_include("a.j2", &tpl, &ctx, &StdFs);
+        assert_eq!(res.targets, [root.join("templates/a.j2")]);
+    }
+
+    /// `dirname(source)` is appended for every caller, so a sibling of the template is
+    /// reachable whoever renders it. This is the one entry that is not a guess.
+    #[test]
+    fn a_sibling_of_the_template_always_resolves() {
+        let root = crate::testing::project(
+            "tpl-sibling",
+            "[defaults]\n",
+            // Deliberately NOT under `<root>/templates`: there the project-root entry would
+            // find the sibling too, and this test could not fail for the reason it claims.
+            &[("deploy/tpl/partials/head.j2", "h"), ("deploy/tpl/main.j2", "m")],
+        );
+        let tpl = root.join("deploy/tpl/main.j2");
+        let ctx = crate::workspace::FileContext::discover(&tpl);
+        let res = resolve_template_include("partials/head.j2", &tpl, &ctx, &StdFs);
+        assert_eq!(res.targets, [root.join("deploy/tpl/partials/head.j2")]);
+        // Missing is Missing, and every path tried is reported so a bad root is debuggable
+        // from the message alone.
+        let res = resolve_template_include("partials/absent.j2", &tpl, &ctx, &StdFs);
+        assert_eq!(res.status, Status::Missing);
+        assert!(res.candidates.len() >= 2, "{:?}", res.candidates);
+    }
+
+    /// A target jinja's loader would refuse is not something to point at. `FileSystemLoader`
+    /// rejects a path that climbs out of its root, and an absolute one is not a template name.
+    #[test]
+    fn a_target_that_leaves_the_search_root_is_skipped() {
+        let root = crate::testing::project("tpl-escape", "[defaults]\n", &[("templates/m.j2", "m")]);
+        let tpl = root.join("templates/m.j2");
+        let ctx = crate::workspace::FileContext::discover(&tpl);
+        for bad in ["../secret.j2", "a/../../b.j2", "/etc/passwd", ""] {
+            let res = resolve_template_include(bad, &tpl, &ctx, &StdFs);
+            assert_eq!(res.status, Status::Skipped, "{bad:?}");
+            assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace), "{bad:?}");
+        }
+        // The control: a plain relative target is not skipped.
+        assert_eq!(resolve_template_include("m.j2", &tpl, &ctx, &StdFs).status, Status::Resolved);
     }
 }
 

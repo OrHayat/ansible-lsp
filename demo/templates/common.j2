@@ -1,0 +1,13 @@
+{# T-040 — one file, three answers. The include target below is a bare name, and the search
+   path that resolves it belongs to the *task doing the rendering*, not to this file. Measured
+   on ansible-core 2.21.2 with this exact fixture:
+
+       rendered from roles/edge-proxy  ->  roles/edge-proxy/templates/shared.j2
+       rendered from roles/edge-cache  ->  roles/edge-cache/templates/shared.j2
+       rendered from a play-level task ->  templates/shared.j2
+
+   So "go to definition" on this line has no single answer. It jumps to the play-level
+   `templates/shared.j2` — the third row, correct for a play-level render and one of three.
+   Offering all three needs the link from this file back to the tasks that render it, which is
+   T-015's, so the jump is "a file this include reaches" rather than "the file". #}
+{% include "shared.j2" %}

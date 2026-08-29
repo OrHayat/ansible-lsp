@@ -1,0 +1,10 @@
+{# BAD — a template that cannot render. `Encountered unknown tag 'forr'`, from jinja2 3.1.6
+   and from us; one `template-syntax` ERROR on the line below.
+
+   No task renders this file, and that is the point. Measured on ansible-core 2.21.2: a
+   playbook with this file sitting in `templates/` runs `ok`, because a template is not
+   parsed until the task that renders it runs on the target. The runtime does report this
+   — at deploy, on the managed host. Here it is a squiggle while you type. #}
+{% forr host in groups['web'] %}
+server {{ host }};
+{% endforr %}

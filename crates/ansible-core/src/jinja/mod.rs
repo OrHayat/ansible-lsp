@@ -20,5 +20,5 @@ mod template;
 pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
 pub use lexer::{Cause, Error};
 pub use parser::parse;
-pub use statement::{references, RefTag, Reference, Stmt};
-pub use template::{blocks, Block, Delimiters, Kind};
+pub use statement::{references, will_not_render, RefTag, Reference, Stmt};
+pub use template::{blocks, document, header, Block, Delimiters, Header, Kind};

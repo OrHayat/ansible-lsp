@@ -1,0 +1,21 @@
+{# BAD — `partials/nowhere.j2` is on no search path of any task that renders this file, so
+   the render fails on the target host the moment this line is reached. One
+   `missing-template` WARNING.
+
+   Measured on ansible-core 2.21.2, rendering this file from a play-level task:
+
+     Task failed: Error rendering template: 'partials/nowhere.j2' not found in search paths:
+     '<demo>/templates', '<demo>', '<demo>/templates', '<demo>', '<demo>/templates/templates',
+     '<demo>/templates'
+
+   — at task run time, which is why no task in `templates_chain.yml` actually renders it.
+   Note the repeats: that is ansible's own list, `[playbook_dir, basedir, dirname(source)]`
+   each doubled as `<p>/templates` then `<p>`. #}
+{% include "partials/nowhere.j2" %}
+
+{# GOOD — the same absent target with `ignore missing`. Legal by design: ansible renders
+   nothing here and the play carries on, so this must stay silent. #}
+{% include "partials/nowhere.j2" ignore missing %}
+
+{# GOOD — this one exists. #}
+{% include "partials/header.j2" %}

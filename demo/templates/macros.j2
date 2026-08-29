@@ -1,0 +1,4 @@
+{# T-040 — the import target. `import` binds this whole file as a namespace and `from` binds
+   one name out of it; both spellings name the same file and both are references. #}
+{% macro upstream(group) %}upstream {{ group }} { server 127.0.0.1; }{% endmacro %}
+{% macro listen_line(port) %}listen {{ port }};{% endmacro %}
