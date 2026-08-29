@@ -42,10 +42,27 @@ the second: `plugins/action/template.py:102` reads it, `:138` templates it. So t
 labour between these two tickets is not subset-and-superset of one grammar; it is Ansible's own
 two entry points.
 
-Read from `jinja2` 3.1.6 (`parser.py`, `lexer.py`) and **run** against the installed copy. The
-ansible-core lines are read from the 2.21.3 sdist and **not run** — no core is installed on the
-machine this was written on, so by rule 1 they are the weaker kind of claim and want
-re-measuring before anything ships on them.
+Read from `jinja2` 3.1.6 (`parser.py`, `lexer.py`) and **run** against the installed copy.
+
+**The ansible-core half has now been run** (2.21.2 under WSL), which it had not been when this
+was written. Every claim below held except one, and the nine jinja2 rows re-confirmed verbatim
+on 3.1.6:
+
+| claim | measured |
+| --- | --- |
+| a template is never parsed at playbook-parse time | **confirmed** — a `.j2` containing `{% forr %}` sits in `templates/` and the playbook runs `ok` as long as no task renders it |
+| the template path takes the whole document grammar | **confirmed** — rendering it fails with `Syntax error in template: Encountered unknown tag 'forr'`, at task run time |
+| an ordinary scalar is the template path | **confirmed** — `msg: "{% for i in [1,2] %}{{ i }}{% endfor %}"` renders `12`, and `{% if %}` likewise |
+| `when:` is `compile_expression`, ending in "chunk after expression" | **confirmed verbatim** — `when: "x == 1 chunk"` fails with `Syntax error in expression: chunk after expression`; `when: "x == 1 %}"` gives `unexpected '}'` |
+| `#jinja2:` header overrides delimiters | **confirmed by output**, not by task status: `[% name %]` renders and `{{ not_a_var }}` survives as literal text — an undefined name that would otherwise have failed the render |
+| `template:` module parameters override delimiters | **confirmed by output**, same control |
+
+**The correction.** "That path physically cannot reach a statement" is true in effect and wrong
+about the mechanism. On 2.21.2 `when: "{% if true %}x{% endif %}"` fails with **`Encountered
+untrusted template or expression`** — the Data Tagging trust gate, which fires *before* the
+expression parser and never reaches "chunk after expression" at all. The conclusion this ticket
+draws from it stands: a statement cannot appear in `when:`. But anything built on the stated
+reason should note that two different gates enforce it, and only one of them is the parser.
 
 1. **`parse_expression`** — the four target-naming statements read their target with the *same*
    call: `parse_extends`, `parse_include`, `parse_import` and `parse_from` each do
@@ -122,6 +139,67 @@ this ticket's answer for the rest, which makes it a ready-made oracle to test ag
 - This is a second grammar (Jinja) over a second file type, and it stays the biggest cost here.
   T-188 pays for the expression half; the document lexer and the statement forms are this
   ticket's, and the lexer is the part that is fiddly rather than long.
+
+## Progress: the document lexer is in
+
+`jinja::template` splits a template into `Data` / `Comment` / `Statement` / `Expression`
+blocks. That is step 2 of the three above — the half the ticket calls "expensive" and
+"has no partial version". No box below is finished by it, because every one of them also
+needs the statement forms or the resolution on top; this is the floor they stand on.
+
+All four lexical traps are asserted, each with a control:
+
+| trap | asserted |
+| --- | --- |
+| `{% raw %}` is a state | `{% raw %}{% include 'x.j2' %}{% endraw %}` is one `Data` block, and the same include outside a raw *is* a `Statement` |
+| `{# … #}` is a state | `{# {% include 'x.j2' %} #}` is one `Comment` |
+| `%}` in a string | `{% if x == '%}' %}ok{% endif %}` is three blocks, not four |
+| `%}` in brackets | `{{ {'a': 1} }}` and `{{ f(a, [1, 2], {'k': 'v'}) }}` are one block each |
+
+Whitespace control moves the `Data` boundaries, including on `raw`/`endraw`, whose tags emit
+no block for a generic pass to work from. Delimiters are a parameter, so both override
+mechanisms have somewhere to go.
+
+### Two oracles, because they answer different questions
+
+`env.lex` gives the block split. `env.parse` gives whether the template renders, and it is the
+stricter: `'{{ x'` comes back from the lexer as **no tokens and no error**, while `parse` calls
+it `unexpected end of template, expected 'end of print statement'` — which is what this port
+says. So the asserted invariant is one-directional: **anything we refuse, `env.parse` must also
+refuse.** The converse waits for the statement forms, since `{% if x %}` is a lexically
+complete tag and an unclosed block.
+
+### Measured, not assumed: `keep_trailing_newline`
+
+Stock jinja2 drops a template's final newline; **Ansible keeps it** — a `.j2` ending
+`hello {{ name }}
+` renders `hello world
+`, verified byte-for-byte with `od`. The corpus
+generator therefore runs `Environment(keep_trailing_newline=True)`. Comparing against a default
+`Environment` would have made this port "wrong" about a byte Ansible keeps, and the first
+corpus run failed on exactly that before it was chased down.
+
+### Gate
+
+`scripts/jinja_blocks.py` generates the goldens. 44 rows are checked in (adversarial plus
+jinja2's own `tests/` and `demo/`); the pinned trees go behind `JINJA_TEMPLATE_CORPUS` in the
+T-184 shape, since 1571 real templates are 8.6 MB of JSON.
+
+**1565 real `.j2` files from the eight pinned trees split identically to jinja2, 0 differences,
+4 refused — and `env.parse` refuses all 4.** Seen red: dropping the string tracking in
+`find_end` splits `{% if x == '%}' %}` into `statement " if x == '"` + `data "' %}ok"`, and
+both the checked-in corpus and the tree gate fail on it.
+
+### Still to do here
+
+- the 14 statement forms, and `parse_statements`' end-token bookkeeping — without them there
+  is no unknown-tag diagnostic and no include target
+- `line_statement_prefix` / `line_comment_prefix`: the fields exist on `Delimiters` and the
+  scanner does not read them yet
+- `trim_blocks` / `lstrip_blocks`, which Ansible's `template:` module defaults differently from
+  jinja2 and which move `Data` boundaries again — **not yet measured**
+- reading the delimiters from the module parameters and the `#jinja2:` header, rather than
+  taking them as an argument
 
 ## Done when
 

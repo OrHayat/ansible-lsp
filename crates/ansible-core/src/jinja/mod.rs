@@ -14,7 +14,9 @@
 mod ast;
 mod lexer;
 mod parser;
+mod template;
 
 pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
 pub use lexer::{Cause, Error};
 pub use parser::parse;
+pub use template::{blocks, Block, Delimiters, Kind};

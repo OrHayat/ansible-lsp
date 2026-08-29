@@ -1,0 +1,12 @@
+- hosts: localhost
+  gather_facts: false
+  vars: {name: world}
+  tasks:
+    - template: {src: hdr.j2, dest: "{{ playbook_dir }}/out_hdr"}
+      ignore_errors: true
+    - template:
+        src: custom.j2
+        dest: "{{ playbook_dir }}/out_custom"
+        variable_start_string: "[["
+        variable_end_string: "]]"
+      ignore_errors: true
