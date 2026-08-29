@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | S    | —          |
+| done   | bug  | P2       | S    | —          |
 
 ## Symptom
 
@@ -44,13 +44,26 @@ rise, and the drift test is what proves the change did something.
 
 ## Done when
 
-- [ ] `hosts|length>0` classifies identically to `hosts | length > 0`
-- [ ] the same asserted for at least one arm that is **not** `RequiresNonEmpty` — the fix is in
+- [x] `hosts|length>0` classifies identically to `hosts | length > 0`
+- [x] the same asserted for at least one arm that is **not** `RequiresNonEmpty` — the fix is in
       shared normalisation, so one arm passing proves nothing about the rest
-- [ ] a quoted operator is not corrupted: `x == "a|b"` and `x == "a > b"` keep their literal
+- [x] a quoted operator is not corrupted: `x == "a|b"` and `x == "a > b"` keep their literal
       values, asserted on the resulting `WhenEquals`
-- [ ] the T-032 corpus classification percentage is re-measured and recorded here — it must not
-      fall, and if it does not rise the fix did nothing worth having
-- [ ] seen red before the fix
+- [x] the corpus classification rate is re-measured and recorded. Measured over the eight
+      trees T-184 pinned (the `~/app/ansible` corpus the 39% came from is not reproducible —
+      see [[T-188]]), running the same sweep against the pre-fix `classify`:
+      **1541 → 1697 of 11 379 sites, 13% → 14%.** It rose.
+
+      **Only 7 of those 156 are this ticket.** The bulk — 71 — is [[T-211]]'s `d(` alias,
+      which the same rewrite fixed. Worth stating plainly rather than claiming the whole
+      number: tight spacing is rare in real playbooks, and the seven are
+      `configured_nameservers | length>0`, `docker_packages_list | length>0`, `item|length > 0`
+      and four `…|length > 0` clauses inside multi-clause conditions.
+
+      So this fix is worth having for correctness, not reach. The reach argument belongs to
+      T-211 and the correctness argument is the nine wrong claims [[T-188]] removed.
+
+- [x] seen red before the fix — the whole test ran against the pre-fix `classify` and printed
+      `"hosts | length > 0" vs "hosts|length>0": RequiresNonEmpty vs Unknown`
 
 **Root cause:** see [[T-188]] — the classifier matches strings; this is one symptom.

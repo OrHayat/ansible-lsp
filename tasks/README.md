@@ -157,8 +157,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
-| T-187 | **bug** · [Conditions without spaces around their operators never classify](open/T-187-conditions-without-spaces-around-their-operators-never-class.md) | S    | —    |
-| T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](open/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | L    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
 | T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
 | T-195 | [Validate rules against public corpora, not one codebase](open/T-195-validate-rules-against-public-corpora-not-one-codebase.md) | M    | —    |
@@ -167,8 +165,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-028 | [`notify:` -> handler resolution](open/T-028-notify-handlers.md) | M    | —    |
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
-| T-211 | **bug** · [The default filter's short and FQCN spellings never classify](open/T-211-the-default-filter-s-short-and-fqcn-spellings-never-classify.md) | S    | —    |
-| T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | T-188 |
+| T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
+| T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](open/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -225,6 +223,7 @@ T-021 is now unblocked on that side.
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
 | T-209 | [Model meta/main.yml whole, not just its top-level key names](open/T-209-model-meta-main-yml-whole-not-just-its-top-level-key-names.md) | M    | —          |
 | T-210 | [meta/main.yml accepts 22 keys that do nothing, and we say nothing](open/T-210-meta-main-yml-accepts-22-keys-that-do-nothing-and-we-say-not.md) | M    | T-209      |
+| T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](open/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -320,6 +319,10 @@ T-021 is now unblocked on that side.
 | T-208 | **bug** · [An include_vars definition claims to be in effect above its own include task](closed/T-208-an-include-vars-definition-claims-to-be-in-effect-above-its.md) | done     |
 | T-184 | [include_vars of a role's own vars/main.yml is redundant and raises its precedence](closed/T-184-include-vars-of-a-role-s-own-vars-main-yml-is-redundant-and.md) | done     |
 | T-147 | [Validate role meta/main.yml against the RoleMetadata set](closed/T-147-validate-role-meta-main-yml-against-the-rolemetadata-set.md) | done     |
+| T-213 | **bug** · [A defaulted membership test whose default is in the list is labelled runs only if](closed/T-213-a-defaulted-membership-test-whose-default-is-in-the-list-is.md) | done     |
+| T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](closed/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | done     |
+| T-187 | **bug** · [Conditions without spaces around their operators never classify](closed/T-187-conditions-without-spaces-around-their-operators-never-class.md) | done     |
+| T-211 | **bug** · [The default filter's short and FQCN spellings never classify](closed/T-211-the-default-filter-s-short-and-fqcn-spellings-never-classify.md) | done     |
 
 ## Settled — don't re-derive these
 

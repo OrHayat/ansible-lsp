@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P2       | S    | T-114 | —          |
+| done   | bug  | P2       | S    | T-114 | —          |
 
 ## Symptom
 
@@ -81,11 +81,28 @@ FQCN has **zero** occurrences anywhere and is included only because it is the sa
 
 ## Done when
 
-- [ ] `x | d(false)` classifies identically to `x | default(false)`, asserted on both
+- [x] `x | d(false)` classifies identically to `x | default(false)`, asserted on both
       `label()` and `requirement()`
-- [ ] the same for a second arm, so the fix is not pinned to one verdict: `x | d(true)` gives
+- [x] the same for a second arm, so the fix is not pinned to one verdict: `x | d(true)` gives
       `UnlessCleared`
-- [ ] `x | ansible.builtin.default(false)` classifies identically to the bare spelling
-- [ ] an unrecognised filter still returns `None` — a test naming one that must stay refused,
+- [x] `x | ansible.builtin.default(false)` classifies identically to the bare spelling
+- [x] an unrecognised filter still returns `None` — a test naming one that must stay refused,
       so the `don't guess` guard is proved not to have widened
-- [ ] seen red before the fix, and the break verified to be in the file (rule 5)
+- [x] seen red before the fix, and the break verified to be in the file (rule 5)
+
+
+## Outcome
+
+Fixed by [[T-188]]'s rewrite rather than as a change of its own: once a filter is a node with
+a name, `d`, `default` and both FQCN spellings are the same shape, and `strip_guards` matches
+on `name.rsplit('.').next()`.
+
+**The measured spread held up.** This ticket predicted debops would carry the gain because it
+uses `d(` 852 times where other trees use `default(`. Over the eight pinned trees, the rewrite
+classified **+156** conditions and **71 of them are the `d(` alias** — debops alone went
+204 → 355, while five of the eight trees moved by 5 or fewer. The per-repo framing this ticket
+argued for was the right one: the blended `+10%` would have hidden a `+74%` and three zeros.
+
+Guard against widening: `dd(`, `default_if_none(` and `frobnicate(` are asserted to stay
+`Unknown`. Seen red — treating any filter beginning `d` as `default` makes `skip_x | dd(false)`
+classify, and the test fails on it.
