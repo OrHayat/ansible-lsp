@@ -706,11 +706,12 @@ mod tests {
             // the call-site link exists to prevent — so the pin below reads every demo
             // template the way the server does, through `render_sites`.
             ("templates/module_delims.j2", &[]),
-            // Read with its own `#jinja2:` delimiters. jinja2 is **not** the oracle for this
-            // one: `find_referenced_templates` knows nothing about the header, so with the
-            // default delimiters it calls the file `unknown tag 'notatag'` — the exact false
-            // positive the header reader exists to prevent. Given the header's delimiters and
-            // the header line removed, upstream agrees on `partials/header.j2`.
+            // Read with its own `#jinja2:` delimiters. `find_referenced_templates` alone is
+            // **not** the oracle here: it knows nothing about the header, so with the default
+            // delimiters it calls the file `unknown tag 'notatag'` — the exact false positive
+            // the header reader exists to prevent. The corpus generator therefore reads the
+            // header with ansible's own `_extract_template_overrides` first, and given those
+            // delimiters and the header line removed, upstream agrees on `partials/header.j2`.
             ("templates/overridden.conf.j2", &["partials/header.j2"]),
             (
                 "templates/optional.conf.j2",
@@ -818,14 +819,29 @@ mod tests {
     /// yields `None` for a dynamic name; this port yields no reference, so the comparison is
     /// on the literal names only, with the dynamic count asserted separately so "we found
     /// nothing" cannot pass as agreement.
+    ///
+    /// `find_referenced_templates` knows nothing about `#jinja2:`, so the corpus generator
+    /// reads the header with **ansible's own** `_extract_template_overrides` and records what
+    /// it refuses in `header_err`. Those rows are asserted here rather than skipped: a header
+    /// ansible rejects is a template that fails at render, and it is the one shape where this
+    /// port must refuse a source a bare jinja2 `Environment` parses happily.
     #[test]
     fn references_match_jinja2_meta_across_the_corpus() {
         let corpus = include_str!("template_corpus.jsonl");
-        let (mut compared, mut literal, mut dynamic) = (0, 0, 0);
+        let (mut compared, mut literal, mut dynamic, mut headers) = (0, 0, 0, 0);
 
         for line in corpus.lines().filter(|l| !l.trim().is_empty()) {
             let row: Value = serde_json::from_str(line).expect("corpus line parses");
             let src = row["src"].as_str().expect("every row has a source");
+
+            if let Some(want_msg) = row["header_err"].as_str() {
+                let e = references(src, &Delimiters::default())
+                    .expect_err("ansible refuses this header, so we must too");
+                assert_eq!(e.msg, want_msg, "{src:?}");
+                headers += 1;
+                continue;
+            }
+
             let Some(want) = row["refs"].as_array() else { continue };
 
             let theirs: Vec<String> =
@@ -842,6 +858,7 @@ mod tests {
         assert!(compared > 30, "only {compared} templates compared");
         assert!(literal > 5, "only {literal} literal references — the oracle found nothing");
         assert!(dynamic > 0, "no dynamic names in the corpus, so silence is untested");
+        assert!(headers > 0, "no rejected headers in the corpus, so that branch is untested");
     }
 
     /// The same against the pinned trees, env-gated in the T-184 shape.
@@ -851,11 +868,33 @@ mod tests {
         let Ok(path) = std::env::var("JINJA_TEMPLATE_CORPUS") else { return };
         let text = std::fs::read_to_string(&path).expect("corpus is readable");
         let (mut compared, mut literal, mut dynamic, mut unrendered) = (0, 0, 0, 0);
+        let mut headers = 0;
         let mut differed = Vec::new();
 
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             let row: Value = serde_json::from_str(line).expect("corpus line parses");
             let src = row["src"].as_str().expect("every row has a source");
+
+            // A header ansible refuses: our refusal is the right answer, and comparing it
+            // against `find_referenced_templates` — which cannot see the header — is what
+            // reported this gate red for four commits over `override_separator.j2`.
+            if let Some(want_msg) = row["header_err"].as_str() {
+                headers += 1;
+                match references(src, &Delimiters::default()) {
+                    Ok(r) => differed.push(format!(
+                        "ACCEPTED {:?} :: ansible refuses it ({want_msg}), we found {r:?}",
+                        &src[..src.len().min(90)]
+                    )),
+                    Err(e) if e.msg != want_msg => differed.push(format!(
+                        "{:?}\n     ours={:?}\n  ansible={want_msg:?}",
+                        &src[..src.len().min(90)],
+                        e.msg
+                    )),
+                    Err(_) => {}
+                }
+                continue;
+            }
+
             let Some(want) = row["refs"].as_array() else { continue };
             let theirs: Vec<String> =
                 want.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
@@ -887,7 +926,7 @@ mod tests {
         }
         println!(
             "templates={compared} literal={literal} dynamic={dynamic} \
-             falsely-refused={unrendered} differed={}",
+             headers={headers} falsely-refused={unrendered} differed={}",
             differed.len()
         );
         for d in differed.iter().take(25) {

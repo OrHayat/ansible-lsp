@@ -715,6 +715,74 @@ down. Deleted, and the tests repointed at `template_diagnostics_at`, the entry t
   constantly pays the full walk often. A precise invalidation needs the inbound edges [[T-020]]
   builds and the watcher [[T-012]] provides; revisit when either lands.
 
+## Progress: the corpus gate was red for four commits, because its oracle cannot see the header
+
+`references_corpus_gate` is the last box's evidence and **nobody re-ran it after the
+`#jinja2:` header reader landed.** Re-measured over the eight pinned trees, same corpus file
+throughout:
+
+| commit    |                          | templates | falsely-refused | differed |       |
+| --------- | ------------------------ | --------: | --------------: | -------: | ----- |
+| `6bf9768` | gate written             |      1553 |               0 |        0 | green |
+| `5cf9ec9` | `#jinja2:` header reader |      1552 |               1 |        1 | red   |
+| `905d53a` | HEAD before this         |      1552 |               1 |        1 | red   |
+
+The row is `ansible/test/integration/targets/template/templates/override_separator.j2`, whose
+whole content is `#jinja2: lstrip_blocks=True\n`. **Our refusal was the right answer.** Measured
+on ansible-core 2.21.3, with a well-formed header as the control that renders:
+
+```
+Syntax error in template: Missing key-value separator `:` in '#jinja2:' override pair ' lstrip_blocks=True'.
+```
+
+Our message character for character, and upstream's own `main.yml:749` asserts
+`'Missing key-value separator' in ansible_failed_result.msg` — the file is a negative fixture.
+`jinja2.meta.find_referenced_templates` is what cannot see it: the oracle was blind, not the
+port. That is the same limitation already recorded for the demo's `overridden.conf.j2`, never
+carried into the corpus gate.
+
+### The oracle is ansible's own reader now, not a second implementation of it
+
+`scripts/jinja_blocks.py` calls `TemplateOverrides._extract_template_overrides` and records
+what it refuses in a `header_err` column; a valid header builds the `Environment` it names and
+`find_referenced_templates` runs on the stripped body. An oracle that reimplements the thing
+under test can be wrong in the same direction as the port and still agree, which is why the
+import is worth needing the ansible interpreter — it ships the same jinja2 3.1.6 the rest of
+the corpus is pinned to.
+
+`parse_err` and `blocks` stay header-blind on purpose: `template.rs` pairs them with `blocks`,
+the raw splitter, and `document` is the header-aware reader. Proven rather than asserted — of
+the 62 rows shared with the old corpus, the only four that changed are demo header templates,
+each from a vacuous answer to the right one (`overridden.conf.j2` now yields
+`partials/header.j2`, `line_statements.conf.j2` yields `partials/plain.j2`).
+
+### The gate agreed about headers by having nothing to compare
+
+All eight header-bearing files in the pinned trees name **zero** templates between them, so the
+seven well-formed ones passed vacuously and only the malformed one ever spoke. Nine adversarial
+rows now carry the path — an overridden `block_start_string` whose tag a header-blind reader
+cannot see, a header below line one that is therefore inert, an overridden *variable* pair that
+must leave block tags alone, a line-statement include, and all five refusal spellings, each
+carrying an include it never reaches.
+
+After: `templates=1556 literal=57 dynamic=1 headers=6 falsely-refused=0 differed=0`, and the
+block-split gate stays green at `templates=1567 refused=5 differed=0`.
+
+**Run the gate against `~/app/ansible` as well as the eight public trees.** The public corpus
+was green while that one reported `falsely-refused=2` — [[T-216]], a `{%` inside a `{% raw %}`
+body read as a tag, which no public tree contains. It runs the other way too: that tree has
+**zero** `#jinja2:` headers, so it exercises none of the work above. Neither corpus subsumes
+the other and the gate is worth only as much as the last tree it was pointed at.
+
+Seen red: pointing `references` at `references_in(.., false)` — the header-blind reading the
+gate could not previously detect — gives **8 differences**, `override_separator.j2` among them.
+
+Two things the re-run turned up on its own. The committed corpus was **stale**: 44 rows
+generated before `demo/` grew, and the documented command now yields 71, losing none. And the
+committed test skipped our refusals with `let Ok(ours) = .. else { continue }`, so a false
+"will not render" on a template jinja2 parses was unobservable there; header rows are now
+asserted rather than skipped, with a count that must be non-zero.
+
 ## Done when
 
 - [x] literal `{% include/import/from/extends %}` targets resolve inside `.j2` files
