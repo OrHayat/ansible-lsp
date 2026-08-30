@@ -8151,6 +8151,37 @@ mod tests {
         assert!(!flagged.contains(&good), "a template that renders was flagged anyway");
     }
 
+    /// A false "will not render" on two real templates in `~/app/ansible`, which wrap a script
+    /// body in `{% raw %}` and print a `{%s}` format inside it. jinja2 renders both; we put a
+    /// `template-syntax` ERROR on them. Asserted through `did_open` because the surface that
+    /// matters is the squiggle, not the reader's return value.
+    #[tokio::test]
+    async fn a_stray_open_inside_a_raw_body_is_text_not_an_unterminated_raw() {
+        use tower_lsp::LanguageServer;
+        let body = "{% raw %}\nplain {%s} text\n{% endraw %}\n";
+        let root = ansible_core::testing::project(
+            "j2-raw-probe",
+            "[defaults]\n",
+            &[("templates/raw.j2", body)],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let uri = tower_lsp::lsp_types::Url::from_file_path(root.join("templates/raw.j2")).unwrap();
+        service
+            .inner()
+            .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "jinja".into(),
+                    version: 1,
+                    text: body.to_string(),
+                },
+            })
+            .await;
+        let flagged = state.flagged.lock().unwrap().clone();
+        assert!(!flagged.contains(&uri), "jinja2 renders this, but we flagged it");
+    }
+
     fn lsp_service(state: std::sync::Arc<super::State>) -> tower_lsp::LspService<super::Backend> {
         let (service, _socket) =
             tower_lsp::LspService::new(move |client| super::Backend { client, state });

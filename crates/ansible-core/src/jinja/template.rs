@@ -642,24 +642,49 @@ impl<'a> Scanner<'a> {
             };
             let tag_start = at + rel;
             let open = tag_start + self.d.block_start.len();
-            let Some(close) = self.find_end(open, &self.d.block_end) else {
-                return Err(self.fail("Missing end of raw directive", raw_start));
+            // Upstream's `raw_end` is a literal match for the endraw tag, never a parse:
+            // inside a raw body there is no tag grammar, so a `{%` that opens nothing is
+            // ordinary text. Reading it with `find_end` applied the tag rules — bracket depth
+            // and strings — to data: on `{%s} text{% endraw %}` the `{` of the *real* endraw
+            // takes the depth off zero, so its `%}` never counts as a terminator, `find_end`
+            // came back empty and the raw was refused on the spot. `printf "x{%s}"` inside a
+            // raw body is the shape that does it, common in shell and python templates.
+            let Some(close) = self.raw_end(open) else {
+                at = open;
+                continue;
             };
-            let name = tag_name(Span { start: open, end: close }.slice(self.src));
-            if name == Some("endraw") {
-                self.push_data(body_start, tag_start);
-                // `{%- endraw %}` trims the end of the body, `{% endraw -%}` the start of
-                // whatever follows. Neither tag becomes a block, so the generic pass cannot
-                // reach them and both are applied here.
-                if self.src[open..].starts_with('-') {
-                    self.trim_previous_data();
-                }
-                self.trim_next_data = self.src[..close].ends_with('-');
-                self.i = close + self.d.block_end.len();
-                return Ok(());
+            self.push_data(body_start, tag_start);
+            // `{%- endraw %}` trims the end of the body, `{% endraw -%}` the start of
+            // whatever follows. Neither tag becomes a block, so the generic pass cannot
+            // reach them and both are applied here.
+            if self.src[open..].starts_with('-') {
+                self.trim_previous_data();
             }
-            at = close + self.d.block_end.len();
+            self.trim_next_data = self.src[..close].ends_with('-');
+            self.i = close + self.d.block_end.len();
+            return Ok(());
         }
+    }
+
+    /// Upstream's `raw_end` rule: the block start, an optional `-`/`+`, `endraw`, then the
+    /// block end with an optional `-`. Returns the offset of that closing delimiter, so the
+    /// caller reads both trim markers off the same offsets a parsed tag gave it.
+    fn raw_end(&self, open: usize) -> Option<usize> {
+        let ws = |s: &str| s.len() - s.trim_start().len();
+        let mut i = open;
+        if self.src[i..].starts_with(['-', '+']) {
+            i += 1;
+        }
+        i += ws(&self.src[i..]);
+        if !self.src[i..].starts_with("endraw") {
+            return None;
+        }
+        i += "endraw".len();
+        i += ws(&self.src[i..]);
+        if self.src[i..].starts_with('-') {
+            i += 1;
+        }
+        self.src[i..].starts_with(self.d.block_end.as_str()).then_some(i)
     }
 
     /// The offset of `end` that actually terminates a tag opened at `from`.
@@ -1202,6 +1227,31 @@ body
                 (Kind::Data, "  c".into()),
             ]
         );
+    }
+
+    /// A `{%` inside a raw body opens nothing — upstream's `raw_end` is a literal match for
+    /// the endraw tag, so everything until one is data. Found on `~/app/ansible`, where two
+    /// templates wrap a script in `{% raw %}` and print a `{%s}` format inside it: reading
+    /// that `{%` as a tag consumed the real `{% endraw %}` and called the raw unterminated.
+    /// jinja2 3.1.6 lexes both of these as one `data` run between raw_begin and raw_end.
+    #[test]
+    fn a_stray_block_open_inside_a_raw_body_is_data() {
+        assert_eq!(
+            split("{% raw %}plain {%s} text{% endraw %}"),
+            [(Kind::Data, "plain {%s} text".into())]
+        );
+        assert_eq!(
+            split(r#"{% raw %}printf "x{%s} %.0f\n", s["k"]{% endraw %}"#),
+            [(Kind::Data, r#"printf "x{%s} %.0f\n", s["k"]"#.into())]
+        );
+        // The control, and the half that keeps the fix honest: with no endraw anywhere the
+        // raw is still unterminated, so this did not become "accept every raw".
+        assert_eq!(err("{% raw %}plain {%s} text").msg, "Missing end of raw directive");
+        // And the trim markers still reach the data on both sides of a real endraw, which is
+        // what the rewritten matcher reads off the same offsets a parsed tag gave it.
+        assert_eq!(split("a {% raw %} {%s} {%- endraw %} b")[0].1, "a ");
+        assert_eq!(split("a {% raw %} {%s} {%- endraw %} b")[1].1, " {%s}");
+        assert_eq!(split("a {% raw %} {%s} {% endraw -%} b")[2].1, "b");
     }
 
     /// The markers belong to the delimiter, not to the tag body — upstream keeps them in its

@@ -323,6 +323,7 @@ T-021 is now unblocked on that side.
 | T-188 | [Parse Jinja expressions into a tree instead of matching them as strings](closed/T-188-parse-jinja-expressions-into-a-tree-instead-of-matching-them.md) | done     |
 | T-187 | **bug** · [Conditions without spaces around their operators never classify](closed/T-187-conditions-without-spaces-around-their-operators-never-class.md) | done     |
 | T-211 | **bug** · [The default filter's short and FQCN spellings never classify](closed/T-211-the-default-filter-s-short-and-fqcn-spellings-never-classify.md) | done     |
+| T-216 | **bug** · [A stray {% inside a raw body is read as a tag, so a template that renders is flagged unterminated](closed/T-216-a-stray-inside-a-raw-body-is-read-as-a-tag-so-a-template-tha.md) | done     |
 
 ## Settled — don't re-derive these
 
