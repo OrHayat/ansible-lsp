@@ -3154,6 +3154,22 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: Default::default(),
                 }),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: SEMANTIC_TOKEN_LEGEND.to_vec(),
+                                token_modifiers: vec![],
+                            },
+                            // Full-document only: a template is a few KB and the whole file
+                            // re-tokenises in well under a frame, so `range` and delta
+                            // requests would be machinery with nothing to buy.
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: Some(false),
+                            work_done_progress_options: Default::default(),
+                        },
+                    ),
+                ),
                 ..Default::default()
             },
         })
@@ -3338,6 +3354,36 @@ impl LanguageServer for Backend {
         )
     }
 
+    /// Jinja syntax colouring, decided by the parser rather than by the client's grammar.
+    ///
+    /// The client ships a TextMate grammar that paints the same shapes and is wrong where a
+    /// regex cannot reach: it hardcodes `{%`, so a template whose `#jinja2:` header renames
+    /// the delimiters gets its real tags missed and a literal `{%` painted as a tag. These
+    /// tokens are read with the delimiters the file actually renders with — including ones
+    /// inherited from the `template:` task, which no standalone grammar of any kind can see.
+    ///
+    /// Templates only for now. The `{{ … }}` inside a YAML scalar is the larger surface and
+    /// is next; it needs the spans `references` already extracts, not new analysis.
+    async fn semantic_tokens_full(
+        &self,
+        p: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = &p.text_document.uri;
+        let (Some(text), Ok(path)) = (self.state.text_of(uri), uri.to_file_path()) else {
+            return Ok(None);
+        };
+        if !Self::is_template_file(&path) {
+            return Ok(None);
+        }
+        let ctx = FileContext::discover(&path);
+        let root = self.state.roots.lock().ok().and_then(|r| r.first().cloned());
+        let (d, is_root) = Self::template_grammar_cached(&self.state, &path, root.as_deref(), &ctx);
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: Self::semantic_tokens_of(&text, &d, is_root),
+        })))
+    }
+
     /// Every resolvable reference. The client also paints these, so what's clickable is
     /// visible without hovering.
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
@@ -3348,7 +3394,91 @@ impl LanguageServer for Backend {
     }
 }
 
+/// The token types this server sends, in the order the protocol indexes them: a
+/// `SemanticToken.token_type` is a **position in this array**, not a name, so appending is
+/// safe and reordering silently recolours everything.
+///
+/// Standard LSP names only. A client that has never heard of Ansible already has theme rules
+/// for these, which is the whole reason to serve tokens rather than paint decorations —
+/// see [`crate::LanguageServer::semantic_tokens_full`].
+///
+/// T-126 wants to colour *resolvable* references from the same provider, and a server has
+/// exactly one legend. Its distinction is "does this resolve", which is a property of a
+/// token rather than a kind of token, so it belongs in `token_modifiers` (still empty here)
+/// and needs nothing moved in this list.
+const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::VARIABLE,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::STRING,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::OPERATOR,
+];
+
+/// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
+fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
+    use ansible_core::jinja::TokenType as T;
+    match ty {
+        T::Comment => 0,
+        T::Keyword => 1,
+        T::Variable => 2,
+        T::Function => 3,
+        T::String => 4,
+        T::Number => 5,
+        T::Operator => 6,
+    }
+}
+
 impl Backend {
+    /// Semantic tokens for a Jinja source, encoded the way the protocol wants them.
+    ///
+    /// Split out from the handler so a test asserts what the editor receives — the same
+    /// reason `document_links_of` exists, and the lesson T-171 taught.
+    ///
+    /// Two encoding rules that are easy to get wrong and silent when you do:
+    /// - every field is a **delta** from the previous token, and the column delta resets to
+    ///   an absolute column whenever the line advances;
+    /// - **a token may not span lines.** A `{# … #}` comment routinely does, so one is split
+    ///   into a per-line run rather than emitted whole. An over-long token is not rejected by
+    ///   the client, it just paints to the end of the line and drops the rest of the file's
+    ///   alignment.
+    fn semantic_tokens_of(text: &str, d: &jinja::Delimiters, root: bool) -> Vec<SemanticToken> {
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let mut out = Vec::new();
+        let (mut last_line, mut last_col) = (0u32, 0u32);
+
+        for t in ansible_core::jinja::semantic_tokens(text, d, root) {
+            let ty = legend_index(t.ty);
+            let (l0, c0) = doc.byte_to_lsp(t.span.start);
+            let (l1, _) = doc.byte_to_lsp(t.span.end);
+            for line in l0..=l1 {
+                // The slice of this token that falls on `line`, in UTF-16 columns.
+                let start = if line == l0 { c0 } else { 0 };
+                let end = if line == l1 {
+                    doc.byte_to_lsp(t.span.end).1
+                } else {
+                    let nl = doc.lsp_to_byte(line + 1, 0);
+                    doc.byte_to_lsp(nl.saturating_sub(1)).1
+                };
+                if end <= start {
+                    continue;
+                }
+                let delta_line = line - last_line;
+                let delta_start = if delta_line == 0 { start - last_col } else { start };
+                out.push(SemanticToken {
+                    delta_line,
+                    delta_start,
+                    length: end - start,
+                    token_type: ty,
+                    token_modifiers_bitset: 0,
+                });
+                (last_line, last_col) = (line, start);
+            }
+        }
+        out
+    }
+
     /// The body of [`LanguageServer::document_link`], split out so a test covers what the
     /// editor actually receives rather than one ingredient of it.
     ///
@@ -8180,6 +8310,95 @@ mod tests {
             .await;
         let flagged = state.flagged.lock().unwrap().clone();
         assert!(!flagged.contains(&uri), "jinja2 renders this, but we flagged it");
+    }
+
+    /// Decode the wire format back to absolute `(line, col, len, type-name)`, because the
+    /// encoding is deltas and an assertion against raw deltas is unreadable — and would pass
+    /// just as happily on a wrong absolute position reached by two cancelling mistakes.
+    fn decoded(text: &str) -> Vec<(u32, u32, u32, &'static str)> {
+        let d = ansible_core::jinja::Delimiters::default();
+        let (mut line, mut col) = (0u32, 0u32);
+        super::Backend::semantic_tokens_of(text, &d, true)
+            .into_iter()
+            .map(|t| {
+                line += t.delta_line;
+                col = if t.delta_line == 0 { col + t.delta_start } else { t.delta_start };
+                let name = super::SEMANTIC_TOKEN_LEGEND[t.token_type as usize].as_str();
+                (line, col, t.length, name)
+            })
+            .collect()
+    }
+
+    /// The encoding is deltas against the previous token, and the column delta is absolute
+    /// again whenever the line advances. Getting that reset wrong shifts every token after
+    /// the first newline and nothing errors.
+    #[test]
+    fn tokens_encode_as_deltas_that_decode_back_to_the_right_places() {
+        let got = decoded("{{ a }}\n{{ bb }}\n");
+        assert_eq!(got, [(0, 3, 1, "variable"), (1, 3, 2, "variable")], "{got:?}");
+        // Two on one line: the second is a delta from the first, not from the line start.
+        let same = decoded("{{ a }}{{ bb }}");
+        assert_eq!(same, [(0, 3, 1, "variable"), (0, 10, 2, "variable")], "{same:?}");
+    }
+
+    /// A token may not span lines, and a `{# … #}` comment routinely does. Split per line, or
+    /// the client paints to the end of the first line and silently drops the rest.
+    #[test]
+    fn a_multiline_comment_is_split_into_one_token_per_line() {
+        let got = decoded("{# one\ntwo\nthree #}");
+        assert_eq!(got.len(), 3, "a comment over 3 lines must be 3 tokens: {got:?}");
+        assert!(got.iter().all(|t| t.3 == "comment"), "{got:?}");
+        assert_eq!(got.iter().map(|t| t.0).collect::<Vec<_>>(), [0, 1, 2], "{got:?}");
+    }
+
+    /// The case the client's grammar gets exactly backwards, asserted here at the wire so it
+    /// is the editor's answer and not just the reader's — the tokens move to the real tags.
+    #[test]
+    fn an_overridden_delimiter_is_answered_from_the_header_not_the_default_pair() {
+        let src = "#jinja2: block_start_string:'<%', block_end_string:'%>'\n<% if x %>\nand {% no %}\n";
+        let got = decoded(src);
+        assert!(got.iter().any(|t| t.3 == "keyword"), "no tag found at all: {got:?}");
+        // Line 2 is literal text under this header, so nothing on it is a token.
+        assert!(!got.iter().any(|t| t.0 == 2), "painted the literal braces: {got:?}");
+    }
+
+    /// Templates only. A playbook is the next surface and must not be half-served meanwhile,
+    /// which would paint YAML with Jinja's legend.
+    #[tokio::test]
+    async fn semantic_tokens_are_served_for_a_template_and_declined_for_a_playbook() {
+        use tower_lsp::LanguageServer;
+        let root = ansible_core::testing::project(
+            "j2-tokens",
+            "[defaults]\n",
+            &[("templates/t.j2", "{{ a | b }}\n"), ("play.yml", "- hosts: all\n")],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        for (rel, want_some) in [("templates/t.j2", true), ("play.yml", false)] {
+            let uri = tower_lsp::lsp_types::Url::from_file_path(root.join(rel)).unwrap();
+            let text = std::fs::read_to_string(root.join(rel)).unwrap();
+            service
+                .inner()
+                .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentItem {
+                        uri: uri.clone(),
+                        language_id: "jinja".into(),
+                        version: 1,
+                        text,
+                    },
+                })
+                .await;
+            let got = service
+                .inner()
+                .semantic_tokens_full(tower_lsp::lsp_types::SemanticTokensParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(got.is_some(), want_some, "{rel}");
+        }
     }
 
     fn lsp_service(state: std::sync::Arc<super::State>) -> tower_lsp::LspService<super::Backend> {
