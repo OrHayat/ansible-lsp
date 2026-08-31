@@ -1034,6 +1034,27 @@ impl Backend {
     /// Not the call sites' delimiters alone: a partial that no task names inherits its
     /// includer's, and its own header is inert. Measured — see
     /// [`resolve::effective_delimiters`].
+    /// [`template_grammar_cached`](Self::template_grammar_cached) without the compute — the
+    /// memoized answer or `None`.
+    ///
+    /// Exists because that function walks every YAML file and every template on a miss, which
+    /// is fine for a diagnostic the user waits on and wrong for colouring: measured at ~10s on
+    /// the demo, during which a reloaded window shows plain text. A caller that can answer
+    /// usefully without the grammar asks with this and refreshes when the map lands.
+    fn template_grammar_if_cached(
+        state: &State,
+        path: &Path,
+        root: Option<&Path>,
+        ctx: &FileContext,
+    ) -> Option<(jinja::Delimiters, bool)> {
+        let r = root.map(Path::to_path_buf).or_else(|| ctx.project_root.clone())?;
+        let map = state.template_grammars.lock().ok()?.get(&canon(&r)).cloned()?;
+        Some(match map.get(&canon(path)) {
+            Some(g) => (g.delimiters.clone(), g.root),
+            None => (jinja::Delimiters::default(), true),
+        })
+    }
+
     fn template_grammar_cached(
         state: &State,
         path: &Path,
@@ -3270,7 +3291,14 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         if let Ok(path) = uri.to_file_path() {
             invalidate_var_cache(&self.state.var_cache, &path);
-            invalidate_render_sites(&self.state, &path);
+            // **Not** `invalidate_render_sites`. Opening a file changes nothing: the buffer
+            // that arrives here is what is already on disk, and both caches are derived from
+            // disk. Clearing them threw away a walk of every YAML file and every template,
+            // which `publish_diagnostics` below then rebuilt inline — once per tab. Measured
+            // in the editor: a reloaded window with six templates open showed plain text for
+            // 10-15s, and the colours only landed after the last rebuild. An edit still
+            // invalidates, in `did_change` and `did_save`, which is where a file's content
+            // actually changes.
         }
         if let Ok(mut d) = self.state.docs.lock() {
             d.insert(uri.clone(), p.text_document.text);
@@ -3377,7 +3405,21 @@ impl LanguageServer for Backend {
         }
         let ctx = FileContext::discover(&path);
         let root = self.state.roots.lock().ok().and_then(|r| r.first().cloned());
-        let (d, is_root) = Self::template_grammar_cached(&self.state, &path, root.as_deref(), &ctx);
+        // Answer now, refine later. The grammar map costs a walk of every YAML file and every
+        // template, and blocking on it left a reloaded window plain for ~10s — so a cold cache
+        // is answered with the default delimiters and a refresh is requested once the real map
+        // is built. Being briefly wrong about an overridden delimiter is the same answer the
+        // client's grammar gives anyway; being blank for ten seconds is not.
+        let cached = Self::template_grammar_if_cached(&self.state, &path, root.as_deref(), &ctx);
+        let (d, is_root) = cached.clone().unwrap_or((jinja::Delimiters::default(), true));
+        if cached.is_none() {
+            let (state, client) = (self.state.clone(), self.client.clone());
+            tokio::spawn(async move {
+                let ctx = FileContext::discover(&path);
+                Self::template_grammar_cached(&state, &path, root.as_deref(), &ctx);
+                let _ = client.semantic_tokens_refresh().await;
+            });
+        }
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: Self::semantic_tokens_of(&text, &d, is_root),
@@ -8360,6 +8402,98 @@ mod tests {
         assert!(got.iter().any(|t| t.3 == "keyword"), "no tag found at all: {got:?}");
         // Line 2 is literal text under this header, so nothing on it is a token.
         assert!(!got.iter().any(|t| t.0 == 2), "painted the literal braces: {got:?}");
+    }
+
+    /// A cold grammar cache must not block the answer. Building the map walks every YAML file
+    /// and every template; blocking on it left a reloaded window showing plain text for ~10s,
+    /// which is what the delay looked like in the editor.
+    ///
+    /// The control is the second call: once the map is warm the overridden delimiters are
+    /// honoured, so "answers immediately" did not become "answers wrongly forever".
+    #[tokio::test]
+    async fn a_cold_grammar_cache_answers_at_once_and_the_warm_one_honours_the_header() {
+        use tower_lsp::LanguageServer;
+        // No `#jinja2:` header on purpose: a file that declares its own delimiters is read
+        // from the header and never needs the map. These come from the *task*, which is the
+        // only case the grammar map answers — and the only one a cold cache can get wrong.
+        let src = "<% if x %>\n";
+        let root = ansible_core::testing::project(
+            "j2-cold-cache",
+            "[defaults]\n",
+            &[
+                ("templates/h.j2", src),
+                (
+                    "play.yml",
+                    "- hosts: all\n  tasks:\n    - ansible.builtin.template:\n        \
+                     src: h.j2\n        dest: /tmp/h\n        block_start_string: \"<%\"\n\
+                     \x20       block_end_string: \"%>\"\n",
+                ),
+            ],
+        );
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let uri = tower_lsp::lsp_types::Url::from_file_path(root.join("templates/h.j2")).unwrap();
+        service
+            .inner()
+            .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "jinja".into(),
+                    version: 1,
+                    text: src.to_string(),
+                },
+            })
+            .await;
+        let ask = |u: tower_lsp::lsp_types::Url| {
+            let s = &service;
+            async move {
+                s.inner()
+                    .semantic_tokens_full(tower_lsp::lsp_types::SemanticTokensParams {
+                        text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: u },
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        // Cold on purpose, and cleared *here*: `did_open` publishes diagnostics, and that path
+        // builds the same map, so clearing any earlier is not a cold cache by the time we ask.
+        state.template_grammars.lock().unwrap().clear();
+
+        // Cold: answered from the default delimiters, so `<% if x %>` is NOT read as a tag.
+        // That is the discriminating assertion — the blocking version built the map inline and
+        // would have honoured the header here, so this fails if the answer ever waits again.
+        // A timing assertion could not do this job: on a one-file fixture both versions are
+        // fast, and the probe would pass without being able to fail.
+        let cold = ask(uri.clone()).await;
+        let cold = match cold {
+            Some(tower_lsp::lsp_types::SemanticTokensResult::Tokens(t)) => t.data,
+            other => panic!("a cold cache must still answer: {other:?}"),
+        };
+        let kw = super::SEMANTIC_TOKEN_LEGEND
+            .iter()
+            .position(|t| *t == tower_lsp::lsp_types::SemanticTokenType::KEYWORD);
+        assert!(
+            !cold.iter().any(|t| Some(t.token_type as usize) == kw),
+            "the cold answer waited for the grammar instead of using the defaults: {cold:?}"
+        );
+
+        // Warm: the header is honoured, so answering early did not become answering wrongly.
+        super::Backend::template_grammar_cached(
+            &state,
+            &root.join("templates/h.j2"),
+            Some(&root),
+            &super::FileContext::discover(&root.join("templates/h.j2")),
+        );
+        let warm = match ask(uri).await {
+            Some(tower_lsp::lsp_types::SemanticTokensResult::Tokens(t)) => t.data,
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            warm.iter().any(|t| Some(t.token_type as usize) == kw),
+            "the warm answer did not read the header: {warm:?}"
+        );
     }
 
     /// Templates only. A playbook is the next surface and must not be half-served meanwhile,
