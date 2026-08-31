@@ -766,7 +766,10 @@ must leave block tags alone, a line-statement include, and all five refusal spel
 carrying an include it never reaches.
 
 After: `templates=1556 literal=57 dynamic=1 headers=6 falsely-refused=0 differed=0`, and the
-block-split gate stays green at `templates=1567 refused=5 differed=0`.
+block-split gate stays green at `templates=1567 refused=5 differed=0`. Those counts are against
+the T-184 revisions; with `ansible/ansible` at `8ebd2d6ee8` instead of `b85437b` the same run
+gives 1603 and 1614 with every other column identical, so quote the revision when comparing —
+the file count is the only thing that moves with the tree.
 
 **Run the gate against `~/app/ansible` as well as the eight public trees.** The public corpus
 was green while that one reported `falsely-refused=2` — [[T-216]], a `{%` inside a `{% raw %}`

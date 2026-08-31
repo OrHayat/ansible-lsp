@@ -59,6 +59,27 @@ markers are read off the same offsets a parsed tag gave them.
 Seen red on all three surfaces by restoring the old skip: the lexer test, the `did_open` test,
 and the corpus gate back to `falsely-refused=2`.
 
+## The pinned trees, re-measured
+
+The eight public trees were not on this machine when the last box was ticked. Cloned at their
+pinned revisions and re-run — seven at the exact SHAs T-184 records, `ansible/ansible` at
+`8ebd2d6ee8` rather than `b85437b`, so its file counts run higher:
+
+```
+block-split   templates=1614 refused=5                                       differed=0
+references    templates=1603 literal=57 dynamic=1 headers=6 falsely-refused=0 differed=0
+```
+
+Every column that is not a file count matches what the gate recorded before — `literal=57`,
+`dynamic=1`, `headers=6`, `refused=5`, and both zeros — so the tree revision moves the count
+and nothing else.
+
+The Symptom's "no public tree contains this shape" is measured now rather than assumed: walking
+`raw_begin`/`data`/`raw_end` with jinja2's own lexer over all 1621 rows finds it in **0** tree
+files, against **2** in `~/app/ansible`. The two public-corpus hits are this fix's own
+adversarial rows — which is the control, since a checker that found the shape nowhere would
+report the same zero.
+
 ## Done when
 
 - [x] a `{%` that opens nothing inside a raw body is data, asserted against jinja2 3.1.6's own
