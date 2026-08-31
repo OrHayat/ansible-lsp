@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | M    | T-124 | —          |
+| partly done | task | P2  | M    | T-124 | —          |
 
 ## Problem
 
@@ -62,9 +62,15 @@ so it is **structurally wrong** in three cases this project already gets right:
 
 | case | what a grammar paints | what we know |
 | ---- | --------------------- | ------------ |
-| `{% raw %}printf "x{%s}"{% endraw %}` | `{%s}` as a tag | it is literal data — this is [[T-216]] as colour |
 | `#jinja2: block_start_string:'<%'` | `{%` hardcoded, so wrong in both directions | the header's real delimiters |
 | a header's `line_statement_prefix` | a `#` line is a comment | it is a statement |
+| delimiters from the `template:` call site | the defaults, always | what the render site passes, down the include tree |
+
+**`{% raw %}` is not on that list, and an earlier draft of this ticket had it there.** A
+TextMate `begin`/`end` rule *does* carry state across lines, so a raw body is handled correctly
+by a grammar as long as its rule is ordered first. Measured, not argued — see the Progress
+section. The claim was written from "regexes are stateless", which is true of a `match` rule
+and false of a `begin`/`end` pair.
 
 Delimiters also arrive from the `template:` call site and inherit down the include tree
 (`98b205f`), which no static grammar can follow.
@@ -85,17 +91,81 @@ move to Neovim. It is not this ticket and does not cover Jinja syntax. But both 
 capability to the same server, so the token-type legend, and full-vs-range requests, want
 settling **once** — whichever lands first owns that decision and the other cites it.
 
+
+## Progress: the client half is in (`9b2e727`)
+
+`.j2` opens as **Jinja**, not Plain Text. What shipped:
+
+- `contributes.languages` — id `jinja`, extensions `.j2/.jinja/.jinja2`, which also makes the
+  pre-existing `onLanguage:jinja` activation event real rather than dangling.
+- `client/syntaxes/jinja.tmLanguage.json` — **written here, nothing vendored**, so the licence
+  question the Approach raised does not arise. ~90 lines: the three delimiter shapes, strings,
+  numbers, constants, filter-vs-variable, and the tag keywords `jinja::statement` reads.
+- `client/language-configuration.json` — `{# #}` comment toggling, bracket pairs, auto-close.
+- `client/test/grammar.js`, in `npm test` — 13 assertions, tokenised with `vscode-textmate`,
+  the engine VS Code itself paints with, rather than read off the JSON.
+
+### The three open decisions, settled
+
+- **Language id `jinja`.** Nothing else on the dev machine contributed it — which is *why* the
+  files were grey — so there was no collision to measure.
+- **Written, not vendored.** No third-party licence enters the tree.
+- **Jinja only; the base language is out of scope.** `app.conf.j2`'s conf text stays plain. The
+  alternative is a grammar per base type (`.yml.j2`, `.conf.j2`, …), which is what the large
+  Jinja extensions ship, and the port cannot help with any of it — it knows Jinja, not nginx.
+  A decision, not an oversight.
+
+### Seen red
+
+The `#raw` rule is first in the pattern list, and that ordering is the whole fix. Demoted below
+`#statement`: `{% raw %}` degrades to a generic tag with `raw` scoped as a **variable**, and the
+raw-body assertion fails — while the control (*outside* a raw body the same delimiters *are* a
+tag) stays green. So the test discriminates rather than merely passing.
+
+### Why it reads as "partially" coloured
+
+A grammar assigns **scope names**; the theme owns every colour. Resolved through Dark Modern's
+real inheritance chain (`dark_modern.json` -> `dark_plus` -> `dark_vs`), our scopes land on:
+
+| scope | resolves to | |
+| ----- | ----------- | - |
+| `comment.block` · `keyword.control` · `string.quoted` | `#6A9955` · `#569cd6` · `#ce9178` | painted |
+| `constant.numeric` · `constant.language` · `support.function` | `#b5cea8` · `#569cd6` · `#DCDCAA` | painted |
+| `variable.other` · `punctuation.definition.template-expression` | `#9CDCFE` · `#569cd6` | painted |
+| `punctuation.definition.tag` | `#808080` | dim **by the theme's choice** |
+| `keyword.operator` | `#d4d4d4` | equals the default foreground, so it reads as uncoloured |
+| `meta.*` | nothing | structural by design; never painted by any theme |
+
+So on Dark Modern only operators and the punctuation inside `{{ }}` render as plain text, and
+both are the theme's own convention for those scopes in every language. Using the standard
+prefixes rather than Jinja-specific ones is what makes any third-party theme work with no
+further effort.
+
+## Still to do
+
+- **`textDocument/semanticTokens`** — not started. This is the whole second layer, and the
+  three rows in the Approach table are unreachable without it.
+- **The unverified question stands.** Whether tokens paint on a document with no grammar was
+  never measured — the grammar landing first made it non-blocking for colour, but it still
+  decides whether tokens can ever be the sole layer, which [[T-126]] also needs to know.
+- **Packaging.** The extension only loads under F5. A stale hand-copied build in
+  `~/.vscode/extensions/` was shadowing this and has been removed, so a plain `code .` window
+  now has no extension at all. A `.vsix` build-and-install step is needed for the editor to run
+  this outside the debug host — the same class of trap as rule 6, one level up from the server
+  binary.
+
 ## Done when
 
-- [ ] a `.j2` in `demo/templates/` is coloured with no other Jinja extension installed,
+- [x] a `.j2` in `demo/templates/` is coloured with no other Jinja extension installed,
       verified in a real editor rather than asserted from the manifest
-- [ ] the language id and file extensions are pinned by a test in the `client/test/selector.js`
+- [x] the language id and file extensions are pinned by a test in the `client/test/selector.js`
       shape — the manifest read back and matched against every `.j2` in `demo/`, so a renamed
       extension or a dropped glob is caught without a human opening VS Code
-- [ ] `activationEvents` names only ids this extension actually contributes, or the entry that
+- [x] `activationEvents` names only ids this extension actually contributes, or the entry that
       does not is removed
-- [ ] the licence of any vendored grammar is recorded here, with its source and revision
+- [x] the licence of any vendored grammar is recorded here, with its source and revision
+      — n/a, resolved by writing one instead: nothing vendored, no third-party licence in the tree
 - [ ] whether semantic tokens need a base grammar is **measured**, and the answer written into
       the Approach above in place of the open question
-- [ ] a `{%` inside a `{% raw %}` body is not coloured as a tag — the [[T-216]] shape, which is
+- [x] a `{%` inside a `{% raw %}` body is not coloured as a tag — the [[T-216]] shape, which is
       the case that justifies serving tokens at all
