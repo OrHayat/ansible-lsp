@@ -41,6 +41,16 @@
         "path": "./syntaxes/jinja.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "jinja",
+        "scopes": {
+          "delimiter": [
+            "punctuation.definition.tag"
+          ]
+        }
+      }
+    ],
     "commands": [
       {
         "command": "ansibleLsp.restart",

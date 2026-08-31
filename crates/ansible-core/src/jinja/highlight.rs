@@ -25,6 +25,14 @@ pub enum TokenType {
     String,
     Number,
     Operator,
+    /// `{%`, `%}`, `{{`, `}}` — the delimiter itself, whatever it currently is.
+    ///
+    /// Not a standard LSP type, and not decoration: the client's grammar used to paint these
+    /// (`punctuation.definition.tag`, a dimmer grey than ordinary text) and stopped when its
+    /// tag rules were removed, because a grammar cannot know which characters are delimiters.
+    /// The parser can, so it says so — including on a file whose `#jinja2:` header or render
+    /// site renamed them, where the grammar was painting the wrong characters anyway.
+    Delimiter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,12 +64,37 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
         match b.kind {
             template::Kind::Data => {}
             template::Kind::Comment => out.push(SemToken { span: b.span, ty: TokenType::Comment }),
-            template::Kind::Statement => inner_tokens(src, b.inner, true, &mut out),
-            template::Kind::Expression => inner_tokens(src, b.inner, false, &mut out),
+            template::Kind::Statement | template::Kind::Expression => {
+                // `span` covers the delimiters and `inner` only what is between them, so the
+                // two edges are exactly the opening and closing delimiter. Emitting them is
+                // what a grammar used to do from a hardcoded `{%`; here they follow whatever
+                // the file actually renders with.
+                // In source order, and that is load-bearing: the protocol encodes each
+                // token as a delta from the previous one, so an out-of-order push underflows
+                // the column subtraction. Emitting both delimiters before the content did
+                // exactly that, and the encoder panicked rather than mis-painting.
+                delimiter(b.span.start, b.inner.start, &mut out);
+                inner_tokens(src, b.inner, b.kind == template::Kind::Statement, &mut out);
+                delimiter(b.inner.end, b.span.end, &mut out);
+            }
         }
     }
     let _ = delims;
+    debug_assert!(
+        out.windows(2).all(|w| w[0].span.start <= w[1].span.start),
+        "tokens must be in source order — the LSP encoding is deltas and underflows otherwise"
+    );
     out
+}
+
+/// One delimiter — an edge of `span` outside `inner` — if it is not empty.
+///
+/// Skips an empty edge rather than emitting a zero-width token: a client is entitled to treat
+/// `length: 0` as malformed, and there is nothing to paint.
+fn delimiter(start: usize, end: usize, out: &mut Vec<SemToken>) {
+    if end > start {
+        out.push(SemToken { span: Span { start, end }, ty: TokenType::Delimiter });
+    }
 }
 
 /// Classify the contents of one `{% … %}` or `{{ … }}`.
@@ -111,6 +144,38 @@ mod tests {
             .into_iter()
             .map(|t| (t.span.slice(src), t.ty))
             .collect()
+    }
+
+    /// The delimiters themselves get a token.
+    ///
+    /// A regression, and the shape of the miss is worth keeping: when the client's tag rules
+    /// were removed this function was already being handed both spans — `span` covers the
+    /// delimiters, `inner` only the content — and used only `inner`, so `{%` and `%}` stopped
+    /// being painted by anything. Every test written at the time asserted what was *inside* a
+    /// tag, so nothing caught it.
+    #[test]
+    fn the_delimiters_are_tokens_too_not_just_what_is_between_them() {
+        let got = toks("{% if x %}{{ y }}");
+        let delims: Vec<_> =
+            got.iter().filter(|(_, ty)| *ty == TokenType::Delimiter).map(|(t, _)| *t).collect();
+        assert_eq!(delims, ["{%", "%}", "{{", "}}"], "{got:?}");
+        // Still no zero-width tokens, which a client may treat as malformed.
+        assert!(
+            tokens("{%%}", &Delimiters::default(), true).iter().all(|t| t.span.end > t.span.start)
+        );
+    }
+
+    /// And they follow the file's real delimiters, which is the half a grammar cannot do:
+    /// under this header the tokens belong to `<%`/`%>`, and the literal `{%` gets none.
+    #[test]
+    fn the_delimiter_tokens_follow_an_overridden_pair() {
+        let src = "#jinja2: block_start_string:'<%', block_end_string:'%>'\n<% if x %>\nand {% no %}\n";
+        let got = toks(src);
+        let delims: Vec<_> =
+            got.iter().filter(|(_, ty)| *ty == TokenType::Delimiter).map(|(t, _)| *t).collect();
+        assert!(delims.contains(&"<%"), "{delims:?}");
+        assert!(delims.contains(&"%>"), "{delims:?}");
+        assert!(!delims.contains(&"{%"), "painted a literal brace as a delimiter: {delims:?}");
     }
 
     /// The case the client's TextMate grammar gets exactly backwards, and the reason this

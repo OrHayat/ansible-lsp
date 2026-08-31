@@ -3456,6 +3456,11 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     SemanticTokenType::STRING,
     SemanticTokenType::NUMBER,
     SemanticTokenType::OPERATOR,
+    // Not standard. The client maps it to `punctuation.definition.tag` through
+    // `contributes.semanticTokenScopes`, which is the scope its grammar used to paint these
+    // with — so the delimiters keep the dimmer grey they had before the tag rules were
+    // removed, and now do so on a file whose delimiters are not the default pair.
+    SemanticTokenType::new("delimiter"),
 ];
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
@@ -3469,6 +3474,7 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::String => 4,
         T::Number => 5,
         T::Operator => 6,
+        T::Delimiter => 7,
     }
 }
 
@@ -8377,10 +8383,33 @@ mod tests {
     #[test]
     fn tokens_encode_as_deltas_that_decode_back_to_the_right_places() {
         let got = decoded("{{ a }}\n{{ bb }}\n");
-        assert_eq!(got, [(0, 3, 1, "variable"), (1, 3, 2, "variable")], "{got:?}");
-        // Two on one line: the second is a delta from the first, not from the line start.
+        assert_eq!(
+            got,
+            [
+                (0, 0, 2, "delimiter"),
+                (0, 3, 1, "variable"),
+                (0, 5, 2, "delimiter"),
+                // The line advanced, so this column is absolute again rather than a delta.
+                (1, 0, 2, "delimiter"),
+                (1, 3, 2, "variable"),
+                (1, 6, 2, "delimiter"),
+            ],
+            "{got:?}"
+        );
+        // Two on one line: each is a delta from the previous, not from the line start.
         let same = decoded("{{ a }}{{ bb }}");
-        assert_eq!(same, [(0, 3, 1, "variable"), (0, 10, 2, "variable")], "{same:?}");
+        assert_eq!(
+            same,
+            [
+                (0, 0, 2, "delimiter"),
+                (0, 3, 1, "variable"),
+                (0, 5, 2, "delimiter"),
+                (0, 7, 2, "delimiter"),
+                (0, 10, 2, "variable"),
+                (0, 13, 2, "delimiter"),
+            ],
+            "{same:?}"
+        );
     }
 
     /// A token may not span lines, and a `{# … #}` comment routinely does. Split per line, or
