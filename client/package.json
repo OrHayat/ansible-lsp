@@ -9,7 +9,7 @@
   },
   "main": "./src/extension.js",
   "scripts": {
-    "test": "node test/webview.js && node test/selector.js"
+    "test": "node test/webview.js && node test/selector.js && node test/grammar.js"
   },
   "activationEvents": [
     "onLanguage:ansible",
@@ -18,6 +18,29 @@
     "workspaceContains:**/*.j2"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "jinja",
+        "aliases": [
+          "Jinja",
+          "Jinja2",
+          "jinja2"
+        ],
+        "extensions": [
+          ".j2",
+          ".jinja",
+          ".jinja2"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jinja",
+        "scopeName": "source.jinja",
+        "path": "./syntaxes/jinja.tmLanguage.json"
+      }
+    ],
     "commands": [
       {
         "command": "ansibleLsp.restart",
@@ -55,7 +78,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "The inventory you run with, standing in for `-i` — which the editor cannot see. Paths are relative to the workspace folder; a directory reads every file in it, as ansible does. Leave empty to follow ANSIBLE_INVENTORY, then ansible.cfg's `inventory =`, then /etc/ansible/hosts, exactly as a plain `ansible-playbook` would. Set it when you habitually pass -i, since a different inventory can give the same variable a different value."
+          "description": "The inventory you run with, standing in for `-i` \u2014 which the editor cannot see. Paths are relative to the workspace folder; a directory reads every file in it, as ansible does. Leave empty to follow ANSIBLE_INVENTORY, then ansible.cfg's `inventory =`, then /etc/ansible/hosts, exactly as a plain `ansible-playbook` would. Set it when you habitually pass -i, since a different inventory can give the same variable a different value."
         },
         "ansibleLsp.serverPath": {
           "type": "string",
@@ -82,5 +105,9 @@
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }
