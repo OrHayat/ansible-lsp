@@ -166,8 +166,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
 | T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](open/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | S    | —    |
-| T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](open/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | M    | —    |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
+| T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](open/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

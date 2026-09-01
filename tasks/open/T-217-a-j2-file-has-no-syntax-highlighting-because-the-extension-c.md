@@ -205,13 +205,57 @@ Recorded because the wrong lesson is available here: the probes said 291ms and t
 15s, and the gap was neither the server nor the client. Ask for the log, and ask what the screen
 is actually doing, before theorising about the code.
 
-## Still to do
+## Progress: YAML scalars are painted too
 
-- **Jinja inside a YAML scalar.** `name: "{{ app_name }}"` in a playbook is still one flat
-  string — the larger surface, since most Jinja anyone writes lives in YAML rather than in a
-  `.j2`. The machinery is deliberately span-based and delimiter-parameterised for exactly this;
-  it needs the spans `references` already extracts, and a decision on bare `when:` expressions,
-  which are Jinja with no delimiters to anchor a token to.
+`name: "{{ app_name }}"` in a playbook now colours. The handler serves `.yml`/`.yaml` as well
+as the three template extensions; anything else still gets `None`, so a `.md` full of braces is
+not painted with Jinja's legend. `Backend::yaml_scalar_tokens` walks the tree and runs the same
+`jinja::highlight` builder per scalar — which is what it was made span-based and
+delimiter-parameterised for. `root: false` throughout: a scalar cannot carry a `#jinja2:`
+header, so its delimiters come from the file's render site and never from itself.
+
+### The offsets are guarded by an identity, not by a list of scalar styles
+
+A scalar's value is only sometimes its source text. Measured before anything was built:
+
+| written | `value` | source slice | 1:1? |
+| ------- | ------- | ------------ | ---- |
+| `plain {{ a }}` | `plain {{ a }}` | same | yes |
+| `"dq {{ b }}"` | `dq {{ b }}` | same — the span excludes the quotes | yes |
+| `'sq {{ c }}'` | `sq {{ c }}` | same | yes |
+| `>` folded | `folded {{ d }}\n` | `>\n    folded {{ d }}\n` | **no** |
+| `\|` literal | `literal {{ e }}\n` | `\|\n    literal {{ e }}\n` | **no** |
+
+So `span.start + offset` is valid for the first three and garbage for the last two — the
+indicator and the block indent are stripped from the value, and an escape shortens it. Rather
+than enumerate styles, the walker requires the identity that makes the arithmetic valid:
+`text[span] == value`, or it paints nothing.
+
+Seen red, and the failure is the argument for the guard. With it removed, the block-scalar
+fixture paints a `delimiter` on the `\|` indicator itself and a `variable` at column 1 of the
+next line:
+
+```
+(3, 7, 1, "delimiter"), (4, 1, 7, "variable"), (4, 9, 2, "delimiter")
+```
+
+Note this same `base + offset` assumption is what `vars::uses` makes (`vars.rs:308`), so
+variable spans inside a block scalar are likely off in hover and go-to-definition too. Not
+touched here — a separate finding, and it wants its own measurement of which consumers show it.
+
+### `when:` is read as an expression, not as a template
+
+The decision this section asked for. A bare `when: flag is defined` has no `{{ }}`, so reading
+it as a template paints nothing at all. Ansible wraps a `when:` in `{{ }}` itself before
+evaluating, which is why `vars::uses` already treats one as an expression — `jinja::highlight`
+grows `expression_tokens` and the walker uses it under a `when:` key, so both readers answer
+from one rule about what a `when:` *is*. Verified: `flag` comes out a variable, `is`/`defined`
+keywords.
+
+Checked end to end against `demo/tasks/main.yml` — 27 tokens, each one slicing back out of its
+own line as exactly the text the token claims.
+
+## Still to do
 - **Richer token types.** The parser resolves more than is being said: a `{% for h in ... %}`
   binding versus a lookup, `h.name` as a property, an `{% import … as m %}` namespace, a
   `{% macro %}` definition. All standard LSP types, all already in the AST.

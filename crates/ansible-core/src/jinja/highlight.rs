@@ -107,6 +107,21 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
     out
 }
 
+/// Tokens for a **bare** Jinja expression — a `when:` clause, where the whole scalar is the
+/// expression and there are no delimiters to anchor to.
+///
+/// Ansible wraps a `when:` in `{{ }}` itself before evaluating, which is why
+/// [`crate::vars::uses`] already reads one as an expression rather than as literal text with
+/// `{{ }}` islands. Painting it the same way keeps one rule for what a `when:` *is*; treating
+/// it as a template would paint nothing at all, since there is no `{{` in `foo is defined`.
+///
+/// `is_statement` is false: the first name in a `when:` is a variable, not a tag keyword.
+pub fn expression_tokens(src: &str) -> Vec<SemToken> {
+    let mut out = Vec::new();
+    inner_tokens(src, Span { start: 0, end: src.len() }, false, &mut out);
+    out
+}
+
 /// Repaint the `{# … #}` runs inside one data block.
 ///
 /// These are literal output on this template — the real comment delimiter is something else —

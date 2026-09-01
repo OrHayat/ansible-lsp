@@ -22,5 +22,5 @@ pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
 pub use lexer::{Cause, Error};
 pub use parser::parse;
 pub use statement::{references, references_in, will_not_render, will_not_render_in, RefTag, Reference, Stmt};
-pub use highlight::{tokens as semantic_tokens, SemToken, TokenType};
+pub use highlight::{expression_tokens, tokens as semantic_tokens, SemToken, TokenType};
 pub use template::{blocks, document, document_in, header, Block, Delimiters, Header, Kind};

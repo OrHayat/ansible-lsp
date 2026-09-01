@@ -3414,7 +3414,14 @@ impl LanguageServer for Backend {
         let (Some(text), Ok(path)) = (self.state.text_of(uri), uri.to_file_path()) else {
             return Ok(None);
         };
-        if !Self::is_template_file(&path) {
+        // A `.j2` is one template; a YAML file is many small ones, one per scalar. Anything
+        // else (a `.cfg`, a `.md`) gets nothing rather than a guess.
+        let is_template = Self::is_template_file(&path);
+        let is_yaml = matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("yml" | "yaml")
+        );
+        if !is_template && !is_yaml {
             return Ok(None);
         }
         let ctx = FileContext::discover(&path);
@@ -3436,7 +3443,13 @@ impl LanguageServer for Backend {
         }
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
-            data: Self::semantic_tokens_of(&text, &d, is_root),
+            data: if is_template {
+                Self::semantic_tokens_of(&text, &d, is_root)
+            } else {
+                // No `is_root` for YAML: a scalar cannot carry a `#jinja2:` header, so the
+                // grammar that applies is the file's render site's, never its own.
+                Self::yaml_semantic_tokens_of(&text, &d)
+            },
         })))
     }
 
@@ -3514,11 +3527,95 @@ impl Backend {
     ///   the client, it just paints to the end of the line and drops the rest of the file's
     ///   alignment.
     fn semantic_tokens_of(text: &str, d: &jinja::Delimiters, root: bool) -> Vec<SemanticToken> {
+        Self::encode_tokens(text, ansible_core::jinja::semantic_tokens(text, d, root))
+    }
+
+    /// The Jinja inside a YAML document's scalars — `name: "{{ app_name }}"` in a playbook.
+    ///
+    /// The larger surface: most Jinja anyone writes lives in YAML, not in a `.j2`. Same
+    /// builder as a template, which is why `jinja::highlight` was made span-based and
+    /// delimiter-parameterised rather than tied to a file.
+    fn yaml_semantic_tokens_of(text: &str, d: &jinja::Delimiters) -> Vec<SemanticToken> {
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let Some(nodes) = doc.parse() else { return Vec::new() };
+        let mut toks = Vec::new();
+        for n in &nodes {
+            Self::yaml_scalar_tokens(text, n, d, false, &mut toks);
+        }
+        // One document's worth of scalars comes out in tree order, which is source order for
+        // every shape we walk — but `when:` is read from a mapping whose key was already
+        // visited, so sort rather than trust it. The protocol encodes deltas and underflows
+        // on an out-of-order token; `jinja::highlight` carries the same assertion.
+        toks.sort_by_key(|t: &ansible_core::jinja::SemToken| t.span.start);
+        Self::encode_tokens(text, toks)
+    }
+
+    /// Walk one node, painting the Jinja in every scalar whose text maps 1:1 back to source.
+    ///
+    /// `in_when` marks a bare expression: Ansible wraps a `when:` in `{{ }}` itself, so
+    /// `foo is defined` is Jinja with no delimiters and reading it as a template would paint
+    /// nothing. Same split `vars::uses` already makes.
+    fn yaml_scalar_tokens(
+        text: &str,
+        node: &ansible_core::parse::Node,
+        d: &jinja::Delimiters,
+        in_when: bool,
+        out: &mut Vec<ansible_core::jinja::SemToken>,
+    ) {
+        use ansible_core::parse::Node;
+        match node {
+            Node::Scalar { value, span } => {
+                // A block scalar's value is not its source text — `>` and `|` strip the
+                // indicator and the indent, and a `\"` escape shortens the value — so
+                // `span.start + offset` would paint the wrong columns. Measured: for `|` the
+                // value is `"literal {{ e }}\n"` while the slice is `"|\n    literal {{ e }}\n"`.
+                // Painting the wrong span is worse than painting nothing, so require the
+                // exact identity that makes the offsets valid rather than guessing at it.
+                if text.get(span.start..span.end) != Some(value.as_str()) {
+                    return;
+                }
+                let inner = if in_when {
+                    ansible_core::jinja::expression_tokens(value)
+                } else {
+                    // `root: false` — a scalar cannot carry a `#jinja2:` header, so its
+                    // delimiters come from the file's render site, never from itself.
+                    ansible_core::jinja::semantic_tokens(value, d, false)
+                };
+                out.extend(inner.into_iter().map(|t| ansible_core::jinja::SemToken {
+                    span: ansible_core::parse::Span {
+                        start: span.start + t.span.start,
+                        end: span.start + t.span.end,
+                    },
+                    ty: t.ty,
+                }));
+            }
+            Node::Sequence { items, .. } => {
+                for i in items {
+                    Self::yaml_scalar_tokens(text, i, d, in_when, out);
+                }
+            }
+            Node::Mapping { entries, .. } => {
+                for (k, v) in entries {
+                    // Keys are literal text in every mapping but two (`vars::Keys`), and a
+                    // key is not where anyone writes Jinja worth painting — walk values only.
+                    let when = k.as_str() == Some("when");
+                    Self::yaml_scalar_tokens(text, v, d, when, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Spans to the wire: LSP wants each token as a delta from the previous one.
+    fn encode_tokens(
+        text: &str,
+        toks: Vec<ansible_core::jinja::SemToken>,
+    ) -> Vec<SemanticToken> {
         let doc = ansible_core::parse::Document::new(text.to_string());
         let mut out = Vec::new();
         let (mut last_line, mut last_col) = (0u32, 0u32);
 
-        for t in ansible_core::jinja::semantic_tokens(text, d, root) {
+        for t in toks {
             let ty = legend_index(t.ty);
             let (l0, c0) = doc.byte_to_lsp(t.span.start);
             let (l1, _) = doc.byte_to_lsp(t.span.end);
@@ -8610,43 +8707,134 @@ mod tests {
         );
     }
 
-    /// Templates only. A playbook is the next surface and must not be half-served meanwhile,
-    /// which would paint YAML with Jinja's legend.
+    /// Served for both surfaces now, and declined for anything else — a `.md` must not be
+    /// painted with Jinja's legend just because it contains braces.
     #[tokio::test]
-    async fn semantic_tokens_are_served_for_a_template_and_declined_for_a_playbook() {
-        use tower_lsp::LanguageServer;
+    async fn semantic_tokens_are_served_for_a_template_and_a_playbook_but_not_other_files() {
         let root = ansible_core::testing::project(
             "j2-tokens",
             "[defaults]\n",
-            &[("templates/t.j2", "{{ a | b }}\n"), ("play.yml", "- hosts: all\n")],
+            &[
+                ("templates/t.j2", "{{ a | b }}\n"),
+                ("play.yml", "- hosts: all\n  tasks:\n    - name: \"{{ app_name }}\"\n"),
+                ("notes.md", "text with {{ braces }}\n"),
+            ],
         );
-        let state = scan_state(&root);
-        let service = lsp_service(state.clone());
-        for (rel, want_some) in [("templates/t.j2", true), ("play.yml", false)] {
-            let uri = tower_lsp::lsp_types::Url::from_file_path(root.join(rel)).unwrap();
-            let text = std::fs::read_to_string(root.join(rel)).unwrap();
-            service
-                .inner()
-                .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
-                    text_document: tower_lsp::lsp_types::TextDocumentItem {
-                        uri: uri.clone(),
-                        language_id: "jinja".into(),
-                        version: 1,
-                        text,
-                    },
-                })
-                .await;
-            let got = service
-                .inner()
-                .semantic_tokens_full(tower_lsp::lsp_types::SemanticTokensParams {
-                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
-                    work_done_progress_params: Default::default(),
-                    partial_result_params: Default::default(),
-                })
-                .await
-                .unwrap();
+        for (rel, want_some) in
+            [("templates/t.j2", true), ("play.yml", true), ("notes.md", false)]
+        {
+            let got = tokens_for(&root, rel).await;
             assert_eq!(got.is_some(), want_some, "{rel}");
         }
+    }
+
+    /// The playbook half of T-217: `{{ }}` inside a YAML scalar, landing on the right
+    /// columns.
+    ///
+    /// Asserted as decoded line/col/len rather than as the reader's return value — the
+    /// protocol encodes each token as a delta from the previous one, and the delta
+    /// arithmetic is where this has already gone wrong once (the encoder underflowed and
+    /// panicked when the delimiters were emitted out of order).
+    #[test]
+    fn jinja_in_a_yaml_scalar_is_painted_at_the_right_columns() {
+        let play = "- hosts: all\n  tasks:\n    - name: \"{{ app_name }}\"\n      when: flag is defined\n";
+        let got = decoded_yaml(play);
+
+        // `    - name: "{{ app_name }}"`
+        //   col 12 is the quote, so `{{` is 13-14 and `app_name` is 16-23. The span the
+        //   parser hands back excludes the quotes, which is what makes `span.start + offset`
+        //   land inside them without any adjustment here.
+        let line2: Vec<_> = got.iter().filter(|t| t.0 == 2).collect();
+        assert!(
+            line2.iter().any(|t| (t.1, t.2, t.3) == (13, 2, "delimiter")),
+            "the opening delimiter, inside the quotes: {line2:?}"
+        );
+        assert!(
+            line2.iter().any(|t| (t.1, t.2, t.3) == (16, 8, "variable")),
+            "`app_name` as a variable at col 16: {line2:?}"
+        );
+
+        // `      when: flag is defined` — a bare expression, no delimiters to anchor to, so
+        // reading it as a template would paint nothing at all.
+        let line3: Vec<_> = got.iter().filter(|t| t.0 == 3).collect();
+        assert!(
+            line3.iter().any(|t| (t.1, t.2, t.3) == (12, 4, "variable")),
+            "`flag` painted in a bare when: {line3:?}"
+        );
+        assert!(
+            line3.iter().any(|t| t.3 == "keyword"),
+            "`is`/`defined` are keywords, not variables: {line3:?}"
+        );
+    }
+
+    /// The guard that makes the offsets valid, and the reason it is a runtime identity check
+    /// rather than a list of scalar styles.
+    ///
+    /// A block scalar's value is not its source slice — the `|` indicator and the block
+    /// indent are stripped — so `span.start + offset` would paint columns that belong to
+    /// other text. Measured before this was written: value `"literal {{ e }}\n"` against
+    /// slice `"|\n    literal {{ e }}\n"`.
+    #[test]
+    fn a_block_scalar_is_left_alone_rather_than_painted_at_the_wrong_columns() {
+        let got = decoded_yaml(
+            "- hosts: all\n  vars:\n    a: \"{{ plain }}\"\n    b: |\n      {{ blocked }}\n",
+        );
+        assert!(
+            got.iter().any(|t| t.0 == 2),
+            "the plain scalar is still painted, so this test can fail: {got:?}"
+        );
+        assert!(
+            !got.iter().any(|t| t.0 == 4),
+            "nothing painted inside the block scalar: {got:?}"
+        );
+    }
+
+    async fn tokens_for(
+        root: &std::path::Path,
+        rel: &str,
+    ) -> Option<tower_lsp::lsp_types::SemanticTokensResult> {
+        use tower_lsp::LanguageServer;
+        let state = scan_state(root);
+        let service = lsp_service(state);
+        let uri = tower_lsp::lsp_types::Url::from_file_path(root.join(rel)).unwrap();
+        let text = std::fs::read_to_string(root.join(rel)).unwrap();
+        service
+            .inner()
+            .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "yaml".into(),
+                    version: 1,
+                    text,
+                },
+            })
+            .await;
+        service
+            .inner()
+            .semantic_tokens_full(tower_lsp::lsp_types::SemanticTokensParams {
+                text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// [`decoded`]'s sibling for the YAML surface. Same reason for existing: the deltas are
+    /// unreadable, and two cancelling mistakes decode to a wrong absolute position that a
+    /// raw-delta assertion would accept.
+    fn decoded_yaml(text: &str) -> Vec<(u32, u32, u32, &'static str)> {
+        let d = ansible_core::jinja::Delimiters::default();
+        let (mut line, mut col) = (0u32, 0u32);
+        super::Backend::yaml_semantic_tokens_of(text, &d)
+            .into_iter()
+            .map(|t| {
+                line += t.delta_line;
+                col = if t.delta_line == 0 { col + t.delta_start } else { t.delta_start };
+                let name = super::SEMANTIC_TOKEN_LEGEND[t.token_type as usize].as_str();
+                (line, col, t.length, name)
+            })
+            .collect()
     }
 
     fn lsp_service(state: std::sync::Arc<super::State>) -> tower_lsp::LspService<super::Backend> {
