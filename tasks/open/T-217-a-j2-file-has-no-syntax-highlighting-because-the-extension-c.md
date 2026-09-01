@@ -256,12 +256,54 @@ Checked end to end against `demo/tasks/main.yml` — 27 tokens, each one slicing
 own line as exactly the text the token claims.
 
 ## Still to do
-- **Richer token types.** The parser resolves more than is being said: a `{% for h in ... %}`
-  binding versus a lookup, `h.name` as a property, an `{% import … as m %}` namespace, a
-  `{% macro %}` definition. All standard LSP types, all already in the AST.
+
+Ordered deliberately, and the order is the point: **richer types before modifiers.** The two
+look like neighbours — both "say more about a token" — but they differ in what they *claim*,
+and that decides which is safe to build on today.
+
+A richer **type** describes the text we already parsed: this name is a property, this one is a
+loop binding. Getting it wrong shows a slightly wrong colour. A **modifier** saying a variable
+does not resolve is a claim about the whole workspace, and getting it wrong fades a variable
+that exists — the same class as a false diagnostic, which is what this project's first
+paragraph is about. The resolver underneath is not ready to make that claim: role entries are
+modelled wrong ([[T-063]] — `main` treated as a fixed target rather than `tasks_from`'s
+default), variable spans inside a block scalar are probably off (see the YAML progress note
+above), and a non-ASCII name crashed the request outright until [[T-219]]. Fading a name on top
+of that advertises those gaps as visible wrong colour on every file.
+
+- **Richer token types.** `h.name` as a property, a `{% for h in … %}` binding versus a lookup,
+  an `{% import … as m %}` namespace, a `{% macro %}` definition. All standard LSP types.
+
+  **Correction to an earlier draft: these are not "already in the AST" as far as this code path
+  is concerned.** `inner_tokens` reads `lexer::tokens`, not the parser, and classifies by
+  neighbour — `prev == Pipe || next == Lparen` is how a filter and a call become `Function`
+  today. So this is more heuristics of the same shape, not a mapping from an AST that is
+  already being walked. Worth knowing before sizing it.
+
+  Sliced smallest-first, since each stands alone:
+
+  | slice | change | most visible on |
+  | ----- | ------ | --------------- |
+  | A | `prev == Dot` -> `Property` — one match arm | `{{ ansible_facts.hostname }}`, which is everywhere in real playbooks |
+  | B | names between `for` and `in` are bindings, not lookups | `{% for h in hosts %}` |
+  | C | `{% macro %}` name as a definition, `{% import … as m %}` as a namespace | macro-heavy templates |
+
+  A and B stay lexer-local. C wants statement-position state and is the first that might earn
+  the parser.
+
 - **Token modifiers.** The legend's modifier list is empty on purpose. Whether a variable
   *resolves* is a property of a token rather than a kind of token, and it is the one thing here
   no other Jinja tooling can answer — the same slot [[T-126]] needs.
+
+  Blocked on judgement, not on code, for the reason above. Two costs to settle first, both
+  structural rather than incremental:
+
+  - `highlight::tokens(src, delimiters, root)` takes **no workspace and no resolver**. Semantic
+    tokens are requested on every keystroke, so this means resolving per edit or designing a
+    cache — a change to the function's shape, not an added arm.
+  - The modifier design is shared with [[T-126]]. Whichever lands first owns it, so they should
+    be settled together rather than one inventing a scheme the other has to adopt.
+
 - **Packaging.** The extension only loads under F5. A stale hand-copied build in
   `~/.vscode/extensions/` was shadowing this and has been removed, so a plain `code .` window
   now has no extension at all. A `.vsix` build-and-install step is needed for the editor to run
