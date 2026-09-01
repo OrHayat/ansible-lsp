@@ -101,6 +101,21 @@ Validating the doc block itself is T-057's.
 
 Subsumes T-042 item 3 (the `*_from` trio); T-042 narrows to its two verify items.
 
+**Subsumes T-218's stopgap, and should delete it.** T-218 added
+`SkipReason::RoleWithoutMainTasks` because the hover was calling a role in `roles/` "not in
+this workspace". That removed a live lie, but it encodes the premise this ticket overturns —
+that a Role reference targets `tasks/main.yml`. Once `role_from_file` resolves the entry as
+`tasks/<tasks_from or main>`, `include_role: {name: r, tasks_from: begin}` **resolves** to
+`tasks/begin.yml`: no skip, no reason, and the variant becomes unreachable. Remove it rather
+than carry it — and with it, the `ROLES WITH NO tasks/main.yml` section in `scan`, which
+exists only to report that skip.
+
+Measured on the current build, and the reason the box below is worth its own line: the Role
+reference resolves to nothing today, so **go-to-definition on the role name does nothing**
+whenever the role has no `tasks/main.yml`, while the `tasks_from` token on the same line
+jumps correctly. That is the "goes silent" half of the same defect T-218 fixed the "lies"
+half of.
+
 ## Done when
 
 - [ ] `role:` alias produces a Role reference — pinned (extraction gap, live today)
@@ -108,6 +123,10 @@ Subsumes T-042 item 3 (the `*_from` trio); T-042 narrows to its two verify items
       and extension order pinned against the real matcher
 - [ ] explicit-`X_from`-missing warns (hard error upstream); absent default `main` stays
       silent
+- [ ] the Role reference resolves to its real entry file, so go-to-definition on the role
+      name works when `tasks_from` names a file and `tasks/main.yml` does not exist; with
+      that, `SkipReason::RoleWithoutMainTasks` and `scan`'s no-main section are deleted
+      (T-218 was the stopgap)
 - [ ] `vars_from`/`defaults_from`/`defaults/main/`-dir keys land in the var index
 - [ ] unknown option, missing name, `apply`/`rescuable` on import, non-string `*_from` —
       each a pinned provable-failure diagnostic

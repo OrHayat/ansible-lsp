@@ -152,7 +152,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | ~~T-147~~ |
-| T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
@@ -168,6 +167,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
 | T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](open/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | S    | —    |
 | T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](open/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | M    | —    |
+| T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

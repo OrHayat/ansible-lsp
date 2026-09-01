@@ -30,6 +30,13 @@ pub enum SkipReason {
     /// hover say "not in this workspace (a builtin, or installed outside it)" about a
     /// directory sitting in `roles/`, which is the wrong-hover failure this repo exists
     /// to avoid. T-218.
+    ///
+    /// **Provisional.** It encodes the premise T-063 overturns — that a Role reference
+    /// targets `tasks/main.yml`. `main` is only the *default* for `tasks_from`, and
+    /// `vars_from`/`defaults_from`/`handlers_from` move the entry the same way for their
+    /// own subdirs. Once the entry resolves as `tasks/<tasks_from or main>` this case
+    /// resolves outright and nothing reaches this variant; delete it then rather than
+    /// keeping it alive.
     RoleWithoutMainTasks,
 }
 
