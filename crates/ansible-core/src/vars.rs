@@ -3992,9 +3992,3 @@ mod parallel_spike {
         }
     }
 }
-
-
-
-
-
-

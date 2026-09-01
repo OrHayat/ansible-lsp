@@ -327,6 +327,7 @@ T-021 is now unblocked on that side.
 | T-216 | **bug** · [A stray {% inside a raw body is read as a tag, so a template that renders is flagged unterminated](closed/T-216-a-stray-inside-a-raw-body-is-read-as-a-tag-so-a-template-tha.md) | done     |
 | T-218 | **bug** · [Role with no tasks/main.yml hovers as "not in this workspace"](closed/T-218-role-with-no-tasks-main-yml-hovers-as-not-in-this-workspace.md) | done     |
 | T-219 | **bug** · [Non-ASCII in a Jinja expression panics the request](closed/T-219-non-ascii-in-a-jinja-expression-panics-the-request.md) | done     |
+| T-220 | **bug** · [True, False and None are reported as undefined variables, because the literal list is lowercase only](closed/T-220-true-false-and-none-are-reported-as-undefined-variables-beca.md) | done     |
 
 ## Settled — don't re-derive these
 

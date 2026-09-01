@@ -13,6 +13,19 @@ use crate::install::Version;
 use crate::jinja::{self, CmpOp, Const as JConst, Expr, ExprKind, UnOp};
 use crate::parse::Node;
 
+/// The six spellings jinja2's parser turns into a literal rather than a name.
+///
+/// Not a judgement call and not extensible: `parse_primary` decides it, and
+/// `env.parse("{{ X }}")` answers `Const` for exactly these and `Name` for everything else —
+/// `null`, `nil` and `TRUE` included, which really are variables and must still be checked.
+///
+/// Kept beside [`NOT_VARIABLES`] rather than inside it because it is a different kind of fact:
+/// that list is a hand-maintained set of filter and test names, while this one is fixed by the
+/// language. Writing the literals into that list is how `True`, `False` and `None` came to be
+/// reported as undefined variables while their lowercase spellings were not — the same fact
+/// written down twice, in `parser.rs` and here, and only one copy updated.
+const LITERALS: &[&str] = &["true", "True", "false", "False", "none", "None"];
+
 /// Jinja tests and filters that are not variable references.
 const NOT_VARIABLES: &[&str] = &[
     // filters
@@ -25,7 +38,7 @@ const NOT_VARIABLES: &[&str] = &[
     "b64decode", "b64encode", "type_debug", "json_query", "replace", "indent", "batch",
     "path_join", "splitext", "expanduser", "relpath", "human_readable", "hash",
     // operators and tests
-    "not", "and", "or", "in", "is", "if", "else", "true", "false", "none", "defined",
+    "not", "and", "or", "in", "is", "if", "else", "defined",
     "undefined", "changed", "failed", "succeeded", "success", "skipped", "match",
     "search", "version", "subset", "superset", "iterable", "mapping", "sequence",
     "number", "boolean", "even", "odd", "sameas", "escaped", "truthy", "falsy",
@@ -452,7 +465,8 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
 /// deduplicated, so each occurrence keeps its own span.
 pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
-        !(NOT_VARIABLES.contains(&w)
+        !(LITERALS.contains(&w)
+            || NOT_VARIABLES.contains(&w)
             || is_injected(w)
             || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
@@ -470,7 +484,9 @@ pub fn is_injected(name: &str) -> bool {
 /// render — rather than two complementary scans of the same tree (T-143).
 pub fn any_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
-        !(NOT_VARIABLES.contains(&w) || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        !(LITERALS.contains(&w)
+            || NOT_VARIABLES.contains(&w)
+            || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
 }
 
@@ -1054,7 +1070,7 @@ fn strip_guards<'a>(src: &str, e: &'a Expr) -> Option<(VarRef, Option<String>, V
 /// author's spelling instead of a normalisation of it.
 fn var_ref(src: &str, e: &Expr) -> Option<VarRef> {
     let root = e.root_name()?;
-    if NOT_VARIABLES.contains(&root) {
+    if LITERALS.contains(&root) || NOT_VARIABLES.contains(&root) {
         return None;
     }
     // A non-literal subscript — `hostvars[h].x` — is representable in the tree but not
@@ -1265,6 +1281,24 @@ mod tests {
     /// T-187. Whitespace never reaches the parser, so the two spellings are not "handled the
     /// same" — they are the same question. Asserted on more than one arm, because a fix that
     /// only reached `RequiresNonEmpty` would look identical from the ticket's own example.
+    /// `True`, `False` and `None` are literals, not variables — and were being reported as
+    /// undefined ones, while their lowercase spellings were not.
+    ///
+    /// Measured against jinja2 3.1.6 rather than assumed: `env.parse("{{ X }}")` yields a
+    /// `Const` for all six spellings and a `Name` for `null`, `nil` and `TRUE`. Those three
+    /// are the control — a fix that simply stopped reporting anything would pass the first
+    /// half of this test and fail the second.
+    #[test]
+    fn the_six_literal_spellings_are_not_variable_references() {
+        let names = |e: &str| {
+            super::variable_uses(e).into_iter().map(|(n, _, _)| n).collect::<Vec<_>>()
+        };
+        assert_eq!(names("True or False or None or true or false or none"), Vec::<String>::new());
+        // The control: these three lex the same way but jinja2 resolves them to `Name`, so
+        // they are real variable uses and must survive.
+        assert_eq!(names("null or nil or TRUE"), ["null", "nil", "TRUE"]);
+    }
+
     #[test]
     fn spacing_around_operators_cannot_change_a_verdict() {
         let pairs = [
