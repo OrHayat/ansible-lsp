@@ -713,7 +713,13 @@ impl<'a> Scanner<'a> {
             if depth < 0 {
                 depth = 0;
             }
-            if depth == 0 && self.src[i..].starts_with(end) {
+            // Byte comparison, not `self.src[i..]`. This loop walks one *byte* at a time,
+            // so slicing the `str` here panics the moment `i` lands inside a multi-byte
+            // character — `{{ café_port }}` was a hard crash of the whole request, on the
+            // `.j2` path as much as in a YAML scalar. Comparing bytes is the same test with
+            // no boundary requirement, and a multi-byte character can never match an ASCII
+            // delimiter's first byte.
+            if depth == 0 && bytes[i..].starts_with(end.as_bytes()) {
                 return Some(i);
             }
             i += 1;

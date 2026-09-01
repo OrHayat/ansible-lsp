@@ -8820,6 +8820,51 @@ mod tests {
             .unwrap()
     }
 
+    /// The wire carries **UTF-16** columns while a `Span` is UTF-8 bytes, and the two
+    /// diverge on every non-ASCII character.
+    ///
+    /// Asserted by slicing the line *by UTF-16 units* at the column the wire reports: if the
+    /// column is right that yields exactly the token's own text, and if it is off by the
+    /// byte-vs-unit difference it yields neighbouring characters instead. An assertion on
+    /// the number alone would need the arithmetic restated in the test, which is the same
+    /// mistake twice rather than a check.
+    ///
+    /// `🎉` is the case that matters: 4 bytes of UTF-8 but **2** UTF-16 units, so a length
+    /// or column computed either in bytes or in `chars()` comes out wrong, in two directions.
+    #[test]
+    fn columns_are_utf16_units_not_bytes_or_chars() {
+        for (text, want) in [
+            // é: 2 bytes, 1 unit.
+            ("- hosts: all\n  tasks:\n    - name: \"h\u{e9}llo {{ x }}\"\n", "x"),
+            // 🎉: 4 bytes, 2 units — a surrogate pair.
+            ("- hosts: all\n  tasks:\n    - name: \"\u{1f389} {{ y }}\"\n", "y"),
+            // Non-ASCII inside the expression, which used to panic outright.
+            ("- hosts: all\n  tasks:\n    - name: \"{{ caf\u{e9}_port }}\"\n", "café_port"),
+            // RTL, and a combining mark that is one char but two code points.
+            ("- hosts: all\n  tasks:\n    - name: \"\u{5e9}\u{5dc}\u{5d5}\u{5dd} {{ z }}\"\n", "z"),
+            ("- hosts: all\n  tasks:\n    - name: \"e\u{301} {{ w }}\"\n", "w"),
+        ] {
+            let line: Vec<u16> = text.lines().nth(2).unwrap().encode_utf16().collect();
+            let got = decoded_yaml(text);
+            let slice = |t: &(u32, u32, u32, &'static str)| {
+                String::from_utf16_lossy(&line[t.1 as usize..(t.1 + t.2) as usize])
+            };
+            for t in got.iter().filter(|t| t.0 == 2) {
+                let seg = slice(t);
+                let expect = match t.3 {
+                    "delimiter" => seg == "{{" || seg == "}}",
+                    "variable" => seg == want,
+                    _ => true,
+                };
+                assert!(expect, "token {t:?} slices to {seg:?} in {:?}", text.lines().nth(2));
+            }
+            assert!(
+                got.iter().any(|t| t.3 == "variable" && slice(t) == want),
+                "the variable must be found at all: {got:?}"
+            );
+        }
+    }
+
     /// [`decoded`]'s sibling for the YAML surface. Same reason for existing: the deltas are
     /// unreadable, and two cancelling mistakes decode to a wrong absolute position that a
     /// raw-delta assertion would accept.

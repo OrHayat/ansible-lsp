@@ -206,6 +206,58 @@ mod tests {
             .collect()
     }
 
+    /// Non-ASCII anywhere in a template must not crash the request.
+    ///
+    /// `find_end` walks one **byte** at a time and used to slice `self.src[i..]` to test for
+    /// the closing delimiter, which panics the moment `i` lands inside a multi-byte
+    /// character. `{{ café_port }}` was a hard crash — on the `.j2` path as much as in a
+    /// YAML scalar, so this shipped broken for any name that is not ASCII.
+    ///
+    /// A sweep rather than one case, because the panic depends on where the character sits
+    /// relative to the bracket walker: inside a quoted string it never fired (`skip_string`
+    /// jumps the literal wholesale) and in a comment it never fired (`find`, not the
+    /// walker), so a single well-chosen example proves much less than it looks.
+    /// **42 of these 72 panic without the fix.**
+    #[test]
+    fn non_ascii_anywhere_in_a_template_does_not_panic() {
+        let pieces = ["café", "שלום", "🎉", "日本語", "ß", "e\u{301}"];
+        let shapes: Vec<String> = pieces
+            .iter()
+            .flat_map(|w| {
+                vec![
+                    format!("{{{{ {w} }}}}"),
+                    format!("{{{{ {w}|upper }}}}"),
+                    format!("{{{{ a.{w} }}}}"),
+                    format!("{{{{ f({w}) }}}}"),
+                    format!("{{% if {w} %}}x{{% endif %}}"),
+                    format!("{{% raw %}}{w} {{% endraw %}}"),
+                    format!("{{% for {w} in xs %}}{w}{{% endfor %}}"),
+                    format!("{w}{{{{ a }}}}{w}"),
+                    format!("{{{{ '{w}' ~ b }}}}"),
+                    // Unterminated: the walker runs to the end of the string, which is the
+                    // path that dereferences the last partial character.
+                    format!("{{{{ {w}"),
+                    format!("{{# {w} #}}"),
+                    format!("#jinja2: block_start_string:'<%'\n<% if {w} %>y<% endif %>"),
+                ]
+            })
+            .collect();
+        let panics: Vec<&String> = shapes
+            .iter()
+            .filter(|src| {
+                let s = (*src).clone();
+                std::panic::catch_unwind(move || tokens(&s, &Delimiters::default(), true)).is_err()
+            })
+            .collect();
+        assert!(panics.is_empty(), "{panics:#?}");
+        // The control: the sweep must actually be reaching the tokenizer, or an empty
+        // `panics` means nothing. Every ASCII-delimited shape here produces tokens.
+        assert!(
+            tokens("{{ café_port }}", &Delimiters::default(), true).len() == 3,
+            "the sweep's subject must tokenize, not merely survive"
+        );
+    }
+
     /// The literal `{# … #}` on a comment-renamed template is repainted, so the grammar's
     /// guess is recoverable.
     ///
