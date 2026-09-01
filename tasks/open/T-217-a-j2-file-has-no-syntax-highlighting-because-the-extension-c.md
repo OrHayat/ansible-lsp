@@ -141,13 +141,83 @@ both are the theme's own convention for those scopes in every language. Using th
 prefixes rather than Jinja-specific ones is what makes any third-party theme work with no
 further effort.
 
+## Progress: the tokens are in, and the grammar stopped painting tags
+
+`textDocument/semanticTokens` is served for `.j2`. `jinja::highlight` maps
+[`template::document_in`]'s blocks to typed spans, `semantic_tokens_of` encodes them, and the
+legend is seven standard LSP names plus one that is not — see below. Measured in the editor on
+`demo/templates/overridden.conf.j2`: **`<% include "partials/header.j2" %>` colours as a real
+tag and the literal `{% notatag %}` does not**, which is the pair that was exactly backwards.
+
+### The grammar had to stop painting tags, because a token cannot un-paint
+
+The first attempt kept the grammar and added a `Text` token over data regions, mapped through
+`contributes.semanticTokenScopes` to an uncoloured scope, to override the grammar where it was
+wrong. **It does not work.** The token was emitted — confirmed on the wire, `Text "\n{% notatag
+%}\n"` — and the editor went on painting the literal braces as a tag.
+
+A semantic token overrides a grammar scope **only where it provides one**, and mapping to a
+scope with no colour rule falls through to the TextMate scope rather than clearing it. "This is
+ordinary output" is not sayable. So silence cannot correct a grammar's guess, and the only fix
+is for the grammar not to guess: `#statement`, `#comment` and `#raw` are gone. What is left
+paints `{{`/`}}` as neutral punctuation, which is true whatever the delimiters are.
+
+The mechanism does work in the other direction — *adding* a colour to a token type the theme
+has no rule for. That is how the `delimiter` type below keeps the grey the grammar used to give
+`{%`, and it is what VS Code's own TypeScript extension uses it for.
+
+Cost accepted: a `.j2` is unpainted until the server answers. Measured at **13-43µs** per
+request in the editor, so it is not perceptible.
+
+### Two bugs the work turned up, neither of them about colour
+
+**`did_open` cleared the grammar cache.** `invalidate_render_sites` drops
+`template_grammars` wholesale, and `did_open` called it — so opening a tab threw away a walk of
+every YAML file and every template, which `publish_diagnostics` then rebuilt inline, once per
+tab. Opening a file changes nothing: the buffer that arrives is what is already on disk, and
+both caches derive from disk. Removed there, kept in `did_change`/`did_save`. Measured over
+`demo` with 41 files open: **268ms -> 125ms**, and it was slowing diagnostics, not just colour.
+
+**The delimiters were dropped, then emitted out of order.** `Block` carries `span` (with the
+delimiters) and `inner` (without); the first version read only `inner`, so `{%` and `%}` stopped
+being painted by anything once the grammar's rules were removed — a regression against the same
+morning, missed because every test asserted what was *inside* a tag. The fix then pushed both
+delimiters before the content, and **the protocol encodes each token as a delta from the
+previous one**, so the column subtraction underflowed and the encoder panicked. Three existing
+tests caught it, which is the argument for asserting the wire format rather than the reader's
+return value. `tokens()` now carries a `debug_assert!` that output is in source order.
+
+### The 10-15s before colour appeared was VS Code, not this
+
+Chased through four wrong hypotheses before asking for the log, which settled it in one line:
+
+```
+[client] client.start() resolved in 13 ms (activate reached at 1494 ms uptime)
+5:08:31  ready -> detect 8ms -> scan 115 files 12ms -> semanticTokens 18.292us
+```
+
+Everything from activation to painted text is ~1.5s, and 1.49 of it is the extension host
+reaching `activate`. The startup report named the cause in its first block — **`Has 7 other
+windows`** — and VS Code restores them serially, which is what "window by window, then the text
+window" looks like. `window.restoreWindows: "one"` is the user-side fix.
+
+Recorded because the wrong lesson is available here: the probes said 291ms and the editor said
+15s, and the gap was neither the server nor the client. Ask for the log, and ask what the screen
+is actually doing, before theorising about the code.
+
 ## Still to do
 
-- **`textDocument/semanticTokens`** — not started. This is the whole second layer, and the
-  three rows in the Approach table are unreachable without it.
-- **The unverified question stands.** Whether tokens paint on a document with no grammar was
-  never measured — the grammar landing first made it non-blocking for colour, but it still
-  decides whether tokens can ever be the sole layer, which [[T-126]] also needs to know.
+- **Jinja inside a YAML scalar.** `name: "{{ app_name }}"` in a playbook is still one flat
+  string — the larger surface, since most Jinja anyone writes lives in YAML rather than in a
+  `.j2`. The machinery is deliberately span-based and delimiter-parameterised for exactly this;
+  it needs the spans `references` already extracts, and a decision on bare `when:` expressions,
+  which are Jinja with no delimiters to anchor a token to.
+- **Richer token types.** The parser resolves more than is being said: a `{% for h in ... %}`
+  binding versus a lookup, `h.name` as a property, an `{% import … as m %}` namespace, a
+  `{% macro %}` definition. All standard LSP types, all already in the AST.
+- **Token modifiers.** The legend's modifier list is empty on purpose. Whether a variable
+  *resolves* is a property of a token rather than a kind of token, and it is the one thing here
+  no other Jinja tooling can answer — the same slot [[T-126]] needs.
 - **Packaging.** The extension only loads under F5. A stale hand-copied build in
   `~/.vscode/extensions/` was shadowing this and has been removed, so a plain `code .` window
   now has no extension at all. A `.vsix` build-and-install step is needed for the editor to run
@@ -165,7 +235,7 @@ further effort.
       does not is removed
 - [x] the licence of any vendored grammar is recorded here, with its source and revision
       — n/a, resolved by writing one instead: nothing vendored, no third-party licence in the tree
-- [ ] whether semantic tokens need a base grammar is **measured**, and the answer written into
-      the Approach above in place of the open question
+- [x] whether semantic tokens need a base grammar is **measured** — a token overrides a grammar
+      scope only where it provides one, and cannot clear one, so the grammar stopped painting tags
 - [x] a `{%` inside a `{% raw %}` body is not coloured as a tag — the [[T-216]] shape, which is
       the case that justifies serving tokens at all
