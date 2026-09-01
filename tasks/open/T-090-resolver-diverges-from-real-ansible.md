@@ -48,6 +48,7 @@ the same argument applied one layer up.
 - [ ] T-144 — Audit base.yml: every setting that touches what we model, routed to its ticket
 - [x] T-145 — ansible.cfg %-interpolation: values read raw
 - [x] T-206 — include_vars searches its relative path in the wrong order, in two places
+- [x] T-218 — Role with no tasks/main.yml hovers as "not in this workspace"
 
 ## Done when
 

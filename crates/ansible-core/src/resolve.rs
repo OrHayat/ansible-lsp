@@ -24,6 +24,13 @@ pub enum SkipReason {
     /// A missing alternative in a first-match `vars_files` list — absence is the
     /// construct working as designed, so the group reference owns the verdict.
     GroupAlternative,
+    /// The role directory **is** here; it just has no `tasks/main.yml`, because every
+    /// caller reaches it through `tasks_from`. Distinct from [`Self::NotInWorkspace`]
+    /// precisely because the role is in the workspace — sharing that variant made the
+    /// hover say "not in this workspace (a builtin, or installed outside it)" about a
+    /// directory sitting in `roles/`, which is the wrong-hover failure this repo exists
+    /// to avoid. T-218.
+    RoleWithoutMainTasks,
 }
 
 #[derive(Debug, Clone)]
@@ -614,7 +621,15 @@ impl<'a> Resolver<'a> {
                     // legal, because every caller passes tasks_from. Warning here would
                     // fire on 16 working references in this repo alone.
                     match (res.status, r.has_tasks_from) {
-                        (Status::Missing, true) => Resolution::skipped(SkipReason::NotInWorkspace),
+                        // Keep the probed paths: `role_dir` already found the directory, so
+                        // every reader can say where the role is rather than guessing it is
+                        // elsewhere. `directory` is not the field for it — that one is
+                        // documented as `VarsFiles`-only (T-087).
+                        (Status::Missing, true) => Resolution {
+                            status: Status::Skipped,
+                            skip_reason: Some(SkipReason::RoleWithoutMainTasks),
+                            ..res
+                        },
                         _ => res,
                     }
                 }
@@ -2893,10 +2908,21 @@ mod tests {
             "- include_role: { name: cib-batch, tasks_from: begin }\n",
             &roles_fs(),
         );
-        assert_eq!(first(&out, ReferenceKind::Role).status, Status::Skipped);
+        let role = first(&out, ReferenceKind::Role);
+        assert_eq!(role.status, Status::Skipped);
         assert_eq!(
             first(&out, ReferenceKind::TasksFrom).status,
             Status::Resolved
+        );
+        // T-218: *why* it skipped, not just that it did. This shared `NotInWorkspace` with
+        // builtins and galaxy roles, and the hover reading that variant told the user the
+        // role was installed outside a workspace it is sitting in.
+        assert_eq!(role.skip_reason, Some(SkipReason::RoleWithoutMainTasks));
+        // The probed paths survive, so a reader can name where the role actually is.
+        assert!(
+            role.candidates.iter().any(|c| c.starts_with("/p/roles/cib-batch")),
+            "tried paths must locate the role: {:?}",
+            role.candidates
         );
     }
 

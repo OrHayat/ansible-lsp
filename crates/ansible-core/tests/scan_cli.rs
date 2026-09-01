@@ -164,10 +164,8 @@ fn every_finding_section_prints_when_the_tree_earns_it() {
         "- hosts: all\n  tasks:\n    - ansible.builtin.debug:\n        msg: hi\n      when: \"{{ flag }}\"\n",
     );
     // A role whose directory exists but has no `tasks/main.yml`, referenced with
-    // `tasks_from`. That is the shape the report singles out: the role *is* there, so
-    // "missing file" would be wrong, but nothing placed its entry point — the section asks
-    // whether it is really installed elsewhere or simply wrong. It also gives the
-    // `tasks_from` kind its row.
+    // `tasks_from`. The role *is* there, so "missing file" would be wrong and so would
+    // "unresolved" — T-218. It gets its own section, and gives the `tasks_from` kind its row.
     write(&d, "roles/nomain/tasks/other.yml", "- ansible.builtin.debug:\n    msg: hi\n");
     write(
         &d,
@@ -178,8 +176,23 @@ fn every_finding_section_prints_when_the_tree_earns_it() {
     let (_, text) = scan(&d);
     assert!(text.contains("BROKEN `when:`"), "the broken-condition section:\n{text}");
     assert!(text.contains("when-jinja-delimiters"), "naming the rule:\n{text}");
-    assert!(text.contains("UNRESOLVED ROLE NAMES"), "the unresolved-role section:\n{text}");
+    // T-218: the section exists and names the role, but says what is true about it. The
+    // negative half is the point — the old heading claimed the role was unresolved, and the
+    // hover reading the same `skip_reason` told the user it was installed outside the
+    // workspace it is sitting in.
+    assert!(
+        text.contains("ROLES WITH NO tasks/main.yml"),
+        "the no-main section:\n{text}"
+    );
     assert!(text.contains("nomain"), "naming the role:\n{text}");
+    assert!(
+        !text.contains("UNRESOLVED ROLE NAMES"),
+        "a role that is present is not an unresolved name:\n{text}"
+    );
+    assert!(
+        !text.split("MISSING FILES").nth(1).unwrap_or("").starts_with("nomain"),
+        "and it is not filed as a missing file:\n{text}"
+    );
     assert!(
         text.lines().any(|l| l.split_whitespace().next() == Some("tasks_from")),
         "the tasks_from kind row:\n{text}"

@@ -2955,6 +2955,20 @@ fn reference_hover(
                     + " — a first-match `vars_files` alternative; the list warns only when \
                        none of its files exists",
             )),
+            // T-218. This used to fall through to `NotInWorkspace` and tell the reader the
+            // role was "installed outside" a workspace it is sitting in. The role directory
+            // was found; naming it is the whole correction, so the probed `tasks/main.*`
+            // paths are carried through to be shortened back into it here.
+            Some(SkipReason::RoleWithoutMainTasks) => {
+                let dir = res.candidates.first().and_then(|c| c.parent()?.parent());
+                let line = "Skipped".bold()
+                    + " — this role has no `tasks/main.yml`, and needs none: the include's \
+                       `tasks_from:` names the file that runs";
+                Some(match dir {
+                    Some(d) => Md::new().line(line).line(md::text("Role: ") + path_span(d, ctx)),
+                    None => Md::new().line(line),
+                })
+            }
             None => None,
         },
     }
@@ -7237,6 +7251,69 @@ mod tests {
             vec![role.join("vars/settings.yml")],
             "the role's vars/ dir is searched before the including file's own dir"
         );
+    }
+
+    /// T-218: the hover on a role that has no `tasks/main.yml` must not claim the role is
+    /// somewhere else.
+    ///
+    /// This is the surface the bug was actually visible on, so it is asserted here and not
+    /// only on `skip_reason` — "a test can reach this code" and "this value reaches that
+    /// code" are different questions, and T-178 was written after scoping only the first.
+    #[test]
+    fn a_role_without_main_tasks_hovers_as_present_not_as_installed_elsewhere() {
+        let root = std::env::temp_dir().join("t218-hover");
+        let _ = std::fs::remove_dir_all(&root);
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w("ansible.cfg", "[defaults]\nroles_path = ./roles\n");
+        // No tasks/main.yml, which is the whole point.
+        w("roles/batch-window/tasks/begin.yml", "- debug: {msg: begin}\n");
+        w("roles/withmain/tasks/main.yml", "- debug: {msg: main}\n");
+        w(
+            "playbooks/site.yml",
+            "- hosts: all\n  tasks:\n\
+             \x20   - include_role: { name: batch-window, tasks_from: begin }\n\
+             \x20   - include_role: { name: withmain, tasks_from: main }\n",
+        );
+
+        let path = root.join("playbooks/site.yml").canonicalize().unwrap();
+        let doc = ansible_core::parse::Document::new(std::fs::read_to_string(&path).unwrap());
+        let nodes = doc.parse().unwrap();
+        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        let refs = ansible_core::references::extract(&nodes).refs;
+        let hover = |name: &str| {
+            let r = refs
+                .iter()
+                .find(|r| r.value == name && r.kind == ansible_core::references::ReferenceKind::Role)
+                .expect("role ref");
+            let res = ansible_core::resolve::Resolver {
+                literals: Some(&Default::default()),
+                ..Default::default()
+            }
+            .resolve(r, &ctx);
+            super::reference_hover(r, &res, &ctx, false).map(crate::Md::render)
+        };
+
+        let md = hover("batch-window").expect("hover expected");
+        assert!(
+            !md.contains("not in this workspace"),
+            "the role is in the workspace: {md}"
+        );
+        assert!(md.contains("tasks/main.yml"), "say what is actually absent: {md}");
+        assert!(md.contains("batch-window"), "and name where the role is: {md}");
+
+        // The control that makes the assertion above mean something: a role WITH main.yml,
+        // called the same way, resolves and so takes a different branch entirely. Without
+        // this, a hover that said the same thing for every role would pass.
+        let with_main = hover("withmain").unwrap_or_default();
+        assert!(
+            !with_main.contains("no `tasks/main.yml`"),
+            "a role that has main.yml must not get the skipped hover: {with_main}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// T-029 against the real demo: a templated path whose variables have no known value

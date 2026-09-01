@@ -325,6 +325,7 @@ T-021 is now unblocked on that side.
 | T-187 | **bug** · [Conditions without spaces around their operators never classify](closed/T-187-conditions-without-spaces-around-their-operators-never-class.md) | done     |
 | T-211 | **bug** · [The default filter's short and FQCN spellings never classify](closed/T-211-the-default-filter-s-short-and-fqcn-spellings-never-classify.md) | done     |
 | T-216 | **bug** · [A stray {% inside a raw body is read as a tag, so a template that renders is flagged unterminated](closed/T-216-a-stray-inside-a-raw-body-is-read-as-a-tag-so-a-template-tha.md) | done     |
+| T-218 | **bug** · [Role with no tasks/main.yml hovers as "not in this workspace"](closed/T-218-role-with-no-tasks-main-yml-hovers-as-not-in-this-workspace.md) | done     |
 
 ## Settled — don't re-derive these
 

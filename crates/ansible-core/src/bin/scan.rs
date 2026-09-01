@@ -41,7 +41,7 @@ fn main() {
 
     let mut totals: BTreeMap<&str, [usize; 3]> = BTreeMap::new(); // resolved, missing, skipped
     let mut missing: Vec<String> = Vec::new();
-    let mut unresolved_roles: Vec<String> = Vec::new();
+    let mut roles_without_main: Vec<String> = Vec::new();
     let mut unparseable: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut mutated: Vec<String> = Vec::new();
@@ -211,12 +211,17 @@ fn main() {
                 }
                 Status::Skipped => {
                     entry[2] += 1;
-                    // A role name we couldn't place: is it really "installed
-                    // elsewhere", or just wrong?
+                    // T-218: these used to be collected as `NotInWorkspace` and printed
+                    // under "UNRESOLVED ROLE NAMES", which was two wrong claims at once —
+                    // the role is in the workspace, and nothing about it is unresolved.
+                    // Kept as a section because the list is worth having (it says which
+                    // roles exist only as named task files), with a heading that no longer
+                    // reads as a problem: on a 779-file tree these were 18 correct rows
+                    // above 3 real ones.
                     if r.kind == ReferenceKind::Role
-                        && res.skip_reason == Some(SkipReason::NotInWorkspace)
+                        && res.skip_reason == Some(SkipReason::RoleWithoutMainTasks)
                     {
-                        unresolved_roles.push(format!("{rel}:{}  {}", line + 1, r.value));
+                        roles_without_main.push(format!("{rel}:{}  {}", line + 1, r.value));
                     }
                 }
             }
@@ -292,9 +297,12 @@ fn main() {
         }
     }
 
-    if !unresolved_roles.is_empty() {
-        println!("\nUNRESOLVED ROLE NAMES ({}):", unresolved_roles.len());
-        for r in &unresolved_roles {
+    if !roles_without_main.is_empty() {
+        println!(
+            "\nROLES WITH NO tasks/main.yml ({}) — reached via tasks_from, not a problem:",
+            roles_without_main.len()
+        );
+        for r in &roles_without_main {
             println!("  {r}");
         }
     }
