@@ -56,6 +56,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-066 — Hover provenance breadcrumb for non-obvious definition routes
 - [ ] T-071 — `unconstrained-path-var`: surface the value set a templated path implies
 - [x] T-182 — Derive a variable's value domain from the assert that constrains it
+- [ ] T-221 — Resolve a dotted access into a literal mapping variable
 
 ## Done when
 
