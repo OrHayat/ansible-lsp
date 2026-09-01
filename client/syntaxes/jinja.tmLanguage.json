@@ -1,8 +1,11 @@
 {
   "name": "Jinja",
   "scopeName": "source.jinja",
-  "comment": "Hand-written for this extension; nothing vendored. Deliberately does NOT paint tags. A grammar hardcodes the delimiters, and a template's real delimiters can come from a `#jinja2:` header or from the `template:` task that renders it \u2014 so painting `{% %}` means confidently colouring literal output as a tag on exactly the files the server gets right. `textDocument/semanticTokens` paints tags instead, from the parser, and a semantic token overrides a grammar scope only where it provides one: silence cannot un-paint, so the grammar must not guess in the first place. What is left here is the part that is true regardless of delimiters.",
+  "comment": "Hand-written for this extension; nothing vendored. Deliberately does NOT paint tags. A grammar hardcodes the delimiters, and a template's real delimiters can come from a `#jinja2:` header or from the `template:` task that renders it \u2014 so painting `{% %}` means confidently colouring literal output as a tag on exactly the files the server gets right. `textDocument/semanticTokens` paints tags instead, from the parser. Comments are the one exception and the reasoning is in `#comment`: they are painted here, and the server repaints the rare file where that is wrong.",
   "patterns": [
+    {
+      "include": "#comment"
+    },
     {
       "include": "#interpolation-fallback"
     }
@@ -12,6 +15,12 @@
       "comment": "The one shape worth keeping: `{{ \u2026 }}` with the default delimiters, painted only as a neutral punctuation scope so a template still reads as structured before the server answers. It names no keyword and no variable, so when the tokens arrive they refine rather than contradict, and on a file whose delimiters are overridden the worst case is a faint bracket rather than a word coloured as a tag.",
       "match": "\\{\\{|\\}\\}",
       "name": "punctuation.definition.template-expression.jinja"
+    },
+    "comment": {
+      "comment": "`{# \u2026 #}` with the default delimiters. This one IS a guess \u2014 `comment_start_string` is overridable from a `#jinja2:` header and from the `template:` task, verified against ansible-core 2.21.3: with `comment_start_string:\"<#\"` the text `{# curly comment #}` is rendered verbatim into the output file. Taken anyway because the odds are measured: 0 of 1222 `.j2` files across seven public trees move any delimiter, and comment blocks are the largest runs of text in a template, so leaving them uncoloured until the server answers is the most visible gap there is. Unlike a tag rule this guess is recoverable \u2014 the server emits a `text` token over these ranges when the delimiters really were renamed, which repaints them to the default foreground. See `demo/templates/moved_comments.conf.j2`.",
+      "begin": "\\{#",
+      "end": "#\\}",
+      "name": "comment.block.jinja"
     }
   }
 }

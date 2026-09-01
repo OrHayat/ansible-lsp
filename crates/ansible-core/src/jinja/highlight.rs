@@ -25,6 +25,20 @@ pub enum TokenType {
     String,
     Number,
     Operator,
+    /// Literal output that the client's grammar paints as something it is not.
+    ///
+    /// The grammar matches `{# … #}` from a hardcoded `{#`, which is right for every template
+    /// that leaves the comment delimiters alone — measured, 0 of 1222 `.j2` files across seven
+    /// public trees move any delimiter. On the ones that do, that text is *rendered into the
+    /// output file*, verified against ansible-core 2.21.3: with `comment_start_string:"<#"` the
+    /// line `LINE1 {# curly comment #} END1` comes out verbatim.
+    ///
+    /// A semantic token cannot un-paint a grammar scope — [`SparseTokensStore::addSparseTokens`]
+    /// merges per attribute and only visits ranges a token covers, so silence leaves the
+    /// grammar's colour standing. It can *re*paint, which is what this is for: emitted only
+    /// over the ranges the grammar is about to get wrong, mapped to a scope that resolves to
+    /// the editor's default foreground so the text reads as the output it is.
+    Text,
     /// `{%`, `%}`, `{{`, `}}` — the delimiter itself, whatever it currently is.
     ///
     /// Not a standard LSP type, and not decoration: the client's grammar used to paint these
@@ -60,9 +74,16 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
         return Vec::new();
     };
     let mut out = Vec::new();
+    // Only worth walking the data when the grammar is about to be wrong. With the default
+    // delimiters its `{# … #}` rule agrees with us and a repaint would be pure noise.
+    let grammar_is_wrong = delims.comment_start != Delimiters::default().comment_start;
     for b in blocks {
         match b.kind {
-            template::Kind::Data => {}
+            template::Kind::Data => {
+                if grammar_is_wrong {
+                    repaint_literal_comments(src, b.span, &mut out);
+                }
+            }
             template::Kind::Comment => out.push(SemToken { span: b.span, ty: TokenType::Comment }),
             template::Kind::Statement | template::Kind::Expression => {
                 // `span` covers the delimiters and `inner` only what is between them, so the
@@ -79,12 +100,36 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
             }
         }
     }
-    let _ = delims;
     debug_assert!(
         out.windows(2).all(|w| w[0].span.start <= w[1].span.start),
         "tokens must be in source order — the LSP encoding is deltas and underflows otherwise"
     );
     out
+}
+
+/// Repaint the `{# … #}` runs inside one data block.
+///
+/// These are literal output on this template — the real comment delimiter is something else —
+/// but the grammar cannot know that and paints them as comments. Emitting a token over exactly
+/// the range it mis-paints is the only way to take the colour back.
+///
+/// Unterminated `{#` is left alone: the grammar's `begin`/`end` would run its comment to the
+/// end of the file, and painting a span we cannot bound is guessing in the other direction.
+fn repaint_literal_comments(src: &str, span: Span, out: &mut Vec<SemToken>) {
+    let d = Delimiters::default();
+    let text = span.slice(src);
+    let mut i = 0;
+    while let Some(rel) = text[i..].find(&d.comment_start) {
+        let start = i + rel;
+        let after = start + d.comment_start.len();
+        let Some(erel) = text[after..].find(&d.comment_end) else { break };
+        let end = after + erel + d.comment_end.len();
+        out.push(SemToken {
+            span: Span { start: span.start + start, end: span.start + end },
+            ty: TokenType::Text,
+        });
+        i = end;
+    }
 }
 
 /// One delimiter — an edge of `span` outside `inner` — if it is not empty.
@@ -144,6 +189,72 @@ mod tests {
             .into_iter()
             .map(|t| (t.span.slice(src), t.ty))
             .collect()
+    }
+
+    /// The literal `{# … #}` on a comment-renamed template is repainted, so the grammar's
+    /// guess is recoverable.
+    ///
+    /// Verified against ansible-core 2.21.3 rather than assumed: rendering
+    /// `demo/templates/moved_comments.conf.j2` writes `keepalive {# not a comment #} 65;`
+    /// into the destination verbatim, so this range really is output and the grammar's
+    /// `comment.block.jinja` on it really is wrong.
+    #[test]
+    fn a_literal_curly_comment_is_repainted_when_the_delimiters_moved() {
+        let src = "#jinja2: comment_start_string:'<#', comment_end_string:'#>'\n\
+                   <# real #>\nkeepalive {# not a comment #} 65;\n";
+        let got = toks(src);
+        let repainted: Vec<_> =
+            got.iter().filter(|(_, ty)| *ty == TokenType::Text).map(|(t, _)| *t).collect();
+        assert_eq!(repainted, ["{# not a comment #}"], "{got:?}");
+        // And the *real* comment is still a comment, so the repaint did not swallow it.
+        let comments: Vec<_> =
+            got.iter().filter(|(_, ty)| *ty == TokenType::Comment).map(|(t, _)| *t).collect();
+        assert_eq!(comments, ["<# real #>"], "{got:?}");
+    }
+
+    /// The demo fixture itself, not a paraphrase of it.
+    ///
+    /// Rule 4: the file's `NO HINT` label is a claim about what we do, and a hand-written
+    /// label rots. It also uses double quotes in its header where the test above uses single
+    /// ones, so this is the only thing checking the bytes that actually ship.
+    ///
+    /// The claim was checked against ansible-core 2.21.3 first — rendering this template
+    /// writes `keepalive {# not a comment #} 65;` to the destination verbatim.
+    #[test]
+    fn the_moved_comments_demo_paints_its_literal_curly_run_as_text() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demo/templates/moved_comments.conf.j2");
+        let src = std::fs::read_to_string(&path).expect("demo fixture is missing");
+        let got = tokens(&src, &Delimiters::default(), true);
+        let repainted: Vec<&str> = got
+            .iter()
+            .filter(|t| t.ty == TokenType::Text)
+            .map(|t| t.span.slice(&src))
+            .collect();
+        assert_eq!(repainted, ["{# not a comment #}"], "{got:?}");
+        // The angle form is the real comment here, so it must still be one — otherwise the
+        // repaint could be passing by painting everything.
+        assert!(
+            got.iter().any(|t| t.ty == TokenType::Comment
+                && t.span.slice(&src).starts_with("<# GOOD")),
+            "the real comments must survive: {got:?}"
+        );
+    }
+
+    /// The control, and the reason the test above means anything: with the delimiters left
+    /// alone the grammar is right, so there is nothing to repaint and we emit no `Text`.
+    /// Without this a `Text` token on every template would pass the assertion above.
+    #[test]
+    fn without_the_header_the_same_text_is_a_real_comment_and_is_not_repainted() {
+        let src = "keepalive {# not a comment #} 65;\n";
+        let got = toks(src);
+        assert!(
+            got.iter().all(|(_, ty)| *ty != TokenType::Text),
+            "nothing to repaint when the grammar is right: {got:?}"
+        );
+        let comments: Vec<_> =
+            got.iter().filter(|(_, ty)| *ty == TokenType::Comment).map(|(t, _)| *t).collect();
+        assert_eq!(comments, ["{# not a comment #}"], "{got:?}");
     }
 
     /// The delimiters themselves get a token.

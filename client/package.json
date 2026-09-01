@@ -47,6 +47,9 @@
         "scopes": {
           "delimiter": [
             "punctuation.definition.tag"
+          ],
+          "text": [
+            "meta.template.expression"
           ]
         }
       }

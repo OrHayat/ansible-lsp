@@ -3461,6 +3461,13 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // with — so the delimiters keep the dimmer grey they had before the tag rules were
     // removed, and now do so on a file whose delimiters are not the default pair.
     SemanticTokenType::new("delimiter"),
+    // Also not standard, and the one token here that exists to *undo* something. The client's
+    // grammar paints `{# … #}` from a hardcoded `{#`; on a template that renames the comment
+    // delimiters that text is literal output, and a grammar scope cannot be cleared by
+    // staying silent. Mapped to `meta.template.expression`, which is the one scope the shipped
+    // dark, light and high-contrast themes all resolve to `editor.foreground` — so the
+    // repaint lands on the default text colour rather than a colour of its own.
+    SemanticTokenType::new("text"),
 ];
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
@@ -3475,6 +3482,7 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::Number => 5,
         T::Operator => 6,
         T::Delimiter => 7,
+        T::Text => 8,
     }
 }
 

@@ -1,0 +1,12 @@
+#jinja2: comment_start_string:"<#", comment_end_string:"#>"
+<# GOOD — this file renames only the COMMENT delimiters. The angle form is the comment and
+   is dropped from the output; the variable delimiters are untouched and still render.
+   Measured on ansible-core 2.21.3, not read off the source. #>
+server <# this comment vanishes #>{{ inventory_hostname }};
+
+<# NO HINT, and the reason this file exists — the line below is LITERAL OUTPUT. The client's
+   TextMate grammar paints the curly comment form from a hardcoded prefix, so it paints that
+   line as a comment, which is a lie: the render writes it into the destination verbatim.
+   The server emits a `text` token over exactly that range to take the colour back, because
+   a semantic token cannot un-paint a grammar scope by staying silent — only repaint it. #>
+keepalive {# not a comment #} 65;

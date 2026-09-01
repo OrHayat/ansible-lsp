@@ -706,6 +706,10 @@ mod tests {
             // the call-site link exists to prevent — so the pin below reads every demo
             // template the way the server does, through `render_sites`.
             ("templates/module_delims.j2", &[]),
+            // Renames only the COMMENT delimiters, so `{# … #}` is literal output here. It
+            // names no template; it exists to pin the one case the client's grammar gets
+            // wrong, and the `text` token that repaints it.
+            ("templates/moved_comments.conf.j2", &[]),
             // Read with its own `#jinja2:` delimiters. `find_referenced_templates` alone is
             // **not** the oracle here: it knows nothing about the header, so with the default
             // delimiters it calls the file `unknown tag 'notatag'` — the exact false positive

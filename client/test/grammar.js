@@ -61,6 +61,15 @@ function tokenize(grammar, src) {
 const claims = (toks, text) =>
   toks.filter((t) => t.text.includes(text) && t.scopes.some((s) => s !== "source.jinja"));
 
+/** Every token is bare `source.jinja` — the grammar claimed nothing anywhere on the line.
+ *
+ * Stronger than `claims(toks, src.slice(0, 6)).length === 0`, which was what this file used
+ * and which stopped being able to fail the moment a rule split a line into pieces: the
+ * 6-character needle then spans a token boundary and `includes` never matches, so the
+ * assertion passed on `{# a comment #}` while the grammar was painting all three of its
+ * tokens `comment.block.jinja`. */
+const unclaimed = (toks) => toks.every((t) => t.scopes.every((s) => s === "source.jinja"));
+
 (async () => {
   const grammar = await (await registry()).loadGrammar("source.jinja");
 
@@ -69,12 +78,32 @@ const claims = (toks, text) =>
   for (const src of [
     "{% if x %}ok{% endif %}",
     "{% notatag %}",
-    "{# a comment #}",
     "{% raw %}printf \"x{%s}\"{% endraw %}",
   ]) {
-    ok(`no claim about ${JSON.stringify(src.slice(0, 24))}`, claims(tokenize(grammar, src), src.slice(0, 6)).length === 0,
+    ok(`no claim about ${JSON.stringify(src.slice(0, 24))}`, unclaimed(tokenize(grammar, src)),
        JSON.stringify(tokenize(grammar, src)));
   }
+
+  // Comments are the one deliberate exception, and the only guess in this file. `{#` is
+  // overridable — verified against ansible-core 2.21.3, a template with
+  // `comment_start_string:"<#"` renders `{# not a comment #}` into the output verbatim — so
+  // this rule is wrong on such a file. Taken because the odds are measured (0 of 1222 public
+  // `.j2` files move any delimiter) and, unlike a tag rule, it is recoverable: the server
+  // emits a `text` token over the range and repaints it. See
+  // `demo/templates/moved_comments.conf.j2` and `highlight.rs`'s repaint tests.
+  const cmt = tokenize(grammar, "{# a comment #}");
+  ok("a comment IS claimed, unlike a tag", cmt.length > 0 && cmt.every((t) => t.scopes.includes("comment.block.jinja")),
+     JSON.stringify(cmt));
+
+  // begin/end, so it holds across lines — and gives the scope back afterwards.
+  const multi = tokenize(grammar, "before\n{# spans\nlines #}\nafter");
+  const scopeOf = (w) => (multi.find((t) => t.text.includes(w)) || {}).scopes || [];
+  ok("the comment rule spans lines and then stops",
+     !scopeOf("before").includes("comment.block.jinja") &&
+       scopeOf("spans").includes("comment.block.jinja") &&
+       scopeOf("lines").includes("comment.block.jinja") &&
+       !scopeOf("after").includes("comment.block.jinja"),
+     JSON.stringify(multi));
 
   // The one thing it does keep: `{{ }}` as neutral punctuation, so a template still reads as
   // structured before the server answers. It names no keyword and no variable, so the tokens
