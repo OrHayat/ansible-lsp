@@ -95,3 +95,16 @@ The section was not merely excluded from `UNRESOLVED ROLE NAMES` — after the f
 reference can no longer reach `NotInWorkspace` by any path, so that collector was dead code.
 It is repointed at the new variant under a heading that states the case is expected, which
 keeps `every_finding_section_prints_when_the_tree_earns_it` meaningful.
+
+**This ticket fixed the lie, not the silence, and the fix is provisional — T-063 owns the
+rest.** Measured after the fix: the Role reference still resolves to nothing, so
+go-to-definition on the role name does nothing whenever `tasks/main.yml` is absent, while the
+`tasks_from` token on the same line jumps correctly.
+
+The reason that is T-063's and not a reopen here: `main` is only the *default* for
+`tasks_from`, and `vars_from`/`defaults_from`/`handlers_from` move the entry the same way for
+their own subdirs — Ansible decides all four in `_load_role_yaml`. So the real fix is to
+resolve the entry as `tasks/<tasks_from or main>`, at which point this case resolves outright,
+`SkipReason::RoleWithoutMainTasks` becomes unreachable, and `scan`'s no-main section goes with
+it. T-063 carries a done-when box for exactly that. Closing this one is not a claim that roles
+without `tasks/main.yml` are fully handled.
