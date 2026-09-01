@@ -24,7 +24,22 @@ pub enum TokenType {
     Function,
     String,
     Number,
+    /// A symbolic operator — `|`, `==`, `+`. Go and Python both leave these at the default
+    /// foreground, and [`TokenType::WordOperator`] is deliberately a different thing.
     Operator,
+    /// `and`, `or`, `not`, `in`, `is` — an operator spelled as a word.
+    ///
+    /// Split from [`TokenType::Keyword`] because the two are not the same thing and the
+    /// precedent says so: Python paints `and` `#569cd6` and `return` `#C586C0`, and Go paints
+    /// `&&` at the default foreground and `if` `#C586C0`. Calling a tag name and a word
+    /// operator the same kind of token is what made `{% if x and true %}` one flat colour.
+    WordOperator,
+    /// `true`, `false`, `none` and their capitalised spellings — a literal, not a keyword.
+    ///
+    /// The set is closed: jinja2's `parse_primary` decides it, and `env.parse("{{ X }}")`
+    /// answers `Const` for exactly these six and `Name` for `null`, `nil` and `TRUE`. Same
+    /// fact as `condition::LITERALS`, and the drift between two copies of it was [[T-220]].
+    Constant,
     /// Literal output that the client's grammar paints as something it is not.
     ///
     /// The grammar matches `{# … #}` from a hardcoded `{#`, which is right for every template
@@ -55,12 +70,12 @@ pub struct SemToken {
     pub ty: TokenType,
 }
 
-/// Words the lexer returns as `Name` but which are keywords, not variables. `true`/`false`/
-/// `none` are values rather than operators, and jinja2 accepts both capitalisations.
-const KEYWORDS: &[&str] = &[
-    "and", "or", "not", "in", "is", "if", "else", "elif", "as", "with", "without", "recursive",
-    "true", "false", "none", "True", "False", "None",
-];
+/// Operators the lexer returns as `Name` because they are spelled as words.
+const WORD_OPERATORS: &[&str] =
+    &["and", "or", "not", "in", "is", "if", "else", "elif", "as", "with", "without", "recursive"];
+
+/// The six spellings jinja2 turns into a literal. Closed set — see [`TokenType::Constant`].
+const LITERALS: &[&str] = &["true", "True", "false", "False", "none", "None"];
 
 /// Tokens for a whole template. `root` says whether this source's own `#jinja2:` header
 /// applies — false for a partial that only ever gets included, matching
@@ -147,6 +162,22 @@ fn repaint_literal_comments(src: &str, span: Span, out: &mut Vec<SemToken>) {
     }
 }
 
+/// Is the name at `i` the test in an `is` expression?
+///
+/// `is` may be followed by `not` before the test name (`x is not defined`), and the name may
+/// be dotted. A literal after `is` stays a literal — `x is none` is a test spelled as one of
+/// the six constants, and jinja2 resolves it as a test, but calling it a function here would
+/// contradict [`TokenType::Constant`] for the identical token elsewhere. Left as a constant
+/// on purpose; the ambiguity is jinja2's, not ours to invent an answer for.
+fn is_test_name(toks: &[lexer::Token], i: usize, text: &str) -> bool {
+    let word_before = |j: usize| toks.get(j).map(|t| t.span.slice(text));
+    match i.checked_sub(1).and_then(word_before) {
+        Some("is") => true,
+        Some("not") => i.checked_sub(2).and_then(word_before) == Some("is"),
+        _ => false,
+    }
+}
+
 /// One delimiter — an edge of `span` outside `inner` — if it is not empty.
 ///
 /// Skips an empty edge rather than emitting a zero-width token: a client is entitled to treat
@@ -177,9 +208,18 @@ fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemTok
                 let prev = i.checked_sub(1).map(|j| toks[j].kind);
                 let next = toks.get(i + 1).map(|n| n.kind);
                 if is_statement && i == 0 {
+                    // The tag name. `include` here is a keyword; the identical text in
+                    // `{{ include }}` is a variable.
                     TokenType::Keyword
-                } else if KEYWORDS.contains(&word) {
-                    TokenType::Keyword
+                } else if LITERALS.contains(&word) {
+                    TokenType::Constant
+                } else if WORD_OPERATORS.contains(&word) {
+                    TokenType::WordOperator
+                } else if is_test_name(&toks, i, text) {
+                    // `x is defined`, `x is not none`, `x is sameas y` — the name after `is`
+                    // is a test, which is the same shape as a filter after `|` and was being
+                    // called a variable.
+                    TokenType::Function
                 } else if prev == Some(lexer::Kind::Pipe) || next == Some(lexer::Kind::Lparen) {
                     // A filter after `|`, or anything being called. Both read as functions,
                     // and both are wrong to call a variable.
@@ -411,11 +451,65 @@ mod tests {
     }
 
     #[test]
-    fn comments_strings_and_word_operators_classify() {
+    fn comments_and_strings_classify() {
         assert_eq!(toks("{# hi #}"), [("{# hi #}", TokenType::Comment)]);
         assert!(toks("{{ 'x' }}").contains(&("'x'", TokenType::String)));
-        assert!(toks("{% if a and b %}").contains(&("and", TokenType::Keyword)));
-        assert!(toks("{{ true }}").contains(&("true", TokenType::Keyword)));
+    }
+
+    /// A tag name, a word operator and a literal are three different things, and were one.
+    ///
+    /// The precedent, measured with `vscode-textmate` over VS Code's own Go and Python
+    /// grammars and resolved through Dark Modern's chain: `if`/`return` are
+    /// `keyword.control` `#C586C0`, `and` is `keyword.operator.logical` `#569cd6`, `true`
+    /// and `True` are `constant.language` `#569cd6`, and Go's `&&` is left at the default
+    /// foreground. Collapsing all of those onto `keyword` painted `{% if x and true %}` in
+    /// one colour, which neither language does.
+    #[test]
+    fn a_tag_name_a_word_operator_and_a_literal_are_three_kinds() {
+        let got = toks("{% if a and true %}");
+        assert!(got.contains(&("if", TokenType::Keyword)), "{got:?}");
+        assert!(got.contains(&("and", TokenType::WordOperator)), "{got:?}");
+        assert!(got.contains(&("true", TokenType::Constant)), "{got:?}");
+        assert!(got.contains(&("a", TokenType::Variable)), "{got:?}");
+        // A symbolic operator stays distinct from a word one.
+        assert!(toks("{{ x | y }}").contains(&("|", TokenType::Operator)));
+    }
+
+    /// A test after `is` is function-shaped, like a filter after `|`.
+    #[test]
+    fn the_name_after_is_is_a_test_not_a_variable() {
+        assert!(toks("{{ x is defined }}").contains(&("defined", TokenType::Function)));
+        assert!(toks("{{ x is not defined }}").contains(&("defined", TokenType::Function)));
+        assert!(toks("{{ x is sameas y }}").contains(&("sameas", TokenType::Function)));
+        // The subject and the far operand are still variables, so this did not become
+        // "anything near an `is` is a function".
+        let got = toks("{{ x is sameas y }}");
+        assert!(got.contains(&("x", TokenType::Variable)), "{got:?}");
+        assert!(got.contains(&("y", TokenType::Variable)), "{got:?}");
+        // And a literal after `is` stays a literal rather than flipping kind by position.
+        assert!(toks("{{ x is none }}").contains(&("none", TokenType::Constant)));
+    }
+
+    /// All six spellings, and the three lookalikes that are really variables — the same split
+    /// jinja2's parser makes, and the control that [[T-220]] turned on.
+    #[test]
+    fn every_literal_spelling_is_a_constant_and_the_lookalikes_are_not() {
+        for lit in ["true", "True", "false", "False", "none", "None"] {
+            let src = format!("{{{{ {lit} }}}}");
+            let got = tokens(&src, &Delimiters::default(), true);
+            assert!(
+                got.iter().any(|t| t.ty == TokenType::Constant && t.span.slice(&src) == lit),
+                "{lit} should be a constant: {got:?}"
+            );
+        }
+        for name in ["null", "nil", "TRUE"] {
+            let src = format!("{{{{ {name} }}}}");
+            let got = tokens(&src, &Delimiters::default(), true);
+            assert!(
+                got.iter().any(|t| t.ty == TokenType::Variable && t.span.slice(&src) == name),
+                "{name} is a name jinja2 looks up, not a literal: {got:?}"
+            );
+        }
     }
 
     /// A header can turn line statements on, and then a `#` line is a statement rather than

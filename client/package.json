@@ -50,6 +50,15 @@
           ],
           "text": [
             "meta.template.expression"
+          ],
+          "keyword": [
+            "keyword.control"
+          ],
+          "wordOperator": [
+            "keyword.operator.wordlike"
+          ],
+          "constant": [
+            "constant.language"
           ]
         }
       }

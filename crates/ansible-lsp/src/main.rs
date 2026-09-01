@@ -3495,6 +3495,12 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // dark, light and high-contrast themes all resolve to `editor.foreground` — so the
     // repaint lands on the default text colour rather than a colour of its own.
     SemanticTokenType::new("text"),
+    // Two more, for the same reason as `delimiter`: the protocol has no name for either, and
+    // both are mapped by the client to a scope the theme already colours. Splitting them is
+    // what lets a tag name, a word operator and a literal differ — which Go and Python both
+    // do and we did not. Appended, never inserted: an index is a position in this array.
+    SemanticTokenType::new("wordOperator"),
+    SemanticTokenType::new("constant"),
 ];
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
@@ -3510,6 +3516,8 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::Operator => 6,
         T::Delimiter => 7,
         T::Text => 8,
+        T::WordOperator => 9,
+        T::Constant => 10,
     }
 }
 
@@ -8761,9 +8769,16 @@ mod tests {
             line3.iter().any(|t| (t.1, t.2, t.3) == (12, 4, "variable")),
             "`flag` painted in a bare when: {line3:?}"
         );
+        // `is` is a word operator and `defined` is a test — neither is a variable, and they
+        // are not the same kind of thing either. Both were `keyword` when the three kinds
+        // were lumped together.
         assert!(
-            line3.iter().any(|t| t.3 == "keyword"),
-            "`is`/`defined` are keywords, not variables: {line3:?}"
+            line3.iter().any(|t| t.3 == "wordOperator"),
+            "`is` is a word operator: {line3:?}"
+        );
+        assert!(
+            line3.iter().any(|t| (t.2, t.3) == (7, "function")),
+            "`defined` is a test, which is function-shaped: {line3:?}"
         );
     }
 
