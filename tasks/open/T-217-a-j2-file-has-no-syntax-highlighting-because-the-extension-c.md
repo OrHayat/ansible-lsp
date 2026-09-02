@@ -274,6 +274,12 @@ of that advertises those gaps as visible wrong colour on every file.
 - **Richer token types.** `h.name` as a property, a `{% for h in … %}` binding versus a lookup,
   an `{% import … as m %}` namespace, a `{% macro %}` definition. All standard LSP types.
 
+  **Partly done in `1e8fc7e`, on a different axis than the slices below.** That commit split
+  the single `Keyword` kind into tag names, word operators (`and`/`or`/`not`/`in`/`is`) and
+  literals, adding `WordOperator` and `Constant` to the enum and the legend, so a theme can
+  tell them apart. It does *not* touch attribute access, loop bindings or definitions — A, B
+  and C below are all still open. Recorded so they are not re-derived.
+
   **Correction to an earlier draft: these are not "already in the AST" as far as this code path
   is concerned.** `inner_tokens` reads `lexer::tokens`, not the parser, and classifies by
   neighbour — `prev == Pipe || next == Lparen` is how a filter and a call become `Function`
