@@ -350,9 +350,19 @@ of that advertises those gaps as visible wrong colour on every file.
   2. **Builtins paint as ordinary variables.** Jinja's `loop` (14 files, `loop.index` /
      `loop.first` / `loop.last`), `namespace(` (2), `range(` (1), and Ansible's magic
      variables — `hostvars` in 40+ files, `groups`, `inventory_hostname`, `ansible_managed`.
-     LSP's standard `defaultLibrary` modifier is for exactly this. Rule 3: the Ansible list is
-     `condition::MAGIC`, and a second copy here is the drift [[T-220]] already paid for once —
-     lift it to somewhere both can read. `loop` is only a builtin *inside* a `for` body; see 4.
+     LSP's standard `defaultLibrary` modifier is for exactly this.
+
+     The lists, measured rather than recalled — an earlier draft of this note typed the
+     Jinja list from memory, which is how [[T-222]] got found:
+
+     - **Jinja 3.1.2**, `jinja2.defaults.DEFAULT_NAMESPACE`: `cycler` `dict` `joiner` `lipsum`
+       `namespace` `range`, everywhere. The compiler binds `self` at the template root, `loop`
+       only inside a `for`, `caller`/`varargs`/`kwargs` only inside a `macro`, `super` only
+       inside a `block`. So half the Jinja set is scoped and waits on 4.
+     - **Ansible 2.21.2**, from a `varnames` run: the play-level set is in [[T-222]]'s table,
+       and `condition::MAGIC` is missing four of it. Fix the list there first; the Ansible
+       side of this item then reads `is_injected`, which is already public — nothing to lift.
+       `item` and `role_*` are scoped too (loop, role), the same shape as Jinja's `loop`.
   3. **`context` after `with`/`without` paints as a variable**, 6 files in ansible-core, and
      the `import` word of `from … import` does too (a test pins that today as the current
      answer, `import_and_from_import_declare_what_lands_in_scope`). Both are keywords. Same
@@ -417,3 +427,25 @@ of that advertises those gaps as visible wrong colour on every file.
       scope only where it provides one, and cannot clear one, so the grammar stopped painting tags
 - [x] a `{%` inside a `{% raw %}` body is not coloured as a tag — the [[T-216]] shape, which is
       the case that justifies serving tokens at all
+
+Token types and modifiers, from the slices and the corpus survey above:
+
+- [x] a name after a `.` is a `property`; a called one stays a `function` (slice A)
+- [x] the names between `for` and `in` are `variable` + `declaration`; the body's read of the
+      same name is not (slice B)
+- [x] `macro` name and parameters, `import … as`, `from … import`, and `set` targets paint as
+      what they introduce, with `declaration`; a later bare use of a namespace or macro paints
+      as that, in source order (slice C, both halves)
+- [x] a keyword argument at a call is a `parameter` without `declaration`, and leaves nothing
+      in the memory map
+- [ ] `context` after `with`/`without`, the `import` word of `from … import`, and `ignore
+      missing` on an include are keywords, not variables — and the test that pins `import` as
+      a variable today is inverted, not kept
+- [ ] Jinja's six globals and `is_injected`'s names carry `defaultLibrary` — after [[T-222]]
+      fixes the shared list, and reading it rather than a copy
+- [ ] `Known` counts `for`/`endfor` and `macro`/`endmacro` depth: `loop` is a builtin only
+      inside a loop, `{{ p }}` inside `{% macro f(p) %}` is a `parameter`, and the control
+      that pins the body use as a variable today is inverted rather than deleted
+- [ ] `highlight_survey` rerun over a corpus wider than kubespray and the two local trees,
+      and every tag or bare name it surfaces above noise is either handled or written down
+      here with the reason it is not
