@@ -4,5 +4,13 @@
   // Diagnostics are unaffected — a warning is silenced per-line with
   // `# noqa: <rule-id>`, not from here.
   "ansibleLsp.inlayHints.enabled": true,
-  "ansibleLsp.hover.candidatesOnResolved": false
+  "ansibleLsp.hover.candidatesOnResolved": false,
+  // Every bundled theme paints a semantic `property` and `variable` the same colour, so
+  // T-217's split is invisible without this. Scoped to Jinja so Rust and Python keep theirs.
+  "editor.semanticTokenColorCustomizations": {
+    "rules": {
+      "property:jinja": "#ffa657",
+      "variable:jinja": "#79c0ff"
+    }
+  }
 }

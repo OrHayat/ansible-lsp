@@ -277,8 +277,20 @@ of that advertises those gaps as visible wrong colour on every file.
   **Partly done in `1e8fc7e`, on a different axis than the slices below.** That commit split
   the single `Keyword` kind into tag names, word operators (`and`/`or`/`not`/`in`/`is`) and
   literals, adding `WordOperator` and `Constant` to the enum and the legend, so a theme can
-  tell them apart. It does *not* touch attribute access, loop bindings or definitions — A, B
-  and C below are all still open. Recorded so they are not re-derived.
+  tell them apart. It does *not* touch attribute access, loop bindings or definitions.
+  Recorded so they are not re-derived.
+
+  **Slice A landed.** `Property` is in the enum and at legend index 11 as the standard
+  `property` type, so the client maps nothing. The arm sits *after* the call check on purpose:
+  `m.upstream(` is a call first, and the demo fixture asserts both halves —
+  `the_chain_root_demo_paints_the_dotted_name_as_a_property` reads
+  `demo/templates/app.conf.j2`, where `ansible_facts.hostname | default(inventory_hostname)`
+  is the property and `m.upstream('web')` is the control. Measured in the bundled themes
+  rather than assumed: Dark Modern inherits dark_plus's single `variable` rule (`#9CDCFE`)
+  and has no `variable.other.property` rule, so `property` and `variable` paint the **same**
+  colour there. The token is distinguishable, not yet distinguished — a theme (or an
+  `editor.semanticTokenColorCustomizations` rule for `property`) is what makes it visible.
+  B and C below are still open.
 
   **Correction to an earlier draft: these are not "already in the AST" as far as this code path
   is concerned.** `inner_tokens` reads `lexer::tokens`, not the parser, and classifies by

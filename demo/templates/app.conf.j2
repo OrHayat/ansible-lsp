@@ -17,5 +17,10 @@
 {% block body %}
 {{ listen_line(app_port | default(8080)) }}
 {{ m.upstream('web') }}
+{# GOOD — `hostname` after the dot is a property token, not a variable: the root is looked up
+   in the render context, the property on whatever the root turned out to be. `default` after
+   the pipe stays a function, and `m.upstream(` above stays a call. Pinned by
+   `highlight.rs::the_chain_root_demo_paints_the_dotted_name_as_a_property`. #}
+{{ ansible_facts.hostname | default(inventory_hostname) }}
 {% include "optional.conf.j2" %}
 {% endblock %}

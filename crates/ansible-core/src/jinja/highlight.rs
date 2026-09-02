@@ -22,6 +22,14 @@ pub enum TokenType {
     Keyword,
     Variable,
     Function,
+    /// The name after a `.` — `hostname` in `ansible_facts.hostname`.
+    ///
+    /// Split from [`TokenType::Variable`] because the two resolve differently and a theme
+    /// should be able to say so: the root is looked up in the render context, the property
+    /// is looked up on whatever the root turned out to be. A called one, `m.upstream(...)`,
+    /// stays a [`TokenType::Function`] — the same call as Python's `obj.method()`, which
+    /// Pylance types `method`, not `property`.
+    Property,
     String,
     Number,
     /// A symbolic operator — `|`, `==`, `+`. Go and Python both leave these at the default
@@ -224,6 +232,10 @@ fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemTok
                     // A filter after `|`, or anything being called. Both read as functions,
                     // and both are wrong to call a variable.
                     TokenType::Function
+                } else if prev == Some(lexer::Kind::Dot) {
+                    // After the call check on purpose: `m.upstream(` is a call first and a
+                    // property second, and one token has one colour.
+                    TokenType::Property
                 } else {
                     TokenType::Variable
                 }
@@ -448,6 +460,42 @@ mod tests {
         assert!(got.contains(&("default", TokenType::Function)), "{got:?}");
         assert!(got.contains(&("8080", TokenType::Number)), "{got:?}");
         assert!(got.contains(&("|", TokenType::Operator)), "{got:?}");
+    }
+
+    /// `ansible_facts.hostname`: the root is a variable and the name after the dot is not.
+    /// The call is the control — `upstream` in `m.upstream(` sits after a dot too and must
+    /// stay a function, otherwise this passes by painting everything after a dot.
+    #[test]
+    fn a_name_after_a_dot_is_a_property_unless_it_is_called() {
+        let got = toks("{{ ansible_facts.hostname | default(x.y) }}");
+        assert!(got.contains(&("ansible_facts", TokenType::Variable)), "{got:?}");
+        assert!(got.contains(&("hostname", TokenType::Property)), "{got:?}");
+        assert!(got.contains(&("x", TokenType::Variable)), "{got:?}");
+        assert!(got.contains(&("y", TokenType::Property)), "{got:?}");
+        let call = toks("{{ m.upstream('web') }}");
+        assert!(call.contains(&("m", TokenType::Variable)), "{call:?}");
+        assert!(call.contains(&("upstream", TokenType::Function)), "{call:?}");
+    }
+
+    /// The demo fixture itself, for the same reason as the moved-comments one below: its
+    /// `GOOD` label claims a property token, and a hand-written label rots.
+    #[test]
+    fn the_chain_root_demo_paints_the_dotted_name_as_a_property() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demo/templates/app.conf.j2");
+        let src = std::fs::read_to_string(&path).expect("demo fixture is missing");
+        let got = tokens(&src, &Delimiters::default(), true);
+        let props: Vec<&str> = got
+            .iter()
+            .filter(|t| t.ty == TokenType::Property)
+            .map(|t| t.span.slice(&src))
+            .collect();
+        assert_eq!(props, ["hostname"], "{got:?}");
+        // `m.upstream(` is the control: a name after a dot that is called is still a call.
+        assert!(
+            got.iter().any(|t| t.ty == TokenType::Function && t.span.slice(&src) == "upstream"),
+            "{got:?}"
+        );
     }
 
     #[test]

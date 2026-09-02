@@ -3501,6 +3501,10 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // do and we did not. Appended, never inserted: an index is a position in this array.
     SemanticTokenType::new("wordOperator"),
     SemanticTokenType::new("constant"),
+    // Standard again, so the client maps nothing: VS Code's default table sends `property`
+    // to `variable.other.property`, and whether that differs from `variable` is the theme's
+    // call. Dark Modern paints both `#9CDCFE`; the point is that a theme *can* tell them apart.
+    SemanticTokenType::PROPERTY,
 ];
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
@@ -3518,6 +3522,7 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::Text => 8,
         T::WordOperator => 9,
         T::Constant => 10,
+        T::Property => 11,
     }
 }
 
@@ -8565,6 +8570,16 @@ mod tests {
                 (line, col, t.length, name)
             })
             .collect()
+    }
+
+    /// `legend_index` is a hand-kept mirror of `SEMANTIC_TOKEN_LEGEND`, and a wrong index
+    /// paints the wrong colour without an error. Decoding through the legend by name is the
+    /// only thing that catches the two drifting apart.
+    #[test]
+    fn a_property_token_decodes_to_the_legend_entry_named_property() {
+        let got = decoded("{{ a.b }}");
+        assert!(got.contains(&(0, 3, 1, "variable")), "{got:?}");
+        assert!(got.contains(&(0, 5, 1, "property")), "{got:?}");
     }
 
     /// The encoding is deltas against the previous token, and the column delta is absolute
