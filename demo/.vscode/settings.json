@@ -10,7 +10,8 @@
   "editor.semanticTokenColorCustomizations": {
     "rules": {
       "property:jinja": "#ffa657",
-      "variable:jinja": "#79c0ff"
+      "variable:jinja": "#79c0ff",
+      "variable.declaration:jinja": "#7ee787"
     }
   }
 }

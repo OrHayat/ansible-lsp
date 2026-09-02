@@ -3194,7 +3194,7 @@ impl LanguageServer for Backend {
                         SemanticTokensOptions {
                             legend: SemanticTokensLegend {
                                 token_types: SEMANTIC_TOKEN_LEGEND.to_vec(),
-                                token_modifiers: vec![],
+                                token_modifiers: SEMANTIC_TOKEN_MODIFIERS.to_vec(),
                             },
                             // Full-document only: a template is a few KB and the whole file
                             // re-tokenises in well under a frame, so `range` and delta
@@ -3473,8 +3473,8 @@ impl LanguageServer for Backend {
 ///
 /// T-126 wants to colour *resolvable* references from the same provider, and a server has
 /// exactly one legend. Its distinction is "does this resolve", which is a property of a
-/// token rather than a kind of token, so it belongs in `token_modifiers` (still empty here)
-/// and needs nothing moved in this list.
+/// token rather than a kind of token, so it belongs in [`SEMANTIC_TOKEN_MODIFIERS`] and
+/// needs nothing moved in this list.
 const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,
     SemanticTokenType::KEYWORD,
@@ -3506,6 +3506,13 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // call. Dark Modern paints both `#9CDCFE`; the point is that a theme *can* tell them apart.
     SemanticTokenType::PROPERTY,
 ];
+
+/// The modifiers a token can carry, each one a bit in `token_modifiers_bitset` at its index
+/// here. One so far: `declaration`, on the `h` of `{% for h in hosts %}`. Standard, so a
+/// theme that styles a Python loop target styles ours; a lexical fact about one line, so
+/// unlike the resolvability modifier above it claims nothing about the workspace.
+const SEMANTIC_TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DECLARATION];
+const DECLARATION_BIT: u32 = 1 << 0;
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
 fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
@@ -3600,6 +3607,7 @@ impl Backend {
                         end: span.start + t.span.end,
                     },
                     ty: t.ty,
+                    declaration: t.declaration,
                 }));
             }
             Node::Sequence { items, .. } => {
@@ -3651,7 +3659,7 @@ impl Backend {
                     delta_start,
                     length: end - start,
                     token_type: ty,
-                    token_modifiers_bitset: 0,
+                    token_modifiers_bitset: if t.declaration { DECLARATION_BIT } else { 0 },
                 });
                 (last_line, last_col) = (line, start);
             }
@@ -8580,6 +8588,25 @@ mod tests {
         let got = decoded("{{ a.b }}");
         assert!(got.contains(&(0, 3, 1, "variable")), "{got:?}");
         assert!(got.contains(&(0, 5, 1, "property")), "{got:?}");
+    }
+
+    /// The modifier travels as a bit whose position is the index in `SEMANTIC_TOKEN_MODIFIERS`,
+    /// and a wrong bit paints nothing and errors nowhere. Decoded by name for the same reason
+    /// as the types above.
+    #[test]
+    fn a_loop_target_carries_the_declaration_bit_and_the_iterable_does_not() {
+        let d = ansible_core::jinja::Delimiters::default();
+        let decl = super::SEMANTIC_TOKEN_MODIFIERS
+            .iter()
+            .position(|m| *m == tower_lsp::lsp_types::SemanticTokenModifier::DECLARATION)
+            .expect("declaration is in the legend");
+        let var = super::legend_index(ansible_core::jinja::TokenType::Variable);
+        let got: Vec<(u32, bool)> = super::Backend::semantic_tokens_of("{% for h in hosts %}", &d, true)
+            .into_iter()
+            .filter(|t| t.token_type == var)
+            .map(|t| (t.length, t.token_modifiers_bitset & (1 << decl) != 0))
+            .collect();
+        assert_eq!(got, [(1, true), (5, false)], "{got:?}");
     }
 
     /// The encoding is deltas against the previous token, and the column delta is absolute

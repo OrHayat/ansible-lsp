@@ -22,5 +22,10 @@
    the pipe stays a function, and `m.upstream(` above stays a call. Pinned by
    `highlight.rs::the_chain_root_demo_paints_the_dotted_name_as_a_property`. #}
 {{ ansible_facts.hostname | default(inventory_hostname) }}
+{# GOOD — the first `h` is introduced by the loop and carries the `declaration` modifier.
+   `groups` and the `h` in the body are lookups and do not, so a theme can show which name
+   has to exist already and which one this line creates. Pinned by
+   `highlight.rs::the_chain_root_demo_marks_the_loop_target_as_a_declaration`. #}
+{% for h in groups['web'] %}server {{ h }};{% endfor %}
 {% include "optional.conf.j2" %}
 {% endblock %}

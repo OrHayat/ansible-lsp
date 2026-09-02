@@ -76,6 +76,15 @@ pub enum TokenType {
 pub struct SemToken {
     pub span: Span,
     pub ty: TokenType,
+    /// This occurrence introduces the name rather than reading it — `h` in
+    /// `{% for h in hosts %}`, where `hosts` is looked up and `h` is not looked up anywhere.
+    ///
+    /// LSP's standard `declaration` modifier, on a [`TokenType::Variable`]. A modifier and not
+    /// a type because it *is* a variable — `{{ h }}` in the body is the same kind of thing —
+    /// and not `parameter`, which is a function's argument and would be a lie here. A lexical
+    /// fact about one line, so unlike the resolvability modifier T-217 leaves open it claims
+    /// nothing about the workspace.
+    pub declaration: bool,
 }
 
 /// Operators the lexer returns as `Name` because they are spelled as words.
@@ -107,7 +116,9 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
                     repaint_literal_comments(src, b.span, &mut out);
                 }
             }
-            template::Kind::Comment => out.push(SemToken { span: b.span, ty: TokenType::Comment }),
+            template::Kind::Comment => {
+                out.push(SemToken { span: b.span, ty: TokenType::Comment, declaration: false })
+            }
             template::Kind::Statement | template::Kind::Expression => {
                 // `span` covers the delimiters and `inner` only what is between them, so the
                 // two edges are exactly the opening and closing delimiter. Emitting them is
@@ -165,6 +176,7 @@ fn repaint_literal_comments(src: &str, span: Span, out: &mut Vec<SemToken>) {
         out.push(SemToken {
             span: Span { start: span.start + start, end: span.start + end },
             ty: TokenType::Text,
+            declaration: false,
         });
         i = end;
     }
@@ -192,7 +204,7 @@ fn is_test_name(toks: &[lexer::Token], i: usize, text: &str) -> bool {
 /// `length: 0` as malformed, and there is nothing to paint.
 fn delimiter(start: usize, end: usize, out: &mut Vec<SemToken>) {
     if end > start {
-        out.push(SemToken { span: Span { start, end }, ty: TokenType::Delimiter });
+        out.push(SemToken { span: Span { start, end }, ty: TokenType::Delimiter, declaration: false });
     }
 }
 
@@ -205,6 +217,17 @@ fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemTok
     // An unlexable body is left to the grammar rather than half-painted.
     let Ok(toks) = lexer::tokens(text) else { return };
     let at = |s: Span| Span { start: inner.start + s.start, end: inner.start + s.end };
+
+    // `{% for k, v in d.items() %}`: every name between the tag name and the first `in` is
+    // being introduced, not read. Past that `in` — the iterable, an `if` filter, a second
+    // `in` inside it — everything is a lookup again.
+    let word = |t: &lexer::Token| t.span.slice(text);
+    let bindings_end = match toks.first() {
+        Some(first) if is_statement && first.kind == lexer::Kind::Name && word(first) == "for" => {
+            toks.iter().position(|t| t.kind == lexer::Kind::Name && word(t) == "in")
+        }
+        _ => None,
+    };
 
     for (i, t) in toks.iter().enumerate() {
         let ty = match t.kind {
@@ -242,7 +265,9 @@ fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemTok
             }
             _ => TokenType::Operator,
         };
-        out.push(SemToken { span: at(t.span), ty });
+        let declaration =
+            ty == TokenType::Variable && i > 0 && bindings_end.is_some_and(|end| i < end);
+        out.push(SemToken { span: at(t.span), ty, declaration });
     }
 }
 
@@ -475,6 +500,50 @@ mod tests {
         let call = toks("{{ m.upstream('web') }}");
         assert!(call.contains(&("m", TokenType::Variable)), "{call:?}");
         assert!(call.contains(&("upstream", TokenType::Function)), "{call:?}");
+    }
+
+    /// `(text, declaration)` for every variable token — the modifier is the whole question.
+    fn decls(src: &str) -> Vec<(&str, bool)> {
+        tokens(src, &Delimiters::default(), true)
+            .into_iter()
+            .filter(|t| t.ty == TokenType::Variable)
+            .map(|t| (t.span.slice(src), t.declaration))
+            .collect()
+    }
+
+    /// `{% for h in hosts %}` introduces `h` and reads `hosts`. Tuple targets are all
+    /// introduced; everything after the first `in` — the iterable, an `if` filter with its
+    /// own `in` — is a read, and so is the same name in the body.
+    #[test]
+    fn the_names_between_for_and_in_are_declarations_and_nothing_after_in_is() {
+        assert_eq!(decls("{% for h in hosts %}"), [("h", true), ("hosts", false)]);
+        assert_eq!(
+            decls("{% for k, v in d.items() if k in wanted %}"),
+            [("k", true), ("v", true), ("d", false), ("k", false), ("wanted", false)]
+        );
+        assert_eq!(decls("{{ h }}"), [("h", false)]);
+        // Controls: `in` as a membership test is not a loop, and a `for` that is not the
+        // tag name is an ordinary variable, so neither may declare anything.
+        assert_eq!(decls("{% if h in hosts %}"), [("h", false), ("hosts", false)]);
+        assert_eq!(decls("{{ for }}"), [("for", false)]);
+    }
+
+    /// The demo fixture's loop line, pinned for the same reason as the property line below.
+    #[test]
+    fn the_chain_root_demo_marks_the_loop_target_as_a_declaration() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demo/templates/app.conf.j2");
+        let src = std::fs::read_to_string(&path).expect("demo fixture is missing");
+        let declared: Vec<(&str, usize)> = tokens(&src, &Delimiters::default(), true)
+            .iter()
+            .filter(|t| t.declaration)
+            .map(|t| (t.span.slice(&src), t.span.start))
+            .collect();
+        // Exactly one, and it is the loop target — not the `h` in the body two tokens later.
+        assert_eq!(declared.len(), 1, "{declared:?}");
+        assert_eq!(declared[0].0, "h");
+        let line = src[..declared[0].1].rsplit('\n').next().unwrap_or("");
+        assert!(line.trim_start().starts_with("{% for "), "declared on the wrong line: {line:?}");
     }
 
     /// The demo fixture itself, for the same reason as the moved-comments one below: its

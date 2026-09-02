@@ -290,7 +290,19 @@ of that advertises those gaps as visible wrong colour on every file.
   and has no `variable.other.property` rule, so `property` and `variable` paint the **same**
   colour there. The token is distinguishable, not yet distinguished — a theme (or an
   `editor.semanticTokenColorCustomizations` rule for `property`) is what makes it visible.
-  B and C below are still open.
+
+  **Slice B landed.** The names between the `for` tag name and the first `in` carry LSP's
+  standard `declaration` modifier on a `variable` token — the legend's modifier list is no
+  longer empty, and `SemToken` grew a `declaration` flag. `variable` + modifier rather than
+  `parameter`, which is a function's argument and would be a lie on a loop target; and a
+  modifier rather than a type because `{{ h }}` in the body is the same kind of thing. The
+  first `in` closes the bindings, so `{% for k, v in d.items() if k in wanted %}` declares
+  `k` and `v` and reads the rest. This modifier is safe where the resolvability one is not:
+  it is a fact about one line, not about the workspace. Same visibility caveat as A — no
+  bundled theme styles `declaration` — so `demo/.vscode/settings.json` carries a
+  `variable.declaration:jinja` rule alongside the `property:jinja` one. C below is still
+  open, and `{% set x = … %}` and the `{% macro %}` name are the obvious next uses of the
+  same flag.
 
   **Correction to an earlier draft: these are not "already in the AST" as far as this code path
   is concerned.** `inner_tokens` reads `lexer::tokens`, not the parser, and classifies by
