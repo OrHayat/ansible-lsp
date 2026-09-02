@@ -132,6 +132,13 @@ const unclaimed = (toks) => toks.every((t) => t.scopes.every((s) => s === "sourc
       (g) => g.language === "jinja" && g.scopeName === "source.jinja"
     )
   );
+  // Every non-standard type the server's legend serves must land on a scope, or a theme has
+  // nothing to colour it with. The list is the server's `SEMANTIC_TOKEN_LEGEND` minus the
+  // standard LSP names; a new `SemanticTokenType::new(...)` there needs a row here and there.
+  const scopes = ((pkg.contributes.semanticTokenScopes || []).find((s) => s.language === "jinja") || {}).scopes || {};
+  for (const t of ["delimiter", "text", "wordOperator", "constant", "label"]) {
+    ok(`non-standard token type ${t} maps to a scope`, Array.isArray(scopes[t]) && scopes[t].length > 0, JSON.stringify(scopes[t]));
+  }
   const ids = new Set((pkg.contributes.languages || []).map((l) => l.id));
   const dangling = pkg.activationEvents
     .filter((e) => e.startsWith("onLanguage:"))

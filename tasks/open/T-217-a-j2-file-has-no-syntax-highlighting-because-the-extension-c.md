@@ -438,9 +438,18 @@ Token types and modifiers, from the slices and the corpus survey above:
       as that, in source order (slice C, both halves)
 - [x] a keyword argument at a call is a `parameter` without `declaration`, and leaves nothing
       in the memory map
-- [ ] `context` after `with`/`without`, the `import` word of `from … import`, and `ignore
+- [x] `context` after `with`/`without`, the `import` word of `from … import`, and `ignore
       missing` on an include are keywords, not variables — and the test that pins `import` as
-      a variable today is inverted, not kept
+      a variable today is inverted, not kept. Also `scoped`/`required` on a `block`, and the
+      name after `{% filter %}` as a function. Gated by statement shape on purpose:
+      `{% if context %}` and `{% set scoped = 1 %}` are variables and asserted as controls.
+      A block's *name* is a `label` — a name two templates agree on, not a variable and not
+      a function whatever Jinja compiles it to. Measured before choosing: LSP has no label
+      type and neither does VS Code's registry (22 types, checked in the workbench bundle),
+      but the bundled C, C#, JavaScript and TypeScript grammars scope a goto label
+      `entity.name.label` and Dark+ paints it, so it is the fifth non-standard type in the
+      legend, mapped by the client like `delimiter`. `{% endblock name %}` is the same label
+      referenced; `grammar.js` now asserts every non-standard type has a scope.
 - [ ] Jinja's six globals and `is_injected`'s names carry `defaultLibrary` — after [[T-222]]
       fixes the shared list, and reading it rather than a copy
 - [ ] `Known` counts `for`/`endfor` and `macro`/`endmacro` depth: `loop` is a builtin only

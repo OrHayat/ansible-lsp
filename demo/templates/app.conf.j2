@@ -7,22 +7,27 @@
    Ansible never parses this file at playbook-parse time; a broken tag here is a run-time
    failure on the target host. `broken.conf.j2` is that case. #}
 {% extends "base.conf.j2" %}
-{% import "macros.j2" as m %}
+{# GOOD — `with context` and, on the body block below, `scoped` are painted as keywords. The
+   same words outside their statement are variables, which is what they are there. Pinned by
+   `highlight.rs::the_demo_paints_its_statement_words_as_keywords`, with `optional.conf.j2`'s
+   `ignore missing`. #}
+{% import "macros.j2" as m with context %}
 {% from "macros.j2" import listen_line %}
 
 {% block header %}
 {% include "partials/header.j2" %}
 {% endblock %}
 
-{% block body %}
+{% block body scoped %}
 {# GOOD — `decoration` is a keyword argument: it names the filter's parameter, so it is painted
    as one, and it declares nothing — the same word as a bare name later would still be a
    variable. `macros.j2` has the other side, a parameter being defined. Pinned by
    `highlight.rs::the_demo_has_one_keyword_argument_and_one_macro_parameter`. #}
 {{ ansible_managed | comment(decoration='# ') }}
-{# GOOD — four statements above and below introduce a name, and each is painted as what it
-   introduces: `m` a namespace, `listen_line` a function, `listen_port` a variable, and the
-   loop's `h` further down. All carry the `declaration` modifier; the reads of them do not.
+{# GOOD — six statements in this file introduce a name, and each is painted as what it
+   introduces: `m` a namespace, `listen_line` a function, the two block names labels,
+   `listen_port` a variable, and the loop's `h` further down. All carry the `declaration`
+   modifier; the reads of them do not.
    `macros.j2` has the other half, a macro name and its parameter. Pinned by
    `highlight.rs::the_chain_root_demo_declares_exactly_these_names`. #}
 {% set listen_port = app_port | default(8080) %}

@@ -14,7 +14,8 @@
       "variable.declaration:jinja": "#7ee787",
       "function.declaration:jinja": { "bold": true, "underline": true },
       "parameter:jinja": "#e3b341",
-      "namespace:jinja": "#ff7b72"
+      "namespace:jinja": "#ff7b72",
+      "label:jinja": { "foreground": "#8b949e", "italic": true }
     }
   }
 }

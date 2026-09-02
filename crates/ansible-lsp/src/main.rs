@@ -3508,6 +3508,10 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // Both standard, both from `{% macro %}` / `{% import %}` declarations.
     SemanticTokenType::PARAMETER,
     SemanticTokenType::NAMESPACE,
+    // Not standard: neither LSP nor VS Code's registry has a label type. The client maps it
+    // to `entity.name.label`, the scope the bundled C/C#/JS/TS grammars give a goto label,
+    // so a `{% block name %}` takes whatever colour a theme gives those.
+    SemanticTokenType::new("label"),
 ];
 
 /// The modifiers a token can carry, each one a bit in `token_modifiers_bitset` at its index
@@ -3535,6 +3539,7 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::Property => 11,
         T::Parameter => 12,
         T::Namespace => 13,
+        T::Label => 14,
     }
 }
 
@@ -8596,6 +8601,8 @@ mod tests {
         let got = decoded("{% macro f(p) %}{% import 'x' as n %}");
         assert!(got.contains(&(0, 11, 1, "parameter")), "{got:?}");
         assert!(got.contains(&(0, 33, 1, "namespace")), "{got:?}");
+        let got = decoded("{% block b %}");
+        assert!(got.contains(&(0, 9, 1, "label")), "{got:?}");
     }
 
     /// The modifier travels as a bit whose position is the index in `SEMANTIC_TOKEN_MODIFIERS`,

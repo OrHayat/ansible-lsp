@@ -36,6 +36,13 @@ pub enum TokenType {
     /// `m` in `{% import "macros.j2" as m %}` — a module-like name whose members are macros.
     /// Standard `namespace`, which is what Pylance sends for `import x as m`.
     Namespace,
+    /// `body` in `{% block body %}` — a name two templates agree on so a child can fill the
+    /// parent's slot. Not a variable: nothing looks it up and `{{ body }}` is undefined. Not a
+    /// function either, whatever Jinja compiles it to. Not standard LSP — the protocol has no
+    /// label type and neither does VS Code's registry — so the client maps it to
+    /// `entity.name.label`, the scope the bundled C, C#, JavaScript and TypeScript grammars
+    /// give a goto label, which Dark+ paints and any theme that colours C labels colours.
+    Label,
     String,
     Number,
     /// A symbolic operator — `|`, `==`, `+`. Go and Python both leave these at the default
@@ -347,8 +354,22 @@ enum Shape {
     /// being introduced, unless after a dot — that is a write to an attribute of something
     /// that already exists.
     Set { end: usize },
+    /// `include "x" ignore missing with context`: introduces nothing, but its trailing words
+    /// are keywords and were painting as variables.
+    Include,
+    /// `block name scoped required`: the name is a [`TokenType::Label`] being defined and the
+    /// two modifiers are keywords. `endblock name` — Jinja lets the close repeat it — is the
+    /// same label, referenced.
+    Block { defines: bool },
+    /// `filter upper`: the word after the tag name is a filter, the same thing as after `|`.
+    Filter,
     Other,
 }
+
+/// Words that are keywords only in the statement that owns them. `{% if context %}` reads a
+/// variable called `context`; `{% import "x" as m with context %}` does not.
+const IMPORT_WORDS: &[&str] = &["context", "ignore", "missing"];
+const BLOCK_WORDS: &[&str] = &["scoped", "required"];
 
 impl Shape {
     fn of(toks: &[lexer::Token], text: &str) -> Shape {
@@ -381,6 +402,10 @@ impl Shape {
                     .unwrap_or(toks.len());
                 Shape::Set { end }
             }
+            "include" | "extends" => Shape::Include,
+            "block" => Shape::Block { defines: true },
+            "endblock" => Shape::Block { defines: false },
+            "filter" => Shape::Filter,
             _ => Shape::Other,
         }
     }
@@ -394,6 +419,19 @@ impl Shape {
             Shape::For { in_at } if i > 0 && in_at.is_some_and(|at| i < at) => {
                 Some((TokenType::Variable, true))
             }
+            // Keywords first, so `import` in `from … import` never reaches the name range
+            // below and `context` never reaches the fallback.
+            Shape::Import | Shape::From { .. } | Shape::Include
+                if word(i).is_some_and(|w| IMPORT_WORDS.contains(&w)) =>
+            {
+                Some((TokenType::Keyword, false))
+            }
+            Shape::From { .. } if word(i) == Some("import") => Some((TokenType::Keyword, false)),
+            Shape::Block { .. } if word(i).is_some_and(|w| BLOCK_WORDS.contains(&w)) => {
+                Some((TokenType::Keyword, false))
+            }
+            Shape::Block { defines } if i == 1 => Some((TokenType::Label, defines)),
+            Shape::Filter if i == 1 => Some((TokenType::Function, false)),
             Shape::Macro { .. } if i == 1 => Some((TokenType::Function, true)),
             Shape::Macro { parens: Some((open, close)) }
                 if open < i
@@ -731,17 +769,76 @@ mod tests {
             names("{% from 'macros.j2' import a, b as c with context %}"),
             [
                 ("from", Keyword, false),
-                ("import", Variable, false),
+                ("import", Keyword, false),
                 ("a", Function, true),
                 ("b", Function, false),
                 ("as", WordOperator, false),
                 ("c", Function, true),
                 ("with", WordOperator, false),
-                ("context", Variable, false),
+                ("context", Keyword, false),
             ]
         );
         // Control: the same names in an expression are plain reads.
         assert_eq!(names("{{ m }}"), [("m", Variable, false)]);
+    }
+
+    /// The words that are keywords only inside the statement that owns them. The controls
+    /// are the same spellings outside it: `{% if context %}` reads a variable, and so does
+    /// `{{ missing }}` — a user is allowed to name a variable `scoped`.
+    #[test]
+    fn statement_words_are_keywords_in_their_statement_and_variables_elsewhere() {
+        use TokenType::*;
+        assert_eq!(
+            names("{% include 'a.j2' ignore missing with context %}"),
+            [
+                ("include", Keyword, false),
+                ("ignore", Keyword, false),
+                ("missing", Keyword, false),
+                ("with", WordOperator, false),
+                ("context", Keyword, false),
+            ]
+        );
+        assert_eq!(
+            names("{% import 'a.j2' as m without context %}"),
+            [
+                ("import", Keyword, false),
+                ("as", WordOperator, false),
+                ("m", Namespace, true),
+                ("without", WordOperator, false),
+                ("context", Keyword, false),
+            ]
+        );
+        assert_eq!(
+            names("{% block body scoped required %}"),
+            [("block", Keyword, false), ("body", Label, true), ("scoped", Keyword, false), ("required", Keyword, false)]
+        );
+        // The close may repeat the name: the same label, referenced rather than defined. And
+        // a bare `body` elsewhere is a variable — the label leaves nothing in the memory map.
+        assert_eq!(names("{% endblock body %}"), [("endblock", Keyword, false), ("body", Label, false)]);
+        assert_eq!(names("{% block body %}{{ body }}"), [("block", Keyword, false), ("body", Label, true), ("body", Variable, false)]);
+        assert_eq!(names("{% filter upper %}"), [("filter", Keyword, false), ("upper", Function, false)]);
+        // Controls.
+        assert_eq!(names("{% if context %}"), [("if", Keyword, false), ("context", Variable, false)]);
+        assert_eq!(names("{{ missing }}"), [("missing", Variable, false)]);
+        assert_eq!(names("{% set scoped = 1 %}"), [("set", Keyword, false), ("scoped", Variable, true)]);
+        assert_eq!(names("{% include tuning_file %}"), [("include", Keyword, false), ("tuning_file", Variable, false)]);
+    }
+
+    /// The demo carries three of these: `with context` on the chain root's import, `scoped`
+    /// on its body block, and `ignore missing` on `optional.conf.j2`'s include.
+    #[test]
+    fn the_demo_paints_its_statement_words_as_keywords() {
+        let keywords = |name: &str| -> Vec<String> {
+            let src = demo(name);
+            tokens(&src, &Delimiters::default(), true)
+                .iter()
+                .filter(|t| t.ty == TokenType::Keyword)
+                .map(|t| t.span.slice(&src).to_string())
+                .filter(|w| IMPORT_WORDS.contains(&w.as_str()) || BLOCK_WORDS.contains(&w.as_str()))
+                .collect()
+        };
+        assert_eq!(keywords("app.conf.j2"), ["context", "scoped"]);
+        assert_eq!(keywords("optional.conf.j2"), ["ignore", "missing"]);
     }
 
     /// `set` introduces what is left of `=` or `|`; an attribute write introduces nothing.
@@ -784,7 +881,7 @@ mod tests {
         );
         assert_eq!(
             names("{% from 'x' import f %}{{ f }}"),
-            [("from", Keyword, false), ("import", Variable, false), ("f", Function, true), ("f", Function, false)]
+            [("from", Keyword, false), ("import", Keyword, false), ("f", Function, true), ("f", Function, false)]
         );
         assert_eq!(
             names("{{ m }}{% import 'x' as m %}"),
@@ -870,6 +967,23 @@ mod tests {
         assert_eq!(params("macros.j2"), [("group".to_string(), true), ("port".to_string(), true)]);
     }
 
+    /// The two halves of the demo's inheritance: `base.conf.j2` defines both slots, and
+    /// `app.conf.j2` fills one. Every block name is a label, and every one is a definition —
+    /// a child's `{% block body %}` defines its own version, it does not reference the parent's.
+    #[test]
+    fn the_demo_block_names_are_labels() {
+        let labels = |name: &str| -> Vec<(String, bool)> {
+            let src = demo(name);
+            tokens(&src, &Delimiters::default(), true)
+                .iter()
+                .filter(|t| t.ty == TokenType::Label)
+                .map(|t| (t.span.slice(&src).to_string(), t.declaration))
+                .collect()
+        };
+        assert_eq!(labels("base.conf.j2"), [("header".to_string(), true), ("body".to_string(), true)]);
+        assert_eq!(labels("app.conf.j2"), [("header".to_string(), true), ("body".to_string(), true)]);
+    }
+
     fn demo(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/templates").join(name);
         std::fs::read_to_string(&path).expect("demo fixture is missing")
@@ -888,7 +1002,14 @@ mod tests {
             .collect();
         assert_eq!(
             declared,
-            [("m", Namespace), ("listen_line", Function), ("listen_port", Variable), ("h", Variable)]
+            [
+                ("m", Namespace),
+                ("listen_line", Function),
+                ("header", Label),
+                ("body", Label),
+                ("listen_port", Variable),
+                ("h", Variable),
+            ]
         );
     }
 
