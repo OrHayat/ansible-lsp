@@ -30,6 +30,12 @@ pub enum TokenType {
     /// stays a [`TokenType::Function`] — the same call as Python's `obj.method()`, which
     /// Pylance types `method`, not `property`.
     Property,
+    /// `group` in `{% macro upstream(group) %}` — a macro's argument, which is the one place
+    /// LSP's `parameter` is the truth. A loop target is not one; see [`SemToken::declaration`].
+    Parameter,
+    /// `m` in `{% import "macros.j2" as m %}` — a module-like name whose members are macros.
+    /// Standard `namespace`, which is what Pylance sends for `import x as m`.
+    Namespace,
     String,
     Number,
     /// A symbolic operator — `|`, `==`, `+`. Go and Python both leave these at the default
@@ -106,6 +112,7 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
         return Vec::new();
     };
     let mut out = Vec::new();
+    let mut known = Known::default();
     // Only worth walking the data when the grammar is about to be wrong. With the default
     // delimiters its `{# … #}` rule agrees with us and a repaint would be pure noise.
     let grammar_is_wrong = delims.comment_start != Delimiters::default().comment_start;
@@ -129,7 +136,7 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
                 // the column subtraction. Emitting both delimiters before the content did
                 // exactly that, and the encoder panicked rather than mis-painting.
                 delimiter(b.span.start, b.inner.start, &mut out);
-                inner_tokens(src, b.inner, b.kind == template::Kind::Statement, &mut out);
+                inner_tokens(src, b.inner, b.kind == template::Kind::Statement, &mut known, &mut out);
                 delimiter(b.inner.end, b.span.end, &mut out);
             }
         }
@@ -152,8 +159,35 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
 /// `is_statement` is false: the first name in a `when:` is a variable, not a tag keyword.
 pub fn expression_tokens(src: &str) -> Vec<SemToken> {
     let mut out = Vec::new();
-    inner_tokens(src, Span { start: 0, end: src.len() }, false, &mut out);
+    // One expression has no statements before it, so nothing is known.
+    inner_tokens(src, Span { start: 0, end: src.len() }, false, &mut Known::default(), &mut out);
     out
+}
+
+/// What the statements walked so far introduced, by name — the memory across statements
+/// that makes `m` in `{{ m.upstream('web') }}` the namespace an earlier `{% import %}` made
+/// it, rather than a variable that happens to share the spelling.
+///
+/// Source order is the scope rule, which is Jinja's own: an import or macro is visible
+/// from its statement to the end of the file, and a use *before* it is an ordinary lookup
+/// that would fail at render. A later declaration of the same name under another kind —
+/// `{% for m in … %}` after the import — replaces the entry, so the loop's `m` reads as the
+/// variable it now is.
+///
+/// Only namespaces and functions are remembered. A parameter is scoped to its macro body
+/// and a variable is already a variable, so neither changes a later token's answer.
+#[derive(Default)]
+struct Known(std::collections::HashMap<String, TokenType>);
+
+impl Known {
+    fn declare(&mut self, name: &str, ty: TokenType) {
+        self.0.insert(name.to_string(), ty);
+    }
+
+    /// The kind a bare use of `name` should paint as, if a statement before it said so.
+    fn use_of(&self, name: &str) -> Option<TokenType> {
+        self.0.get(name).copied().filter(|t| matches!(t, TokenType::Namespace | TokenType::Function))
+    }
 }
 
 /// Repaint the `{# … #}` runs inside one data block.
@@ -212,28 +246,25 @@ fn delimiter(start: usize, end: usize, out: &mut Vec<SemToken>) {
 ///
 /// `is_statement` marks the first name as the tag keyword — `include` in `{% include x %}`
 /// is a keyword, while the identical text in `{{ include }}` is a variable.
-fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemToken>) {
+fn inner_tokens(
+    src: &str,
+    inner: Span,
+    is_statement: bool,
+    known: &mut Known,
+    out: &mut Vec<SemToken>,
+) {
     let text = inner.slice(src);
     // An unlexable body is left to the grammar rather than half-painted.
     let Ok(toks) = lexer::tokens(text) else { return };
     let at = |s: Span| Span { start: inner.start + s.start, end: inner.start + s.end };
 
-    // `{% for k, v in d.items() %}`: every name between the tag name and the first `in` is
-    // being introduced, not read. Past that `in` — the iterable, an `if` filter, a second
-    // `in` inside it — everything is a lookup again.
-    let word = |t: &lexer::Token| t.span.slice(text);
-    let bindings_end = match toks.first() {
-        Some(first) if is_statement && first.kind == lexer::Kind::Name && word(first) == "for" => {
-            toks.iter().position(|t| t.kind == lexer::Kind::Name && word(t) == "in")
-        }
-        _ => None,
-    };
+    let shape = if is_statement { Shape::of(&toks, text) } else { Shape::Other };
 
     for (i, t) in toks.iter().enumerate() {
-        let ty = match t.kind {
+        let (ty, declaration) = match t.kind {
             lexer::Kind::Eof => continue,
-            lexer::Kind::Str => TokenType::String,
-            lexer::Kind::Int | lexer::Kind::Float => TokenType::Number,
+            lexer::Kind::Str => (TokenType::String, false),
+            lexer::Kind::Int | lexer::Kind::Float => (TokenType::Number, false),
             lexer::Kind::Name => {
                 let word = t.span.slice(text);
                 let prev = i.checked_sub(1).map(|j| toks[j].kind);
@@ -241,33 +272,155 @@ fn inner_tokens(src: &str, inner: Span, is_statement: bool, out: &mut Vec<SemTok
                 if is_statement && i == 0 {
                     // The tag name. `include` here is a keyword; the identical text in
                     // `{{ include }}` is a variable.
-                    TokenType::Keyword
+                    (TokenType::Keyword, false)
+                } else if let Some(introduced) = shape.introduces(&toks, i, text) {
+                    // Before the generic arms: `upstream(` in `{% macro upstream(group) %}`
+                    // is being *defined*, which the call arm below cannot see, and `group`
+                    // after its `(` is a parameter, which the fallback would call a variable.
+                    introduced
+                } else if next == Some(lexer::Kind::Assign)
+                    && matches!(prev, Some(lexer::Kind::Lparen | lexer::Kind::Comma))
+                {
+                    // `to_nice_yaml(indent=2, width=80)`: a keyword argument names the
+                    // callee's parameter. Not a variable being read — it was the single
+                    // most-painted "variable" in kubespray — and not a declaration either,
+                    // which is what separates it from the macro arm above: VS Code's own
+                    // Python grammar draws the same line, `variable.parameter.function`
+                    // at a `def` and `variable.parameter.function-call` at a call.
+                    (TokenType::Parameter, false)
                 } else if LITERALS.contains(&word) {
-                    TokenType::Constant
+                    (TokenType::Constant, false)
                 } else if WORD_OPERATORS.contains(&word) {
-                    TokenType::WordOperator
+                    (TokenType::WordOperator, false)
                 } else if is_test_name(&toks, i, text) {
                     // `x is defined`, `x is not none`, `x is sameas y` — the name after `is`
                     // is a test, which is the same shape as a filter after `|` and was being
                     // called a variable.
-                    TokenType::Function
+                    (TokenType::Function, false)
                 } else if prev == Some(lexer::Kind::Pipe) || next == Some(lexer::Kind::Lparen) {
                     // A filter after `|`, or anything being called. Both read as functions,
                     // and both are wrong to call a variable.
-                    TokenType::Function
+                    (TokenType::Function, false)
                 } else if prev == Some(lexer::Kind::Dot) {
                     // After the call check on purpose: `m.upstream(` is a call first and a
                     // property second, and one token has one colour.
-                    TokenType::Property
+                    (TokenType::Property, false)
+                } else if let Some(introduced_as) = known.use_of(word) {
+                    // A bare name an earlier statement introduced: the `m` of
+                    // `{{ m.upstream('web') }}` is the namespace its import made it.
+                    (introduced_as, false)
                 } else {
-                    TokenType::Variable
+                    (TokenType::Variable, false)
                 }
             }
-            _ => TokenType::Operator,
+            _ => (TokenType::Operator, false),
         };
-        let declaration =
-            ty == TokenType::Variable && i > 0 && bindings_end.is_some_and(|end| i < end);
+        if declaration {
+            known.declare(t.span.slice(text), ty);
+        }
         out.push(SemToken { span: at(t.span), ty, declaration });
+    }
+}
+
+/// What a statement's tag name says about the names after it — the statements that
+/// *introduce* a name rather than read one.
+///
+/// Everything here is decided from the one statement's own tokens. The other half of the
+/// question — that `m` in a later `{{ m.upstream('web') }}` is the namespace this file's
+/// `{% import %}` introduced — needs memory across statements, which this classifier does
+/// not have and T-217 leaves open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// `for k, v in d.items() if k in wanted`: every name before the first `in` is a
+    /// binding. Past it — the iterable, the filter, the filter's own `in` — is a read.
+    For { in_at: Option<usize> },
+    /// `macro name(a, b=1)`: `name` is a function being defined and the names directly after
+    /// `(` or `,` inside its parens are parameters — `b`, not the `1` it defaults to.
+    Macro { parens: Option<(usize, usize)> },
+    /// `import "x" as m`: the name after `as` is a namespace being introduced.
+    Import,
+    /// `from "x" import a, b as c with context`: every name after `import` is a macro of
+    /// the other file. The one that lands in *this* scope — `a`, and `c` rather than `b` —
+    /// is being introduced. `with`/`without context` ends the list.
+    From { names: Option<(usize, usize)> },
+    /// `set a, b = …`, `set x | upper`, `set ns.attr = …`: the names before `=` or `|` are
+    /// being introduced, unless after a dot — that is a write to an attribute of something
+    /// that already exists.
+    Set { end: usize },
+    Other,
+}
+
+impl Shape {
+    fn of(toks: &[lexer::Token], text: &str) -> Shape {
+        let is = |t: &lexer::Token, w: &str| t.kind == lexer::Kind::Name && t.span.slice(text) == w;
+        let find = |from: usize, w: &str| toks.iter().skip(from).position(|t| is(t, w)).map(|p| p + from);
+        let Some(first) = toks.first().filter(|t| t.kind == lexer::Kind::Name) else {
+            return Shape::Other;
+        };
+        match first.span.slice(text) {
+            "for" => Shape::For { in_at: find(1, "in") },
+            "macro" => {
+                let open = toks.iter().position(|t| t.kind == lexer::Kind::Lparen);
+                let close = toks.iter().rposition(|t| t.kind == lexer::Kind::Rparen);
+                Shape::Macro { parens: open.zip(close).filter(|(o, c)| o < c) }
+            }
+            "import" => Shape::Import,
+            "from" => {
+                let names = find(1, "import").map(|start| {
+                    let end = find(start + 1, "with")
+                        .or_else(|| find(start + 1, "without"))
+                        .unwrap_or(toks.len());
+                    (start + 1, end)
+                });
+                Shape::From { names }
+            }
+            "set" => {
+                let end = toks
+                    .iter()
+                    .position(|t| matches!(t.kind, lexer::Kind::Assign | lexer::Kind::Pipe))
+                    .unwrap_or(toks.len());
+                Shape::Set { end }
+            }
+            _ => Shape::Other,
+        }
+    }
+
+    /// The type and modifier for the name at `i`, if this statement introduces it or paints
+    /// it because of what it introduces. `None` hands the name to the generic arms.
+    fn introduces(self, toks: &[lexer::Token], i: usize, text: &str) -> Option<(TokenType, bool)> {
+        let word = |j: usize| toks.get(j).filter(|t| t.kind == lexer::Kind::Name).map(|t| t.span.slice(text));
+        let prev_kind = i.checked_sub(1).map(|j| toks[j].kind);
+        match self {
+            Shape::For { in_at } if i > 0 && in_at.is_some_and(|at| i < at) => {
+                Some((TokenType::Variable, true))
+            }
+            Shape::Macro { .. } if i == 1 => Some((TokenType::Function, true)),
+            Shape::Macro { parens: Some((open, close)) }
+                if open < i
+                    && i < close
+                    && matches!(prev_kind, Some(lexer::Kind::Lparen | lexer::Kind::Comma)) =>
+            {
+                Some((TokenType::Parameter, true))
+            }
+            Shape::Import if word(i - 1) == Some("as") => Some((TokenType::Namespace, true)),
+            Shape::From { names: Some((start, end)) }
+                if start <= i && i < end && word(i) != Some("as") =>
+            {
+                // `b as c` lands as `c`; `b` is the other file's name for it. The `as`
+                // itself falls through to `WORD_OPERATORS`.
+                let renamed_away = word(i + 1) == Some("as");
+                Some((TokenType::Function, !renamed_away))
+            }
+            Shape::Set { end }
+                if i > 0
+                    && i < end
+                    && prev_kind != Some(lexer::Kind::Dot)
+                    && toks.get(i + 1).map(|t| t.kind) != Some(lexer::Kind::Dot) =>
+            {
+                Some((TokenType::Variable, true))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -528,22 +681,232 @@ mod tests {
         assert_eq!(decls("{{ for }}"), [("for", false)]);
     }
 
-    /// The demo fixture's loop line, pinned for the same reason as the property line below.
+    /// `(text, type, declaration)` for every name — the full answer for a statement that
+    /// introduces something.
+    fn names(src: &str) -> Vec<(&str, TokenType, bool)> {
+        tokens(src, &Delimiters::default(), true)
+            .into_iter()
+            .filter(|t| {
+                !matches!(
+                    t.ty,
+                    TokenType::Delimiter | TokenType::Operator | TokenType::String | TokenType::Number
+                )
+            })
+            .map(|t| (t.span.slice(src), t.ty, t.declaration))
+            .collect()
+    }
+
+    /// `{% macro %}` defines a function and its parameters; a default value is a read.
+    /// The control is a *call* of the same name, which must stay an undeclared function.
     #[test]
-    fn the_chain_root_demo_marks_the_loop_target_as_a_declaration() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../demo/templates/app.conf.j2");
-        let src = std::fs::read_to_string(&path).expect("demo fixture is missing");
-        let declared: Vec<(&str, usize)> = tokens(&src, &Delimiters::default(), true)
+    fn a_macro_declares_its_name_as_a_function_and_its_arguments_as_parameters() {
+        use TokenType::*;
+        assert_eq!(
+            names("{% macro upstream(group, sep=default_sep) %}"),
+            [
+                ("macro", Keyword, false),
+                ("upstream", Function, true),
+                ("group", Parameter, true),
+                ("sep", Parameter, true),
+                ("default_sep", Variable, false),
+            ]
+        );
+        assert_eq!(names("{% macro bare() %}"), [("macro", Keyword, false), ("bare", Function, true)]);
+        assert_eq!(
+            names("{% call upstream('web') %}"),
+            [("call", Keyword, false), ("upstream", Function, false)]
+        );
+    }
+
+    /// `import … as m` introduces a namespace; `from … import a, b as c` introduces `a` and
+    /// `c`, and `b` is the other file's name for `c`. `with context` is not a macro.
+    #[test]
+    fn import_and_from_import_declare_what_lands_in_scope() {
+        use TokenType::*;
+        assert_eq!(
+            names("{% import 'macros.j2' as m %}"),
+            [("import", Keyword, false), ("as", WordOperator, false), ("m", Namespace, true)]
+        );
+        assert_eq!(
+            names("{% from 'macros.j2' import a, b as c with context %}"),
+            [
+                ("from", Keyword, false),
+                ("import", Variable, false),
+                ("a", Function, true),
+                ("b", Function, false),
+                ("as", WordOperator, false),
+                ("c", Function, true),
+                ("with", WordOperator, false),
+                ("context", Variable, false),
+            ]
+        );
+        // Control: the same names in an expression are plain reads.
+        assert_eq!(names("{{ m }}"), [("m", Variable, false)]);
+    }
+
+    /// `set` introduces what is left of `=` or `|`; an attribute write introduces nothing.
+    #[test]
+    fn set_declares_its_targets_but_not_an_attribute_it_writes_to() {
+        use TokenType::*;
+        assert_eq!(
+            names("{% set a, b = c %}"),
+            [("set", Keyword, false), ("a", Variable, true), ("b", Variable, true), ("c", Variable, false)]
+        );
+        assert_eq!(
+            names("{% set x | upper %}"),
+            [("set", Keyword, false), ("x", Variable, true), ("upper", Function, false)]
+        );
+        assert_eq!(
+            names("{% set ns.attr = 1 %}"),
+            [("set", Keyword, false), ("ns", Variable, false), ("attr", Property, false)]
+        );
+        assert_eq!(names("{% set block_form %}"), [("set", Keyword, false), ("block_form", Variable, true)]);
+    }
+
+    /// A bare use after the statement that introduced the name paints as what it introduced.
+    /// Three controls, each a way this could be wrong: the use *before* the declaration is a
+    /// variable (source order, which is also Jinja's scope rule); a later `for` over the same
+    /// name takes it back; and a parameter's body use stays a variable, because a parameter
+    /// is scoped to its macro and this memory does not model that.
+    #[test]
+    fn a_later_use_of_an_introduced_name_paints_as_what_introduced_it() {
+        use TokenType::*;
+        assert_eq!(
+            names("{% import 'x' as m %}{{ m.a }}{{ m }}"),
+            [
+                ("import", Keyword, false),
+                ("as", WordOperator, false),
+                ("m", Namespace, true),
+                ("m", Namespace, false),
+                ("a", Property, false),
+                ("m", Namespace, false),
+            ]
+        );
+        assert_eq!(
+            names("{% from 'x' import f %}{{ f }}"),
+            [("from", Keyword, false), ("import", Variable, false), ("f", Function, true), ("f", Function, false)]
+        );
+        assert_eq!(
+            names("{{ m }}{% import 'x' as m %}"),
+            [("m", Variable, false), ("import", Keyword, false), ("as", WordOperator, false), ("m", Namespace, true)]
+        );
+        assert_eq!(
+            names("{% import 'x' as m %}{% for m in xs %}{{ m }}"),
+            [
+                ("import", Keyword, false),
+                ("as", WordOperator, false),
+                ("m", Namespace, true),
+                ("for", Keyword, false),
+                ("m", Variable, true),
+                ("in", WordOperator, false),
+                ("xs", Variable, false),
+                ("m", Variable, false),
+            ]
+        );
+        assert_eq!(
+            names("{% macro f(p) %}{{ p }}{% endmacro %}"),
+            [
+                ("macro", Keyword, false),
+                ("f", Function, true),
+                ("p", Parameter, true),
+                ("p", Variable, false),
+                ("endmacro", Keyword, false),
+            ]
+        );
+    }
+
+    /// The demo's `{{ m.upstream('web') }}`, with the `{% import "macros.j2" as m %}` above
+    /// it: every `m` in the file is the namespace, and exactly the first is its declaration.
+    #[test]
+    fn the_chain_root_demo_paints_the_imported_namespace_at_its_use() {
+        use TokenType::*;
+        let src = demo("app.conf.j2");
+        let ms: Vec<(TokenType, bool)> = tokens(&src, &Delimiters::default(), true)
+            .iter()
+            .filter(|t| t.span.slice(&src) == "m")
+            .map(|t| (t.ty, t.declaration))
+            .collect();
+        assert_eq!(ms, [(Namespace, true), (Namespace, false)]);
+    }
+
+    /// A keyword argument at a call names a parameter and declares nothing. Controls: `=`
+    /// after `set` is a declaration, `==` is not `=`, and a positional argument is a read.
+    #[test]
+    fn a_keyword_argument_is_a_parameter_that_declares_nothing() {
+        use TokenType::*;
+        assert_eq!(
+            names("{{ x | to_nice_yaml(indent=2, width=w) }}"),
+            [
+                ("x", Variable, false),
+                ("to_nice_yaml", Function, false),
+                ("indent", Parameter, false),
+                ("width", Parameter, false),
+                ("w", Variable, false),
+            ]
+        );
+        assert_eq!(names("{{ dict(a=1) }}"), [("dict", Function, false), ("a", Parameter, false)]);
+        assert_eq!(names("{% set a = 1 %}"), [("set", Keyword, false), ("a", Variable, true)]);
+        assert_eq!(names("{{ f(a == b) }}"), [("f", Function, false), ("a", Variable, false), ("b", Variable, false)]);
+        // And it leaves no memory behind: a later bare `indent` is still a variable.
+        assert_eq!(
+            names("{{ f(indent=2) }}{{ indent }}"),
+            [("f", Function, false), ("indent", Parameter, false), ("indent", Variable, false)]
+        );
+    }
+
+    /// The demo's `comment(decoration='# ')` is the call side; `macros.j2` has the
+    /// definition side. Between the two files, every parameter token and its modifier.
+    #[test]
+    fn the_demo_has_one_keyword_argument_and_one_macro_parameter() {
+        let params = |name: &str| -> Vec<(String, bool)> {
+            let src = demo(name);
+            tokens(&src, &Delimiters::default(), true)
+                .iter()
+                .filter(|t| t.ty == TokenType::Parameter)
+                .map(|t| (t.span.slice(&src).to_string(), t.declaration))
+                .collect()
+        };
+        assert_eq!(params("app.conf.j2"), [("decoration".to_string(), false)]);
+        assert_eq!(params("macros.j2"), [("group".to_string(), true), ("port".to_string(), true)]);
+    }
+
+    fn demo(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/templates").join(name);
+        std::fs::read_to_string(&path).expect("demo fixture is missing")
+    }
+
+    /// The demo fixture's declarations, as an exact ordered set: the `GOOD` label in
+    /// `app.conf.j2` names four, and an extra or missing one is a wrong label.
+    #[test]
+    fn the_chain_root_demo_declares_exactly_these_names() {
+        use TokenType::*;
+        let src = demo("app.conf.j2");
+        let declared: Vec<(&str, TokenType)> = tokens(&src, &Delimiters::default(), true)
             .iter()
             .filter(|t| t.declaration)
-            .map(|t| (t.span.slice(&src), t.span.start))
+            .map(|t| (t.span.slice(&src), t.ty))
             .collect();
-        // Exactly one, and it is the loop target — not the `h` in the body two tokens later.
-        assert_eq!(declared.len(), 1, "{declared:?}");
-        assert_eq!(declared[0].0, "h");
-        let line = src[..declared[0].1].rsplit('\n').next().unwrap_or("");
-        assert!(line.trim_start().starts_with("{% for "), "declared on the wrong line: {line:?}");
+        assert_eq!(
+            declared,
+            [("m", Namespace), ("listen_line", Function), ("listen_port", Variable), ("h", Variable)]
+        );
+    }
+
+    /// The other half of that label lives in `macros.j2`: the macro's own name and parameter.
+    /// The body's `{{ group }}` is the control — the same name, read, undeclared.
+    #[test]
+    fn the_macros_demo_declares_the_macro_and_its_parameter_only() {
+        use TokenType::*;
+        let src = demo("macros.j2");
+        let got: Vec<(&str, TokenType, bool)> = tokens(&src, &Delimiters::default(), true)
+            .iter()
+            .filter(|t| t.span.slice(&src) == "upstream" || t.span.slice(&src) == "group")
+            .map(|t| (t.span.slice(&src), t.ty, t.declaration))
+            .collect();
+        assert_eq!(
+            got,
+            [("upstream", Function, true), ("group", Parameter, true), ("group", Variable, false)]
+        );
     }
 
     /// The demo fixture itself, for the same reason as the moved-comments one below: its
@@ -636,5 +999,91 @@ mod tests {
         let got = toks("#jinja2: line_statement_prefix:'#'\n# if x\nbody\n# endif\n");
         assert!(got.contains(&("if", TokenType::Keyword)), "{got:?}");
         assert!(got.contains(&("endif", TokenType::Keyword)), "{got:?}");
+    }
+
+    /// What a corpus of real templates hands to the generic arms. Not an assertion — a
+    /// survey, so the shapes T-217 handles are the ones templates contain rather than the
+    /// ones we thought of. Prints three tables: every statement tag with whether a `Shape`
+    /// reads it, the bare names painted `variable` most often (a builtin like `loop` shows up
+    /// here), and sample statements for each unshaped tag.
+    ///
+    /// `ANSIBLE_CORPUS` is one tree or a directory of trees, as for `when_coverage`.
+    #[test]
+    #[ignore = "corpus survey: ANSIBLE_CORPUS=<path> cargo test -p ansible-core --lib highlight_survey -- --ignored --nocapture"]
+    fn highlight_survey() {
+        use std::collections::BTreeMap;
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "j2") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(std::path::Path::new(&root), &mut files);
+
+        // Tags that close or branch: a `Shape` has nothing to read after them.
+        const STRUCTURAL: &[&str] = &[
+            "if", "elif", "else", "endif", "endfor", "endmacro", "endblock", "endset", "raw",
+            "endraw", "endcall", "endfilter", "endwith", "break", "continue", "extends",
+        ];
+        let d = Delimiters::default();
+        let (mut parsed, mut unparsed) = (0, 0);
+        let mut tags: BTreeMap<String, (usize, bool)> = BTreeMap::new();
+        let mut bare: BTreeMap<String, usize> = BTreeMap::new();
+        let mut samples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for f in &files {
+            let Ok(src) = std::fs::read_to_string(f) else { continue };
+            let Ok((blocks, _)) = template::document_in(&src, &d, true) else {
+                unparsed += 1;
+                continue;
+            };
+            parsed += 1;
+            for b in blocks.iter().filter(|b| b.kind == template::Kind::Statement) {
+                let text = b.inner.slice(&src);
+                let Ok(ts) = lexer::tokens(text) else { continue };
+                let Some(first) = ts.first().filter(|t| t.kind == lexer::Kind::Name) else { continue };
+                let tag = first.span.slice(text).to_string();
+                let shaped = Shape::of(&ts, text) != Shape::Other;
+                let e = tags.entry(tag.clone()).or_insert((0, shaped));
+                e.0 += 1;
+                if !shaped && !STRUCTURAL.contains(&tag.as_str()) {
+                    let s = samples.entry(tag).or_default();
+                    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if s.len() < 4 && !s.contains(&line) {
+                        s.push(line);
+                    }
+                }
+            }
+            for t in tokens(&src, &d, true) {
+                if t.ty == TokenType::Variable && !t.declaration {
+                    *bare.entry(t.span.slice(&src).to_string()).or_default() += 1;
+                }
+            }
+        }
+
+        println!("\n{} templates, {parsed} parsed, {unparsed} refused\n", files.len());
+        println!("{:<12} {:>6}  shaped", "tag", "n");
+        let mut by_n: Vec<_> = tags.iter().collect();
+        by_n.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+        for (tag, (n, shaped)) in by_n {
+            println!("{tag:<12} {n:>6}  {}", if *shaped { "yes" } else { "-" });
+        }
+        println!("\nbare names painted variable, top 40:");
+        let mut by_n: Vec<_> = bare.iter().collect();
+        by_n.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        for (name, n) in by_n.iter().take(40) {
+            println!("{n:>6}  {name}");
+        }
+        println!("\nunshaped tags, sample statements:");
+        for (tag, lines) in &samples {
+            for l in lines {
+                println!("  {tag:<10} {l}");
+            }
+        }
     }
 }

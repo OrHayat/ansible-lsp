@@ -3505,6 +3505,9 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     // to `variable.other.property`, and whether that differs from `variable` is the theme's
     // call. Dark Modern paints both `#9CDCFE`; the point is that a theme *can* tell them apart.
     SemanticTokenType::PROPERTY,
+    // Both standard, both from `{% macro %}` / `{% import %}` declarations.
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::NAMESPACE,
 ];
 
 /// The modifiers a token can carry, each one a bit in `token_modifiers_bitset` at its index
@@ -3530,6 +3533,8 @@ fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
         T::WordOperator => 9,
         T::Constant => 10,
         T::Property => 11,
+        T::Parameter => 12,
+        T::Namespace => 13,
     }
 }
 
@@ -8588,6 +8593,9 @@ mod tests {
         let got = decoded("{{ a.b }}");
         assert!(got.contains(&(0, 3, 1, "variable")), "{got:?}");
         assert!(got.contains(&(0, 5, 1, "property")), "{got:?}");
+        let got = decoded("{% macro f(p) %}{% import 'x' as n %}");
+        assert!(got.contains(&(0, 11, 1, "parameter")), "{got:?}");
+        assert!(got.contains(&(0, 33, 1, "namespace")), "{got:?}");
     }
 
     /// The modifier travels as a bit whose position is the index in `SEMANTIC_TOKEN_MODIFIERS`,

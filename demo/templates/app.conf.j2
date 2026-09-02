@@ -15,7 +15,22 @@
 {% endblock %}
 
 {% block body %}
-{{ listen_line(app_port | default(8080)) }}
+{# GOOD — `decoration` is a keyword argument: it names the filter's parameter, so it is painted
+   as one, and it declares nothing — the same word as a bare name later would still be a
+   variable. `macros.j2` has the other side, a parameter being defined. Pinned by
+   `highlight.rs::the_demo_has_one_keyword_argument_and_one_macro_parameter`. #}
+{{ ansible_managed | comment(decoration='# ') }}
+{# GOOD — four statements above and below introduce a name, and each is painted as what it
+   introduces: `m` a namespace, `listen_line` a function, `listen_port` a variable, and the
+   loop's `h` further down. All carry the `declaration` modifier; the reads of them do not.
+   `macros.j2` has the other half, a macro name and its parameter. Pinned by
+   `highlight.rs::the_chain_root_demo_declares_exactly_these_names`. #}
+{% set listen_port = app_port | default(8080) %}
+{{ listen_line(listen_port) }}
+{# GOOD — the `m` here is painted as a namespace, not a variable, because the `{% import %}`
+   above introduced it as one. Source order is the rule: the same `{{ m }}` written above
+   the import would be a variable, which is also what it is at render time. Pinned by
+   `highlight.rs::the_chain_root_demo_paints_the_imported_namespace_at_its_use`. #}
 {{ m.upstream('web') }}
 {# GOOD — `hostname` after the dot is a property token, not a variable: the root is looked up
    in the render context, the property on whatever the root turned out to be. `default` after

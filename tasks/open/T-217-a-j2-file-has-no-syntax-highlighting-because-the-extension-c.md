@@ -300,9 +300,71 @@ of that advertises those gaps as visible wrong colour on every file.
   `k` and `v` and reads the rest. This modifier is safe where the resolvability one is not:
   it is a fact about one line, not about the workspace. Same visibility caveat as A — no
   bundled theme styles `declaration` — so `demo/.vscode/settings.json` carries a
-  `variable.declaration:jinja` rule alongside the `property:jinja` one. C below is still
-  open, and `{% set x = … %}` and the `{% macro %}` name are the obvious next uses of the
-  same flag.
+  `variable.declaration:jinja` rule alongside the `property:jinja` one.
+
+  **Slice C, declaration half, landed.** The classifier now reads a statement's *shape* from
+  its tag name (`Shape` in `highlight.rs`) and paints what the statement introduces:
+  `{% macro upstream(group) %}` → `function` + `declaration` and `parameter` + `declaration`
+  (the one place `parameter` is the truth); `{% import … as m %}` → `namespace` +
+  `declaration`; `{% from … import a, b as c %}` → `a` and `c` declared functions, `b` a
+  function that is the other file's name; `{% set a, b = … %}` → declared variables, with
+  `set ns.attr = …` declaring nothing because it writes to something that exists. Legend
+  indices 12 and 13 are `parameter` and `namespace`, both standard. Still lexer-local: every
+  answer comes from the one statement's own tokens.
+
+  **Slice C, use half, landed — without the parser.** `Known` in `highlight.rs` is a
+  name → kind map the block walk carries across statements: a declaration records into it,
+  and a bare name that would otherwise be a variable paints as what an earlier statement
+  introduced, so the `m` of `{{ m.upstream('web') }}` is the namespace its import made it.
+  Source order is the scope rule, which is Jinja's own; a later `{% for m in … %}` replaces
+  the entry. Only namespaces and functions are remembered — a parameter is scoped to its
+  macro body and this map does not model scopes, so `{{ p }}` inside `{% macro f(p) %}`
+  stays a variable (asserted as a control, and the honest answer until scopes exist). That
+  scope-less-ness is the limit of the lexer path, and the first thing a parser would buy.
+
+  **Not closing yet.** The slices are in but the shapes are the ones we thought of, not the
+  ones a corpus contains. `highlight_survey` (ignored, `ANSIBLE_CORPUS=<tree>`) now measures
+  that: every statement tag with whether a `Shape` reads it, the bare names painted
+  `variable` most often, and sample statements for each unshaped tag. Run over kubespray
+  (293 templates), ansible-core's own test templates (149) and one private tree (151):
+
+  | tag | files | shaped |
+  | --- | ----- | ------ |
+  | `if`/`elif`/`else`/`endif`, `for`/`endfor`, `set`, `macro`, `import`, `from` | everything | yes, or structural |
+  | `include` | 20 | no — but nothing to paint except `with context` |
+  | `with`, `call`, `filter`, `block`, `do`, `ignore missing`, `super()`, `caller` | **0** | absent from all three trees |
+
+  So the shapes we thought of are the ones templates use; the unshaped tags are not worth a
+  `Shape` until a corpus contains one. What the survey *did* turn up, in order of frequency:
+
+  1. **Keyword-argument names paint as variables — landed.** `to_nice_yaml(indent=2,
+     width=1337)` — `width` was the single most-painted "variable" in kubespray (60 uses, 21
+     files) and it is not one. Lexer-local: a name whose next token is `=` and whose previous
+     is `(` or `,` is a `parameter` without `declaration`. Same shape as the macro arm,
+     opposite modifier — and measured precedent rather than taste: VS Code's own Python
+     grammar scopes a `def` parameter `variable.parameter.function` and a call-site keyword
+     `variable.parameter.function-call`, both under the `variable.parameter` that semantic
+     `parameter` maps to. Without the flag on purpose: a declaration would also enter
+     `Known` and repaint every later bare `width` in the file. Demo: `comment(decoration='# ')`
+     in `app.conf.j2`, pinned with `macros.j2`'s definition side.
+  2. **Builtins paint as ordinary variables.** Jinja's `loop` (14 files, `loop.index` /
+     `loop.first` / `loop.last`), `namespace(` (2), `range(` (1), and Ansible's magic
+     variables — `hostvars` in 40+ files, `groups`, `inventory_hostname`, `ansible_managed`.
+     LSP's standard `defaultLibrary` modifier is for exactly this. Rule 3: the Ansible list is
+     `condition::MAGIC`, and a second copy here is the drift [[T-220]] already paid for once —
+     lift it to somewhere both can read. `loop` is only a builtin *inside* a `for` body; see 4.
+  3. **`context` after `with`/`without` paints as a variable**, 6 files in ansible-core, and
+     the `import` word of `from … import` does too (a test pins that today as the current
+     answer, `import_and_from_import_declare_what_lands_in_scope`). Both are keywords. Same
+     for `ignore missing` on an include, absent from the corpus but real.
+  4. **Scope.** Two things wait on tracking `for`/`endfor` and `macro`/`endmacro` depth in
+     `Known`: painting `{{ p }}` inside `{% macro f(p) %}` as `parameter` (today a variable,
+     asserted as a control), and giving `loop` its `defaultLibrary` only where it exists. A
+     depth counter on the tag names is enough — no parser needed for either.
+  5. **Not cases, checked:** `self.` in 4 kubespray files is Kubernetes CEL inside literal
+     text, not Jinja. `is defined` (84 files), `is not`, `is divisibleby` already paint the
+     test as a function. `x['key']` subscripts are strings already. 2 of 149 ansible-core
+     templates are refused by the splitter; they are its own deliberately broken fixtures.
 
   **Correction to an earlier draft: these are not "already in the AST" as far as this code path
   is concerned.** `inner_tokens` reads `lexer::tokens`, not the parser, and classifies by

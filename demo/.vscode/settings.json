@@ -11,7 +11,10 @@
     "rules": {
       "property:jinja": "#ffa657",
       "variable:jinja": "#79c0ff",
-      "variable.declaration:jinja": "#7ee787"
+      "variable.declaration:jinja": "#7ee787",
+      "function.declaration:jinja": { "bold": true, "underline": true },
+      "parameter:jinja": "#e3b341",
+      "namespace:jinja": "#ff7b72"
     }
   }
 }
