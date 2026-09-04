@@ -808,12 +808,18 @@ pub fn variables(cond: &str) -> Vec<String> {
 ///
 /// A clause guards itself when every name it reads is covered by a [`Guard`] — so
 /// `x is defined and y` is not guarded, `y` raises; and `user_defined_ports == 1` is not
-/// guarded, whatever its spelling contains (T-223). A clause with no names at all is not
-/// "guarded", it is constant, and a clause that does not parse is not judged.
+/// guarded, whatever its spelling contains (T-223). A name in the injected table is not a
+/// read that can fail, so `inventory_hostname == 'x' and r.stdout is defined` is guarded
+/// on the strength of `r`; a fact is — `ansible_selinux is defined and ...` guards a real
+/// read — and a clause reading nothing that can fail has nothing to guard and is not
+/// "guarded", it is plain. A clause that does not parse is not judged.
 pub fn is_guarded(conditions: &[String]) -> bool {
     !conditions.is_empty()
         && conditions.iter().all(|c| {
-            let names = any_uses(c);
+            let names: Vec<_> = any_uses(c)
+                .into_iter()
+                .filter(|(n, _, _)| crate::injected::injected(n).is_none())
+                .collect();
             !names.is_empty()
                 && jinja::parse(c).is_ok()
                 && names.iter().all(|(_, s, _)| guard_at(c, *s).is_some())
@@ -2430,8 +2436,12 @@ mod tests {
         // guarded; a read of `user_defined_ports` raises, and so does the bare `y`.
         assert!(!is_guarded(&["user_defined_ports == 1".into()]));
         assert!(!is_guarded(&["x is defined and y".into()]));
-        // A constant clause is not a guarded one.
-        assert!(!is_guarded(&["true".into()]));
+        // An always-present name is not a read that can fail, and not a guard either; a
+        // fact can be absent, so a test on one is a guard.
+        assert!(is_guarded(&["inventory_hostname == 'x' and r.stdout is defined".into()]));
+        assert!(!is_guarded(&["inventory_hostname == 'x' and r.stdout".into()]));
+        assert!(!is_guarded(&["ansible_os_family == 'RedHat'".into()]));
+        assert!(is_guarded(&["ansible_selinux is defined and ansible_selinux.status == 'x'".into()]));
         // Every clause must guard itself.
         assert!(!is_guarded(&[
             "skip_x | default(false)".into(),
