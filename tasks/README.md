@@ -169,7 +169,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
 | T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](open/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | M    | —    |
-| T-223 | **bug** · [Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read](open/T-223-undefined-softening-is-a-substring-match-so-a-name-containin.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -332,6 +331,7 @@ T-021 is now unblocked on that side.
 | T-220 | **bug** · [True, False and None are reported as undefined variables, because the literal list is lowercase only](closed/T-220-true-false-and-none-are-reported-as-undefined-variables-beca.md) | done     |
 | T-222 | **bug** · [Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment](closed/T-222-four-names-ansible-always-provides-are-flagged-as-never-defi.md) | done     |
 | T-224 | **bug** · [Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed](closed/T-224-injected-names-are-a-prefix-guess-a-user-s-own-ansible-var-l.md) | done     |
+| T-223 | **bug** · [Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read](closed/T-223-undefined-softening-is-a-substring-match-so-a-name-containin.md) | done     |
 
 ## Settled — don't re-derive these
 

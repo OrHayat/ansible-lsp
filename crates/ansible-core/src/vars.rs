@@ -253,6 +253,10 @@ pub struct VarUse {
     /// Read through `hostvars[...]`, which is assembled with no play and no task — so only
     /// the sources [`VarSource::visible_to_hostvars`] admits can satisfy it (T-104).
     pub through_hostvars: bool,
+    /// Absolute span of the Jinja expression this use sits in: the inside of its `{{ }}`,
+    /// or the whole `when:` clause. What [`undefined_uses`] hands to
+    /// [`condition::guard_at`] (T-223).
+    pub expr: Span,
     /// Where this use is rendered, for the scope of a name ansible provides (T-224).
     pub site: Site,
     /// Set by [`undefined_uses`] when the name is one ansible provides, but not at this
@@ -377,6 +381,7 @@ fn push_uses(
             guard: Vec::new(),
             defined_out_of_scope: false,
             through_hostvars,
+            expr: Span { start: base, end: base + expr.len() },
             site: Site::default(),
             scope_gap: None,
             no_facts_here: false,
@@ -974,8 +979,15 @@ pub fn undefined_uses_in(
                 && !u.through_hostvars
                 && !provided_here(u, facts_at(u.span.start))
                 && !declared.contains(&u.name)
-                && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
-                && !softened(text, u.span.start)
+                // A `when: x is defined` on the task (or a block around it) keeps the read
+                // from running while `x` is undefined — that name, not a name it is a
+                // substring of (T-223).
+                && !u.guard.iter().any(|g| condition::positively_defined(g).contains(&u.name))
+                && !handled_in_expression(u, text, |name| {
+                    all.iter().any(|d| d.name == name && d.reaches(u, path))
+                        || declared.contains(name)
+                        || crate::injected::provided(name)
+                })
         })
         .map(|mut u| {
             u.defined_out_of_scope = all.iter().any(|d| d.name == u.name);
@@ -1129,25 +1141,22 @@ fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
 /// enclosing `{{ … }}`, or the enclosing line for a bare `when:` expression, for
 /// `default(` or an `is (not) defined` test. Text-level and deliberately loose — a false
 /// "handled" is silence, the safe direction.
-fn softened(text: &str, at: usize) -> bool {
-    // Use spans are value-relative offsets rebased onto the source; block and escaped
-    // scalars shift them, so `at` can land mid-character. Clamp to a boundary — the
-    // check is a text heuristic anyway.
-    let mut at = at.min(text.len());
-    while at > 0 && !text.is_char_boundary(at) {
-        at -= 1;
+/// Whether the expression around `u` handles `u.name` being undefined (T-223): the read is
+/// defaulted or tested itself, or sits in a `default` argument whose root — asked of
+/// `defined` — is defined here, so the argument is never evaluated (measured on 2.21.2).
+///
+/// Use spans are value-relative offsets rebased onto the source; block and escaped scalars
+/// shift them, so the use can land off its expression. Then nothing is claimed either way.
+fn handled_in_expression(u: &VarUse, text: &str, defined: impl Fn(&str) -> bool) -> bool {
+    let Span { start, end } = u.expr;
+    if start > u.span.start || end > text.len() || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return true;
     }
-    let (start, end) = match text[..at].rfind("{{") {
-        Some(open) if !text[open..at].contains("}}") => {
-            (open, text[at..].find("}}").map_or(text.len(), |c| at + c))
-        }
-        _ => (
-            text[..at].rfind('\n').map_or(0, |i| i + 1),
-            text[at..].find('\n').map_or(text.len(), |i| at + i),
-        ),
-    };
-    let expr = &text[start..end];
-    expr.contains("default(") || expr.contains("defined")
+    match condition::guard_at(&text[start..end], u.span.start - start) {
+        Some(condition::Guard::Handled) => true,
+        Some(condition::Guard::WhenUndefined(root)) => defined(&root),
+        None => false,
+    }
 }
 
 /// [`definitions`] plus the set of files it read (canonicalised) — its dependencies, so a
@@ -2167,6 +2176,47 @@ mod tests {
         };
         assert_eq!(run("[defaults]\nfact_caching = memory\n"), ["ansible_hostnme"]);
         assert!(run("[defaults]\nfact_caching = jsonfile\n").is_empty());
+    }
+
+    /// T-223, the Symptom table, each row measured on 2.21.2. Rows 1–3 were silent under
+    /// the substring check; row 4 must stay silent — an undefined `default` argument is
+    /// not evaluated when the left side is defined (the lazy Marker model); rows 5–6 are
+    /// the controls that fired before and fire now.
+    #[test]
+    fn softening_follows_the_expression_not_the_spelling() {
+        let play = |tasks: &str| format!("- hosts: all\n  tasks:\n{tasks}");
+        // Row 1.
+        assert_eq!(
+            undef(&play("    - debug: { msg: \"{{ user_defined_ports }} {{ predefined_routes }}\" }\n")),
+            ["user_defined_ports", "predefined_routes"]
+        );
+        // Row 2.
+        assert_eq!(
+            undef(&play("    - debug: { msg: \"{{ foo }}\" }\n      when: foo_bar is defined\n")),
+            ["foo"]
+        );
+        assert!(undef(&play("    - debug: { msg: \"{{ foo_bar }} {{ foo_bar.x }}\" }\n      when: foo_bar is defined\n")).is_empty());
+        // Row 3: the argument is evaluated, because the left is undefined.
+        assert_eq!(
+            undef(&play("    - debug: { msg: \"{{ nope_missing | default(also_missing) }}\" }\n")),
+            ["also_missing"]
+        );
+        // Row 4: the argument is not evaluated, because the left is defined.
+        assert!(undef(&play(
+            "    - debug: { msg: \"{{ a_set | default(nope_missing) }}\" }\n    - set_fact: { a_set: 1 }\n"
+        ))
+        .is_empty());
+        // Rows 5–6.
+        assert_eq!(
+            undef(&play("    - debug: { msg: \"{{ foo }}\" }\n      when: user_defined_x | bool\n")),
+            ["foo", "user_defined_x"]
+        );
+        assert_eq!(undef(&play("    - debug: { msg: \"{{ nope_missing }}\" }\n")), ["nope_missing"]);
+        // And `x is not defined` on the task is the opposite of a guard.
+        assert_eq!(
+            undef(&play("    - debug: { msg: \"{{ x }}\" }\n      when: x is not defined\n")),
+            ["x"]
+        );
     }
 
     #[test]

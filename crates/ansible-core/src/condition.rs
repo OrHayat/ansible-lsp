@@ -612,17 +612,17 @@ pub const IMPLICIT_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 ///
 /// The enclosing `{{ … }}` is the unit, not the whole scalar: in
 /// `"{{ hostvars['typo'].x }} {{ y | default(1) }}"` the default belongs to the second
-/// expression and rescues nothing. Within that unit the test is the blunt substring one
-/// [`is_guarded`] already uses for `when:` clauses, and blunt in the safe direction — a
-/// spurious match costs a missed report, never a false error.
+/// expression and rescues nothing. Within that unit the question goes to [`guard_at`]: the
+/// `hostvars[...]` read this key sits on must itself be defaulted or tested — a `default`
+/// on some other name in the same expression rescues nothing either (T-223).
 fn expression_swallows_undefined(text: &str, s: usize, e: usize) -> bool {
     let open = text[..s].rfind("{{").or_else(|| text[..s].rfind("{%"));
     let close = text[e..].find("}}").or_else(|| text[e..].find("%}")).map(|i| e + i);
     let (Some(open), Some(close)) = (open, close) else {
         return false;
     };
-    let expr = &text[open..close];
-    expr.contains("default(") || expr.contains(" is defined") || expr.contains(" is not defined")
+    let expr = &text[open + 2..close];
+    guard_at(expr, s - open - 2).is_some()
 }
 
 /// Is the subscript *nothing but* this quoted string — `hostvars['web01']` and not
@@ -805,11 +805,218 @@ pub fn variables(cond: &str) -> Vec<String> {
 /// Whether every clause guards itself, so an undefined variable is swallowed instead of
 /// raising. This is what makes a typo permanent: `skip_smaba | default(false)` is false
 /// forever and nothing ever complains.
+///
+/// A clause guards itself when every name it reads is covered by a [`Guard`] — so
+/// `x is defined and y` is not guarded, `y` raises; and `user_defined_ports == 1` is not
+/// guarded, whatever its spelling contains (T-223). A clause with no names at all is not
+/// "guarded", it is constant, and a clause that does not parse is not judged.
 pub fn is_guarded(conditions: &[String]) -> bool {
     !conditions.is_empty()
-        && conditions
-            .iter()
-            .all(|c| c.contains("default(") || c.contains(" is defined") || c.contains(" is not defined"))
+        && conditions.iter().all(|c| {
+            let names = any_uses(c);
+            !names.is_empty()
+                && jinja::parse(c).is_ok()
+                && names.iter().all(|(_, s, _)| guard_at(c, *s).is_some())
+        })
+}
+
+/// How an expression handles one of its names being undefined (T-223).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guard {
+    /// The read never raises: `x is defined`, `x is undefined`, `x | default(…)`, or a
+    /// branch that an enclosing `is defined` test on the same name keeps from running.
+    Handled,
+    /// `y` as an argument of `default` on `x`: evaluated only when `x` is undefined
+    /// (measured on 2.21.2 — `a_set | default(nope_missing)` prints `a_set`, and
+    /// `nope_missing | default(also_missing)` fails on `also_missing`), so it raises only
+    /// when the named root is undefined too.
+    WhenUndefined(String),
+}
+
+/// Every position in `expr` that an undefinedness guard covers: the root of a tested or
+/// defaulted spine, a subscript literal on such a spine, and the names inside a `default`
+/// argument. Nothing else — a `default` on `a` says nothing about a `b` elsewhere in the
+/// same expression, which is the substring check's mistake ([[T-223]]). Empty when the
+/// expression does not parse.
+fn guards(expr: &str) -> Vec<(crate::parse::Span, Guard)> {
+    let Ok(tree) = jinja::parse(expr) else { return Vec::new() };
+    let mut out = Vec::new();
+    walk_guards(&tree, None, None, &[], &mut out);
+    out
+}
+
+/// `spine` covers the root of the node being walked (an `is defined` on it); `ambient`
+/// covers everything inside (a `default` argument); `named` are roots an enclosing
+/// conditional has already tested positively, so their reads on this branch are handled.
+fn walk_guards(
+    e: &Expr,
+    spine: Option<&Guard>,
+    ambient: Option<&Guard>,
+    named: &[String],
+    out: &mut Vec<(crate::parse::Span, Guard)>,
+) {
+    let here = |root: Option<&str>| -> Option<Guard> {
+        spine
+            .cloned()
+            .or_else(|| root.filter(|r| named.iter().any(|n| n == r)).map(|_| Guard::Handled))
+            .or_else(|| ambient.cloned())
+    };
+    match &e.kind {
+        ExprKind::Name(n) => {
+            if let Some(g) = here(Some(n)) {
+                out.push((e.span, g));
+            }
+        }
+        ExprKind::Getattr { node, .. } => walk_guards(node, spine, ambient, named, out),
+        ExprKind::Getitem { node, arg } => {
+            walk_guards(node, spine, ambient, named, out);
+            // The subscript literal rides the spine's guard, so a caller asking about
+            // `hostvars['web01']` gets the answer for the read it is part of.
+            if matches!(arg.kind, ExprKind::Const(_)) {
+                if let Some(g) = here(node.root_name()) {
+                    out.push((arg.span, g));
+                }
+            } else {
+                walk_guards(arg, None, ambient, named, out);
+            }
+        }
+        ExprKind::Test { node, name, args } if matches!(name.as_str(), "defined" | "undefined") => {
+            walk_guards(node, Some(&Guard::Handled), ambient, named, out);
+            for a in &args.args {
+                walk_guards(a, None, ambient, named, out);
+            }
+        }
+        ExprKind::Filter { node, name, args } if name == "default" || name.ends_with(".default") => {
+            walk_guards(node, Some(&Guard::Handled), ambient, named, out);
+            // Inside the argument: evaluated only if the defaulted root is undefined. A
+            // default nested in another default's argument stays with the outer guard —
+            // the exact condition is a conjunction this type does not express, and either
+            // half alone over-approximates in the flagging direction.
+            let inner = match (ambient, node.root_name()) {
+                (Some(g), _) => Some(g.clone()),
+                (None, Some(root)) => Some(Guard::WhenUndefined(root.to_string())),
+                (None, None) => None,
+            };
+            for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
+                walk_guards(a, None, inner.as_ref(), named, out);
+            }
+        }
+        ExprKind::Filter { node, args, .. } | ExprKind::Test { node, args, .. } => {
+            walk_guards(node, None, ambient, named, out);
+            for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
+                walk_guards(a, None, ambient, named, out);
+            }
+        }
+        ExprKind::Call { node, args } => {
+            walk_guards(node, None, ambient, named, out);
+            for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
+                walk_guards(a, None, ambient, named, out);
+            }
+        }
+        // `x if x is defined else 1`: the branch runs only when the test held.
+        ExprKind::CondExpr { test, then, or_else } => {
+            walk_guards(test, None, ambient, named, out);
+            let (pos, neg) = definedness_tests_of(test);
+            let then_named: Vec<String> = named.iter().cloned().chain(pos).collect();
+            walk_guards(then, None, ambient, &then_named, out);
+            if let Some(o) = or_else {
+                let else_named: Vec<String> = named.iter().cloned().chain(neg).collect();
+                walk_guards(o, None, ambient, &else_named, out);
+            }
+        }
+        // `x is defined and x > 1` / `x is not defined or x > 1`: jinja short-circuits, so
+        // the right side runs only when the left settled the name's definedness.
+        ExprKind::Bin { op: jinja::BinOp::And, left, right } => {
+            walk_guards(left, None, ambient, named, out);
+            let (pos, _) = definedness_tests_of(left);
+            let right_named: Vec<String> = named.iter().cloned().chain(pos).collect();
+            walk_guards(right, None, ambient, &right_named, out);
+        }
+        ExprKind::Bin { op: jinja::BinOp::Or, left, right } => {
+            walk_guards(left, None, ambient, named, out);
+            let (_, neg) = definedness_tests_of(left);
+            let right_named: Vec<String> = named.iter().cloned().chain(neg).collect();
+            walk_guards(right, None, ambient, &right_named, out);
+        }
+        ExprKind::Bin { left, right, .. } => {
+            walk_guards(left, None, ambient, named, out);
+            walk_guards(right, None, ambient, named, out);
+        }
+        ExprKind::Unary { node, .. } => walk_guards(node, None, ambient, named, out),
+        ExprKind::Compare { expr, ops } => {
+            walk_guards(expr, None, ambient, named, out);
+            for (_, o) in ops {
+                walk_guards(o, None, ambient, named, out);
+            }
+        }
+        ExprKind::List(items) | ExprKind::Tuple(items) | ExprKind::Concat(items) => {
+            for i in items {
+                walk_guards(i, None, ambient, named, out);
+            }
+        }
+        ExprKind::Dict(pairs) => {
+            for (k, v) in pairs {
+                walk_guards(k, None, ambient, named, out);
+                walk_guards(v, None, ambient, named, out);
+            }
+        }
+        ExprKind::Slice { start, stop, step } => {
+            for s in [start, stop, step].into_iter().flatten() {
+                walk_guards(s, None, ambient, named, out);
+            }
+        }
+        ExprKind::Const(_) => {}
+    }
+}
+
+/// The roots a condition tests for definedness: `(positive, negative)`. Positive is
+/// `x is defined` / `x is not undefined`, negative the reverse. Both sides of an `and` or
+/// an `or` are pooled — an `or` proves neither, and pooling errs toward "handled", the
+/// silent side.
+fn definedness_tests_of(e: &Expr) -> (Vec<String>, Vec<String>) {
+    fn go(e: &Expr, negate: bool, pos: &mut Vec<String>, neg: &mut Vec<String>) {
+        match &e.kind {
+            ExprKind::Test { node, name, .. } if name == "defined" || name == "undefined" => {
+                if let Some(root) = node.root_name() {
+                    let positive = (name == "defined") != negate;
+                    if positive { pos.push(root.to_string()) } else { neg.push(root.to_string()) }
+                }
+            }
+            ExprKind::Unary { op: UnOp::Not, node } => go(node, !negate, pos, neg),
+            ExprKind::Bin { op: jinja::BinOp::And | jinja::BinOp::Or, left, right } => {
+                go(left, negate, pos, neg);
+                go(right, negate, pos, neg);
+            }
+            _ => {}
+        }
+    }
+    let (mut pos, mut neg) = (Vec::new(), Vec::new());
+    go(e, false, &mut pos, &mut neg);
+    (pos, neg)
+}
+
+/// The guard covering byte `at` of `expr`, if the expression handles the name there being
+/// undefined. `None` for a bare read — and for an expression that does not parse, since a
+/// rule that cannot read the expression cannot say the read is unhandled.
+pub fn guard_at(expr: &str, at: usize) -> Option<Guard> {
+    if jinja::parse(expr).is_err() {
+        return Some(Guard::Handled);
+    }
+    guards(expr)
+        .into_iter()
+        .find(|(span, _)| span.start <= at && at < span.end)
+        .map(|(_, g)| g)
+}
+
+/// The roots a `when:` clause tests positively for definedness (`x is defined`,
+/// `x is not undefined`), outside any `not` — the tests that keep a task from running
+/// while the name is undefined, so a read of it inside the task is safe. `x is not
+/// defined` is the opposite: the task runs exactly when the read would fail.
+pub fn positively_defined(clause: &str) -> Vec<String> {
+    match jinja::parse(clause) {
+        Ok(e) => definedness_tests_of(&e).0,
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Combine the conditions on one task. A list `when:` is clauses ANDed together.
@@ -1628,6 +1835,10 @@ mod tests {
         assert!(hosts(&msg("{{ hostvars['w'].x if hostvars['w'] is defined else '' }}")).is_empty());
         // ...but a default in a *neighbouring* expression rescues nothing.
         assert_eq!(hosts(&msg("{{ hostvars['w'].x }} {{ y | default(1) }}")), ["w"]);
+        // T-223: nor a default on another name in the SAME expression, nor a name that
+        // merely contains `defined` — both of which the substring check took for a guard.
+        assert_eq!(hosts(&msg("{{ hostvars['w'].x ~ (y | default(1)) }}")), ["w"]);
+        assert_eq!(hosts(&msg("{{ hostvars['w'].x ~ user_defined_suffix }}")), ["w"]);
 
         // A host key is read from a `when:` exactly as from a value — same expression
         // language, and a rule that only looked at `msg:` would miss half the corpus.
@@ -2215,6 +2426,12 @@ mod tests {
         assert!(is_guarded(&["skip_x | default(false) | bool".into()]));
         assert!(is_guarded(&["snap_uuid is defined".into()]));
         assert!(!is_guarded(&["zfs_role == 'storage'".into()]));
+        // T-223: the name, not the spelling. The substring check said both of these were
+        // guarded; a read of `user_defined_ports` raises, and so does the bare `y`.
+        assert!(!is_guarded(&["user_defined_ports == 1".into()]));
+        assert!(!is_guarded(&["x is defined and y".into()]));
+        // A constant clause is not a guarded one.
+        assert!(!is_guarded(&["true".into()]));
         // Every clause must guard itself.
         assert!(!is_guarded(&[
             "skip_x | default(false)".into(),
@@ -2630,14 +2847,62 @@ mod corpus {
             .iter()
             .filter(|c| is_guarded(std::slice::from_ref(&(*c).to_string())))
             .count();
-        // 16/111 and 10/111 as measured. Low by design, and in line with the full sweep
+        // 16/111 and 9/111 as measured. Low by design, and in line with the full sweep
         // (166/1313 across the collections, 221/2261 across kubespray) — the sample tracks
         // the corpus it came from rather than being cherry-picked for a flattering number.
         // It was 14 before T-186: reading the accessor path instead of cutting it off also
         // reads two `acme_*[N].subject_key_identifier is defined` rows that used to be
         // refused outright, so the correctness fix bought reach rather than costing it.
+        // Guarded was 10 before T-223: the substring check counted
+        // `terraform_version_installed is not defined or terraform_version_installed !=
+        // terraform_version`, whose bare `terraform_version` raises — not a guarded clause.
         assert!(classified >= 16, "only {classified}/{} classified", REAL_WHENS.len());
-        assert!(guarded >= 10, "only {guarded} guarded conditions recognised");
+        assert!(guarded >= 9, "only {guarded} guarded conditions recognised");
+    }
+
+    /// T-223: where an undefined name is handled, by position in the expression — each row
+    /// measured on 2.21.2 (Symptom table of the ticket, plus the `is defined` forms).
+    #[test]
+    fn a_guard_covers_the_name_it_names_and_nothing_beside_it() {
+        use super::Guard::*;
+        let at = |expr: &str, name: &str| guard_at(expr, expr.find(name).unwrap());
+        // Row 1: a name containing `defined` is a bare read.
+        assert_eq!(at("user_defined_ports", "user_defined_ports"), None);
+        assert_eq!(at("predefined_routes | length", "predefined_routes"), None);
+        // The tested or defaulted spine is handled; a neighbour is not.
+        assert_eq!(at("x is defined", "x"), Some(Handled));
+        assert_eq!(at("x is not defined", "x"), Some(Handled));
+        assert_eq!(at("x.y is defined", "x"), Some(Handled));
+        assert_eq!(at("x | default(1)", "x"), Some(Handled));
+        assert_eq!(at("x | default(1) | int", "x"), Some(Handled));
+        assert_eq!(at("x | default(1) ~ y", "y"), None);
+        assert_eq!(at("x is defined and y", "y"), None);
+        // Rows 3 and 4: a `default` argument runs only when the defaulted root is undefined.
+        assert_eq!(at("x | default(y)", "y"), Some(WhenUndefined("x".into())));
+        assert_eq!(at("x | default(y)", "x"), Some(Handled));
+        // A subscript literal rides its spine, so the hostvars rule can ask about the key.
+        assert_eq!(at("hostvars['web01'].x | default(1)", "'web01'"), Some(Handled));
+        assert_eq!(at("hostvars['web01'].x", "'web01'"), None);
+        // A branch the test keeps from running, and jinja's short-circuit.
+        assert_eq!(at("x if x is defined else 1", "x if"), Some(Handled));
+        assert_eq!(at("x is defined and x > 1", "x > 1"), Some(Handled));
+        assert_eq!(at("x is not defined or x > 1", "x > 1"), Some(Handled));
+        assert_eq!(at("x is defined or x > 1", "x > 1"), None);
+        // An expression the parser refuses is not judged.
+        assert_eq!(at("x |", "x"), Some(Handled));
+    }
+
+    /// T-223: a `when:` on the task guards a read inside it only through a positive test
+    /// of that very name — `foo_bar is defined` says nothing about `foo` (row 2), and
+    /// `x is not defined` runs the task exactly when the read of `x` would fail.
+    #[test]
+    fn a_when_guard_is_a_positive_test_of_the_same_name() {
+        assert_eq!(positively_defined("foo_bar is defined"), ["foo_bar"]);
+        assert_eq!(positively_defined("x is not undefined"), ["x"]);
+        assert_eq!(positively_defined("x.y is defined and z"), ["x"]);
+        assert!(positively_defined("x is not defined").is_empty());
+        assert!(positively_defined("not (x is defined)").is_empty());
+        assert!(positively_defined("user_defined_x | bool").is_empty());
     }
 
     /// T-140, fixed. A Jinja keyword argument is not an assignment, and

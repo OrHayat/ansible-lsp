@@ -58,7 +58,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-182 — Derive a variable's value domain from the assert that constrains it
 - [ ] T-221 — Resolve a dotted access into a literal mapping variable
 - [x] T-222 — Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment
-- [ ] T-223 — Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read
+- [x] T-223 — Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read
 - [x] T-224 — Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed
 
 ## Done when

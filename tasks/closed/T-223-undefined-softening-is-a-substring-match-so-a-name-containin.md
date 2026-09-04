@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P2       | M    | T-112 | —          |
+| done   | bug  | P2       | M    | T-112 | —          |
 
 ## Symptom
 
@@ -69,14 +69,32 @@ would raise. Record which core the assertion holds on.
 Unparseable expressions (the Jinja parser rejects) fall back to silence, as today: a
 spurious match costs a missed report, never a false error.
 
+## Landed
+
+`condition::guards` walks the Jinja AST once and records, per name position, whether the
+read is `Handled` (tested, defaulted, or on a branch an enclosing test keeps from
+running) or evaluated `WhenUndefined(root)` (a `default` argument). `guard_at` answers
+for one position; `positively_defined` answers for a `when:` clause. The four sites read
+those: `handled_in_expression` and the guard-clause check in `vars.rs`,
+`expression_swallows_undefined` and `is_guarded` in `condition.rs`. `VarUse` carries the
+span of its expression so the rule can hand the right text over.
+
+Row 4 is resolved per name at the use: a `default` argument is flagged only when the
+defaulted root has no definition in scope — which is exactly when ansible evaluates it.
+
+The corpus pin moved from 10 to 9 guarded clauses: `terraform_version_installed is not
+defined or terraform_version_installed != terraform_version` has a bare `terraform_version`
+that raises, and the substring had counted it.
+
 ## Done when
 
-- [ ] rows 1–3 of the Symptom table flag exactly the names shown as `fatal`, in `vars.rs`
+- [x] rows 1–3 of the Symptom table flag exactly the names shown as `fatal`, in `vars.rs`
       tests next to `undef`, with row 6 as the control in the same test
-- [ ] row 4 stays silent, with a comment naming the 2.21.2 run that says why
-- [ ] `when: foo_bar is defined` guards `foo_bar` and `foo_bar.x`, and not `foo` — one test
+      (`softening_follows_the_expression_not_the_spelling`)
+- [x] row 4 stays silent, with a comment naming the 2.21.2 run that says why
+- [x] `when: foo_bar is defined` guards `foo_bar` and `foo_bar.x`, and not `foo` — one test
       each way round
-- [ ] `expression_swallows_undefined` and `is_guarded` answer from the same predicate, and
+- [x] `expression_swallows_undefined` and `is_guarded` answer from the same predicate, and
       each has a test where the substring answer and the AST answer differ
-- [ ] no `contains("defined")` or `contains("default(")` remains in `vars.rs` or
+- [x] no `contains("defined")` or `contains("default(")` remains in `vars.rs` or
       `condition.rs`
