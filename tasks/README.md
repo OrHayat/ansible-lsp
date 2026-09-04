@@ -170,6 +170,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
 | T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](open/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | M    | —    |
+| T-223 | **bug** · [Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read](open/T-223-undefined-softening-is-a-substring-match-so-a-name-containin.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
