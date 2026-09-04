@@ -115,6 +115,40 @@ impl VarSource {
         }
     }
 
+    /// Whether a definition from this source can supply a templated `import_playbook`
+    /// (T-136).
+    ///
+    /// The import is expanded when the playbook file is parsed, from
+    /// `variable_manager.get_vars()` called with **no play, host or task**
+    /// (`playbook_include.py:69-83`; live-verified on 2.21.2 in T-095). Every source the
+    /// index knows needs one of those three, so every arm is `false` — and the match is
+    /// written out arm by arm on purpose: a source added later must be placed on one side
+    /// here before the build passes, rather than default to "cannot" and produce a false
+    /// diagnostic on the day it lands. The two sources that *can* — `-e` and a `vars:` on
+    /// the import entry — are not indexed as definitions, and the rule reads the entry's
+    /// `vars:` directly.
+    pub fn can_supply_import_playbook(self) -> bool {
+        match self {
+            // Need a play.
+            VarSource::PlayVars
+            | VarSource::BlockVars
+            | VarSource::TaskVars
+            | VarSource::VarsFiles
+            | VarSource::RoleDefaults
+            | VarSource::RoleVars
+            | VarSource::RoleParams
+            | VarSource::RoleEntryVars => false,
+            // Need a host.
+            VarSource::GroupVarsAll
+            | VarSource::GroupVars
+            | VarSource::HostVars
+            | VarSource::Inventory
+            | VarSource::AddHost => false,
+            // Need a task to have run.
+            VarSource::SetFact | VarSource::Register | VarSource::IncludeVars => false,
+        }
+    }
+
     /// True for sources whose applicability depends on the target host — a named `group_vars`
     /// or `host_vars` file. We can point at the definition, but not assert it's in effect for
     /// a given host without parsing inventory.

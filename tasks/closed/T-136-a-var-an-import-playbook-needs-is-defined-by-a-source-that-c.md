@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | M    | T-099 | T-095      |
+| done   | task | P1       | M    | T-099 | T-095      |
 
 ## Problem
 
@@ -87,11 +87,55 @@ launch command. If the corpus shows it is noisy, downgrade to a hint rather than
 - The rule needs the corpus run before it ships — `~/app/ansible` has 48 conditional imports;
   if a meaningful number are templated and this fires on all of them, the framing is wrong.
 
+## Progress
+
+Landed as `inert-import-var` (WARNING), `Backend::inert_import_var_diagnostics` in
+`main.rs`, run from the publish path's `State::inventory_diagnostics` beside the coverage and
+`unknown-host` rules — it reads the definition index, and that index depends on the inventory,
+so it takes the same per-file inventory snapshot those two do (T-202). The reachability
+question is `VarSource::can_supply_import_playbook` in `vars.rs`: an arm per variant, every
+one `false`, no wildcard, so a variant added later does not compile until it is placed.
+
+The message names the file, 1-based line and source of the winning definition
+(`vars::effective` over the in-scope ones, with "and N more" when several), and stops at the
+definition being inert. Names are taken only from inside `{{ }}` — the first draft scanned the
+whole value as an expression and read `env.yml` as a use of `env`, which the magic-variable
+control caught.
+
+Silent, each pinned: a name nothing indexed defines (T-095's case), an entry with any `vars:`
+at all, a magic-only template, an `import_playbook` inside a task list, the rule's own noqa
+and a bare one. The control on the silence: `# noqa: templated-import` on the same line does
+**not** silence this rule, since the two say different things. Seen red with the rule
+short-circuited — the four positive tests fail, the demo guard stays green as a guard should.
+
+Demo: `group_vars/all.yml` defines `deploy_stage`, and `playbook.yml` gained the row after
+the SILENCED `{{ env }}` one. Not `env`, as the Watch-out suggested: `env` is deliberately
+defined nowhere reachable from `playbook.yml` (that is what keeps T-095's rows on T-095's
+side), and a second name keeps both fixtures honest. The `-e` GOOD case is the existing
+SILENCED row. Pinned by `demo_playbook_has_exactly_the_documented_inert_import_var` plus the
+`every_other_demo_file_is_free_of_inert_import_var_diagnostics` guard.
+
+**The corpus gate**, run 2026-09-04 through `inert_import_var_corpus` (an env-gated
+`#[ignore]`d test in `main.rs`, the same shape as T-184's, because the rule lives in the
+publish path and `scan.rs` cannot reach it):
+
+| tree | commit | yaml files | files mentioning `import_playbook` | templated playbook-level imports | hits |
+| ---- | ------ | ---------- | ---------------------------------- | -------------------------------- | ---- |
+| the reference tree (`~/app/ansible`, here at `volumez/matrix/ansible`) | `186c7ed5` | 768 | 57 | **0** | **0** |
+
+The control came out different: `demo/` reports exactly 1, on the `deploy_stage` row. And
+the zero denominator was checked outside the tool — a grep for `import_playbook:` lines
+containing `{{` over the same tree also finds none; the 57 files match the grep's 57. So
+the zero is honest but weak: this tree has no templated import for the rule to judge, and
+the "48 conditional imports" the Watch-out worried about are `when:`-gated literal paths,
+which the rule never looks at. The ticket's noise question stays open in principle and is
+answered for this tree only; the gate stays runnable for the next one.
+
 ## Done when
 
-- [ ] a templated `import_playbook` whose var the index defines names that file and source
-- [ ] the message says the definition is inert, never that the playbook fails
-- [ ] a `vars:` on the import entry suppresses it entirely
-- [ ] a var the index does not know stays silent here (T-095 owns that case)
-- [ ] adding a `VarSource` variant fails the build rather than defaulting to unreachable
-- [ ] the corpus scan is run and the hit count recorded here
+- [x] a templated `import_playbook` whose var the index defines names that file and source
+- [x] the message says the definition is inert, never that the playbook fails
+- [x] a `vars:` on the import entry suppresses it entirely
+- [x] a var the index does not know stays silent here (T-095 owns that case)
+- [x] adding a `VarSource` variant fails the build rather than defaulting to unreachable
+- [x] the corpus scan is run and the hit count recorded here — 0 hits over 0 templated imports, see Progress

@@ -31,6 +31,15 @@
   # so the warning is suppressible and the message says so.
   import_playbook: "{{ env }}-setup.yml"  # noqa: templated-import
 
+- name: BAD — templated from a definition that exists and cannot reach it (inert-import-var)
+  # `deploy_stage` IS defined — group_vars/all.yml — and that definition is inert here:
+  # group_vars apply per host, and this line is expanded before any host exists. The
+  # second warning on this line names that file, which is otherwise the thing you stare
+  # at. It does not say the run fails: `-e deploy_stage=prod` at launch would work, and
+  # group_vars-as-default plus `-e`-as-override is an ordinary pattern. The definition
+  # still never reaches this line.
+  import_playbook: "{{ deploy_stage }}-setup.yml"
+
 - name: GOOD — templated, but supplied right here
   # `vars:` on the import entry is `self.vars`, read before the variable manager is
   # consulted — one of the two things that works. Resolves and does not warn.
