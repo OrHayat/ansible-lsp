@@ -164,7 +164,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-203 | [Install-gated tests skip silently, so resolver coverage depends on the machine](open/T-203-install-gated-tests-skip-silently-so-resolver-coverage-depen.md) | M    | —    |
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
-| T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](open/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | S    | —    |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
 
@@ -334,6 +333,7 @@ T-021 is now unblocked on that side.
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](closed/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | done     |
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](closed/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | done     |
 | T-225 | **bug** · [A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads](closed/T-225-a-configured-inventory-path-that-does-not-exist-drops-the-gr.md) | done     |
+| T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](closed/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | done     |
 
 ## Settled — don't re-derive these
 
