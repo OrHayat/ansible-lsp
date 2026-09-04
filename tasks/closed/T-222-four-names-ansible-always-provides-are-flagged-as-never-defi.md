@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | S    | T-112 | —          |
+| done   | bug  | P1       | S    | T-112 | —          |
 
 ## Symptom
 
@@ -46,10 +46,19 @@ function. The `varnames` run is the measurement; the source is only where to loo
 
 ## Fix
 
-Add the four to `MAGIC`, with a comment on each saying which layer sets it and that the
-list was diffed against a 2.21.2 `varnames` run — so the next person knows it was measured,
-not typed. Keep `play_hosts`: it is present, though 2.21 tags it deprecated (a hover fact
-for later, not this ticket).
+Landed as part of [[T-224]]: `MAGIC` is gone, replaced by `injected.rs` — one table of
+every name the 2.21.2 `varnames` run showed, each with the layer that sets it and the
+scope it is set in, and the recipe in the module comment. `role_names`, `inventory_file`
+and `environment` are `Always` rows there.
+
+**Correction to the Symptom.** `role_uuid` was not a gap. The table in the Symptom says
+it: `role_uuid` is present only inside a role, and the probe read it from a play task,
+where ansible itself fails with `'role_uuid' is undefined`. That flag was a true positive,
+and it is *not* silenced — it is a `Role`-scoped row, and the scope diagnostic is
+[[T-224]] slice 2. So three names, not four.
+
+`play_hosts` stays present, and its table row says it is deprecated (measured: 2.21.2
+warns, removal in 2.23).
 
 Not in scope, but recorded: `item` and `role_name`/`role_path`/`role_uuid` are only present
 in a loop / in a role, and `MAGIC` treats all of them as always-present. That is the
@@ -59,12 +68,12 @@ Jinja's `loop`.
 
 ## Done when
 
-- [ ] the six-name playbook above flags nothing — a test in `vars.rs` asserting the exact
-      empty set, next to the existing `undef` helper
-- [ ] the same test carries a control that still flags: a seventh, genuinely undefined name
+- [x] the playbook above, minus `role_uuid` (see the correction in Fix), flags nothing —
+      `names_ansible_sets_for_every_task_stay_silent` in `vars.rs`, next to `undef`
+- [x] the same test carries a control that still flags: a seventh, genuinely undefined name
       in the same expression, so the fix cannot pass by silencing the rule
-- [ ] every consumer of `is_injected` is listed in the test's doc comment with what it
+- [x] every consumer of `injected::provided` is listed in the test's doc comment with what it
       answers for `inventory_file` (rule 3: a test per consumer, not per rule) — hover,
-      injected-hover, and the undefined rule
-- [ ] `MAGIC`'s comment names the ansible-core version it was diffed against and the
-      `varnames` recipe, so the next drift is one command to find
+      injected-hover, go-to-definition, and the undefined rule
+- [x] the table's module comment names the ansible-core version it was diffed against and
+      the `varnames` recipe, so the next drift is one command to find

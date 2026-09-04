@@ -14,6 +14,7 @@ use ansible_core::config::DuplicateDictKey;
 use ansible_core::expressions;
 use ansible_core::fs::{Counting, Fs, StdFs};
 use ansible_core::include_target;
+use ansible_core::injected;
 use ansible_core::jinja;
 use ansible_core::install::{AnsibleInstall, Version};
 use ansible_core::attributes;
@@ -2196,7 +2197,9 @@ impl Backend {
         install: Option<&Arc<AnsibleInstall>>,
     ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
-        let use_ = vars::uses(nodes)
+        // The full view, not the rule-facing one: a definition of `ansible_custom` is a
+        // definition, and the prefix must not stop the jump (T-224).
+        let use_ = vars::any_uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
@@ -2296,7 +2299,7 @@ impl Backend {
         use_: &vars::VarUse,
         install: Option<&AnsibleInstall>,
     ) -> Option<(String, Range)> {
-        let md = injected_var_hover(&use_.name, install?)?;
+        let md = injected_var_hover(&use_.name, install)?;
         let (sl, sc) = doc.byte_to_lsp(use_.span.start);
         let (el, ec) = doc.byte_to_lsp(use_.span.end);
         Some((md, Range::new(Position::new(sl, sc), Position::new(el, ec))))
@@ -2318,16 +2321,16 @@ impl Backend {
         let use_ = vars::any_uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
-        if condition::is_injected(&use_.name) {
-            return Self::injected_var_hover_at(doc, &use_, install.map(|i| i.as_ref()));
-        }
         let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
             .collect();
+        // A definition answers first. Only a name nothing defines falls back to what ansible
+        // provides — the other way round hid a user's own `ansible_custom` behind its
+        // prefix (T-224).
         if defs.is_empty() {
-            return None;
+            return Self::injected_var_hover_at(doc, &use_, install.map(|i| i.as_ref()));
         }
         // Highest precedence first (latest on a tie): defs[0] is what actually applies here.
         defs.sort_by(|a, b| {
@@ -2983,45 +2986,77 @@ fn reference_hover(
 /// Both lines name the install, because both values are the *editor's* Ansible and the play
 /// may well run on another one — CI, tox, a second venv (T-051). A hover that states the
 /// source can be argued with; one that just asserts a path cannot.
-fn injected_var_hover(name: &str, install: &AnsibleInstall) -> Option<String> {
-    let source = || match install.package_dir.as_ref() {
+fn injected_var_hover(name: &str, install: Option<&AnsibleInstall>) -> Option<String> {
+    let source = |install: &AnsibleInstall| match install.package_dir.as_ref() {
         Some(p) => md::text(&format!("from the detected install at {}", p.display())),
         None => md::text("from the detected install"),
     };
-    match name {
-        "ansible_playbook_python" => {
-            let py = install.python.as_ref()?;
-            Some(
-                Md::new()
-                    .line(md::text("`ansible_playbook_python` — the interpreter Ansible runs on"))
-                    .line(md::code(&py.display().to_string()))
-                    .gap()
-                    .line(source().italic())
-                    .line(
-                        md::text(
-                            "The running play's own interpreter may differ — this is the one \
-                             behind the `ansible` this editor found.",
-                        )
-                        .italic(),
+    // A value the resolver actually holds comes first. When it holds none, the name still
+    // gets the table's line below — silence here used to read as "not a variable".
+    let valued = match (name, install) {
+        ("ansible_playbook_python", Some(i)) => i.python.as_ref().map(|py| {
+            Md::new()
+                .line(md::text("`ansible_playbook_python` — the interpreter Ansible runs on"))
+                .line(md::code(&py.display().to_string()))
+                .gap()
+                .line(source(i).italic())
+                .line(
+                    md::text(
+                        "The running play's own interpreter may differ — this is the one \
+                         behind the `ansible` this editor found.",
                     )
-                    .render(),
-            )
-        }
+                    .italic(),
+                )
+                .render()
+        }),
         // A dict at runtime (`full`, `major`, `minor`, `revision`, `string`), so the hover
         // reports the release rather than implying the bare name is a string.
-        "ansible_version" => {
-            let v = install.version.as_ref()?;
-            Some(
-                Md::new()
-                    .line(md::text("`ansible_version` — ansible-core, as a dict"))
-                    .line(md::code(&format!("{v}")))
-                    .gap()
-                    .line(source().italic())
-                    .render(),
-            )
-        }
+        ("ansible_version", Some(i)) => i.version.as_ref().map(|v| {
+            Md::new()
+                .line(md::text("`ansible_version` — ansible-core, as a dict"))
+                .line(md::code(&format!("{v}")))
+                .gap()
+                .line(source(i).italic())
+                .render()
+        }),
         _ => None,
+    };
+    if valued.is_some() {
+        return valued;
     }
+    if let Some(row) = injected::injected(name) {
+        return Some(
+            Md::new()
+                .line(md::code(name) + " — " + md::raw(row.meaning))
+                .gap()
+                .line(
+                    (md::text("Set by ansible (")
+                        + md::raw(row.set_by)
+                        + "); "
+                        + md::raw(row.scope.describe())
+                        + ".")
+                        .italic(),
+                )
+                .render(),
+        );
+    }
+    if injected::may_be_fact(name) {
+        return Some(
+            Md::new()
+                .line(md::code(name) + " — not set by ansible-core itself")
+                .gap()
+                .line(
+                    md::raw(
+                        "An `ansible_`-prefixed name: a fact gathered from the host, or a \
+                         connection variable set in inventory. Nothing in this workspace \
+                         defines it.",
+                    )
+                    .italic(),
+                )
+                .render(),
+        );
+    }
+    None
 }
 
 /// Everything the hover request decides, given a parsed document and a byte offset. Kept
@@ -3827,7 +3862,7 @@ mod tests {
             let use_ = ansible_core::vars::any_uses(&nodes)
                 .into_iter()
                 .find(|u| byte >= u.span.start && byte < u.span.end)?;
-            if !ansible_core::condition::is_injected(&use_.name) {
+            if !ansible_core::injected::provided(&use_.name) {
                 return None;
             }
             super::Backend::injected_var_hover_at(&doc, &use_, i)
@@ -3845,9 +3880,56 @@ mod tests {
 
         // An ordinary variable is the definition hover's business, not this one's.
         assert!(hover("base_url }}", Some(&install)).is_none());
-        // No install detected yet, or one we learned nothing about: silence, not a guess.
-        assert!(hover("ansible_playbook_python", None).is_none());
-        assert!(hover("ansible_version", Some(&AnsibleInstall::default())).is_none());
+        // No install detected yet, or one we learned nothing about: the table's line, and no
+        // invented value (T-224).
+        let (md, _) = hover("ansible_playbook_python", None).expect("generic line");
+        assert!(md.contains("interpreter") && !md.contains("/venv"), "{md}");
+        let (md, _) = hover("ansible_version", Some(&AnsibleInstall::default())).expect("generic line");
+        assert!(md.contains("dict") && !md.contains("2.21"), "{md}");
+    }
+
+    /// T-224: a user's own variable whose name happens to start with `ansible_` is an
+    /// ordinary variable. Hover shows its definition and go-to-definition reaches it — the
+    /// prefix used to pre-empt both. `plain_custom` beside it is the control: both names
+    /// must come out the same way.
+    #[test]
+    fn a_defined_ansible_prefixed_name_hovers_and_jumps_to_its_definition() {
+        let d = std::env::temp_dir().join("ansible-lsp-t224-defined-prefix");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("play.yml");
+        let text = concat!(
+            "- hosts: all\n  vars:\n    ansible_custom: 1\n    plain_custom: 2\n  tasks:\n",
+            "    - debug: { msg: \"{{ ansible_custom }} {{ plain_custom }} {{ ansible_play_name }}\" }\n",
+        );
+        std::fs::write(&path, text).unwrap();
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+
+        let hover = |needle: &str| {
+            let byte = text.find(needle).unwrap() + 3;
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+                .map(|h| h.0)
+        };
+        let jump = |needle: &str| {
+            let byte = text.find(needle).unwrap() + 3;
+            let (l, c) = doc.byte_to_lsp(byte);
+            super::Backend::variable_defs_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &no_buffers(), &[], &no_cache(), None)
+        };
+
+        for name in ["ansible_custom", "plain_custom"] {
+            let h = hover(&format!("{{{{ {name}")).unwrap_or_else(|| panic!("{name} hovers"));
+            assert!(h.contains("play var") && h.contains("play.yml:"), "{name}: {h}");
+            assert!(!h.contains("Set by ansible"), "{name} is the user's, not ansible's: {h}");
+            let locs = jump(&format!("{{{{ {name}")).unwrap_or_else(|| panic!("{name} jumps"));
+            assert_eq!(locs.len(), 1);
+            assert_eq!(locs[0].range.start.line, if name == "ansible_custom" { 2 } else { 3 }, "{name}");
+        }
+        // A name nothing defines still falls through to the table.
+        let h = hover("{{ ansible_play_name").expect("table line");
+        assert!(h.contains("Set by ansible") && h.contains("`name:`"), "{h}");
+        assert!(jump("{{ ansible_play_name").is_none());
     }
 
     /// The gap that made the first cut of T-143 dead code: the renderer was right and nothing
@@ -3869,7 +3951,7 @@ mod tests {
             ansible_core::vars::any_uses(&nodes)
                 .into_iter()
                 .find(|u| byte >= u.span.start && byte < u.span.end)
-                .filter(|u| ansible_core::condition::is_injected(&u.name))
+                .filter(|u| ansible_core::injected::provided(&u.name))
                 .map(|u| u.name)
         };
         assert_eq!(at("ansible_playbook_python").as_deref(), Some("ansible_playbook_python"));
@@ -3898,7 +3980,7 @@ mod tests {
             version: Some(Version { major: 2, minor: 21, patch: 2 }),
             ..Default::default()
         };
-        let hover = |n: &str| super::injected_var_hover(n, &install);
+        let hover = |n: &str| super::injected_var_hover(n, Some(&install));
 
         let py = hover("ansible_playbook_python").expect("interpreter is known");
         assert!(py.contains("/venv/bin/python"), "{py}");
@@ -3909,15 +3991,24 @@ mod tests {
         assert!(v.contains("2.21.2"), "{v}");
         assert!(v.contains("dict"), "does not imply the bare name is a string");
 
-        // Facts and the value-less magic names stay silent — no "provided by Ansible" noise.
-        assert!(hover("ansible_os_family").is_none());
-        assert!(hover("inventory_hostname").is_none());
-        assert!(hover("playbook_dir").is_none());
+        // A value-less table name gets its meaning and scope, and no value (T-224).
+        let h = hover("inventory_hostname").expect("table line");
+        assert!(h.contains("inventory spells it") && h.contains("every task"), "{h}");
+        let h = hover("ansible_loop").expect("table line");
+        assert!(h.contains("extended: true"), "scope named: {h}");
+        // A possible fact is a maybe, and says so.
+        let h = hover("ansible_os_family").expect("fact line");
+        assert!(h.contains("fact") && h.contains("Nothing in this workspace"), "{h}");
+        // Not ansible's at all: nothing to say.
+        assert!(hover("base_url").is_none());
 
-        // A known name whose value was not detected invents nothing.
+        // A known name whose value was not detected invents nothing — the table line, and
+        // neither a path nor a version in it.
         let empty = AnsibleInstall::default();
-        assert!(super::injected_var_hover("ansible_playbook_python", &empty).is_none());
-        assert!(super::injected_var_hover("ansible_version", &empty).is_none());
+        let h = super::injected_var_hover("ansible_playbook_python", Some(&empty)).expect("table line");
+        assert!(!h.contains('/'), "{h}");
+        let h = super::injected_var_hover("ansible_version", Some(&empty)).expect("table line");
+        assert!(!h.contains("2.21"), "{h}");
     }
 
     /// T-102 end to end, against the two checked-in fixtures. The YAML file must report
@@ -8045,11 +8136,10 @@ mod tests {
 
     /// T-178's per-consumer box, at the one surface measured to show the key.
     ///
-    /// Hover and go-to-definition cannot carry this assertion: `is_injected`
-    /// (`condition.rs:476`) matches every `ansible_*` name, so `variable_hover_at`
-    /// short-circuits at the injected branch and `variable_defs_at` never sees the use at
-    /// all — both are silent from *any* position, before or after the fix. The templated-path
-    /// hover is the consumer that reads the index for this name and says something.
+    /// Hover and go-to-definition answer from the same index since T-224 (a definition
+    /// first, the injected table only after), so they now agree with this surface; the
+    /// templated-path hover is the one that was measured to show the key when this was
+    /// written, and stays the pinned consumer.
     ///
     /// Each fixture carries an ordinary `control` variable in the SAME position, used in a
     /// second templated path. That is what keeps the negative honest: the group case asserts

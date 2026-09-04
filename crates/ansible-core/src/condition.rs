@@ -44,23 +44,6 @@ const NOT_VARIABLES: &[&str] = &[
     "number", "boolean", "even", "odd", "sameas", "escaped", "truthy", "falsy",
 ];
 
-/// Variables Ansible always provides, so their absence from the workspace means nothing.
-const MAGIC: &[&str] = &[
-    "inventory_hostname", "groups", "group_names", "hostvars", "item", "omit",
-    "play_hosts", "role_name", "role_path", "playbook_dir", "inventory_dir",
-    "inventory_hostname_short", "ansible_check_mode", "ansible_verbosity", "vars",
-    // Set even with no play/host/task (`vars/manager.py:457`); its value, when a config
-    // exists, is what T-098's discovery records. Undefined only when no config was found
-    // — a case the definedness rule cannot assume, so never flag it.
-    "ansible_config_file",
-];
-
-/// Shared with the definedness diagnostic (T-051): a magic name must never be
-/// flagged as undefined.
-pub fn is_magic(name: &str) -> bool {
-    MAGIC.contains(&name)
-}
-
 
 /// A variable reference in a condition: the name that is bound, and the accessor path
 /// applied to it. They part company the moment there is an accessor — `r.stdout` binds `r`,
@@ -457,8 +440,8 @@ pub fn problems(cond: &str, has_loop: bool) -> Vec<Problem> {
 }
 
 /// Each root variable *use* in a Jinja expression, with its byte range in `expr` — the
-/// span-aware core of [`variables`]. Filters, tests, attribute accesses, magic vars and
-/// string-literal contents are excluded; the root only (`foo.bar.baz` -> `foo`).
+/// span-aware core of [`variables`]. Filters, tests, attribute accesses, names ansible
+/// provides and string-literal contents are excluded; the root only (`foo.bar.baz` -> `foo`).
 ///
 /// Scans the original text — not the string-stripped copy [`variables`] used to use — so
 /// the offsets stay byte-accurate past non-ASCII. Uses are returned in order and NOT
@@ -467,21 +450,15 @@ pub fn variable_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
         !(LITERALS.contains(&w)
             || NOT_VARIABLES.contains(&w)
-            || is_injected(w)
+            || crate::injected::provided(w)
             || w.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
 }
 
-/// True for a name Ansible injects: a magic variable, or the `ansible_*` fact prefix.
-/// [`variable_uses`] drops these — no rule can use a name no workspace file defines — and
-/// [`any_uses`] keeps them, which is the difference between the rule view and hover's.
-pub fn is_injected(name: &str) -> bool {
-    MAGIC.contains(&name) || name.starts_with("ansible_")
-}
-
-/// [`variable_uses`] plus the injected names it drops. One scan answering "what name is
-/// under this cursor", for a caller that will decide by [`is_injected`] which hover to
-/// render — rather than two complementary scans of the same tree (T-143).
+/// [`variable_uses`] plus the names ansible provides ([`crate::injected::provided`]), which
+/// it drops. One scan answering "what name is under this cursor", for a caller that looks
+/// for a definition first and falls back to the injected table — rather than two
+/// complementary scans of the same tree (T-143, T-224).
 pub fn any_uses(expr: &str) -> Vec<(String, usize, usize)> {
     scan_words(expr, |w| {
         !(LITERALS.contains(&w)

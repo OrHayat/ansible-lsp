@@ -334,10 +334,11 @@ pub fn uses(nodes: &[Node]) -> Vec<VarUse> {
     uses_with(nodes, condition::variable_uses)
 }
 
-/// [`uses`] plus the names Ansible injects, which it drops on purpose — no rule can use a
-/// name no workspace file defines. Hover is the only consumer, and it wants one scan of the
-/// tree rather than two complementary ones, so it takes this and sorts the two kinds out
-/// with [`condition::is_injected`] (T-143).
+/// [`uses`] plus the names ansible provides, which it drops on purpose — no rule can use a
+/// name no workspace file defines. Hover and go-to-definition take this view: a definition
+/// answers first, and only a name with none falls back to the injected table
+/// ([`crate::injected`]), so a user's own `ansible_custom` is never hidden by its prefix
+/// (T-143, T-224).
 pub fn any_uses(nodes: &[Node]) -> Vec<VarUse> {
     uses_with(nodes, condition::any_uses)
 }
@@ -824,8 +825,7 @@ pub fn undefined_uses_in(
                 // sound for them: the play var is definitely not what this read returns,
                 // whatever inventory holds. Claiming the read is *broken* needs T-062.
                 && !u.through_hostvars
-                && !condition::is_magic(&u.name)
-                && !u.name.starts_with("ansible_")
+                && !crate::injected::provided(&u.name)
                 && !declared.contains(&u.name)
                 && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
                 && !softened(text, u.span.start)
@@ -1705,6 +1705,27 @@ mod tests {
             "      loop_control: { loop_var: my_row }\n",
         );
         assert!(undef(src).is_empty());
+    }
+
+    /// T-222: `role_names`, `inventory_file` and `environment` are set for every task
+    /// (2.21.2 `varnames` run, see `injected.rs`), and the hand-typed list this rule used to
+    /// read lacked all three. The seventh name is the control: the rule still fires.
+    ///
+    /// Consumers of `injected::provided`, and what each answers for `inventory_file`
+    /// (rule 3): this rule — silent; `condition::variable_uses` — dropped, so no condition
+    /// hint names it; hover (`main.rs` `variable_hover_at`) — the table's line, since no
+    /// definition exists; go-to-definition — nothing, for the same reason.
+    ///
+    /// `role_uuid`, the fourth name the ticket listed, is *not* here: it is present only
+    /// inside a role, so a play task reading it was a true positive, not a gap.
+    #[test]
+    fn names_ansible_sets_for_every_task_stay_silent() {
+        let src = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ role_names }} {{ inventory_file }} {{ environment }} ",
+            "{{ groups }} {{ inventory_dir }} {{ nope_missing }}\" }\n",
+        );
+        assert_eq!(undef(src), ["nope_missing"]);
     }
 
     #[test]

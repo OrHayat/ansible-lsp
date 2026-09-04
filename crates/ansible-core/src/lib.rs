@@ -10,6 +10,7 @@ pub mod glob;
 pub mod guard;
 pub mod include_target;
 pub mod include_vars;
+pub mod injected;
 pub mod install;
 pub mod inventory;
 pub mod jinja;
