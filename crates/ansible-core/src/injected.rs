@@ -143,7 +143,7 @@ pub const TABLE: &[Injected] = &[
     row!("ansible_parent_role_paths", ChildRole, ROLE, "directories of the roles that included or imported this one, innermost first"),
     row!("ansible_delegated_vars", Delegated, GET_VARS, "the delegated host's variables, keyed by its name"),
     // --- inside a rendered template ---
-    row!("ansible_managed", Template, TEMPLATE, "the `ansible_managed` config string, rendered — the usual first line of a generated file"),
+    row!("ansible_managed", Template, TEMPLATE, "the `[defaults] ansible_managed` config string with `{uid}`, `{file}`, `{host}` filled in (measured: `Ansible managed` by default); the config key is deprecated for 2.23 in favour of setting the variable yourself"),
     row!("template_host", Template, TEMPLATE, "the node `ansible-playbook` runs on"),
     row!("template_path", Template, TEMPLATE, "the template's path as the task gave it"),
     row!("template_fullpath", Template, TEMPLATE, "the template's absolute path"),
