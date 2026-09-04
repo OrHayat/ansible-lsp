@@ -1007,6 +1007,32 @@ pub fn undefined_uses_in(
         .collect()
 }
 
+/// Reads of a provided name that ansible has deprecated and the detected core still sets —
+/// `play_hosts` on 2.21.2, which prints a deprecation warning for each read. Once the core
+/// is at or past the removing release the read is undefined instead and
+/// [`undefined_uses`] reports it; a name the workspace defines itself is the user's, not
+/// the deprecated one. Playbooks only, like the undefined rule.
+pub fn deprecated_uses_in(path: &Path, nodes: &[Node], cache: &ScanCache) -> Vec<VarUse> {
+    let tree = ast::build(nodes);
+    if !matches!(tree, Ast::Playbook(_)) {
+        return Vec::new();
+    }
+    let core = cache.core_version();
+    let all = definitions_with_deps_in(path, nodes, cache).0;
+    any_uses(nodes)
+        .into_iter()
+        .filter_map(|mut u| {
+            let row = crate::injected::injected(&u.name)?;
+            let gone = row.removed_in?;
+            if !row.present_on(core) || all.iter().any(|d| d.name == u.name && d.reaches(&u, path)) {
+                return None;
+            }
+            u.removed_in = Some(gone);
+            Some(u)
+        })
+        .collect()
+}
+
 /// The scope a provided name would need at this use and does not have, if any (T-224).
 /// `item` inside a `when:` is left to the condition rule, which already reports it as
 /// `when-item-without-loop`.
@@ -2186,6 +2212,36 @@ mod tests {
         assert!(on(None).is_empty());
         assert!(on(v(2, 21, 2)).is_empty());
         assert_eq!(on(v(2, 23, 0)), [("play_hosts".to_string(), v(2, 23, 0))]);
+    }
+
+    /// A deprecated name still present on the detected core is reported as deprecated —
+    /// ansible-core 2.21.2 prints `The \`play_hosts\` magic variable is deprecated. This
+    /// feature will be removed from ansible-core version 2.23.` for the read (measured).
+    /// Not on 2.23, where it is undefined instead; not when the workspace defines the name
+    /// itself; and never for the replacement.
+    #[test]
+    fn a_deprecated_name_is_reported_while_the_core_still_sets_it() {
+        use crate::fs::StdFs;
+        use crate::install::{AnsibleInstall, Version};
+        use std::sync::Arc;
+        let path = Path::new("/nonexistent-deprecated/play.yml");
+        let on = |src: &str, core: Option<Version>| {
+            let nodes = Document::new(src.to_string()).parse().unwrap();
+            let install = AnsibleInstall { version: core, ..Default::default() };
+            let cache = ScanCache::new(StdFs).with_install(Some(Arc::new(install)));
+            deprecated_uses_in(path, &nodes, &cache)
+                .into_iter()
+                .map(|u| (u.name, u.removed_in))
+                .collect::<Vec<_>>()
+        };
+        let v = |major, minor, patch| Some(Version { major, minor, patch });
+        let read = "- hosts: all\n  tasks:\n    - debug: { msg: \"{{ play_hosts }} {{ ansible_play_batch }}\" }\n";
+        assert_eq!(on(read, v(2, 21, 2)), [("play_hosts".to_string(), v(2, 23, 0))]);
+        assert_eq!(on(read, None), [("play_hosts".to_string(), v(2, 23, 0))]);
+        assert!(on(read, v(2, 23, 0)).is_empty(), "undefined there, not deprecated");
+        let own = "- hosts: all\n  vars: { play_hosts: [a] }\n  tasks:\n    - debug: { msg: \"{{ play_hosts }}\" }\n";
+        assert!(on(own, v(2, 21, 2)).is_empty(), "the user's own variable");
+        assert!(on("- debug: { msg: \"{{ play_hosts }}\" }\n", v(2, 21, 2)).is_empty(), "task files are not judged");
     }
 
     /// T-224: a persistent fact cache carries facts across runs (measured on 2.21.2 with

@@ -1576,9 +1576,40 @@ impl Backend {
             });
         }
 
+        // A deprecated provided name the detected core still sets: ansible warns on the
+        // read, so the editor does too, and tags it so the name is struck through.
+        // Suppressible with `# noqa: var-deprecated`.
+        // The same cache shape `cached_definitions` builds: the open buffers laid over disk,
+        // the inventory setting, and the detected install — which is what the version
+        // gate on a removed name reads. The undefined rule below takes it too; it used to
+        // run on a bare default cache and so never saw the install.
+        let scan = ScanCache::new(OverlayFs(a.open.clone()))
+            .with_inventory(inv.to_vec())
+            .with_install(a.ctx.install.clone());
+        for u in vars::deprecated_uses_in(path, nodes, &scan) {
+            if a.doc.is_suppressed(u.span.start, "var-deprecated") {
+                continue;
+            }
+            let Some(gone) = u.removed_in else { continue };
+            let (sl, sc) = a.doc.byte_to_lsp(u.span.start);
+            let (el, ec) = a.doc.byte_to_lsp(u.span.end);
+            out.push(Diagnostic {
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String("var-deprecated".into())),
+                tags: Some(vec![DiagnosticTag::DEPRECATED]),
+                message: format!(
+                    "`{}` is deprecated: ansible warns on every read, and ansible-core {gone} removes it.",
+                    u.name
+                ),
+                ..Default::default()
+            });
+        }
+
         // T-051 base case: no reachable definition at all. The message concedes the
         // sources we cannot see. Suppressible with `# noqa: var-undefined`.
-        for u in vars::undefined_uses(path, nodes, &a.doc.text) {
+        for u in vars::undefined_uses_in(path, nodes, &a.doc.text, &scan) {
             if a.doc.is_suppressed(u.span.start, "var-undefined") {
                 continue;
             }
@@ -4032,6 +4063,31 @@ mod tests {
         assert!(has("`item` is undefined here: `loop_control: loop_var` names this loop's item `row`"), "{msgs:?}");
         assert!(has("`ansible_loop` is set only in a loop with `loop_control: extended: true`"), "{msgs:?}");
         assert!(!msgs.iter().any(|m| m.contains("`item` is never defined")), "{msgs:?}");
+    }
+
+    /// The deprecated read reaches the editor as a warning tagged `DEPRECATED`, on the name
+    /// alone, and `# noqa: var-deprecated` silences it.
+    #[test]
+    fn a_deprecated_read_is_a_tagged_warning_and_noqa_silences_it() {
+        use tower_lsp::lsp_types::{Diagnostic, DiagnosticTag, NumberOrString};
+        let d = std::env::temp_dir().join("ansible-lsp-var-deprecated");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("play.yml");
+        let run = |text: &str| -> Vec<Diagnostic> {
+            std::fs::write(&path, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-deprecated"))
+                .collect()
+        };
+        let got = run("- hosts: all\n  tasks:\n    - debug: { msg: \"{{ play_hosts }} {{ groups }}\" }\n");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].tags, Some(vec![DiagnosticTag::DEPRECATED]));
+        assert_eq!(got[0].range.end.character - got[0].range.start.character, "play_hosts".len() as u32);
+        assert!(got[0].message.contains("2.23.0 removes it"), "{}", got[0].message);
+        assert!(run("- hosts: all\n  tasks:\n    - debug: { msg: \"{{ play_hosts }}\" } # noqa: var-deprecated\n").is_empty());
     }
 
     /// T-224: an unknown `ansible_*` name in a facts-free play says why it is reported and
