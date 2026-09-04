@@ -1589,7 +1589,9 @@ impl Backend {
                 severity: Some(DiagnosticSeverity::WARNING),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String("var-undefined".into())),
-                message: if u.defined_out_of_scope {
+                message: if let Some(scope) = u.scope_gap {
+                    scope_gap_message(&u, scope)
+                } else if u.defined_out_of_scope {
                     // It IS defined in this file — pointing at "never defined" sends the
                     // reader off to add a definition that already exists a few lines up.
                     format!(
@@ -3059,6 +3061,37 @@ fn injected_var_hover(name: &str, install: Option<&AnsibleInstall>) -> Option<St
     None
 }
 
+/// A name ansible does provide, read where ansible does not provide it (T-224). The scope
+/// it needs is the whole message; "never defined" would send the reader hunting for a
+/// definition that no file could hold.
+fn scope_gap_message(u: &vars::VarUse, scope: injected::Scope) -> String {
+    use injected::Scope::*;
+    match scope {
+        Loop => match &u.site.loop_var {
+            Some(lv) => format!(
+                "`{}` is undefined here: `loop_control: loop_var` names this loop's item `{}` \
+                 instead.",
+                u.name, lv
+            ),
+            None => format!(
+                "`{}` is set only while a `loop:` / `with_*` runs — it is not defined here.",
+                u.name
+            ),
+        },
+        ExtendedLoop => format!(
+            "`{}` is set only in a loop with `loop_control: extended: true`.",
+            u.name
+        ),
+        IndexVar => format!("`{}` is set only in a loop with `loop_control: index_var:`.", u.name),
+        Role | ChildRole => format!(
+            "`{}` is set only inside a role — a play's own task is not in one.",
+            u.name
+        ),
+        Delegated => format!("`{}` is set only on a task with `delegate_to:`.", u.name),
+        Always => format!("`{}` is not defined here.", u.name),
+    }
+}
+
 /// Everything the hover request decides, given a parsed document and a byte offset. Kept
 /// out of the async handler because the whole point of T-078 is the *precedence* between
 /// the three hovers that can claim a token, and precedence is what wants a test.
@@ -3930,6 +3963,41 @@ mod tests {
         let h = hover("{{ ansible_play_name").expect("table line");
         assert!(h.contains("Set by ansible") && h.contains("`name:`"), "{h}");
         assert!(jump("{{ ansible_play_name").is_none());
+    }
+
+    /// T-224: a provided name read outside its scope is reported with the scope it needs,
+    /// never as "never defined" — no file could define `item`, and saying so sends the
+    /// reader to add one. The unlooped `nope_missing` beside them is the control that the
+    /// ordinary message still exists.
+    #[test]
+    fn a_scope_gap_names_the_scope_it_needs() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let d = std::env::temp_dir().join("ansible-lsp-t224-scope-gap");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("play.yml");
+        let text = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{{ item }} {{ role_name }} {{ nope_missing }}\" }\n",
+            "    - debug: { msg: \"{{ item }} {{ ansible_loop }}\" }\n      loop: [1]\n",
+            "      loop_control: { loop_var: row }\n",
+        );
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let msgs: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect();
+        assert_eq!(msgs.len(), 5, "{msgs:?}");
+        let has = |needle: &str| msgs.iter().any(|m| m.contains(needle));
+        assert!(has("`item` is set only while a `loop:`"), "{msgs:?}");
+        assert!(has("`role_name` is set only inside a role"), "{msgs:?}");
+        assert!(has("`nope_missing` is never defined"), "{msgs:?}");
+        assert!(has("`item` is undefined here: `loop_control: loop_var` names this loop's item `row`"), "{msgs:?}");
+        assert!(has("`ansible_loop` is set only in a loop with `loop_control: extended: true`"), "{msgs:?}");
+        assert!(!msgs.iter().any(|m| m.contains("`item` is never defined")), "{msgs:?}");
     }
 
     /// The gap that made the first cut of T-143 dead code: the renderer was right and nothing

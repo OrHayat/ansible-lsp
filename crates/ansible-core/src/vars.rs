@@ -253,6 +253,66 @@ pub struct VarUse {
     /// Read through `hostvars[...]`, which is assembled with no play and no task — so only
     /// the sources [`VarSource::visible_to_hostvars`] admits can satisfy it (T-104).
     pub through_hostvars: bool,
+    /// Where this use is rendered, for the scope of a name ansible provides (T-224).
+    pub site: Site,
+    /// Set by [`undefined_uses`] when the name is one ansible provides, but not at this
+    /// site: `item` with no loop, `ansible_loop` with no `extended`, `role_name` in a
+    /// play's own task. The scope it would need is the message.
+    pub scope_gap: Option<crate::injected::Scope>,
+}
+
+/// Where a variable use is rendered, as far as the scope of an injected name goes (T-224).
+///
+/// Only a value the task itself renders when it runs is judged — module arguments,
+/// `when:`, `until:`, `delegate_to:`, `loop_control: label` and the rest of the task's own
+/// keys. Everything else is rendered lazily by whoever reads it, so its scope is the
+/// reader's: a play `vars:` value holding `{{ item }}` is fine when a looped task reads it
+/// and fatal when an unlooped one does (measured, both), and this walker cannot see the
+/// reader. Two more exclusions, both measured on 2.21.2: the `loop:` value itself is
+/// rendered before there is an item (`'item' is undefined`), and a task `name:` is rendered
+/// once, before the loop, and a failure there is soft — the name prints as
+/// `<< error 1 - 'item' is undefined >>` and the task runs — so `name:` is claimed neither
+/// way.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Site {
+    /// A task's own rendered value. `false` is "unknown reader": no scope claim is made.
+    pub fixed: bool,
+    /// The task has `loop:` or `with_*`.
+    pub in_loop: bool,
+    /// `loop_control: loop_var`, when it names something other than `item` — which makes
+    /// `item` itself undefined (measured).
+    pub loop_var: Option<String>,
+    /// `loop_control: extended: true`.
+    pub extended: bool,
+    /// `loop_control: index_var:` is set.
+    pub index_var: bool,
+    /// `delegate_to:` on the task, or on a block it sits in (measured: a delegated block's
+    /// task sees `ansible_delegated_vars`).
+    pub delegated: bool,
+    /// Inside a `when:`. The condition rule owns `item` there (`when-item-without-loop`),
+    /// so the undefined rule does not repeat it.
+    pub in_when: bool,
+}
+
+impl Site {
+    /// Whether a name of scope `scope` is present here. `None` when this site makes no
+    /// claim. A playbook's own task is never inside a role, which is what makes the two
+    /// role scopes a plain `false` — this is only ever asked for a playbook (task files
+    /// are never judged by the undefined rule).
+    pub fn admits(&self, name: &str, scope: crate::injected::Scope) -> Option<bool> {
+        use crate::injected::Scope::*;
+        if !self.fixed {
+            return None;
+        }
+        Some(match scope {
+            Always => true,
+            Loop => self.in_loop && (name != "item" || self.loop_var.is_none()),
+            ExtendedLoop => self.in_loop && self.extended,
+            IndexVar => self.in_loop && self.index_var,
+            Role | ChildRole => false,
+            Delegated => self.delegated,
+        })
+    }
 }
 
 /// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
@@ -313,6 +373,8 @@ fn push_uses(
             guard: Vec::new(),
             defined_out_of_scope: false,
             through_hostvars,
+            site: Site::default(),
+            scope_gap: None,
         });
     };
     for (name, s, e) in extract(expr) {
@@ -350,10 +412,47 @@ fn uses_with(
     extract: impl Fn(&str) -> Vec<(String, usize, usize)> + Copy,
 ) -> Vec<VarUse> {
     let mut out = Vec::new();
+    // A top-level list is a task list unless its items are plays, and `walk_uses` tells a
+    // play by its `hosts:` — so `tasks = true` here is right for both file kinds.
     for n in nodes {
-        walk_uses(n, false, &[], &mut out, extract, Keys::Literal);
+        walk_uses(n, false, &[], &mut out, extract, Keys::Literal, &Site::default(), true);
     }
     out
+}
+
+/// The keys whose sequence items are tasks (or blocks of tasks).
+fn is_task_list_key(k: &str) -> bool {
+    matches!(k, "tasks" | "pre_tasks" | "post_tasks" | "handlers" | "block" | "rescue" | "always")
+}
+
+fn is_looped(node: &Node) -> bool {
+    node.entries().iter().any(|(k, _)| {
+        matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
+    })
+}
+
+/// The [`Site`] a task mapping's own rendered values get, on top of what it inherited.
+fn task_site(node: &Node, inherited: &Site) -> Site {
+    let mut site = inherited.clone();
+    site.fixed = true;
+    if is_looped(node) {
+        site.in_loop = true;
+        let lc = node.get("loop_control");
+        site.loop_var = lc
+            .and_then(|c| c.get("loop_var"))
+            .and_then(Node::as_str)
+            .filter(|v| *v != "item")
+            .map(str::to_owned);
+        site.extended = lc
+            .and_then(|c| c.get("extended"))
+            .and_then(Node::as_str)
+            .is_some_and(|v| matches!(v, "true" | "True" | "yes" | "Yes" | "on"));
+        site.index_var = lc.and_then(|c| c.get("index_var")).is_some();
+    }
+    if node.get("delegate_to").is_some() {
+        site.delegated = true;
+    }
+    site
 }
 
 /// The `when:` clauses on a mapping (a task/block), if any.
@@ -397,6 +496,7 @@ fn keys_under(current: Keys, k: &Node) -> Keys {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_uses(
     node: &Node,
     in_when: bool,
@@ -404,6 +504,8 @@ fn walk_uses(
     out: &mut Vec<VarUse>,
     ex: impl Fn(&str) -> Vec<(String, usize, usize)> + Copy,
     keys: Keys,
+    site: &Site,
+    tasks: bool,
 ) {
     match node {
         Node::Scalar { value, span } => {
@@ -415,19 +517,35 @@ fn walk_uses(
             }
             for u in &mut out[before..] {
                 u.guard = guard.to_vec();
+                u.site = site.clone();
+                u.site.in_when = in_when;
             }
         }
         // Neither key-templating site is list-shaped, so items start over as literal.
-        Node::Sequence { items, .. } => {
-            items.iter().for_each(|i| walk_uses(i, in_when, guard, out, ex, Keys::Literal))
-        }
+        Node::Sequence { items, .. } => items
+            .iter()
+            .for_each(|i| walk_uses(i, in_when, guard, out, ex, Keys::Literal, site, tasks)),
         Node::Mapping { entries, .. } => {
             // This task/block's own `when:` guards the values inside it (its module args),
             // accumulated onto whatever guard we inherited.
             let mut inner = guard.to_vec();
             inner.extend(when_of(node));
+            // What this mapping is decides what its values' site is. A play's and a block's
+            // own keyword values are inherited and rendered later, by each task, so they
+            // stay unjudged; a block's `delegate_to:` does reach its tasks (measured).
+            let is_play = node.get("hosts").is_some();
+            let is_block = ["block", "rescue", "always"].iter().any(|k| node.get(k).is_some());
+            let this_task = tasks && !is_play && !is_block;
+            let own: Site = if this_task {
+                task_site(node, site)
+            } else if is_block && node.get("delegate_to").is_some() {
+                Site { delegated: true, ..site.clone() }
+            } else {
+                site.clone()
+            };
             for (k, v) in entries {
-                let is_when = k.as_str().map(crate::keywords::core_action) == Some("when");
+                let key = k.as_str().map(crate::keywords::core_action);
+                let is_when = key == Some("when");
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
                 let g: &[String] = if is_when { guard } else { &inner };
                 if keys == Keys::Templated {
@@ -436,10 +554,25 @@ fn walk_uses(
                         template_uses_with(value, span.start, out, ex);
                         for u in &mut out[before..] {
                             u.guard = inner.clone();
+                            u.site = site.clone();
                         }
                     }
                 }
-                walk_uses(v, is_when, g, out, ex, keys_under(keys, k));
+                // See [`Site`]: the loop value is rendered before there is an item, and a
+                // `vars:` value or a task `name:` is nobody's fixed site.
+                let child_site: Site = match key {
+                    Some(k) if this_task && (k == "loop" || k.starts_with("with_")) => Site {
+                        in_loop: false,
+                        loop_var: None,
+                        extended: false,
+                        index_var: false,
+                        ..own.clone()
+                    },
+                    Some("vars") | Some("name") if this_task => Site { fixed: false, ..own.clone() },
+                    _ => own.clone(),
+                };
+                let child_tasks = key.is_some_and(is_task_list_key);
+                walk_uses(v, is_when, g, out, ex, keys_under(keys, k), &child_site, child_tasks);
             }
         }
         // Null holds no text, so there is nothing to scan for variable uses.
@@ -807,7 +940,9 @@ pub fn undefined_uses_in(
     // inside an entry silent while the same name in the play's tasks is reported.
     let all = definitions_with_deps_in(path, nodes, cache).0;
     let declared = declared_names(nodes, text);
-    uses(nodes)
+    // The full view: a provided name is exempt by its scope at the use, not by its spelling,
+    // so the rule has to see it to judge it (T-224).
+    any_uses(nodes)
         .into_iter()
         .filter(|u| {
             !all.iter().any(|d| d.name == u.name && d.reaches(u, path))
@@ -825,21 +960,45 @@ pub fn undefined_uses_in(
                 // sound for them: the play var is definitely not what this read returns,
                 // whatever inventory holds. Claiming the read is *broken* needs T-062.
                 && !u.through_hostvars
-                && !crate::injected::provided(&u.name)
+                && !provided_here(u)
                 && !declared.contains(&u.name)
                 && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
                 && !softened(text, u.span.start)
         })
         .map(|mut u| {
             u.defined_out_of_scope = all.iter().any(|d| d.name == u.name);
+            u.scope_gap = scope_gap(&u);
             u
         })
         .collect()
 }
 
+/// The scope a provided name would need at this use and does not have, if any (T-224).
+/// `item` inside a `when:` is left to the condition rule, which already reports it as
+/// `when-item-without-loop`.
+fn scope_gap(u: &VarUse) -> Option<crate::injected::Scope> {
+    let row = crate::injected::injected(&u.name)?;
+    if u.name == "item" && u.site.in_when {
+        return None;
+    }
+    match u.site.admits(&u.name, row.scope) {
+        Some(false) => Some(row.scope),
+        _ => None,
+    }
+}
+
+/// Whether ansible provides `u.name` at `u`'s site: a possible fact, or a table row whose
+/// scope the site admits — or makes no claim about (a lazily rendered value).
+fn provided_here(u: &VarUse) -> bool {
+    match crate::injected::injected(&u.name) {
+        Some(_) => scope_gap(u).is_none(),
+        None => crate::injected::may_be_fact(&u.name),
+    }
+}
+
 /// Names declared by constructs the definition index doesn't model: `loop_control:
-/// loop_var`, `vars_prompt:`, and `{% set %}`. Collected file-wide — broader than their
-/// real scope, which errs toward silence.
+/// loop_var` / `index_var`, `vars_prompt:`, and `{% set %}`. Collected file-wide — broader
+/// than their real scope, which errs toward silence.
 fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
     fn walk(n: &Node, out: &mut HashSet<String>) {
         match n {
@@ -847,8 +1006,10 @@ fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
                 for (k, v) in entries {
                     match k.as_str() {
                         Some("loop_control") => {
-                            if let Some(lv) = v.get("loop_var").and_then(|x| x.as_str()) {
-                                out.insert(lv.to_string());
+                            for declared in ["loop_var", "index_var"] {
+                                if let Some(lv) = v.get(declared).and_then(|x| x.as_str()) {
+                                    out.insert(lv.to_string());
+                                }
                             }
                         }
                         Some("vars_prompt") => {
@@ -1728,6 +1889,148 @@ mod tests {
         assert_eq!(undef(src), ["nope_missing"]);
     }
 
+    /// [`undef`] with the scope each flag lacks, for the T-224 scope rows.
+    fn undef_gaps(src: &str) -> Vec<(String, Option<crate::injected::Scope>)> {
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        let path = Path::new("/nonexistent-t224/play.yml");
+        undefined_uses(path, &nodes, src).into_iter().map(|u| (u.name, u.scope_gap)).collect()
+    }
+
+    fn play_tasks(tasks: &str) -> String {
+        format!("- hosts: all\n  tasks:\n{tasks}")
+    }
+
+    /// T-224 slice 2, the loop scope. Every row measured on 2.21.2: `item` outside a loop
+    /// is `'item' is undefined`, and so is `item` inside the `loop:` value itself and
+    /// `item` on a task whose `loop_control: loop_var` renamed it. `item` in a `when:` is
+    /// the condition rule's (`when-item-without-loop`) and is not repeated here.
+    #[test]
+    fn item_is_provided_only_while_its_loop_runs() {
+        use crate::injected::Scope;
+        let gap = |tasks: &str| undef_gaps(&play_tasks(tasks));
+        assert_eq!(
+            gap("    - debug: { msg: \"{{ item }}\" }\n"),
+            [("item".to_string(), Some(Scope::Loop))]
+        );
+        assert!(gap("    - debug: { msg: \"{{ item }}\" }\n      loop: [1]\n").is_empty());
+        assert!(gap("    - debug: { msg: \"{{ item }}\" }\n      with_items: [1]\n").is_empty());
+        // The loop value is rendered before there is an item.
+        assert_eq!(
+            gap("    - debug: { msg: x }\n      loop: \"{{ [item] }}\"\n"),
+            [("item".to_string(), Some(Scope::Loop))]
+        );
+        // Renamed away: `item` is gone and the new name is declared.
+        assert_eq!(
+            gap(concat!(
+                "    - debug: { msg: \"{{ item }} {{ row }}\" }\n      loop: [1]\n",
+                "      loop_control: { loop_var: row }\n",
+            )),
+            [("item".to_string(), Some(Scope::Loop))]
+        );
+        // Per-item values of the task itself are in the loop: `when:`, `delegate_to:`,
+        // `loop_control: label`.
+        assert!(gap(concat!(
+            "    - debug: { msg: x }\n      loop: [1]\n      when: item > 0\n",
+            "      delegate_to: \"{{ item }}\"\n      loop_control: { label: \"{{ item }}\" }\n",
+        ))
+        .is_empty());
+        // The condition rule owns `item` in a `when:`.
+        assert!(gap("    - debug: { msg: x }\n      when: item > 0\n").is_empty());
+    }
+
+    /// T-224: `ansible_loop` exists only with `extended: true`, `ansible_index_var` only
+    /// with `index_var:` set (measured: extended alone does not add it), and
+    /// `ansible_loop_var` survives a rename (measured: present with `loop_var: row`).
+    #[test]
+    fn the_loop_control_names_need_their_loop_control() {
+        use crate::injected::Scope;
+        let gap = |tasks: &str| undef_gaps(&play_tasks(tasks));
+        let read = "    - debug: { msg: \"{{ ansible_loop.index }} {{ ansible_index_var }} {{ ansible_loop_var }}\" }\n      loop: [1]\n";
+        assert_eq!(
+            gap(read),
+            [
+                ("ansible_loop".to_string(), Some(Scope::ExtendedLoop)),
+                ("ansible_index_var".to_string(), Some(Scope::IndexVar)),
+            ]
+        );
+        assert_eq!(
+            gap(&format!("{read}      loop_control: {{ extended: true }}\n")),
+            [("ansible_index_var".to_string(), Some(Scope::IndexVar))]
+        );
+        assert!(gap(&format!(
+            "{read}      loop_control: {{ extended: true, index_var: idx, loop_var: row }}\n"
+        ))
+        .is_empty());
+        // No loop at all: every one of them is the loop scope's problem first.
+        assert_eq!(
+            gap("    - debug: { msg: \"{{ ansible_loop_var }}\" }\n"),
+            [("ansible_loop_var".to_string(), Some(Scope::Loop))]
+        );
+    }
+
+    /// T-224: the role names exist only inside a role, and a play's own task is not in one
+    /// (measured: `'role_name' is undefined` from a play task; present from a role task).
+    /// An `include_role`'s `vars:` are rendered by the role, so they are in scope; its
+    /// `name:` is rendered by the play, so it is not (measured, both).
+    #[test]
+    fn role_names_are_not_a_play_tasks_to_read() {
+        use crate::injected::Scope;
+        let gap = |tasks: &str| undef_gaps(&play_tasks(tasks));
+        assert_eq!(
+            gap("    - debug: { msg: \"{{ role_name }} {{ ansible_parent_role_names }}\" }\n"),
+            [
+                ("role_name".to_string(), Some(Scope::Role)),
+                ("ansible_parent_role_names".to_string(), Some(Scope::ChildRole)),
+            ]
+        );
+        assert!(gap("    - include_role: { name: r }\n      vars: { msg: \"{{ role_name }}\" }\n").is_empty());
+        assert_eq!(
+            gap("    - include_role: { name: \"{{ role_name }}\" }\n"),
+            [("role_name".to_string(), Some(Scope::Role))]
+        );
+    }
+
+    /// T-224: `ansible_delegated_vars` needs a `delegate_to:` — on the task, or on a block
+    /// around it (measured: a delegated block's task sees it).
+    #[test]
+    fn delegated_vars_need_a_delegate_to() {
+        use crate::injected::Scope;
+        let gap = |tasks: &str| undef_gaps(&play_tasks(tasks));
+        assert_eq!(
+            gap("    - debug: { msg: \"{{ ansible_delegated_vars }}\" }\n"),
+            [("ansible_delegated_vars".to_string(), Some(Scope::Delegated))]
+        );
+        assert!(gap("    - debug: { msg: \"{{ ansible_delegated_vars }}\" }\n      delegate_to: x\n").is_empty());
+        assert!(gap(concat!(
+            "    - block:\n        - debug: { msg: \"{{ ansible_delegated_vars }}\" }\n",
+            "      delegate_to: x\n",
+        ))
+        .is_empty());
+    }
+
+    /// T-224: a value rendered by its reader is not judged. A play `vars:` value holding
+    /// `{{ item }}` is fine when a looped task reads it and fatal when an unlooped one does
+    /// (measured, both), and a task `name:` holding it renders `<< error 1 - 'item' is
+    /// undefined >>` and runs — with or without a loop (measured, both). Neither is a claim
+    /// this rule can make, so it makes none; the control is the same read in a module
+    /// argument.
+    #[test]
+    fn lazily_rendered_values_make_no_scope_claim() {
+        assert!(undef(concat!(
+            "- hosts: all\n  vars: { lazy: \"{{ item }}\" }\n  tasks:\n",
+            "    - name: \"{{ item }}\"\n      debug: { msg: \"{{ lazy }}\" }\n      loop: [1]\n",
+            "    - name: \"{{ item }}\"\n      debug: { msg: x }\n",
+        ))
+        .is_empty());
+        assert_eq!(
+            undef(concat!(
+                "- hosts: all\n  vars: { lazy: \"{{ item }}\" }\n  tasks:\n",
+                "    - name: \"{{ item }}\"\n      debug: { msg: \"{{ item }}\" }\n",
+            )),
+            ["item"]
+        );
+    }
+
     #[test]
     fn handled_undefinedness_stays_silent() {
         let src = concat!(
@@ -2218,10 +2521,11 @@ mod tests {
             "    - debug: { msg: \"{{ hostvars['web01'].play_scoped }}\" }\n",
         ))
         .is_empty());
-        // Defined nowhere we can see — the 37-false-positive shape.
+        // Defined nowhere we can see — the 37-false-positive shape. (The loop is for
+        // `item`, which is its own rule since T-224 and not what this test is about.)
         assert!(undef(concat!(
             "- hosts: all\n  tasks:\n",
-            "    - debug: { msg: \"{{ hostvars[item].infiniband_ip }}\" }\n",
+            "    - debug: { msg: \"{{ hostvars[item].infiniband_ip }}\" }\n      loop: [web01]\n",
         ))
         .is_empty());
         // A fact is host storage, so hostvars genuinely sees it.
