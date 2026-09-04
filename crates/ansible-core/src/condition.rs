@@ -210,17 +210,30 @@ impl Verdict {
     /// This clause as a bare requirement, for joining with siblings. Deliberately drops
     /// the "runs unless" framing — that describes a whole condition, and a clause ANDed
     /// with others does not describe the whole condition.
+    ///
+    /// Dropping the framing must not drop the *content*: `mode | default('a') == 'a'` is
+    /// satisfied with `mode` unset (measured on 2.21.2, T-215), so "mode = a" alone is a
+    /// requirement the task does not have. `matches_default` is the same field `label()`
+    /// reads, rendered here as a hedge on the value rather than as a framing.
     pub fn requirement(&self) -> Option<String> {
+        fn or_unset(req: String, runs_unset: bool) -> String {
+            if runs_unset {
+                format!("{req} (or unset)")
+            } else {
+                req
+            }
+        }
         Some(match self {
             Verdict::UnlessSet { var } => format!("{var} unset"),
             Verdict::OnlyIfSet { var } => format!("{var} set"),
             Verdict::UnlessCleared { var } => format!("{var} not false"),
-            Verdict::WhenEquals { var, value, negated: false, .. } => format!("{var} = {value}"),
-            Verdict::WhenEquals { var, value, negated: true, .. } => format!("{var} != {value}"),
-            Verdict::WhenIn { var, values, negated, .. } => format!(
-                "{var} {}in [{}]",
-                if *negated { "not " } else { "" },
-                values.join(", ")
+            Verdict::WhenEquals { var, value, negated, matches_default } => or_unset(
+                format!("{var} {} {value}", if *negated { "!=" } else { "=" }),
+                *matches_default,
+            ),
+            Verdict::WhenIn { var, values, negated, matches_default } => or_unset(
+                format!("{var} {}in [{}]", if *negated { "not " } else { "" }, values.join(", ")),
+                *matches_default == Some(true),
             ),
             Verdict::RequiresDefined { var, negated: false } => format!("{var} set"),
             Verdict::RequiresDefined { var, negated: true } => format!("{var} unset"),
@@ -1989,7 +2002,7 @@ mod tests {
             (
                 "r.mode | default('native') == 'native'",
                 "runs unless r.mode changes from native",
-                "r.mode = native",
+                "r.mode = native (or unset)",
             ),
             ("r.mode in ['a', 'b']", "runs only if r.mode is one of [a, b]", "r.mode in [a, b]"),
             ("r.stdout is defined", "runs only if r.stdout is set", "r.stdout set"),
@@ -2173,7 +2186,7 @@ mod tests {
     #[test]
     fn every_requirement_shape_renders() {
         for (cond, req) in [
-            ("demo_mode | default('native') != 'docker'", "demo_mode != docker"),
+            ("demo_mode | default('native') != 'docker'", "demo_mode != docker (or unset)"),
             ("proto in ['http', 'ftp']", "proto in [http, ftp]"),
             ("other not in ['a']", "other not in [a]"),
             ("flag is not defined", "flag unset"),
@@ -2191,7 +2204,63 @@ mod tests {
             "proto in ['http', 'ftp']".into(),
             "flag is not defined".into(),
         ]);
-        assert_eq!(v.label().unwrap(), "runs only if demo_mode != docker +2 more");
+        assert_eq!(v.label().unwrap(), "runs only if demo_mode != docker (or unset) +2 more");
+    }
+
+    /// T-215. `label()` read `matches_default` and `requirement()` did not, so a clause the
+    /// default satisfies came out under `All`'s "runs only if" as a plain requirement — the
+    /// one framing that excludes the unset case. Measured on ansible-core 2.21.2, each with a
+    /// second clause (`other is defined`, `other` set) so the condition is a real `All`:
+    ///
+    /// | named clause | unset | control |
+    /// | --- | --- | --- |
+    /// | `mode \| default('a') == 'a'` | **ran** | `default('b')`: skipping |
+    /// | `m \| d('a') in ['a','b']` | **ran** | `d('c')`: skipping |
+    /// | `mode \| default('b') != 'a'` | **ran** | — |
+    /// | `m \| d('c') not in ['a','b']` | **ran** | — |
+    #[test]
+    fn a_requirement_the_default_satisfies_says_so() {
+        let other = "other is defined".to_string();
+        // The two conditions from the ticket, verbatim.
+        let v = classify_all(&["mode | default('a') == 'a'".into(), other.clone()]);
+        assert_eq!(v.label().as_deref(), Some("runs only if mode = a (or unset) +1 more"));
+        let v = classify_all(&["m | d('a') in ['a','b']".into(), other.clone()]);
+        assert_eq!(v.label().as_deref(), Some("runs only if m in [a, b] (or unset) +1 more"));
+
+        // One rule, two verdict types, both directions — every `(type, negated)` pairing
+        // whose default satisfies the clause carries the hedge.
+        for (cond, req) in [
+            ("mode | default('a') == 'a'", "mode = a (or unset)"),
+            ("mode | default('b') != 'a'", "mode != a (or unset)"),
+            ("m | d('a') in ['a','b']", "m in [a, b] (or unset)"),
+            ("m | d('c') not in ['a','b']", "m not in [a, b] (or unset)"),
+        ] {
+            assert_eq!(classify(cond).requirement().as_deref(), Some(req), "{cond}");
+        }
+        // The control: the same shapes with a default the clause rejects, and with no
+        // default at all, read as a plain requirement — the hedge is a reading of the
+        // field, not a blanket "or unset" on every comparison.
+        for (cond, req) in [
+            ("mode | default('b') == 'a'", "mode = a"),
+            ("mode | default('a') != 'a'", "mode != a"),
+            ("m | d('c') in ['a','b']", "m in [a, b]"),
+            ("m | d('a') not in ['a','b']", "m not in [a, b]"),
+            ("m in ['a','b']", "m in [a, b]"),
+        ] {
+            assert_eq!(classify(cond).requirement().as_deref(), Some(req), "{cond}");
+        }
+
+        // The `+N more` case with an unreadable clause folded in. Measured: with
+        // `gate | int > 3` as a third clause the task skips at `gate: 1` and runs at
+        // `gate: 9`, so the unreadable half still gates the run and the wording must stay a
+        // requirement — hedged on the named clause, never promising a default run.
+        let v = classify_all(&[
+            "mode | default('a') == 'a'".into(),
+            other,
+            "gate | int > 3".into(),
+        ]);
+        assert!(matches!(&v, Verdict::All { unreadable: 1, .. }), "{v:?}");
+        assert_eq!(v.label().as_deref(), Some("runs only if mode = a (or unset) +2 more"));
     }
 
     #[test]

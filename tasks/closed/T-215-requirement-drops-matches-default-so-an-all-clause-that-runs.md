@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P2       | S    | T-121 | —          |
+| done   | bug  | P2       | S    | T-121 | —          |
 
 ## Symptom
 
@@ -56,14 +56,42 @@ Whichever is picked, `All` must also account for the *unreadable* clauses it fol
 `+N more`: a condition that runs by default in its readable half can still be gated by the
 half we cannot read, so the wording must not promise a default run either.
 
+## Resolution
+
+The first option: `requirement()` reads `matches_default` and renders the hedge on the value —
+`mode = a (or unset)`, `m in [a, b] (or unset)` — for both `WhenEquals` and `WhenIn`, in both
+directions. `All::label()` is untouched and keeps "runs only if", which stays true: the whole
+condition is still a conjunction of requirements, one of which is now stated correctly. That
+also keeps the `+N more` case honest without a special case, since the unreadable clauses can
+still gate the run and the wording never promises one.
+
+Chosen over the `All`-side fix because `requirement()` has three readers, not one:
+`Verdict::All::label`, `when_hover`, and `guard_line` in `main.rs`. The two hovers list each
+clause as a bare requirement under "runs only when **all** hold", and they were lying the same
+way. Fixing the field's reader fixes all three (rule 3); fixing `All` would have fixed one.
+
+Measured on ansible-core 2.21.2, each condition paired with `other is defined` (`other` set):
+
+| named clause | unset | control |
+| --- | --- | --- |
+| `mode \| default('a') == 'a'` | **ran** | `mode: b`: skipping; `default('b')`: skipping |
+| `m \| d('a') in ['a','b']` | **ran** | `m: c`: skipping; `d('c')`: skipping |
+| `mode \| default('b') != 'a'` | **ran** | — |
+| `m \| d('c') not in ['a','b']` | **ran** | — |
+| `mode \| default('a') == 'a'` + `gate \| int > 3` | `gate: 1`: skipping | `gate: 9`: ran |
+
+Pinned by `a_requirement_the_default_satisfies_says_so` in `condition.rs`. Three existing
+assertions had pinned the wrong answer (`r.mode = native`, `demo_mode != docker`, and the
+`+2 more` label built on it) and were corrected rather than kept.
+
 ## Done when
 
-- [ ] the two conditions in Symptom render something that is true of an unset variable, with
+- [x] the two conditions in Symptom render something that is true of an unset variable, with
       both asserted verbatim
-- [ ] a control: the same shapes with a default that does *not* satisfy the clause still read
+- [x] a control: the same shapes with a default that does *not* satisfy the clause still read
       as a plain requirement, so the fix reads the field rather than always hedging
-- [ ] `WhenEquals` and `WhenIn` are both covered — this is one rule with two verdict types
-- [ ] the `+N more` case is asserted, not only the single-part case, since that is where the
+- [x] `WhenEquals` and `WhenIn` are both covered — this is one rule with two verdict types
+- [x] the `+N more` case is asserted, not only the single-part case, since that is where the
       unreadable clauses hide
-- [ ] measured against ansible-core, not reasoned: a playbook where the named clause is
+- [x] measured against ansible-core, not reasoned: a playbook where the named clause is
       satisfied by the default and the task genuinely runs
