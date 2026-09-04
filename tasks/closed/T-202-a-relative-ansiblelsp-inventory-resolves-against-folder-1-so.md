@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | M    | T-201      |
+| done   | bug  | P1       | M    | T-201      |
 
 
 ## Symptom
@@ -87,6 +87,62 @@ window, computed from `roots.first()`. T-062's whole argument is that a tool whi
 inventory silently reproduces the ambiguity it exists to solve, so a per-folder answer that is
 invisible is only half a fix.
 
+### The rule as landed
+
+`State::inventory_setting_for(path)` (`main.rs`), with `inventory_setting()` kept as the
+window-level answer for the one caller with no file in hand, the status bar. Pinned by
+`a_relative_inventory_setting_resolves_against_the_folder_containing_the_file`, every row
+under both root orders:
+
+| case | what happens | why |
+| ---- | ------------ | --- |
+| absolute entry | as written | no folder involved |
+| under exactly one root | that root | the file's project is unambiguous |
+| under nested roots, entry present in the deeper | the deeper root | matches how VS Code scopes a folder-level `settings.json` |
+| under nested roots, entry absent in the deeper | walk outward, first root where it exists | same project either way, so the outward step is not a lie, and it avoids reading no inventory |
+| under one root, entry absent, no enclosing root | the missing path, **kept** | never a sibling's copy - that is the wrong-project answer this ticket removes. `inventory::sources` drops it, nothing is read, and the status bar names the folder it is missing from |
+| under no root | `roots.first()`, as before | the request cannot say which project the user came from; a stable guess |
+
+The nested rows are the candidate above, measured rather than assumed: the test builds
+`A/sub-with/inv.ini` and `A/sub-without/` and asserts the deeper file for the first and
+`A/inv.ini` for the second. The one departure from the candidate is the fallback target:
+"falling back to `roots.first()` when none exists" was written for the nested case, and read
+literally it would send a sibling folder's file to a project it does not belong to. The
+fallback only ever walks *enclosing* roots; a first root that does not contain the file is
+reached only when no root does. Containment is checked canonicalised and raw both, because a
+path that does not exist cannot be canonicalised and on Windows the canonical form carries a
+prefix the raw one lacks.
+
+**The status bar answers per folder.** `inventory_status` gains a `folders` array - one entry
+per root with its own `resolved` list and a `missing` list of configured relative entries it
+has no file for. The window-level fields keep their first-folder meaning, so the picker panel
+built on them is unchanged. The client appends a per-folder section to the tooltip when the
+window has more than one root, and adds the warning glyph when any folder is missing its
+entry - that folder reads nothing, and nothing else on screen would say so. The reason for
+"per folder in the tooltip" rather than "the active editor's folder in the text": the server
+does not know which editor is active, and the status bar item is one per window, so listing
+every folder is the answer that is true whichever file has focus.
+
+**No multi-root demo.** The demo harness (`demo_exercises_every_problem_and_verdict` and its
+siblings) walks one root and cannot open a `.code-workspace`, so a `demo/multiroot/` label
+would have nothing pinning it, which is what rule 4 forbids. The five tests above are the
+record instead; the hover one, `each_workspace_folder_answers_from_its_own_inventory`, is
+the same shape a demo would have shown by hand.
+
+**The consumer tests**, one per site in the table below, each run under `[A, B]` and `[B, A]`
+and each seen red with `containing_roots` short-circuited to empty (which restores the old
+`roots.first()` rule): the hover (`each_workspace_folder_answers_from_its_own_inventory`),
+the unparseable message (`each_folders_inventory_file_is_judged_an_inventory_source`), the
+publish path through `unknown-host` (`unknown_host_reads_the_inventory_of_the_folder_the_play_is_in`,
+via the new `State::inventory_diagnostics`, which is the publish path's inventory-dependent
+half factored out so it can be reached without a `Client`), and the status bar
+(`the_inventory_status_reports_each_folder_separately`). Every one failed at the folder-B
+assertion with folder A's answer - the symptom, not an unrelated break.
+
+The ignored hover test needed one edit to pass: `inventory_setting_for(&file)` in place of
+`inventory_setting()`. That is not the rule changing; it is the resolver now having to be told
+which file is asking, which is the fix itself.
+
 ## How to test it
 
 **The failing test already exists.** `each_workspace_folder_answers_from_its_own_inventory`
@@ -155,20 +211,20 @@ that was decided against and an absent demo that was forgotten look identical la
 
 ## Done when
 
-- [ ] the resolution rule is written down here, including the nested-root case, **with the
+- [x] the resolution rule is written down here, including the nested-root case, **with the
       nested case measured** rather than assumed
-- [ ] a relative `ansibleLsp.inventory` resolves against the workspace folder containing the
+- [x] a relative `ansibleLsp.inventory` resolves against the workspace folder containing the
       file, with `roots.first()` kept only as the no-containing-root fallback
-- [ ] a resolved path that does not exist falls back rather than silently reading no inventory
+- [x] a resolved path that does not exist falls back rather than silently reading no inventory
 - [x] the harness is a committed, `#[ignore]`d test rather than a printing probe -
       `each_workspace_folder_answers_from_its_own_inventory`, seen to fail for the documented
       reason
-- [ ] that test is un-ignored and passes, and the nested-root case is added to it once the
+- [x] that test is un-ignored and passes, and the nested-root case is added to it once the
       rule below is decided
-- [ ] a two-root test per consumer of `inventory_setting()` - all four sites in the table
+- [x] a two-root test per consumer of `inventory_setting()` - all four sites in the table
       above, each with the reversed-root-order control
-- [ ] the status-bar question is answered: either `publish_inventory` reports per folder, or
+- [x] the status-bar question is answered: either `publish_inventory` reports per folder, or
       the ticket records why one window-level answer is still honest
-- [ ] the demo question is answered in writing, either way
-- [ ] verified red first: with the fix reverted, each new test fails for the right reason
+- [x] the demo question is answered in writing, either way
+- [x] verified red first: with the fix reverted, each new test fails for the right reason
       (rule 5), and the mutation is confirmed present in the file before concluding anything

@@ -519,19 +519,78 @@ impl State {
     /// silently vanished. Both halves were already fields here — `inventory` and `roots` —
     /// so the globals were shadow copies kept only because the readers were free functions.
     ///
-    /// Resolution is deliberately unchanged: a relative path still joins to `roots.first()`.
-    /// That rule is wrong in a multi-root window (T-202, measured) and changing it here would
-    /// mix a behaviour fix into a de-globalising one.
+    /// The window-level answer: a relative path joins to `roots.first()`. Right for a
+    /// one-folder window, and the only answer available where no file is in hand — the
+    /// status bar, and a file outside every folder. A request about a file must use
+    /// [`inventory_setting_for`](Self::inventory_setting_for) instead (T-202).
     fn inventory_setting(&self) -> Vec<PathBuf> {
+        self.resolve_inventory(&[])
+    }
+
+    /// The `ansibleLsp.inventory` paths as they apply to `path` (T-202).
+    ///
+    /// The setting is window-scoped — one value however many folders the window holds —
+    /// and a relative entry means "relative to my project". Which project is the one the
+    /// file is in, so a relative entry joins to the workspace folder containing `path`. It
+    /// used to join to `roots.first()` for every file, which in a two-folder window answered
+    /// folder B's hovers from folder A's inventory, with a source link into the wrong
+    /// project (measured; the test named in the ticket is the record).
+    ///
+    /// The rule, case by case:
+    ///
+    /// - under one folder: that folder.
+    /// - under nested folders (VS Code allows adding `A/sub` alongside `A`): the deepest
+    ///   folder where the file exists, walking outward. `A/sub/inv.ini` when it is there,
+    ///   `A/inv.ini` when it is not. Both are the same project, so the outward step is not
+    ///   a lie, and it avoids reading *no* inventory when the subfolder has none.
+    /// - under a folder where the entry does not exist, with no enclosing folder: the
+    ///   missing path, kept. Never a sibling folder's copy — that is the wrong-project
+    ///   answer this exists to remove. `inventory::sources` drops a missing path, so nothing
+    ///   is read, and the status bar names the folder it is missing from
+    ///   ([`Backend::inventory_status`]) so the silence is not silent.
+    /// - under no folder (an installed collection, an include outside the window): the
+    ///   request does not say which project the user came from, so `roots.first()`, as
+    ///   before — stable, if a guess.
+    /// - absolute: as written.
+    fn inventory_setting_for(&self, path: &Path) -> Vec<PathBuf> {
+        self.resolve_inventory(&self.containing_roots(path))
+    }
+
+    /// The workspace folders that contain `path`, deepest first. Compared canonicalised
+    /// and raw both: a path that does not exist cannot be canonicalised, and on Windows the
+    /// canonical form carries a prefix the raw one lacks.
+    fn containing_roots(&self, path: &Path) -> Vec<PathBuf> {
+        let roots = self.roots.lock().map(|r| r.clone()).unwrap_or_default();
+        let target = canon(path);
+        let mut containing: Vec<(PathBuf, PathBuf)> = roots
+            .into_iter()
+            .map(|r| (canon(&r), r))
+            .filter(|(c, r)| target.starts_with(c) || path.starts_with(r))
+            .collect();
+        containing.sort_by_key(|(c, _)| std::cmp::Reverse(c.components().count()));
+        containing.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// [`inventory_setting_for`](Self::inventory_setting_for) with the containing folders
+    /// already found, deepest first; empty means the window-level fallback.
+    fn resolve_inventory(&self, containing: &[PathBuf]) -> Vec<PathBuf> {
         let raw = self.inventory.lock().map(|v| v.clone()).unwrap_or_default();
         if raw.is_empty() {
             return raw;
         }
-        let root = self.roots.lock().ok().and_then(|r| r.first().cloned());
+        let first = self.roots.lock().ok().and_then(|r| r.first().cloned());
         raw.into_iter()
-            .map(|p| match (&root, p.is_absolute()) {
-                (Some(r), false) => r.join(p),
-                _ => p,
+            .map(|p| {
+                if p.is_absolute() {
+                    return p;
+                }
+                containing
+                    .iter()
+                    .map(|r| r.join(&p))
+                    .find(|c| c.exists())
+                    .or_else(|| containing.first().map(|r| r.join(&p)))
+                    .or_else(|| first.as_ref().map(|r| r.join(&p)))
+                    .unwrap_or(p)
             })
             .collect()
     }
@@ -703,9 +762,21 @@ impl State {
             return Vec::new();
         };
         let inventory = uri.to_file_path().ok().is_some_and(|p| {
-            Self::is_inventory_source(&p, &ScanCache::default().with_inventory(self.inventory_setting()))
+            Self::is_inventory_source(&p, &ScanCache::default().with_inventory(self.inventory_setting_for(&p)))
         });
         Self::unparseable_diagnostic_for(text, inventory)
+    }
+
+    /// The diagnostics on `path` that read the inventory: variable coverage and
+    /// `unknown-host`. One snapshot of the setting for both, so two diagnostics on one file
+    /// cannot disagree about which inventory is in effect (rule 3), and resolved for this
+    /// file's folder, not the window's first (T-202).
+    fn inventory_diagnostics(&self, a: &Analysis, path: &Path) -> Vec<Diagnostic> {
+        let inv = self.inventory_setting_for(path);
+        let mut out = Backend::variable_coverage_diagnostics(a, path, &a.nodes, &inv, &self.var_cache);
+        let cache = ScanCache::default().with_inventory(inv).with_install(self.install());
+        out.extend(Backend::unknown_host_diagnostics(a, path, &cache));
+        out
     }
 
     fn unparseable_diagnostic_for(text: String, inventory: bool) -> Vec<Diagnostic> {
@@ -1107,15 +1178,8 @@ impl Backend {
         diagnostics.extend(Self::duplicate_key_diagnostics(&a));
         diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
         if let Ok(path) = uri.to_file_path() {
-            // One snapshot for this publish: the coverage walk and the unknown-host walk must
-            // answer from the same inventory, or two diagnostics on one file disagree (rule 3).
-            let inv = self.state.inventory_setting();
-            diagnostics.extend(Self::variable_coverage_diagnostics(&a, &path, &a.nodes, &inv, &self.state.var_cache));
+            diagnostics.extend(self.state.inventory_diagnostics(&a, &path));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
-            let cache = ScanCache::default()
-                .with_inventory(inv.clone())
-                .with_install(self.state.install());
-            diagnostics.extend(Self::unknown_host_diagnostics(&a, &path, &cache));
         }
         self.state.track(uri, &diagnostics);
         self.client
@@ -1817,6 +1881,36 @@ impl Backend {
             })
             .unwrap_or_default();
         let candidates = Self::inventory_candidates(root.as_deref());
+        // Everything above is answered from the first folder, and the fields the panel is
+        // built on keep that meaning. A window with several folders resolves a relative
+        // setting per folder (T-202), so each folder's own answer goes alongside: what it
+        // reads, and which configured entries it has no file for. A folder with a missing
+        // entry reads nothing from that entry, and nothing else on screen would say so.
+        let folders: Vec<serde_json::Value> = state
+            .roots
+            .lock()
+            .map(|r| r.clone())
+            .unwrap_or_default()
+            .iter()
+            .map(|r| {
+                let inv = state.inventory_setting_for(&r.join("x.yml"));
+                let rel = |p: &Path| p.strip_prefix(r).unwrap_or(p).display().to_string();
+                let missing: Vec<String> =
+                    inv.iter().filter(|p| !p.exists()).map(|p| rel(p)).collect();
+                let cache = ScanCache::default().with_inventory(inv);
+                let resolved: Vec<String> =
+                    ansible_core::inventory::sources(&cache.context(&r.join("x.yml")).config, &cache)
+                        .iter()
+                        .map(|p| rel(p))
+                        .collect();
+                serde_json::json!({
+                    "name": r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    "path": r.display().to_string(),
+                    "resolved": resolved,
+                    "missing": missing,
+                })
+            })
+            .collect();
         serde_json::json!({
             "source": source,
             "resolved": resolved,
@@ -1825,6 +1919,7 @@ impl Backend {
             "autoResolved": auto_resolved,
             "configFile": config_file,
             "candidates": candidates,
+            "folders": folders,
         })
     }
 
@@ -2124,7 +2219,7 @@ impl Backend {
                 &path,
                 nodes,
                 &self.state.open_docs(),
-                &self.state.inventory_setting(),
+                &self.state.inventory_setting_for(&path),
                 &self.state.var_cache,
                 self.state.install().as_ref(),
             );
@@ -3404,7 +3499,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let byte = doc.lsp_to_byte(pos.line, pos.character);
-        let inv = self.state.inventory_setting();
+        let inv = self.state.inventory_setting_for(&path);
         Ok(
             hover_at(
                 &doc,
@@ -3516,7 +3611,7 @@ impl LanguageServer for Backend {
                 &uri,
                 &path,
                 &self.state.open_docs(),
-                &self.state.inventory_setting(),
+                &self.state.inventory_setting_for(&path),
                 &self.state.var_cache,
                 self.state.install().as_ref(),
             )
@@ -9801,45 +9896,34 @@ mod tests {
         }
     }
 
-    /// A multi-root window must answer each folder from *its own* inventory (T-202).
-    ///
-    /// Ignored because it asserts the answer we want, not the one we give. `inventory_setting`
-    /// resolves a relative `ansibleLsp.inventory` against `roots.first()`, so today a file in
-    /// folder B is answered from folder A's `inv.ini` — a wrong value **and** a source link
-    /// into the wrong project. Measured, and unchanged by T-201, which moved the value off a
-    /// process global without touching the rule.
-    ///
-    /// Written now rather than with the fix so T-202 has the shape to work against and can be
-    /// judged by un-ignoring it. It covers only the case T-202 has already decided: a file
-    /// under exactly one root. The nested case — folder B *inside* folder A, which VS Code
-    /// allows — is deliberately absent, because the rule for it is still open and a test
-    /// asserting a guess would be worse than no test.
-    ///
-    /// Un-ignore this when T-202 lands. If it needs editing to pass, the rule changed and the
-    /// ticket should say why.
-    #[tokio::test]
-    #[ignore = "asserts the multi-root answer we do not give yet — T-202"]
-    async fn each_workspace_folder_answers_from_its_own_inventory() {
-        let mk = |name: &str, val: &str| {
-            ansible_core::testing::project(
-                name,
-                "[defaults]\n",
-                &[
-                    ("inv.ini", &format!("[web]\nnode1 control={val}\n")),
-                    ("vars/11.yml", "x: 1\n"),
-                    ("vars/22.yml", "x: 1\n"),
-                    ("play.yml", T201_PLAY),
-                ],
-            )
-        };
-        let a = mk("t202-folder-a", "11");
-        let b = mk("t202-folder-b", "22");
+    // ---- T-202: a relative ansibleLsp.inventory resolves against the file's folder ------
+    //
+    // Two folders, one window-scoped relative setting. The control throughout is the root
+    // order reversed: under the old rule the answer followed `roots.first()`, so a test that
+    // passes with `[A, B]` and `[B, A]` both cannot be passing because of the order. And a
+    // fixture whose inventory was never read substitutes nothing, so "B says 22" cannot come
+    // from silence.
 
-        // One window holding both folders, in the order the client sent them, with a single
-        // window-scoped relative setting — the shape `ansibleLsp.inventory` actually has.
+    /// A folder holding its own `inv.ini`, with `control` set to `val`.
+    fn t202_folder(name: &str, val: &str) -> std::path::PathBuf {
+        ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                ("inv.ini", &format!("[web]\nnode{val} control={val}\n")),
+                ("vars/11.yml", "x: 1\n"),
+                ("vars/22.yml", "x: 1\n"),
+                ("play.yml", T201_PLAY),
+            ],
+        )
+    }
+
+    /// One window holding `roots`, in the order the client sent them, with the single
+    /// window-scoped relative setting `ansibleLsp.inventory: ["inv.ini"]`.
+    fn t202_window(roots: Vec<std::path::PathBuf>) -> std::sync::Arc<super::State> {
         let state = std::sync::Arc::new(super::State {
             docs: Default::default(),
-            roots: std::sync::Mutex::new(vec![a.clone(), b.clone()]),
+            roots: std::sync::Mutex::new(roots),
             flagged: Default::default(),
             render_sites: Default::default(),
             template_grammars: Default::default(),
@@ -9854,24 +9938,200 @@ mod tests {
             install: Default::default(),
         });
         state.set_inventory(&serde_json::json!({ "inventory": ["inv.ini"] }));
+        state
+    }
 
-        // Folder A is `roots.first()`, so this one already passes today. It is the control:
-        // without it, "B is wrong" could equally mean no inventory was read at all.
-        let from_a = t201_hover(&a, &state.inventory_setting(), &no_cache());
-        assert!(
-            from_a.contains("`control` = `11`") && from_a.contains("t202-folder-a"),
-            "folder A answers from its own inventory:\n{from_a}"
-        );
+    /// The variable-definitions consumer, through the templated-path hover: each folder's
+    /// file substitutes `{{ control }}` from its own `inv.ini`, and the source link points
+    /// inside its own folder. Was `#[ignore]`d until the rule changed; the one edit it needed
+    /// is `inventory_setting_for(&file)` in place of `inventory_setting()` — the resolver now
+    /// has to be told which file is asking, which is the whole of the fix.
+    #[tokio::test]
+    async fn each_workspace_folder_answers_from_its_own_inventory() {
+        let a = t202_folder("t202-folder-a", "11");
+        let b = t202_folder("t202-folder-b", "22");
 
-        // The bug: folder B is answered from folder A.
-        let from_b = t201_hover(&b, &state.inventory_setting(), &no_cache());
-        assert!(
-            from_b.contains("`control` = `22`"),
-            "folder B must answer from its own inventory, not folder A's:\n{from_b}"
-        );
-        assert!(
-            from_b.contains("t202-folder-b"),
-            "and the source link must point inside folder B:\n{from_b}"
-        );
+        for roots in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+            let state = t202_window(roots.clone());
+            let order = format!("roots = {roots:?}");
+
+            let from_a = t201_hover(&a, &state.inventory_setting_for(&a.join("play.yml")), &no_cache());
+            assert!(
+                from_a.contains("`control` = `11`") && from_a.contains("t202-folder-a"),
+                "folder A answers from its own inventory ({order}):\n{from_a}"
+            );
+
+            let from_b = t201_hover(&b, &state.inventory_setting_for(&b.join("play.yml")), &no_cache());
+            assert!(
+                from_b.contains("`control` = `22`"),
+                "folder B must answer from its own inventory, not folder A's ({order}):\n{from_b}"
+            );
+            assert!(
+                from_b.contains("t202-folder-b"),
+                "and the source link must point inside folder B ({order}):\n{from_b}"
+            );
+        }
+    }
+
+    /// The rule itself, case by case, on the resolved paths. The hover test above proves a
+    /// consumer sees it; this pins the edges no consumer test reaches.
+    #[test]
+    fn a_relative_inventory_setting_resolves_against_the_folder_containing_the_file() {
+        let a = t202_folder("t202-rule-a", "11");
+        let b = t202_folder("t202-rule-b", "22");
+        // A third folder with no `inv.ini` of its own.
+        let c = ansible_core::testing::project("t202-rule-c", "[defaults]\n", &[("play.yml", T201_PLAY)]);
+        // A nested folder inside A, one with its own `inv.ini` and one without.
+        let sub_with = a.join("sub-with");
+        let sub_without = a.join("sub-without");
+        std::fs::create_dir_all(&sub_with).unwrap();
+        std::fs::create_dir_all(&sub_without).unwrap();
+        std::fs::write(sub_with.join("inv.ini"), "[web]\nnode33 control=33\n").unwrap();
+
+        for roots in [
+            vec![a.clone(), b.clone(), c.clone(), sub_with.clone(), sub_without.clone()],
+            vec![sub_without.clone(), c.clone(), b.clone(), sub_with.clone(), a.clone()],
+        ] {
+            let state = t202_window(roots.clone());
+            let order = format!("roots = {roots:?}");
+            let inv = |file: &std::path::Path| state.inventory_setting_for(file);
+
+            // Under exactly one folder: that folder.
+            assert_eq!(inv(&a.join("play.yml")), vec![a.join("inv.ini")], "{order}");
+            assert_eq!(inv(&b.join("play.yml")), vec![b.join("inv.ini")], "{order}");
+
+            // Under a folder where the entry does not exist, with no enclosing folder: the
+            // missing path, kept — never a sibling's copy.
+            assert_eq!(inv(&c.join("play.yml")), vec![c.join("inv.ini")], "{order}");
+            assert!(!c.join("inv.ini").exists(), "control: C really has no inventory");
+
+            // Nested, present: the deepest folder.
+            assert_eq!(inv(&sub_with.join("play.yml")), vec![sub_with.join("inv.ini")], "{order}");
+            // Nested, absent: walk outward to the enclosing folder's file.
+            assert_eq!(inv(&sub_without.join("play.yml")), vec![a.join("inv.ini")], "{order}");
+
+            // Under no folder: `roots.first()`, whichever that is.
+            let outside = std::env::temp_dir().join("t202-nowhere/play.yml");
+            assert_eq!(inv(&outside), vec![roots[0].join("inv.ini")], "{order}");
+
+            // Absolute: as written, whatever the file.
+            let abs = std::env::temp_dir().join("t202-abs.ini");
+            state.set_inventory(&serde_json::json!({ "inventory": [abs.to_string_lossy()] }));
+            assert_eq!(inv(&b.join("play.yml")), vec![abs.clone()], "{order}");
+        }
+    }
+
+    /// The unparseable consumer: whether a file *is* an inventory source decides which
+    /// message it gets. Judged against the first folder, `B/inv.ini` was an ordinary broken
+    /// YAML file with a message promising a play would fail on it.
+    #[test]
+    fn each_folders_inventory_file_is_judged_an_inventory_source() {
+        let a = t202_folder("t202-unparseable-a", "11");
+        let b = t202_folder("t202-unparseable-b", "22");
+        let ini = "[web]\nnode1 control=1\n";
+        let code = |d: &[super::Diagnostic]| {
+            d.iter()
+                .map(|d| match &d.code {
+                    Some(super::NumberOrString::String(s)) => s.clone(),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for roots in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+            let state = t202_window(roots.clone());
+            let order = format!("roots = {roots:?}");
+            let open = |p: &std::path::Path| {
+                let uri = super::Url::from_file_path(p).unwrap();
+                state.docs.lock().unwrap().insert(uri.clone(), ini.to_string());
+                uri
+            };
+            assert_eq!(
+                code(&state.unparseable_diagnostic(&open(&a.join("inv.ini")))),
+                ["inventory-not-yaml"],
+                "A/inv.ini is folder A's inventory ({order})"
+            );
+            assert_eq!(
+                code(&state.unparseable_diagnostic(&open(&b.join("inv.ini")))),
+                ["inventory-not-yaml"],
+                "B/inv.ini is folder B's inventory ({order})"
+            );
+            // Control: the same bytes in a file the setting does not name are plain
+            // broken YAML, so the predicate is not "every .ini is an inventory".
+            assert_eq!(
+                code(&state.unparseable_diagnostic(&open(&b.join("other.ini")))),
+                ["unparseable"],
+                "B/other.ini is not an inventory ({order})"
+            );
+        }
+    }
+
+    /// The publish-diagnostics consumer, through `unknown-host`: a `hostvars['name']` read
+    /// is judged against the inventory of the folder the play is in. A name that only the
+    /// *other* folder's inventory knows is the positive control — it must fire, which under
+    /// the old rule it did not for whichever folder happened to be first.
+    #[test]
+    fn unknown_host_reads_the_inventory_of_the_folder_the_play_is_in() {
+        let a = t202_folder("t202-unknown-host-a", "11");
+        let b = t202_folder("t202-unknown-host-b", "22");
+        let play = |host: &str| {
+            format!("- hosts: all\n  tasks:\n    - debug:\n        msg: \"{{{{ hostvars['{host}'].x }}}}\"\n")
+        };
+
+        for roots in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+            let state = t202_window(roots.clone());
+            let order = format!("roots = {roots:?}");
+            let fires = |folder: &std::path::Path, host: &str| {
+                let path = folder.join("play.yml");
+                let text = play(host);
+                std::fs::write(&path, &text).unwrap();
+                let a = super::Backend::analyze_text(text, &path).unwrap();
+                state.inventory_diagnostics(&a, &path).len()
+            };
+            assert_eq!(fires(&a, "node11"), 0, "A knows node11 ({order})");
+            assert_eq!(fires(&b, "node22"), 0, "B knows node22 ({order})");
+            assert_eq!(fires(&a, "node22"), 1, "A does not know B's host ({order})");
+            assert_eq!(fires(&b, "node11"), 1, "B does not know A's host ({order})");
+        }
+    }
+
+    /// The status-bar consumer: the payload names each folder's own answer, and a folder
+    /// where the relative setting has no file says so — that folder reads nothing, and a
+    /// window-level line computed from the first folder would show it as fine.
+    #[test]
+    fn the_inventory_status_reports_each_folder_separately() {
+        let a = t202_folder("t202-status-a", "11");
+        let b = t202_folder("t202-status-b", "22");
+        let c = ansible_core::testing::project("t202-status-c", "[defaults]\n", &[("play.yml", T201_PLAY)]);
+
+        for roots in [vec![a.clone(), b.clone(), c.clone()], vec![c.clone(), b.clone(), a.clone()]] {
+            let state = t202_window(roots.clone());
+            let order = format!("roots = {roots:?}");
+            let status = super::Backend::inventory_status(&state);
+            let folders = status["folders"].as_array().expect("a folders array");
+            assert_eq!(folders.len(), 3, "{order}");
+            let by_path = |p: &std::path::Path| {
+                folders
+                    .iter()
+                    .find(|f| f["path"] == p.display().to_string())
+                    .unwrap_or_else(|| panic!("folder {} in {folders:?} ({order})", p.display()))
+                    .clone()
+            };
+            for (name, p) in [("A", &a), ("B", &b)] {
+                let f = by_path(p);
+                assert_eq!(f["resolved"], serde_json::json!(["inv.ini"]), "{name} reads its own ({order})");
+                assert_eq!(f["missing"], serde_json::json!([]), "{name} is missing nothing ({order})");
+            }
+            let f = by_path(&c);
+            assert_eq!(f["resolved"], serde_json::json!([]), "C reads nothing ({order})");
+            assert_eq!(f["missing"], serde_json::json!(["inv.ini"]), "and says which entry it lacks ({order})");
+            // The window-level fields keep meaning "the first folder", so the panel built on
+            // them is unchanged: here that is whichever folder was sent first.
+            assert_eq!(
+                status["resolved"],
+                if roots[0] == c { serde_json::json!([]) } else { serde_json::json!(["inv.ini"]) },
+                "{order}"
+            );
+        }
     }
 }

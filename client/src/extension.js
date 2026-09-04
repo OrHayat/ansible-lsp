@@ -957,6 +957,26 @@ function activate(context) {
         "do, so those hosts are unknown rather than absent, and variables defined only " +
         "there cannot resolve.";
     }
+    // One window-scoped setting, several folders: a relative path resolves per folder
+    // (T-202), so the one-line answer above is only the first folder's. Each folder's own
+    // answer goes here, and a folder where the setting names no existing file is flagged —
+    // that folder reads nothing, and nothing else on screen would say so.
+    const folders = (info && info.folders) || [];
+    if (folders.length > 1) {
+      const missing = folders.filter((f) => f.missing && f.missing.length);
+      if (missing.length) {
+        inventoryStatus.text += " $(warning)";
+      }
+      inventoryStatus.tooltip +=
+        "\n\nPer folder (a relative path resolves against the folder a file is in):\n" +
+        folders
+          .map((f) =>
+            f.missing && f.missing.length
+              ? `  ${f.name}: ${f.missing.join(", ")} not found — nothing read`
+              : `  ${f.name}: ${f.resolved.length ? f.resolved.join(", ") : "nothing resolves"}`
+          )
+          .join("\n");
+    }
     inventoryStatus.show();
   }
   paintInventory(null);
