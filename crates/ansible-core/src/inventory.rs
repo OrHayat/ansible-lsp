@@ -19,7 +19,9 @@
 //!
 //! A configured inventory that does not exist is **normal**, not an error: the corpus this
 //! was built against generates its inventories and commits none of them, so a clean clone
-//! has none. Resolve, find nothing, say nothing.
+//! has none. It contributes no hosts — but its `group_vars/`/`host_vars/` are still read,
+//! because ansible reads them (T-225, [`source_dirs`]), and the status bar says the file is
+//! missing in ansible's own words rather than saying nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -161,6 +163,26 @@ pub fn sources(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
 /// inside `inv` the actual host files sit. Measured: with `inv/sub/hosts.ini` as the only
 /// host file, `inv/group_vars/web.yml` still applies and `inv/sub/group_vars/web.yml` does
 /// not. Deriving this per *expanded file* got both halves wrong at once.
+///
+/// **A source that does not exist still has a base: its parent.** This is not
+/// [`sources`]' rule, and the difference is the whole of T-225. `vars/plugins.py:78`
+/// (`get_vars_from_inventory_sources`) walks the configured source list — which
+/// `inventory/manager.py:225` keeps intact when a source fails to parse, warning only —
+/// and takes `os.path.dirname(path)` for anything that is not a directory, with no
+/// existence check ("always pass the directory of the inventory source file"). Measured on
+/// 2.21.2, `x` defined only in `<dir>/group_vars/all.yml`, each row against a control with
+/// that directory removed that came back undefined:
+///
+/// | configured source | exists | `x` read from |
+/// | ----------------- | ------ | ------------- |
+/// | `sub/inv.yml` | yes | `sub/group_vars` |
+/// | `sub/inv.yml` | **no** | `sub/group_vars` — warning, exit 0 |
+/// | `sub/nope/` or `sub/nope` | **no** | `sub/group_vars` — a missing directory is "not a directory", so it gets the file rule |
+/// | `sub/real/` | yes, empty | `sub/real/group_vars`, and `sub/group_vars` is *not* read |
+///
+/// Same under `-i` and under `ansible.cfg`. A generated, untracked inventory — the corpus's
+/// normal state — therefore loses its hosts and keeps its variables, and dropping the
+/// directory with the file reported 237 defined names as undefined on that tree.
 pub fn source_dirs(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
     let chosen: Vec<PathBuf> = match &cfg.inventory {
         Some(v) => v.clone(),
@@ -168,13 +190,7 @@ pub fn source_dirs(cfg: &AnsibleConfig, fs: &dyn Fs) -> Vec<PathBuf> {
     };
     let mut out = Vec::new();
     for p in chosen {
-        let dir = if fs.is_dir(&p) {
-            Some(p)
-        } else if fs.is_file(&p) {
-            p.parent().map(|d| d.to_path_buf())
-        } else {
-            None
-        };
+        let dir = if fs.is_dir(&p) { Some(p) } else { p.parent().map(|d| d.to_path_buf()) };
         if let Some(d) = dir {
             if !out.contains(&d) {
                 out.push(d);
@@ -829,6 +845,41 @@ mod tests {
     /// Measured on 2.21.2: one directory holding a file per suffix, reading back which hosts
     /// arrived. `.ini` is read — it lives in `MODULE_IGNORE_EXTS`, not this list — while
     /// `.cfg`, `.bak`, `.md` and a `~` backup are dropped.
+    /// T-225: the vars base of a configured source, per the table on [`source_dirs`]. The
+    /// missing rows are the fix; the existing rows are the control that the fix did not
+    /// widen the existing rule, and `sources` still drops what does not exist.
+    #[test]
+    fn a_missing_source_keeps_its_parent_as_the_vars_base() {
+        let dirs_for = |value: &str, files: &[(&str, &str)], dirs: &[&str]| -> Vec<String> {
+            let cfg_text = format!("[defaults]\ninventory = {value}\n");
+            let mut all: Vec<(&str, &str)> = vec![("/p/ansible.cfg", &cfg_text)];
+            all.extend_from_slice(files);
+            let fs = crate::testing::MemFs::with_dirs(&all, dirs);
+            let cfg = AnsibleConfig::builder(Path::new("/p"))
+                .fs(&fs)
+                .env(&crate::config::EnvMap::empty())
+                .load();
+            let hosts = sources(&cfg, &fs).len();
+            let mut out: Vec<String> = source_dirs(&cfg, &fs)
+                .iter()
+                .map(|p| p.strip_prefix("/p").unwrap_or(p).to_string_lossy().replace('\\', "/"))
+                .collect();
+            out.push(format!("{hosts} host source(s)"));
+            out
+        };
+        // File present: its parent, and one host source.
+        assert_eq!(dirs_for("sub/inv.yml", &[("/p/sub/inv.yml", "")], &[]), ["sub", "1 host source(s)"]);
+        // File missing: still its parent, and no host source.
+        assert_eq!(dirs_for("sub/inv.yml", &[], &["/p/sub"]), ["sub", "0 host source(s)"]);
+        // Directory missing: "not a directory", so the file rule — the parent.
+        assert_eq!(dirs_for("sub/nope/", &[], &["/p/sub"]), ["sub", "0 host source(s)"]);
+        assert_eq!(dirs_for("sub/nope", &[], &["/p/sub"]), ["sub", "0 host source(s)"]);
+        // Directory present: itself, not its parent.
+        assert_eq!(dirs_for("sub/real/", &[], &["/p/sub/real"]), ["sub/real", "0 host source(s)"]);
+        // Two missing files in one directory: the base once.
+        assert_eq!(dirs_for("a.yml,b.yml", &[], &[]), ["", "0 host source(s)"]);
+    }
+
     #[test]
     fn a_directory_source_skips_the_suffixes_ansible_ignores() {
         let got = sources_for(
