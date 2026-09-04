@@ -46,6 +46,11 @@
    `groups` and the `h` in the body are lookups and do not, so a theme can show which name
    has to exist already and which one this line creates. Pinned by
    `highlight.rs::the_chain_root_demo_marks_the_loop_target_as_a_declaration`. #}
-{% for h in groups['web'] %}server {{ h }};{% endfor %}
+{# GOOD — `groups` here, `ansible_managed`, `ansible_facts` and `inventory_hostname` above,
+   and `loop` below carry the `defaultLibrary` modifier: ansible or Jinja provides them, so
+   no file has to. `loop` only inside the `for` — the same word after `endfor` is a plain
+   lookup, and would fail. Pinned by
+   `highlight.rs::the_chain_root_demo_marks_the_provided_names_as_default_library`. #}
+{% for h in groups['web'] %}server {{ h }} weight={{ loop.index }};{% endfor %}
 {% include "optional.conf.j2" %}
 {% endblock %}

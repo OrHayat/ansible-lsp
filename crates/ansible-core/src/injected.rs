@@ -37,6 +37,9 @@ pub enum Scope {
     ChildRole,
     /// A task with `delegate_to:`.
     Delegated,
+    /// Inside a file the `template` action renders. Measured on 2.21.2: all eight names
+    /// are present in the template and none in the play task that renders it.
+    Template,
 }
 
 impl Scope {
@@ -50,6 +53,7 @@ impl Scope {
             Scope::Role => "present only inside a role",
             Scope::ChildRole => "present only in a role included or imported from another role",
             Scope::Delegated => "present only on a task with `delegate_to:`",
+            Scope::Template => "present only inside a file rendered by the `template` action",
         }
     }
 }
@@ -70,6 +74,7 @@ const PLAY_CONTEXT: &str = "PlayContext.update_vars, at task execution";
 const GET_VARS: &str = "VariableManager.get_vars";
 const LOOP: &str = "TaskExecutor, per loop item";
 const ROLE: &str = "Role.get_role_params / RoleInclude";
+const TEMPLATE: &str = "the `template` action, for the file it renders";
 
 macro_rules! row {
     ($name:literal, $scope:ident, $set_by:expr, $meaning:literal) => {
@@ -137,6 +142,15 @@ pub const TABLE: &[Injected] = &[
     row!("ansible_parent_role_names", ChildRole, ROLE, "names of the roles that included or imported this one, innermost first"),
     row!("ansible_parent_role_paths", ChildRole, ROLE, "directories of the roles that included or imported this one, innermost first"),
     row!("ansible_delegated_vars", Delegated, GET_VARS, "the delegated host's variables, keyed by its name"),
+    // --- inside a rendered template ---
+    row!("ansible_managed", Template, TEMPLATE, "the `ansible_managed` config string, rendered — the usual first line of a generated file"),
+    row!("template_host", Template, TEMPLATE, "the node `ansible-playbook` runs on"),
+    row!("template_path", Template, TEMPLATE, "the template's path as the task gave it"),
+    row!("template_fullpath", Template, TEMPLATE, "the template's absolute path"),
+    row!("template_destpath", Template, TEMPLATE, "the `dest:` the rendered file goes to"),
+    row!("template_mtime", Template, TEMPLATE, "the template file's modification time"),
+    row!("template_run_date", Template, TEMPLATE, "when this render ran"),
+    row!("template_uid", Template, TEMPLATE, "the owner of the template file"),
 ];
 
 /// The table row for `name`, if ansible sets it.
@@ -207,6 +221,13 @@ mod tests {
         );
         assert_eq!(of(Scope::ChildRole), ["ansible_parent_role_names", "ansible_parent_role_paths"]);
         assert_eq!(of(Scope::Delegated), ["ansible_delegated_vars"]);
+        assert_eq!(
+            of(Scope::Template),
+            [
+                "ansible_managed", "template_destpath", "template_fullpath", "template_host",
+                "template_mtime", "template_path", "template_run_date", "template_uid"
+            ]
+        );
     }
 
     #[test]

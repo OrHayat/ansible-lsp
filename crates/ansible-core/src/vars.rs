@@ -317,7 +317,7 @@ impl Site {
             Loop => self.in_loop && (name != "item" || self.loop_var.is_none()),
             ExtendedLoop => self.in_loop && self.extended,
             IndexVar => self.in_loop && self.index_var,
-            Role | ChildRole => false,
+            Role | ChildRole | Template => false,
             Delegated => self.delegated,
         })
     }

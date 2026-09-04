@@ -3095,6 +3095,10 @@ fn scope_gap_message(u: &vars::VarUse, scope: injected::Scope) -> String {
             u.name
         ),
         Delegated => format!("`{}` is set only on a task with `delegate_to:`.", u.name),
+        Template => format!(
+            "`{}` is set only inside a file the `template` action renders — not in the task.",
+            u.name
+        ),
         Always => format!("`{}` is not defined here.", u.name),
     }
 }
@@ -3590,11 +3594,14 @@ const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
 ];
 
 /// The modifiers a token can carry, each one a bit in `token_modifiers_bitset` at its index
-/// here. One so far: `declaration`, on the `h` of `{% for h in hosts %}`. Standard, so a
-/// theme that styles a Python loop target styles ours; a lexical fact about one line, so
-/// unlike the resolvability modifier above it claims nothing about the workspace.
-const SEMANTIC_TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DECLARATION];
+/// here. `declaration`, on the `h` of `{% for h in hosts %}`; `defaultLibrary`, on a name
+/// Jinja or ansible provides — `range(`, `loop.index`, `hostvars`. Both standard, so a theme
+/// that styles a Python loop target or a builtin styles ours; both lexical facts about the
+/// file, so unlike the resolvability modifier above they claim nothing about the workspace.
+const SEMANTIC_TOKEN_MODIFIERS: &[SemanticTokenModifier] =
+    &[SemanticTokenModifier::DECLARATION, SemanticTokenModifier::DEFAULT_LIBRARY];
 const DECLARATION_BIT: u32 = 1 << 0;
+const DEFAULT_LIBRARY_BIT: u32 = 1 << 1;
 
 /// This token's index into [`SEMANTIC_TOKEN_LEGEND`].
 fn legend_index(ty: ansible_core::jinja::TokenType) -> u32 {
@@ -3693,6 +3700,7 @@ impl Backend {
                     },
                     ty: t.ty,
                     declaration: t.declaration,
+                    default_library: t.default_library,
                 }));
             }
             Node::Sequence { items, .. } => {
@@ -3744,7 +3752,8 @@ impl Backend {
                     delta_start,
                     length: end - start,
                     token_type: ty,
-                    token_modifiers_bitset: if t.declaration { DECLARATION_BIT } else { 0 },
+                    token_modifiers_bitset: (if t.declaration { DECLARATION_BIT } else { 0 })
+                        | (if t.default_library { DEFAULT_LIBRARY_BIT } else { 0 }),
                 });
                 (last_line, last_col) = (line, start);
             }
@@ -8811,6 +8820,25 @@ mod tests {
             .map(|t| (t.length, t.token_modifiers_bitset & (1 << decl) != 0))
             .collect();
         assert_eq!(got, [(1, true), (5, false)], "{got:?}");
+    }
+
+    /// The second modifier, by the same route: `hostvars` and `loop` carry `defaultLibrary`,
+    /// the loop target and the user's own name do not (T-217).
+    #[test]
+    fn a_provided_name_carries_the_default_library_bit_and_a_users_name_does_not() {
+        let d = ansible_core::jinja::Delimiters::default();
+        let lib = super::SEMANTIC_TOKEN_MODIFIERS
+            .iter()
+            .position(|m| *m == tower_lsp::lsp_types::SemanticTokenModifier::DEFAULT_LIBRARY)
+            .expect("defaultLibrary is in the legend");
+        let var = super::legend_index(ansible_core::jinja::TokenType::Variable);
+        let got: Vec<(u32, bool)> =
+            super::Backend::semantic_tokens_of("{% for h in hostvars %}{{ loop.index }}{{ app }}{% endfor %}", &d, true)
+                .into_iter()
+                .filter(|t| t.token_type == var)
+                .map(|t| (t.length, t.token_modifiers_bitset & (1 << lib) != 0))
+                .collect();
+        assert_eq!(got, [(1, false), (8, true), (4, true), (3, false)], "{got:?}");
     }
 
     /// The encoding is deltas against the previous token, and the column delta is absolute

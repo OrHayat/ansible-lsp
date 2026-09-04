@@ -98,7 +98,17 @@ pub struct SemToken {
     /// fact about one line, so unlike the resolvability modifier T-217 leaves open it claims
     /// nothing about the workspace.
     pub declaration: bool,
+    /// The name is one Jinja or ansible provides rather than one the template or its caller
+    /// has to define — `range`, `loop` inside a `for`, `hostvars`, `ansible_managed`.
+    /// LSP's standard `defaultLibrary` modifier. Only on a lookup: a declaration of the same
+    /// spelling shadows the builtin, and a property or a keyword argument is not a lookup.
+    pub default_library: bool,
 }
+
+/// `jinja2.defaults.DEFAULT_NAMESPACE` on Jinja 3.1.2, bound everywhere. The compiler binds
+/// the rest by position — `loop` in a `for`, `caller`/`varargs`/`kwargs` in a `macro`,
+/// `super` in a `block`, `self` at the root — which is what [`Known`] tracks.
+const JINJA_GLOBALS: &[&str] = &["cycler", "dict", "joiner", "lipsum", "namespace", "range"];
 
 /// Operators the lexer returns as `Name` because they are spelled as words.
 const WORD_OPERATORS: &[&str] =
@@ -131,7 +141,12 @@ pub fn tokens(src: &str, base: &Delimiters, root: bool) -> Vec<SemToken> {
                 }
             }
             template::Kind::Comment => {
-                out.push(SemToken { span: b.span, ty: TokenType::Comment, declaration: false })
+                out.push(SemToken {
+                    span: b.span,
+                    ty: TokenType::Comment,
+                    declaration: false,
+                    default_library: false,
+                })
             }
             template::Kind::Statement | template::Kind::Expression => {
                 // `span` covers the delimiters and `inner` only what is between them, so the
@@ -181,19 +196,72 @@ pub fn expression_tokens(src: &str) -> Vec<SemToken> {
 /// `{% for m in … %}` after the import — replaces the entry, so the loop's `m` reads as the
 /// variable it now is.
 ///
-/// Only namespaces and functions are remembered. A parameter is scoped to its macro body
-/// and a variable is already a variable, so neither changes a later token's answer.
+/// Only namespaces and functions are remembered by name. A variable is already a variable,
+/// so it changes no later answer. A macro's parameters are remembered for the length of its
+/// body — `{{ p }}` inside `{% macro f(p) %}` is that parameter — and dropped at `endmacro`.
+///
+/// The depth counters are what scope Jinja's positional builtins: `loop` exists only inside
+/// a `for`, `caller`/`varargs`/`kwargs` only inside a `macro`, `super` only inside a `block`.
+/// Counted on the tag names alone; an unbalanced close saturates at zero rather than going
+/// negative, since a template that does not balance will not render anyway.
 #[derive(Default)]
-struct Known(std::collections::HashMap<String, TokenType>);
+struct Known {
+    names: std::collections::HashMap<String, TokenType>,
+    for_depth: usize,
+    block_depth: usize,
+    /// One entry per open `macro`, holding its parameter names.
+    macros: Vec<Vec<String>>,
+}
 
 impl Known {
     fn declare(&mut self, name: &str, ty: TokenType) {
-        self.0.insert(name.to_string(), ty);
+        if ty == TokenType::Parameter {
+            if let Some(m) = self.macros.last_mut() {
+                m.push(name.to_string());
+            }
+            return;
+        }
+        self.names.insert(name.to_string(), ty);
     }
 
     /// The kind a bare use of `name` should paint as, if a statement before it said so.
     fn use_of(&self, name: &str) -> Option<TokenType> {
-        self.0.get(name).copied().filter(|t| matches!(t, TokenType::Namespace | TokenType::Function))
+        self.names.get(name).copied().filter(|t| matches!(t, TokenType::Namespace | TokenType::Function))
+    }
+
+    /// A parameter of the macro whose body this is.
+    fn is_parameter(&self, name: &str) -> bool {
+        self.macros.last().is_some_and(|m| m.iter().any(|p| p == name))
+    }
+
+    /// The statement whose tag this is opens or closes a scope.
+    fn enter(&mut self, tag: &str) {
+        match tag {
+            "for" => self.for_depth += 1,
+            "endfor" => self.for_depth = self.for_depth.saturating_sub(1),
+            "block" => self.block_depth += 1,
+            "endblock" => self.block_depth = self.block_depth.saturating_sub(1),
+            "macro" => self.macros.push(Vec::new()),
+            "endmacro" => {
+                self.macros.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether a lookup of `name` here reaches something Jinja or ansible provides. A name
+    /// this file declared — `{% set range = 1 %}`, `{% for loop in xs %}` — shadows the
+    /// builtin from there on; file-wide rather than scoped, which errs toward not claiming.
+    fn is_builtin(&self, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        JINJA_GLOBALS.contains(&name)
+            || name == "self"
+            || (name == "loop" && self.for_depth > 0)
+            || (name == "super" && self.block_depth > 0)
+            || (matches!(name, "caller" | "varargs" | "kwargs") && !self.macros.is_empty())
+            || crate::injected::provided(name)
     }
 }
 
@@ -218,6 +286,7 @@ fn repaint_literal_comments(src: &str, span: Span, out: &mut Vec<SemToken>) {
             span: Span { start: span.start + start, end: span.start + end },
             ty: TokenType::Text,
             declaration: false,
+            default_library: false,
         });
         i = end;
     }
@@ -245,7 +314,12 @@ fn is_test_name(toks: &[lexer::Token], i: usize, text: &str) -> bool {
 /// `length: 0` as malformed, and there is nothing to paint.
 fn delimiter(start: usize, end: usize, out: &mut Vec<SemToken>) {
     if end > start {
-        out.push(SemToken { span: Span { start, end }, ty: TokenType::Delimiter, declaration: false });
+        out.push(SemToken {
+            span: Span { start, end },
+            ty: TokenType::Delimiter,
+            declaration: false,
+            default_library: false,
+        });
     }
 }
 
@@ -267,11 +341,23 @@ fn inner_tokens(
 
     let shape = if is_statement { Shape::of(&toks, text) } else { Shape::Other };
 
+    // The tag opens or closes a scope before its own body is read: `{% for loop in x %}`
+    // is inside the loop it opens as far as its later tokens go, which is also Jinja's view.
+    if is_statement {
+        if let Some(tag) = toks.first().filter(|t| t.kind == lexer::Kind::Name) {
+            known.enter(tag.span.slice(text));
+        }
+    }
+
     for (i, t) in toks.iter().enumerate() {
-        let (ty, declaration) = match t.kind {
+        // `lookup` is true for the two arms that read a name from the render context —
+        // a call and a bare variable — which is where a builtin is a builtin. Everywhere
+        // else the same spelling is something else: a property, a keyword argument, a
+        // declaration that shadows it.
+        let (ty, declaration, lookup) = match t.kind {
             lexer::Kind::Eof => continue,
-            lexer::Kind::Str => (TokenType::String, false),
-            lexer::Kind::Int | lexer::Kind::Float => (TokenType::Number, false),
+            lexer::Kind::Str => (TokenType::String, false, false),
+            lexer::Kind::Int | lexer::Kind::Float => (TokenType::Number, false, false),
             lexer::Kind::Name => {
                 let word = t.span.slice(text);
                 let prev = i.checked_sub(1).map(|j| toks[j].kind);
@@ -279,12 +365,12 @@ fn inner_tokens(
                 if is_statement && i == 0 {
                     // The tag name. `include` here is a keyword; the identical text in
                     // `{{ include }}` is a variable.
-                    (TokenType::Keyword, false)
-                } else if let Some(introduced) = shape.introduces(&toks, i, text) {
+                    (TokenType::Keyword, false, false)
+                } else if let Some((ty, declaration)) = shape.introduces(&toks, i, text) {
                     // Before the generic arms: `upstream(` in `{% macro upstream(group) %}`
                     // is being *defined*, which the call arm below cannot see, and `group`
                     // after its `(` is a parameter, which the fallback would call a variable.
-                    introduced
+                    (ty, declaration, false)
                 } else if next == Some(lexer::Kind::Assign)
                     && matches!(prev, Some(lexer::Kind::Lparen | lexer::Kind::Comma))
                 {
@@ -294,38 +380,46 @@ fn inner_tokens(
                     // which is what separates it from the macro arm above: VS Code's own
                     // Python grammar draws the same line, `variable.parameter.function`
                     // at a `def` and `variable.parameter.function-call` at a call.
-                    (TokenType::Parameter, false)
+                    (TokenType::Parameter, false, false)
                 } else if LITERALS.contains(&word) {
-                    (TokenType::Constant, false)
+                    (TokenType::Constant, false, false)
                 } else if WORD_OPERATORS.contains(&word) {
-                    (TokenType::WordOperator, false)
+                    (TokenType::WordOperator, false, false)
                 } else if is_test_name(&toks, i, text) {
                     // `x is defined`, `x is not none`, `x is sameas y` — the name after `is`
                     // is a test, which is the same shape as a filter after `|` and was being
                     // called a variable.
-                    (TokenType::Function, false)
-                } else if prev == Some(lexer::Kind::Pipe) || next == Some(lexer::Kind::Lparen) {
-                    // A filter after `|`, or anything being called. Both read as functions,
-                    // and both are wrong to call a variable.
-                    (TokenType::Function, false)
+                    (TokenType::Function, false, false)
+                } else if prev == Some(lexer::Kind::Pipe) {
+                    // A filter after `|` reads as a function, and is wrong to call a variable.
+                    (TokenType::Function, false, false)
+                } else if next == Some(lexer::Kind::Lparen) {
+                    // Anything being called — and a call of `range(` or `super(` is a lookup
+                    // of the builtin, so the modifier applies here as on a bare name.
+                    (TokenType::Function, false, prev != Some(lexer::Kind::Dot))
                 } else if prev == Some(lexer::Kind::Dot) {
                     // After the call check on purpose: `m.upstream(` is a call first and a
                     // property second, and one token has one colour.
-                    (TokenType::Property, false)
+                    (TokenType::Property, false, false)
                 } else if let Some(introduced_as) = known.use_of(word) {
                     // A bare name an earlier statement introduced: the `m` of
                     // `{{ m.upstream('web') }}` is the namespace its import made it.
-                    (introduced_as, false)
+                    (introduced_as, false, false)
+                } else if known.is_parameter(word) {
+                    // `{{ p }}` inside `{% macro f(p) %}`: the parameter, read. Without the
+                    // flag, like a keyword argument — the `(p)` in the tag is the declaration.
+                    (TokenType::Parameter, false, false)
                 } else {
-                    (TokenType::Variable, false)
+                    (TokenType::Variable, false, true)
                 }
             }
-            _ => (TokenType::Operator, false),
+            _ => (TokenType::Operator, false, false),
         };
         if declaration {
             known.declare(t.span.slice(text), ty);
         }
-        out.push(SemToken { span: at(t.span), ty, declaration });
+        let default_library = lookup && known.is_builtin(t.span.slice(text));
+        out.push(SemToken { span: at(t.span), ty, declaration, default_library });
     }
 }
 
@@ -900,14 +994,17 @@ mod tests {
                 ("m", Variable, false),
             ]
         );
+        // The body's `{{ p }}` is the parameter, read (T-217 slice 4 — it was a variable
+        // while `Known` had no depth); past `endmacro` the same spelling is a variable.
         assert_eq!(
-            names("{% macro f(p) %}{{ p }}{% endmacro %}"),
+            names("{% macro f(p) %}{{ p }}{% endmacro %}{{ p }}"),
             [
                 ("macro", Keyword, false),
                 ("f", Function, true),
                 ("p", Parameter, true),
-                ("p", Variable, false),
+                ("p", Parameter, false),
                 ("endmacro", Keyword, false),
+                ("p", Variable, false),
             ]
         );
     }
@@ -964,7 +1061,16 @@ mod tests {
                 .collect()
         };
         assert_eq!(params("app.conf.j2"), [("decoration".to_string(), false)]);
-        assert_eq!(params("macros.j2"), [("group".to_string(), true), ("port".to_string(), true)]);
+        // Each macro declares its parameter once and reads it once in its body.
+        assert_eq!(
+            params("macros.j2"),
+            [
+                ("group".to_string(), true),
+                ("group".to_string(), false),
+                ("port".to_string(), true),
+                ("port".to_string(), false)
+            ]
+        );
     }
 
     /// The two halves of the demo's inheritance: `base.conf.j2` defines both slots, and
@@ -1014,7 +1120,7 @@ mod tests {
     }
 
     /// The other half of that label lives in `macros.j2`: the macro's own name and parameter.
-    /// The body's `{{ group }}` is the control — the same name, read, undeclared.
+    /// The body's `{{ group }}` is the same parameter, read — undeclared, and not a variable.
     #[test]
     fn the_macros_demo_declares_the_macro_and_its_parameter_only() {
         use TokenType::*;
@@ -1026,8 +1132,91 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            [("upstream", Function, true), ("group", Parameter, true), ("group", Variable, false)]
+            [("upstream", Function, true), ("group", Parameter, true), ("group", Parameter, false)]
         );
+    }
+
+    /// `(text, type, defaultLibrary)` for every name token.
+    fn builtins(src: &str) -> Vec<(&str, TokenType, bool)> {
+        tokens(src, &Delimiters::default(), true)
+            .into_iter()
+            .filter(|t| {
+                !matches!(
+                    t.ty,
+                    TokenType::Delimiter
+                        | TokenType::Operator
+                        | TokenType::String
+                        | TokenType::Number
+                        | TokenType::Keyword
+                        | TokenType::WordOperator
+                )
+            })
+            .map(|t| (t.span.slice(src), t.ty, t.default_library))
+            .collect()
+    }
+
+    /// T-217: a name Jinja or ansible provides carries `defaultLibrary` — on a lookup, and
+    /// only there. The Jinja list is `DEFAULT_NAMESPACE` on 3.1.2; the ansible list is the
+    /// injected table, whose rows were measured (`injected.rs`).
+    #[test]
+    fn a_provided_name_is_a_default_library_lookup_and_nothing_else_is() {
+        use TokenType::*;
+        assert_eq!(builtins("{{ range(3) }}"), [("range", Function, true)]);
+        assert_eq!(builtins("{{ dict }}"), [("dict", Variable, true)]);
+        assert_eq!(builtins("{{ hostvars[inventory_hostname] }}"), [("hostvars", Variable, true), ("inventory_hostname", Variable, true)]);
+        assert_eq!(builtins("{{ ansible_managed }}"), [("ansible_managed", Variable, true)]);
+        assert_eq!(builtins("{{ ansible_facts.os_family }}"), [("ansible_facts", Variable, true), ("os_family", Property, false)]);
+        assert_eq!(builtins("{{ app_port }}"), [("app_port", Variable, false)]);
+        // The same spellings where they are not lookups: a property, a keyword argument, a
+        // declaration that shadows the builtin, a filter, a called attribute.
+        assert_eq!(builtins("{{ x.range }}"), [("x", Variable, false), ("range", Property, false)]);
+        assert_eq!(builtins("{{ f(range=1) }}"), [("f", Function, false), ("range", Parameter, false)]);
+        assert_eq!(builtins("{% set range = 1 %}{{ range }}"), [("range", Variable, false), ("range", Variable, false)]);
+        assert_eq!(builtins("{{ x | dict }}"), [("x", Variable, false), ("dict", Function, false)]);
+        assert_eq!(builtins("{{ m.range() }}"), [("m", Variable, false), ("range", Function, false)]);
+    }
+
+    /// T-217: the positional builtins exist only inside the statement that binds them —
+    /// `loop` in a `for`, `caller`/`varargs`/`kwargs` in a `macro`, `super` in a `block`.
+    /// Outside, the same word is a plain lookup that would fail at render.
+    #[test]
+    fn a_positional_builtin_is_provided_only_inside_its_scope() {
+        use TokenType::*;
+        fn looked(src: &str) -> Vec<(&str, bool)> {
+            builtins(src).into_iter().filter(|(_, ty, _)| *ty != Property).map(|(w, _, b)| (w, b)).collect()
+        }
+        assert_eq!(
+            looked("{{ loop.index }}{% for h in hs %}{{ loop.index }}{% endfor %}{{ loop.index }}"),
+            [("loop", false), ("h", false), ("hs", false), ("loop", true), ("loop", false)]
+        );
+        // Nested loops: still inside after the inner `endfor`.
+        assert_eq!(
+            looked("{% for a in x %}{% for b in y %}{% endfor %}{{ loop.last }}{% endfor %}"),
+            [("a", false), ("x", false), ("b", false), ("y", false), ("loop", true)]
+        );
+        assert_eq!(
+            looked("{{ caller() }}{% macro f() %}{{ caller() }}{{ kwargs }}{% endmacro %}{{ varargs }}"),
+            [("caller", false), ("f", false), ("caller", true), ("kwargs", true), ("varargs", false)]
+        );
+        assert_eq!(
+            looked("{% block b %}{{ super() }}{% endblock %}{{ super() }}"),
+            [("b", false), ("super", true), ("super", false)]
+        );
+        // `self` is bound at the root, so it is everywhere.
+        assert_eq!(looked("{{ self.b() }}"), [("self", true), ("b", false)]);
+    }
+
+    /// The demo's `GOOD` label for the modifier: exactly these tokens in `app.conf.j2`
+    /// carry `defaultLibrary`, in this order, and `loop` only inside its `for`.
+    #[test]
+    fn the_chain_root_demo_marks_the_provided_names_as_default_library() {
+        let src = demo("app.conf.j2");
+        let got: Vec<&str> = tokens(&src, &Delimiters::default(), true)
+            .iter()
+            .filter(|t| t.default_library)
+            .map(|t| t.span.slice(&src))
+            .collect();
+        assert_eq!(got, ["ansible_managed", "ansible_facts", "inventory_hostname", "groups", "loop"]);
     }
 
     /// The demo fixture itself, for the same reason as the moved-comments one below: its
@@ -1043,7 +1232,7 @@ mod tests {
             .filter(|t| t.ty == TokenType::Property)
             .map(|t| t.span.slice(&src))
             .collect();
-        assert_eq!(props, ["hostname"], "{got:?}");
+        assert_eq!(props, ["hostname", "index"], "{got:?}");
         // `m.upstream(` is the control: a name after a dot that is called is still a call.
         assert!(
             got.iter().any(|t| t.ty == TokenType::Function && t.span.slice(&src) == "upstream"),
@@ -1156,6 +1345,8 @@ mod tests {
         let (mut parsed, mut unparsed) = (0, 0);
         let mut tags: BTreeMap<String, (usize, bool)> = BTreeMap::new();
         let mut bare: BTreeMap<String, usize> = BTreeMap::new();
+        // Painted `variable` with `defaultLibrary`: what the file need not define.
+        let mut provided: BTreeMap<String, usize> = BTreeMap::new();
         let mut samples: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for f in &files {
             let Ok(src) = std::fs::read_to_string(f) else { continue };
@@ -1182,7 +1373,8 @@ mod tests {
             }
             for t in tokens(&src, &d, true) {
                 if t.ty == TokenType::Variable && !t.declaration {
-                    *bare.entry(t.span.slice(&src).to_string()).or_default() += 1;
+                    let table = if t.default_library { &mut provided } else { &mut bare };
+                    *table.entry(t.span.slice(&src).to_string()).or_default() += 1;
                 }
             }
         }
@@ -1193,6 +1385,12 @@ mod tests {
         by_n.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
         for (tag, (n, shaped)) in by_n {
             println!("{tag:<12} {n:>6}  {}", if *shaped { "yes" } else { "-" });
+        }
+        println!("\nprovided names (defaultLibrary), all:");
+        let mut by_n: Vec<_> = provided.iter().collect();
+        by_n.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        for (name, n) in by_n {
+            println!("{n:>6}  {name}");
         }
         println!("\nbare names painted variable, top 40:");
         let mut by_n: Vec<_> = bare.iter().collect();

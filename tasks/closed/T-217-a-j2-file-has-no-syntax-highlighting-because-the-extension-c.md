@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| partly done | task | P2  | M    | T-124 | —          |
+| done   | task | P2       | M    | T-124 | —          |
 
 ## Problem
 
@@ -450,11 +450,24 @@ Token types and modifiers, from the slices and the corpus survey above:
       `entity.name.label` and Dark+ paints it, so it is the fifth non-standard type in the
       legend, mapped by the client like `delimiter`. `{% endblock name %}` is the same label
       referenced; `grammar.js` now asserts every non-standard type has a scope.
-- [ ] Jinja's six globals and `is_injected`'s names carry `defaultLibrary` — after [[T-222]]
-      fixes the shared list, and reading it rather than a copy
-- [ ] `Known` counts `for`/`endfor` and `macro`/`endmacro` depth: `loop` is a builtin only
-      inside a loop, `{{ p }}` inside `{% macro f(p) %}` is a `parameter`, and the control
-      that pins the body use as a variable today is inverted rather than deleted
-- [ ] `highlight_survey` rerun over a corpus wider than kubespray and the two local trees,
-      and every tag or bare name it surfaces above noise is either handled or written down
-      here with the reason it is not
+- [x] Jinja's six globals and the injected names carry `defaultLibrary` — read from
+      `injected::provided` (the table [[T-222]] and [[T-224]] built, plus the fact prefix),
+      never a copy. Only on a lookup: a property, a keyword argument, a filter, or a
+      declaration of the same spelling is not one, and a declaration shadows the builtin
+      from there on. Measured on the way: the `template` action injects eight names of
+      its own (`ansible_managed`, `template_*`), now a `Template` scope in the table
+- [x] `Known` counts `for`/`endfor`, `macro`/`endmacro` and `block`/`endblock` depth:
+      `loop` is a builtin only inside a loop, `caller`/`varargs`/`kwargs` only inside a
+      macro, `super` only inside a block, `{{ p }}` inside `{% macro f(p) %}` is a
+      `parameter` (read, no flag — the keyword-argument precedent), and the three controls
+      that pinned the body use as a variable are inverted
+- [x] `highlight_survey` rerun over ansible-core 2.21.2's own templates (39), the installed
+      collections (19) and the larger local tree (124): 182 templates, 0 refused, no
+      unshaped tag outside the structural set. The survey now lists provided names apart
+      from bare ones. Everything it surfaced is handled — `hostvars`, `inventory_hostname`,
+      `groups`, `item`, `ansible_managed`, `ansible_facts`, `role_name`, and every `loop`
+      inside its `for` — with two written down: `{{ namespace }}` in ansible-core's galaxy
+      skeleton is painted as Jinja's global while galaxy passes a context variable of that
+      name, which shadows it at render and cannot be told apart lexically; and
+      `ansible_plugin_list_dir` in the same skeleton rides the fact prefix, which is the
+      prefix rule's stated deal, not a fact
