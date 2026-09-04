@@ -1591,6 +1591,13 @@ impl Backend {
                 code: Some(NumberOrString::String("var-undefined".into())),
                 message: if let Some(scope) = u.scope_gap {
                     scope_gap_message(&u, scope)
+                } else if u.no_facts_here {
+                    format!(
+                        "`{}` is not a name ansible sets, and this play gathers no facts — \
+                         it may still come from inventory, a fact cache from an earlier \
+                         run, or extra-vars (-e).",
+                        u.name
+                    )
                 } else if u.defined_out_of_scope {
                     // It IS defined in this file — pointing at "never defined" sends the
                     // reader off to add a definition that already exists a few lines up.
@@ -3998,6 +4005,30 @@ mod tests {
         assert!(has("`item` is undefined here: `loop_control: loop_var` names this loop's item `row`"), "{msgs:?}");
         assert!(has("`ansible_loop` is set only in a loop with `loop_control: extended: true`"), "{msgs:?}");
         assert!(!msgs.iter().any(|m| m.contains("`item` is never defined")), "{msgs:?}");
+    }
+
+    /// T-224: an unknown `ansible_*` name in a facts-free play says why it is reported and
+    /// what it might still be, rather than "never defined in any file" — which is true and
+    /// beside the point.
+    #[test]
+    fn an_unknown_ansible_name_in_a_facts_free_play_says_so() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let d = std::env::temp_dir().join("ansible-lsp-t224-no-facts");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("play.yml");
+        let text = "- hosts: all\n  gather_facts: false\n  tasks:\n    - debug: { msg: \"{{ ansible_hostnme }} {{ nope_missing }}\" }\n";
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let msgs: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect();
+        assert_eq!(msgs.len(), 2, "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.starts_with("`ansible_hostnme` is not a name ansible sets, and this play gathers no facts")), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.starts_with("`nope_missing` is never defined")), "{msgs:?}");
     }
 
     /// The gap that made the first cut of T-143 dead code: the renderer was right and nothing

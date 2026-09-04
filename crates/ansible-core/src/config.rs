@@ -88,6 +88,12 @@ pub struct AnsibleConfig {
     /// `Encountered unknown tag 'break'` by default and renders `1` under
     /// `jinja2.ext.loopcontrols`.
     pub jinja2_extensions: Vec<String>,
+    /// `CACHE_PLUGIN` — ini `[defaults] fact_caching`, env `ANSIBLE_CACHE_PLUGIN`, default
+    /// `memory`. Anything else persists facts across runs, so a play with
+    /// `gather_facts: false` still sees them (measured on 2.21.2 with `jsonfile`: a second
+    /// run's facts-off play answered `ansible_os_family is defined` with `True`). `None` is
+    /// "never set", which means `memory`. T-224.
+    pub fact_caching: Option<String>,
 }
 
 /// Hand-written for one field: `invalid_task_attribute_failed` defaults *true*, which
@@ -106,6 +112,7 @@ impl Default for AnsibleConfig {
             duplicate_dict_key: DuplicateDictKey::default(),
             invalid_task_attribute_failed: true,
             jinja2_extensions: Vec::new(),
+            fact_caching: None,
         }
     }
 }
@@ -225,6 +232,7 @@ impl AnsibleConfig {
                         cfg.invalid_task_attribute_failed = v;
                     }
                 }
+                "fact_caching" => cfg.fact_caching = Some(value.trim().to_string()),
                 _ => {}
             }
         }
@@ -267,7 +275,16 @@ impl AnsibleConfig {
         if let Some(v) = env.var("ANSIBLE_INVALID_TASK_ATTRIBUTE_FAILED").and_then(parse_bool) {
             cfg.invalid_task_attribute_failed = v;
         }
+        if let Some(v) = env.var("ANSIBLE_CACHE_PLUGIN") {
+            cfg.fact_caching = Some(v.trim().to_string());
+        }
         cfg
+    }
+
+    /// Whether facts can outlive the run that gathered them: any cache plugin but the
+    /// default `memory` one.
+    pub fn facts_persist(&self) -> bool {
+        self.fact_caching.as_deref().is_some_and(|p| p != "memory")
     }
 
     /// Whether `prefix` names a network platform, whose single action plugin handles every
@@ -471,6 +488,20 @@ mod tests {
             .env(&env)
             .load();
         assert!(!got.invalid_task_attribute_failed, "env must beat the ini value");
+    }
+
+    /// T-224. Unset is `memory`; any other plugin persists facts; env beats ini.
+    #[test]
+    fn fact_caching_reads_ini_and_env() {
+        assert!(!cfg("[defaults]\nroles_path = ./roles\n").facts_persist());
+        assert!(!cfg("[defaults]\nfact_caching = memory\n").facts_persist());
+        assert!(cfg("[defaults]\nfact_caching = jsonfile\n").facts_persist());
+        assert!(cfg("[defaults]\nfact_caching = redis \n").facts_persist());
+        let got = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nfact_caching = jsonfile\n"))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_CACHE_PLUGIN", "memory")]))
+            .load();
+        assert!(!got.facts_persist(), "env must beat the ini value");
     }
 
     /// T-102. All three spellings, plus the two ways a value can be absent. Live-verified

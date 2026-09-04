@@ -259,6 +259,10 @@ pub struct VarUse {
     /// site: `item` with no loop, `ansible_loop` with no `extended`, `role_name` in a
     /// play's own task. The scope it would need is the message.
     pub scope_gap: Option<crate::injected::Scope>,
+    /// Set by [`undefined_uses`] for an `ansible_*` name outside the injected table, read
+    /// in a play that provably gathers no facts — so "it may be a fact" does not hold and
+    /// the read is reported. See [`facts_possible`] for what "provably" means.
+    pub no_facts_here: bool,
 }
 
 /// Where a variable use is rendered, as far as the scope of an injected name goes (T-224).
@@ -375,6 +379,7 @@ fn push_uses(
             through_hostvars,
             site: Site::default(),
             scope_gap: None,
+            no_facts_here: false,
         });
     };
     for (name, s, e) in extract(expr) {
@@ -940,6 +945,13 @@ pub fn undefined_uses_in(
     // inside an entry silent while the same name in the play's tasks is reported.
     let all = definitions_with_deps_in(path, nodes, cache).0;
     let declared = declared_names(nodes, text);
+    let plays = facts_possible(nodes, cache.context(path).config.facts_persist());
+    let facts_at = |at: usize| {
+        plays
+            .iter()
+            .find(|(span, _)| span.start <= at && at < span.end)
+            .map_or(true, |(_, possible)| *possible)
+    };
     // The full view: a provided name is exempt by its scope at the use, not by its spelling,
     // so the rule has to see it to judge it (T-224).
     any_uses(nodes)
@@ -960,7 +972,7 @@ pub fn undefined_uses_in(
                 // sound for them: the play var is definitely not what this read returns,
                 // whatever inventory holds. Claiming the read is *broken* needs T-062.
                 && !u.through_hostvars
-                && !provided_here(u)
+                && !provided_here(u, facts_at(u.span.start))
                 && !declared.contains(&u.name)
                 && !u.guard.iter().any(|g| g.contains(&u.name) && g.contains("defined"))
                 && !softened(text, u.span.start)
@@ -968,6 +980,8 @@ pub fn undefined_uses_in(
         .map(|mut u| {
             u.defined_out_of_scope = all.iter().any(|d| d.name == u.name);
             u.scope_gap = scope_gap(&u);
+            u.no_facts_here = crate::injected::injected(&u.name).is_none()
+                && crate::injected::may_be_fact(&u.name);
             u
         })
         .collect()
@@ -987,13 +1001,77 @@ fn scope_gap(u: &VarUse) -> Option<crate::injected::Scope> {
     }
 }
 
-/// Whether ansible provides `u.name` at `u`'s site: a possible fact, or a table row whose
-/// scope the site admits — or makes no claim about (a lazily rendered value).
-fn provided_here(u: &VarUse) -> bool {
+/// Whether ansible provides `u.name` at `u`'s site: a table row whose scope the site
+/// admits — or makes no claim about (a lazily rendered value) — or, where facts may exist,
+/// any `ansible_*` name at all.
+fn provided_here(u: &VarUse, facts_possible: bool) -> bool {
     match crate::injected::injected(&u.name) {
         Some(_) => scope_gap(u).is_none(),
-        None => crate::injected::may_be_fact(&u.name),
+        None => facts_possible && crate::injected::may_be_fact(&u.name),
     }
+}
+
+/// For each play in a playbook, its span and whether an `ansible_<fact>` name may exist in
+/// it (T-224). "May" is the honest answer nearly everywhere; `false` needs every one of:
+///
+/// - `gather_facts:` literally false on the play (absent means true — ansible's default);
+/// - no task in the play that runs `setup` or `gather_facts` — the only modules measured
+///   to add `ansible_*` names (`service_facts` and a cacheable `set_fact` add none);
+/// - no `roles:`, `include_role`, `import_role`, `include_tasks`, `import_tasks`, or
+///   `action:`/`local_action:` — any of which could run `setup` where this walk does not
+///   look;
+/// - no earlier play or `import_playbook` in the file — facts are per host and survive
+///   the play that gathered them;
+/// - no persistent fact cache ([`crate::config::AnsibleConfig::facts_persist`]), which
+///   carries them across runs (measured).
+///
+/// Not covered, and conceded in the message: a playbook that imports *this* file after
+/// gathering facts, and inventory that sets `ansible_*` connection variables the
+/// definitions walk did not read.
+fn facts_possible(nodes: &[Node], persist: bool) -> Vec<(Span, bool)> {
+    fn gathers(node: &Node) -> bool {
+        match node {
+            Node::Sequence { .. } => node.items().iter().any(gathers),
+            Node::Mapping { entries, .. } => entries.iter().any(|(k, v)| {
+                let Some(key) = k.as_str() else { return false };
+                if matches!(key, "block" | "rescue" | "always") {
+                    return gathers(v);
+                }
+                if key == "action" || key == "local_action" || crate::keywords::is_task_directive(key) {
+                    return key == "action" || key == "local_action";
+                }
+                matches!(
+                    crate::keywords::core_action(key),
+                    "setup" | "gather_facts" | "include_role" | "import_role" | "include_tasks"
+                        | "import_tasks" | "include"
+                )
+            }),
+            _ => false,
+        }
+    }
+    let mut earlier = persist;
+    let mut out = Vec::new();
+    for n in nodes {
+        for item in n.items() {
+            if item.get("import_playbook").is_some() {
+                earlier = true;
+            }
+            let Some(hosts_span) = item.get("hosts").map(|_| item.span()) else { continue };
+            let off = item
+                .get("gather_facts")
+                .and_then(Node::as_str)
+                .is_some_and(|v| matches!(v, "false" | "False" | "no" | "No" | "off" | "0"));
+            let roles = item.get("roles").is_some_and(|r| !r.items().is_empty());
+            let tasks = ["pre_tasks", "tasks", "post_tasks", "handlers"]
+                .iter()
+                .filter_map(|k| item.get(k))
+                .any(gathers);
+            let possible = earlier || !off || roles || tasks;
+            earlier |= possible;
+            out.push((hosts_span, possible));
+        }
+    }
+    out
 }
 
 /// Names declared by constructs the definition index doesn't model: `loop_control:
@@ -2029,6 +2107,66 @@ mod tests {
             )),
             ["item"]
         );
+    }
+
+    /// T-224 slice 3. An `ansible_*` name outside the injected table may be a fact, and a
+    /// fact may exist wherever anything could have gathered one — so the read is reported
+    /// only where nothing could have. Each silent row below is one thing that could have:
+    /// the default `gather_facts`, a `setup` or `gather_facts` task (in a block too), a
+    /// role or an include that might run one, an earlier play or `import_playbook`. The
+    /// two flagged rows are the control, and the last row is the order of the rules: a
+    /// definition beats the prefix. `ansible_facts` rides along as a table name that is
+    /// never touched by any of this.
+    #[test]
+    fn an_unknown_ansible_name_is_undefined_only_where_facts_provably_are_not() {
+        let read = "    - debug: { msg: \"{{ ansible_hostnme }} {{ ansible_facts }}\" }\n";
+        let off = |before_tasks: &str, tasks_before_read: &str| {
+            format!("- hosts: all\n  gather_facts: false\n{before_tasks}  tasks:\n{tasks_before_read}{read}")
+        };
+        assert_eq!(undef(&off("", "")), ["ansible_hostnme"]);
+        assert_eq!(
+            undef(&format!("- hosts: all\n  gather_facts: no\n  tasks:\n{read}")),
+            ["ansible_hostnme"]
+        );
+
+        assert!(undef(&format!("- hosts: all\n  tasks:\n{read}")).is_empty());
+        assert!(undef(&format!("- hosts: all\n  gather_facts: true\n  tasks:\n{read}")).is_empty());
+        assert!(undef(&off("", "    - setup:\n")).is_empty());
+        assert!(undef(&off("", "    - ansible.builtin.gather_facts:\n")).is_empty());
+        assert!(undef(&off("", "    - block:\n        - setup: { gather_subset: min }\n")).is_empty());
+        assert!(undef(&off("  roles: [base]\n", "")).is_empty());
+        assert!(undef(&off("", "    - include_role: { name: base }\n")).is_empty());
+        assert!(undef(&off("", "    - import_tasks: t.yml\n")).is_empty());
+        assert!(undef(&off("  pre_tasks:\n    - setup:\n", "")).is_empty());
+        assert!(undef(&format!("- hosts: db\n  tasks: []\n{}", off("", ""))).is_empty());
+        assert!(undef(&format!("- import_playbook: other.yml\n{}", off("", ""))).is_empty());
+        // Definition first: the name is the user's own here, prefix or not.
+        assert!(undef(&off("  vars: { ansible_hostnme: x }\n", "")).is_empty());
+    }
+
+    /// T-224: a persistent fact cache carries facts across runs (measured on 2.21.2 with
+    /// `jsonfile`), so a facts-off play is not facts-free under one. `memory`, the default,
+    /// is the control.
+    #[test]
+    fn a_persistent_fact_cache_keeps_every_ansible_name_possible() {
+        use crate::config::EnvMap;
+        use crate::fs::StdFs;
+        let d = std::env::temp_dir().join("ansible-lsp-t224-fact-cache");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let play = d.join("play.yml");
+        let src = "- hosts: all\n  gather_facts: false\n  tasks:\n    - debug: { msg: \"{{ ansible_hostnme }}\" }\n";
+        std::fs::write(&play, src).unwrap();
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let run = |cfg: &str| {
+            write(&d, "ansible.cfg", cfg);
+            // A fresh cache per run: the context is memoized, and an ambient
+            // `ANSIBLE_CONFIG` must not replace the fixture's file.
+            let cache = ScanCache::new(StdFs).with_env(EnvMap::empty());
+            undefined_uses_in(&play, &nodes, src, &cache).into_iter().map(|u| u.name).collect::<Vec<_>>()
+        };
+        assert_eq!(run("[defaults]\nfact_caching = memory\n"), ["ansible_hostnme"]);
+        assert!(run("[defaults]\nfact_caching = jsonfile\n").is_empty());
     }
 
     #[test]

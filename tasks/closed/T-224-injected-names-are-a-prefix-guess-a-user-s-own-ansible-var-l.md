@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-112 | —          |
+| done   | bug  | P1       | M    | T-112 | —          |
 
 ## Symptom
 
@@ -79,16 +79,37 @@ Rule 3: the table is the data, `is_injected` becomes `injected_scope(name) ->
 Option<Scope>`, and each consumer — hover, go-to-definition, `variable_uses`,
 `undefined_uses`, the injected hover — gets a test row from the first table above.
 
+## Landed
+
+Three commits, in the order of the Fix list. `injected.rs` is the table; `Site` on
+`VarUse` is where a use is rendered; `facts_possible` in `vars.rs` is the step-5 verdict.
+
+Two things measured on the way that the Fix above did not know:
+
+- A `vars:` value is rendered by its reader, so its scope is the reader's — a play `vars:`
+  holding `{{ item }}` works from a looped task and fails from an unlooped one. A task
+  `name:` is rendered once, before the loop, and a failure there is soft (the name prints
+  as `<< error 1 - 'item' is undefined >>`, the task runs). Neither site makes a scope
+  claim; only a task's own rendered values do.
+- Only `setup` / `gather_facts` add `ansible_*` names. `service_facts` adds none at the
+  top level, a cacheable `set_fact` adds none, and a persistent `fact_caching` plugin
+  carries them across runs — so that is a config key now (`facts_persist`).
+
+Conceded, in the message: a playbook that imports this file after gathering facts, and
+inventory `ansible_*` connection variables the definitions walk did not read. Both are
+the same concession the ordinary "never defined" message already makes.
+
 ## Done when
 
-- [ ] `{{ ansible_custom }}` with a play `vars:` definition hovers the definition and
+- [x] `{{ ansible_custom }}` with a play `vars:` definition hovers the definition and
       go-to-definition reaches it, with `plain_custom` as the control in the same test
-- [ ] `{{ ansible_hostnme }}` in a `gather_facts: false` play is flagged undefined, and the
+- [x] `{{ ansible_hostnme }}` in a `gather_facts: false` play is flagged undefined, and the
       same read in a `gather_facts: true` play is silent
-- [ ] `{{ ansible_role_name }}` in a play task and `{{ ansible_loop }}` in a non-extended
+- [x] `{{ ansible_role_name }}` in a play task and `{{ ansible_loop }}` in a non-extended
       loop are flagged with the scope named; the same reads in scope are silent
-- [ ] `{{ ansible_play_name }}` hovers a generic line; `{{ ansible_playbook_python }}` still
+- [x] `{{ ansible_play_name }}` hovers a generic line; `{{ ansible_playbook_python }}` still
       hovers the install value (the existing test keeps passing)
-- [ ] the table's comment names the 2.21.2 `varnames` recipe it was diffed against
-- [ ] `MAGIC` and `starts_with("ansible_")` are gone from `condition.rs` and `vars.rs`;
-      [[T-222]]'s test rows pass against the table
+- [x] the table's comment names the 2.21.2 `varnames` recipe it was diffed against
+- [x] `MAGIC` and `starts_with("ansible_")` are gone from `condition.rs` and `vars.rs`;
+      the prefix survives only as `injected::may_be_fact`; [[T-222]]'s test rows pass
+      against the table

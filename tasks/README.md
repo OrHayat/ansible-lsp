@@ -102,7 +102,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
-| T-224 | **bug** · [Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed](open/T-224-injected-names-are-a-prefix-guess-a-user-s-own-ansible-var-l.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -332,6 +331,7 @@ T-021 is now unblocked on that side.
 | T-219 | **bug** · [Non-ASCII in a Jinja expression panics the request](closed/T-219-non-ascii-in-a-jinja-expression-panics-the-request.md) | done     |
 | T-220 | **bug** · [True, False and None are reported as undefined variables, because the literal list is lowercase only](closed/T-220-true-false-and-none-are-reported-as-undefined-variables-beca.md) | done     |
 | T-222 | **bug** · [Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment](closed/T-222-four-names-ansible-always-provides-are-flagged-as-never-defi.md) | done     |
+| T-224 | **bug** · [Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed](closed/T-224-injected-names-are-a-prefix-guess-a-user-s-own-ansible-var-l.md) | done     |
 
 ## Settled — don't re-derive these
 
