@@ -94,10 +94,26 @@ pub struct AnsibleConfig {
     /// run's facts-off play answered `ansible_os_family is defined` with `True`). `None` is
     /// "never set", which means `memory`. T-224.
     pub fact_caching: Option<String>,
+    /// `INVENTORY_UNPARSED_WARNING` (`base.yml:535`) — ini `[inventory]
+    /// inventory_unparsed_warning`, env `ANSIBLE_INVENTORY_UNPARSED_WARNING`, default true:
+    /// whether a run with no parsed inventory prints "No inventory was parsed, only implicit
+    /// localhost is available". T-225.
+    pub inventory_unparsed_warning: bool,
+    /// `INVENTORY_UNPARSED_IS_FAILED` (`base.yml:1790`) — ini `[inventory]
+    /// unparsed_is_failed`, env `ANSIBLE_INVENTORY_UNPARSED_FAILED` (no `IS`, read off the
+    /// yaml, not guessed from the name), default false: a run where *no* source parsed is
+    /// fatal. T-225.
+    pub inventory_unparsed_is_failed: bool,
+    /// `INVENTORY_ANY_UNPARSED_IS_FAILED` (`base.yml:1744`) — ini `[inventory]
+    /// any_unparsed_is_failed`, env `ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED`, default
+    /// false: a run where *any* source failed to parse is fatal. Measured on 2.21.2 with a
+    /// missing `-i` file: off, a warning and exit 0; on, "Completely failed to parse
+    /// inventory source" and no play. T-225.
+    pub inventory_any_unparsed_is_failed: bool,
 }
 
-/// Hand-written for one field: `invalid_task_attribute_failed` defaults *true*, which
-/// `#[derive(Default)]` cannot express.
+/// Hand-written for the fields that default *true* — `invalid_task_attribute_failed` and
+/// `inventory_unparsed_warning` — which `#[derive(Default)]` cannot express.
 impl Default for AnsibleConfig {
     fn default() -> Self {
         Self {
@@ -113,6 +129,9 @@ impl Default for AnsibleConfig {
             invalid_task_attribute_failed: true,
             jinja2_extensions: Vec::new(),
             fact_caching: None,
+            inventory_unparsed_warning: true,
+            inventory_unparsed_is_failed: false,
+            inventory_any_unparsed_is_failed: false,
         }
     }
 }
@@ -183,15 +202,24 @@ impl AnsibleConfig {
         if text.is_some() {
             cfg.config_file = Some(file.clone());
         }
+        // The `[inventory]` section's three booleans, read beside `[defaults]` (T-225). Kept
+        // apart from `entries` because configparser interpolates within a section, and
+        // nothing here is interpolated across the two.
+        let mut inventory_section: Vec<(String, String)> = Vec::new();
         if let Some(text) = text {
-            let mut in_defaults = false;
+            let mut section = String::new();
             for line in text.lines() {
                 let line = line.trim();
                 if line.starts_with('[') {
-                    in_defaults = line == "[defaults]";
+                    section = line.to_string();
                     continue;
                 }
-                if !in_defaults || line.starts_with('#') || line.starts_with(';') {
+                let bucket = match section.as_str() {
+                    "[defaults]" => &mut entries,
+                    "[inventory]" => &mut inventory_section,
+                    _ => continue,
+                };
+                if line.starts_with('#') || line.starts_with(';') {
                     continue;
                 }
                 let Some((key, value)) = line.split_once('=') else {
@@ -200,10 +228,21 @@ impl AnsibleConfig {
                 // Keys are case-folded (configparser's `optionxform`), and `;` after
                 // whitespace starts an inline comment — `manager.py:432` enables exactly
                 // that prefix and no other, so an inline `#` is part of the value.
-                entries.push((
+                bucket.push((
                     key.trim().to_lowercase(),
                     strip_inline_comment(value.trim()).to_string(),
                 ));
+            }
+        }
+        for (key, value) in &inventory_section {
+            let slot = match key.as_str() {
+                "inventory_unparsed_warning" => &mut cfg.inventory_unparsed_warning,
+                "unparsed_is_failed" => &mut cfg.inventory_unparsed_is_failed,
+                "any_unparsed_is_failed" => &mut cfg.inventory_any_unparsed_is_failed,
+                _ => continue,
+            };
+            if let Some(v) = parse_bool(value) {
+                *slot = v;
             }
         }
         let section: HashMap<String, String> = entries.iter().cloned().collect();
@@ -277,6 +316,16 @@ impl AnsibleConfig {
         }
         if let Some(v) = env.var("ANSIBLE_CACHE_PLUGIN") {
             cfg.fact_caching = Some(v.trim().to_string());
+        }
+        for (var, slot) in [
+            ("ANSIBLE_INVENTORY_UNPARSED_WARNING", &mut cfg.inventory_unparsed_warning),
+            // Not `…_UNPARSED_IS_FAILED`: `base.yml:1797` names the env var without `IS`.
+            ("ANSIBLE_INVENTORY_UNPARSED_FAILED", &mut cfg.inventory_unparsed_is_failed),
+            ("ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED", &mut cfg.inventory_any_unparsed_is_failed),
+        ] {
+            if let Some(v) = env.var(var).and_then(parse_bool) {
+                *slot = v;
+            }
         }
         cfg
     }
@@ -488,6 +537,50 @@ mod tests {
             .env(&env)
             .load();
         assert!(!got.invalid_task_attribute_failed, "env must beat the ini value");
+    }
+
+    /// T-225. The three `[inventory]` booleans: shipped defaults, ini under the right
+    /// section only, env with the one irregular name, env beating ini, and a bad spelling
+    /// keeping the default.
+    #[test]
+    fn inventory_failure_settings_read_ini_and_env() {
+        let d = cfg("[defaults]\nroles_path = ./roles\n");
+        assert!(d.inventory_unparsed_warning);
+        assert!(!d.inventory_unparsed_is_failed);
+        assert!(!d.inventory_any_unparsed_is_failed);
+
+        let ini = cfg(
+            "[defaults]\ninventory = inv.yml\n[inventory]\ninventory_unparsed_warning = False\n\
+             unparsed_is_failed = yes\nany_unparsed_is_failed = on\n",
+        );
+        assert!(!ini.inventory_unparsed_warning);
+        assert!(ini.inventory_unparsed_is_failed);
+        assert!(ini.inventory_any_unparsed_is_failed);
+        // The `[defaults]` reader was untouched by the second section.
+        assert_eq!(ini.inventory, Some(vec![PathBuf::from("/p/inv.yml")]));
+
+        // Under `[defaults]` the keys mean nothing — the section is the address.
+        let wrong = cfg("[defaults]\nany_unparsed_is_failed = true\n");
+        assert!(!wrong.inventory_any_unparsed_is_failed);
+        // And a spelling Ansible rejects keeps the default.
+        assert!(cfg("[inventory]\ninventory_unparsed_warning = maybe\n").inventory_unparsed_warning);
+
+        let env = EnvMap::from_pairs(&[
+            ("ANSIBLE_INVENTORY_UNPARSED_WARNING", "0"),
+            ("ANSIBLE_INVENTORY_UNPARSED_FAILED", "1"),
+            ("ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED", "true"),
+        ]);
+        let got = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[inventory]\ninventory_unparsed_warning = True\nunparsed_is_failed = False\nany_unparsed_is_failed = False\n"))
+            .env(&env)
+            .load();
+        assert!(!got.inventory_unparsed_warning, "env must beat the ini value");
+        assert!(got.inventory_unparsed_is_failed);
+        assert!(got.inventory_any_unparsed_is_failed);
+        // The guessable-but-wrong env name does nothing.
+        let guessed = EnvMap::from_pairs(&[("ANSIBLE_INVENTORY_UNPARSED_IS_FAILED", "1")]);
+        let got = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&guessed).load();
+        assert!(!got.inventory_unparsed_is_failed);
     }
 
     /// T-224. Unset is `memory`; any other plugin persists facts; env beats ini.

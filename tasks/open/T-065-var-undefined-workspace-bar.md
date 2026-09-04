@@ -41,6 +41,26 @@ Costs — **proposed, not yet user-approved**, and possibly avoidable:
   is small, this ticket closes unimplemented. Only if it stays high does the blunt bar —
   and its precision cost — get decided, by the user, on the measured numbers.
 
+## Measured, 2026-09-04
+
+The residual after T-062 is not high, and what is left is not reachability's fault:
+
+| state of the reference tree (`186c7ed5`, 768 files) | `var-undefined` hits |
+| --- | --- |
+| clean checkout, generated `inventory.yml` absent, before T-225 | 434 |
+| same, with the file present | 197 |
+| clean checkout after T-225 | 197, list-identical |
+
+The 197, read one by one: about 110 are `-e` inputs the playbooks document in their own
+headers (`artifact_source`, `snapshot_name`, `s3_user_action`, …) — the class T-061 exists
+to reframe; about 50 are host variables that live only in the generated inventory
+(`infiniband_ip`, `private_ip`, …), which the message already concedes; 26 are scanner
+shapes (`{% for %}` names, filter keyword arguments, `{% raw %}`) that T-212 owns; and the
+block-scalar lines are T-226's. A workspace-wide bar would silence none of the first two
+classes — they are defined nowhere in the workspace — and would cost the demo's true
+`env` warning. **Recommendation: close unimplemented**, per the Approach's own condition.
+Left open for the user's call, as the Approach says the decision is theirs.
+
 ## Done when
 
 - [ ] workspace-wide set built and consulted; reachability logic untouched otherwise

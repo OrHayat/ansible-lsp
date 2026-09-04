@@ -1985,22 +1985,33 @@ impl Backend {
             .map(|r| {
                 let inv = state.inventory_setting_for(&r.join("x.yml"));
                 let rel = |p: &Path| p.strip_prefix(r).unwrap_or(p).display().to_string();
-                let missing: Vec<String> =
-                    inv.iter().filter(|p| !p.exists()).map(|p| rel(p)).collect();
                 let cache = ScanCache::default().with_inventory(inv);
+                let cfg = &cache.context(&r.join("x.yml")).config;
                 let resolved: Vec<String> =
-                    ansible_core::inventory::sources(&cache.context(&r.join("x.yml")).config, &cache)
-                        .iter()
-                        .map(|p| rel(p))
-                        .collect();
+                    ansible_core::inventory::sources(cfg, &cache).iter().map(|p| rel(p)).collect();
+                let (missing, tier, note) = Self::missing_inventory(cfg, &resolved, &rel);
                 serde_json::json!({
                     "name": r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
                     "path": r.display().to_string(),
                     "resolved": resolved,
                     "missing": missing,
+                    "missingTier": tier,
+                    "missingNote": note,
                 })
             })
             .collect();
+        // The first folder's missing sources at window level too, so a one-folder window —
+        // where the client shows no per-folder section — still hears about them.
+        let (missing, missing_tier, missing_note) = folders
+            .first()
+            .map(|f| {
+                (
+                    f["missing"].clone(),
+                    f["missingTier"].clone(),
+                    f["missingNote"].clone(),
+                )
+            })
+            .unwrap_or((serde_json::json!([]), serde_json::Value::Null, serde_json::Value::Null));
         serde_json::json!({
             "source": source,
             "resolved": resolved,
@@ -2010,7 +2021,64 @@ impl Backend {
             "configFile": config_file,
             "candidates": candidates,
             "folders": folders,
+            "missing": missing,
+            "missingTier": missing_tier,
+            "missingNote": missing_note,
         })
+    }
+
+    /// The configured inventory sources that do not exist, and what Ansible does about that
+    /// (T-225): the list (relative), a tier, and one plain-text note in Ansible's own words.
+    ///
+    /// Only an *explicit* configuration counts — the setting, `ANSIBLE_INVENTORY` or
+    /// `ansible.cfg`; a missing `/etc/ansible/hosts` is the "auto" state the picker already
+    /// explains. The tier follows the user's `[inventory]` settings, each measured on 2.21.2:
+    /// a missing source is a warning and the run continues with implicit localhost, unless
+    /// `any_unparsed_is_failed` is on (fatal for any missing source) or `unparsed_is_failed`
+    /// is on and nothing at all parsed. Never silent: the per-source "Unable to parse"
+    /// warning is unconditional in `inventory/manager.py:344`, so `inventory_unparsed_warning`
+    /// only trims the second line and never the tier. The note says the one thing a reader
+    /// would otherwise get wrong — `group_vars/` beside the missing file is still read.
+    fn missing_inventory(
+        cfg: &ansible_core::config::AnsibleConfig,
+        resolved: &[String],
+        rel: &dyn Fn(&Path) -> String,
+    ) -> (Vec<String>, Option<&'static str>, Option<String>) {
+        let Some(configured) = &cfg.inventory else { return (Vec::new(), None, None) };
+        let missing: Vec<String> = configured.iter().filter(|p| !p.exists()).map(|p| rel(p)).collect();
+        if missing.is_empty() {
+            return (missing, None, None);
+        }
+        let shown = missing.join(", ");
+        let (tier, note) = if cfg.inventory_any_unparsed_is_failed {
+            (
+                "error",
+                format!(
+                    "{shown} does not exist — ansible stops: \"Completely failed to parse \
+                     inventory source\" (any_unparsed_is_failed is on)."
+                ),
+            )
+        } else if cfg.inventory_unparsed_is_failed && resolved.is_empty() {
+            (
+                "error",
+                format!(
+                    "{shown} does not exist and nothing else parsed — ansible stops: \"No \
+                     inventory was parsed, please check your configuration and options.\" \
+                     (unparsed_is_failed is on)."
+                ),
+            )
+        } else {
+            (
+                "warning",
+                format!(
+                    "{shown} does not exist — ansible warns \"Unable to parse … as an inventory \
+                     source\" and runs{}; group_vars/ and host_vars/ beside it are still read, \
+                     so variables defined there resolve and hosts do not.",
+                    if resolved.is_empty() { " with only implicit localhost" } else { "" }
+                ),
+            )
+        };
+        (missing, Some(tier), Some(note))
     }
 
     /// What the picker offers: inventory files anywhere in the workspace, and the
@@ -10400,5 +10468,135 @@ mod tests {
         for h in &hits {
             println!("  HIT {h}");
         }
+    }
+
+    // ---- T-225: group_vars beside a configured inventory that does not exist -------------
+    //
+    // `ansible.cfg` names `inventory.yml`; the file is absent; `group_vars/all.yml` beside it
+    // defines `gv_only`. The play lives in `plays/`, one level down, so that directory is
+    // inventory-adjacent only — beside the play it would also be playbook-adjacent, and the
+    // first cut of this fixture stayed green with the fix reverted for exactly that reason. Ansible reads that directory regardless (measured, see
+    // `inventory::source_dirs`), so every consumer must answer from it. The control in each
+    // test is the same project with `group_vars/` deleted: then the name really is undefined
+    // and the consumer must say so — a fixture whose config was never read would answer the
+    // same both ways.
+
+    const T225_PLAY: &str = "- hosts: all\n  tasks:\n    - debug:\n        msg: \"{{ gv_only }}\"\n";
+
+    fn t225_project(name: &str, with_group_vars: bool) -> std::path::PathBuf {
+        let mut files: Vec<(&str, &str)> = vec![("plays/play.yml", T225_PLAY)];
+        if with_group_vars {
+            files.push(("group_vars/all.yml", "gv_only: 1\n"));
+        }
+        let root = ansible_core::testing::project(name, "[defaults]\ninventory = inventory.yml\n", &files);
+        assert!(!root.join("inventory.yml").exists(), "the fixture's inventory must be missing");
+        root
+    }
+
+    fn t225_analysis(root: &std::path::Path) -> (std::path::PathBuf, super::Document, Vec<super::Node>, super::Analysis) {
+        let path = root.join("plays/play.yml");
+        let doc = super::Document::new(T225_PLAY.to_string());
+        let nodes = doc.parse().expect("fixture parses");
+        let a = super::Backend::analyze_text(T225_PLAY.to_string(), &path).expect("analyses");
+        (path, doc, nodes, a)
+    }
+
+    /// The diagnostic consumer: no `var-undefined` for a name defined beside the missing
+    /// inventory, and one for the same name when the directory is not there.
+    #[test]
+    fn a_var_beside_a_missing_inventory_is_not_reported_undefined() {
+        let undefined = |root: &std::path::Path| -> Vec<String> {
+            let (path, _, _, a) = t225_analysis(root);
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(super::NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect()
+        };
+        let with = undefined(&t225_project("t225-diag-with", true));
+        assert!(with.is_empty(), "defined in group_vars/all.yml beside the missing inventory: {with:?}");
+        let without = undefined(&t225_project("t225-diag-without", false));
+        assert_eq!(without.len(), 1, "control: with no group_vars it is undefined: {without:?}");
+    }
+
+    /// The hover consumer: names the definition, and says nothing without it.
+    #[test]
+    fn a_var_beside_a_missing_inventory_has_a_hover() {
+        let hover = |root: &std::path::Path| -> Option<String> {
+            let (path, doc, nodes, _) = t225_analysis(root);
+            let byte = T225_PLAY.find("gv_only").unwrap() + 1;
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+                .map(|h| h.0)
+        };
+        let with = hover(&t225_project("t225-hover-with", true)).expect("a hover");
+        assert!(with.contains("group_vars/all"), "names the source: {with}");
+        assert!(hover(&t225_project("t225-hover-without", false)).is_none(), "control: nothing to hover");
+    }
+
+    /// The go-to-definition consumer: jumps into `group_vars/all.yml`, and nowhere without it.
+    #[test]
+    fn a_var_beside_a_missing_inventory_has_a_definition() {
+        let definition = |root: &std::path::Path| -> Option<Vec<super::Location>> {
+            let (path, doc, nodes, _) = t225_analysis(root);
+            let (line, character) = doc.byte_to_lsp(T225_PLAY.find("gv_only").unwrap() + 1);
+            let pos = super::Position { line, character };
+            let uri = super::Url::from_file_path(&path).unwrap();
+            super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+        };
+        let with = definition(&t225_project("t225-def-with", true)).expect("a definition");
+        assert_eq!(with.len(), 1);
+        assert!(with[0].uri.path().ends_with("group_vars/all.yml"), "landed on {}", with[0].uri);
+        assert!(definition(&t225_project("t225-def-without", false)).is_none(), "control: nowhere to jump");
+    }
+
+    /// The status-bar consumer: the missing source is named in Ansible's words, with the
+    /// tier the user's own `[inventory]` settings give it — each tier measured on core.
+    #[test]
+    fn the_inventory_status_names_a_missing_configured_source_at_the_measured_tier() {
+        let status_for = |name: &str, cfg: &str, files: &[(&str, &str)]| -> serde_json::Value {
+            let root = ansible_core::testing::project(name, cfg, files);
+            let state = t202_window(vec![root]);
+            state.set_inventory(&serde_json::json!({ "inventory": [] }));
+            super::Backend::inventory_status(&state)
+        };
+        let play = ("play.yml", T225_PLAY);
+
+        // Default: a warning, and the note says the directory beside it is still read.
+        let s = status_for("t225-status-warn", "[defaults]\ninventory = inventory.yml\n", &[play]);
+        assert_eq!(s["missing"], serde_json::json!(["inventory.yml"]));
+        assert_eq!(s["missingTier"], "warning");
+        let note = s["missingNote"].as_str().unwrap();
+        for want in ["Unable to parse", "implicit localhost", "still read"] {
+            assert!(note.contains(want), "{want:?} in {note}");
+        }
+        assert_eq!(s["folders"][0]["missingTier"], "warning", "the per-folder entry carries the same");
+
+        // any_unparsed_is_failed: fatal for any missing source, even beside one that parses.
+        let s = status_for(
+            "t225-status-any",
+            "[defaults]\ninventory = inventory.yml,real.ini\n[inventory]\nany_unparsed_is_failed = True\n",
+            &[play, ("real.ini", "[web]\nnode1\n")],
+        );
+        assert_eq!(s["missing"], serde_json::json!(["inventory.yml"]));
+        assert_eq!(s["missingTier"], "error");
+        assert!(s["missingNote"].as_str().unwrap().contains("Completely failed to parse"));
+
+        // unparsed_is_failed: fatal only when nothing parsed at all.
+        let cfg_unparsed = "[defaults]\ninventory = inventory.yml,real.ini\n[inventory]\nunparsed_is_failed = True\n";
+        let s = status_for("t225-status-unparsed-some", cfg_unparsed, &[play, ("real.ini", "[web]\nnode1\n")]);
+        assert_eq!(s["missingTier"], "warning", "real.ini parsed, so the run continues");
+        let s = status_for("t225-status-unparsed-none", cfg_unparsed, &[play]);
+        assert_eq!(s["missing"], serde_json::json!(["inventory.yml", "real.ini"]));
+        assert_eq!(s["missingTier"], "error");
+        assert!(s["missingNote"].as_str().unwrap().contains("No inventory was parsed"));
+
+        // Controls: a source that exists is not missing, and no configured source at all
+        // is the auto state, not a missing one.
+        let s = status_for("t225-status-present", "[defaults]\ninventory = inv.ini\n", &[play, ("inv.ini", "[web]\nnode1\n")]);
+        assert_eq!(s["missing"], serde_json::json!([]));
+        assert!(s["missingTier"].is_null());
+        let s = status_for("t225-status-auto", "[defaults]\n", &[play]);
+        assert_eq!(s["missing"], serde_json::json!([]));
+        assert!(s["missingTier"].is_null());
     }
 }

@@ -962,17 +962,28 @@ function activate(context) {
     // answer goes here, and a folder where the setting names no existing file is flagged —
     // that folder reads nothing, and nothing else on screen would say so.
     const folders = (info && info.folders) || [];
+    // A configured inventory that does not exist, said the way ansible says it (T-225): a
+    // warning by default, an error when the user's own [inventory] settings make the run
+    // stop. The server writes the note; this only picks the glyph.
+    const glyph = (tier) => (tier === "error" ? " $(error)" : " $(warning)");
+    if (info && info.missing && info.missing.length && folders.length <= 1) {
+      inventoryStatus.text += glyph(info.missingTier);
+      inventoryStatus.tooltip += "\n\n" + info.missingNote;
+    }
     if (folders.length > 1) {
-      const missing = folders.filter((f) => f.missing && f.missing.length);
-      if (missing.length) {
-        inventoryStatus.text += " $(warning)";
+      const worst = folders
+        .filter((f) => f.missing && f.missing.length)
+        .map((f) => f.missingTier)
+        .sort()[0]; // "error" sorts before "warning"
+      if (worst) {
+        inventoryStatus.text += glyph(worst);
       }
       inventoryStatus.tooltip +=
         "\n\nPer folder (a relative path resolves against the folder a file is in):\n" +
         folders
           .map((f) =>
             f.missing && f.missing.length
-              ? `  ${f.name}: ${f.missing.join(", ")} not found — nothing read`
+              ? `  ${f.name}: ${f.missingNote}`
               : `  ${f.name}: ${f.resolved.length ? f.resolved.join(", ") : "nothing resolves"}`
           )
           .join("\n");

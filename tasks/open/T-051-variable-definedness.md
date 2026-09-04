@@ -148,7 +148,15 @@ than a fact.
 - [x] role/task files that legitimately receive vars from a caller are not false-flagged
       (playbooks only, pinned)
 - [ ] corpus gate: ~~zero hits~~ **656 real hits** once the panicked run was fixed — the
-      workspace-wide-absence tightening above must land and re-gate before this ticks
+      workspace-wide-absence tightening above must land and re-gate before this ticks.
+      Re-measured 2026-09-04 at corpus `186c7ed5` (768 files): **197**, after T-062 (656 →
+      238), the T-222/223/224 fixes, and T-225 (a missing generated inventory was dropping
+      the `group_vars/` beside it — 434 on a clean checkout, 197 with the file, now 197
+      either way, list-identical). Of the 197, read by hand: ~110 are documented `-e`
+      inputs (T-061's class), ~50 are host vars that exist only in the generated inventory
+      (honest, the message concedes them), 26 are scanner shapes T-212 owns, and the block
+      scalar lines are T-226's. So the bar itself is right and the box waits on T-061 to
+      reframe the `-e` class, not on T-065 — see T-065's note.
 - [x] supersedes T-033 (the `when:`-only version), or explicitly narrows to it — resolved
       by splitting T-033: its playbook-level unguarded class is absorbed here; the
       near-miss rule (T-060), `-e` contract (T-061), and inventory indexing (T-062) are
