@@ -1591,6 +1591,13 @@ impl Backend {
                 code: Some(NumberOrString::String("var-undefined".into())),
                 message: if let Some(scope) = u.scope_gap {
                     scope_gap_message(&u, scope)
+                } else if let Some(gone) = u.removed_in {
+                    format!(
+                        "`{}` was removed in ansible-core {gone}, and the detected install is {} — \
+                         it is undefined here.",
+                        u.name,
+                        a.ctx.install.as_ref().and_then(|i| i.version).map_or("newer".to_string(), |v| v.to_string())
+                    )
                 } else if u.no_facts_here {
                     format!(
                         "`{}` is not a name ansible sets, and this play gathers no facts — \
@@ -3034,20 +3041,31 @@ fn injected_var_hover(name: &str, install: Option<&AnsibleInstall>) -> Option<St
         return valued;
     }
     if let Some(row) = injected::injected(name) {
-        return Some(
-            Md::new()
-                .line(md::code(name) + " — " + md::raw(row.meaning))
-                .gap()
-                .line(
-                    (md::text("Set by ansible (")
-                        + md::raw(row.set_by)
-                        + "); "
-                        + md::raw(row.scope.describe())
-                        + ".")
-                        .italic(),
-                )
-                .render(),
-        );
+        let core = install.and_then(|i| i.version);
+        // The deprecation is dated by ansible; whether it has already bitten depends on
+        // the core this editor found, and the line says which side of it this install is.
+        let removal = row.removed_in.map(|gone| match core {
+            Some(v) if v >= gone => md::text(&format!(
+                "Removed in ansible-core {gone}. The detected install is {v}, so this read is undefined."
+            )),
+            Some(v) => md::text(&format!("Deprecated: removed in ansible-core {gone}. The detected install is {v}.")),
+            None => md::text(&format!("Deprecated: removed in ansible-core {gone}.")),
+        });
+        let mut doc = Md::new()
+            .line(md::code(name) + " — " + md::raw(row.meaning))
+            .gap()
+            .line(
+                (md::text("Set by ansible (")
+                    + md::raw(row.set_by)
+                    + "); "
+                    + md::raw(row.scope.describe())
+                    + ".")
+                    .italic(),
+            );
+        if let Some(line) = removal {
+            doc = doc.line(line.bold());
+        }
+        return Some(doc.render());
     }
     if injected::may_be_fact(name) {
         return Some(
@@ -4109,6 +4127,15 @@ mod tests {
         assert!(h.contains("fact") && h.contains("Nothing in this workspace"), "{h}");
         // Not ansible's at all: nothing to say.
         assert!(hover("base_url").is_none());
+
+        // A deprecated name says so, and which side of the removal this install is on.
+        let h = super::injected_var_hover("play_hosts", Some(&install)).expect("table line");
+        assert!(h.contains("Deprecated: removed in ansible-core 2.23.0. The detected install is 2.21.2."), "{h}");
+        let newer = AnsibleInstall { version: Some(Version { major: 2, minor: 23, patch: 0 }), ..Default::default() };
+        let h = super::injected_var_hover("play_hosts", Some(&newer)).expect("table line");
+        assert!(h.contains("Removed in ansible-core 2.23.0. The detected install is 2.23.0, so this read is undefined."), "{h}");
+        let h = super::injected_var_hover("play_hosts", None).expect("table line");
+        assert!(h.contains("Deprecated: removed in ansible-core 2.23.0.") && !h.contains("detected"), "{h}");
 
         // A known name whose value was not detected invents nothing — the table line, and
         // neither a path nor a version in it.

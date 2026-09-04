@@ -17,6 +17,13 @@
 //!
 //! Not in the table on purpose: `_task` (internal), and the `ansible_<fact>` set, which only
 //! exists after `setup` runs and is host-dependent — see [`may_be_fact`].
+//!
+//! A row can carry the ansible-core version that removes it. That is ansible's own claim,
+//! taken from the deprecation warning the 2.21.2 run printed, not a measurement of the
+//! removing release — none is installable yet. A consumer with the detected core version
+//! reads [`Injected::present_on`]; one without treats every row as present.
+
+use crate::install::Version;
 
 /// Where a name is set, and so where a read of it is answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +73,18 @@ pub struct Injected {
     pub set_by: &'static str,
     /// One line: what the value is.
     pub meaning: &'static str,
+    /// The ansible-core release that removes the name, when it is deprecated.
+    pub removed_in: Option<Version>,
+}
+
+impl Injected {
+    /// Whether this ansible-core still sets the name. Unknown core, or no removal: present.
+    pub fn present_on(&self, core: Option<Version>) -> bool {
+        match (self.removed_in, core) {
+            (Some(gone), Some(core)) => core < gone,
+            _ => true,
+        }
+    }
 }
 
 const MAGIC: &str = "VariableManager._get_magic_variables";
@@ -78,7 +97,16 @@ const TEMPLATE: &str = "the `template` action, for the file it renders";
 
 macro_rules! row {
     ($name:literal, $scope:ident, $set_by:expr, $meaning:literal) => {
-        Injected { name: $name, scope: Scope::$scope, set_by: $set_by, meaning: $meaning }
+        Injected { name: $name, scope: Scope::$scope, set_by: $set_by, meaning: $meaning, removed_in: None }
+    };
+    ($name:literal, $scope:ident, $set_by:expr, $meaning:literal, removed $major:literal . $minor:literal) => {
+        Injected {
+            name: $name,
+            scope: Scope::$scope,
+            set_by: $set_by,
+            meaning: $meaning,
+            removed_in: Some(Version { major: $major, minor: $minor, patch: 0 }),
+        }
     };
 }
 
@@ -92,7 +120,9 @@ pub const TABLE: &[Injected] = &[
     row!("inventory_dir", Always, OPTIONS, "directory of the inventory source that first defined the current host"),
     row!("inventory_file", Always, OPTIONS, "path of the inventory source that first defined the current host"),
     row!("playbook_dir", Always, MAGIC, "directory of the playbook `ansible-playbook` was given"),
-    row!("play_hosts", Always, MAGIC, "deprecated alias of `ansible_play_batch`, removed in 2.23 — the hosts in the current batch"),
+    // 2.21.2 warns: "The `play_hosts` magic variable is deprecated. This feature will be
+    // removed from ansible-core version 2.23."
+    row!("play_hosts", Always, MAGIC, "deprecated alias of `ansible_play_batch` — the hosts in the current batch", removed 2 . 23),
     row!("role_names", Always, MAGIC, "names of the roles in the play's `roles:` plus any `import_role`, plus each `include_role` once it has run — not `meta/main.yml` dependencies; prefer `ansible_play_role_names`"),
     row!("environment", Always, GET_VARS, "the `environment:` keyword in effect, merged play → block → task, as a list of dicts"),
     row!("vars", Always, GET_VARS, "dict of every variable in effect, for a lookup by name"),
@@ -228,6 +258,25 @@ mod tests {
                 "template_mtime", "template_path", "template_run_date", "template_uid"
             ]
         );
+    }
+
+    /// The removal is a gate on the detected core: below it the name is present, from it
+    /// on it is not, and an unknown core is treated as present.
+    #[test]
+    fn a_removed_name_is_present_only_below_the_removing_release() {
+        let v = |major, minor, patch| Some(Version { major, minor, patch });
+        let row = injected("play_hosts").unwrap();
+        assert_eq!(row.removed_in, v(2, 23, 0));
+        assert!(row.present_on(v(2, 21, 2)));
+        assert!(row.present_on(v(2, 22, 9)));
+        assert!(!row.present_on(v(2, 23, 0)));
+        assert!(!row.present_on(v(2, 24, 0)));
+        assert!(row.present_on(None));
+        // A row with no removal is present on every core.
+        assert!(injected("groups").unwrap().present_on(v(9, 0, 0)));
+        // Exactly one row carries a removal today; a second one is a deliberate addition.
+        let removed: Vec<&str> = TABLE.iter().filter(|r| r.removed_in.is_some()).map(|r| r.name).collect();
+        assert_eq!(removed, ["play_hosts"]);
     }
 
     #[test]

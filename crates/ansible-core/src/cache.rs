@@ -367,6 +367,12 @@ impl ScanCache {
         self
     }
 
+    /// The detected ansible-core version, if startup found one — what a version-gated rule
+    /// reads. `None` is "unknown", and every gate treats unknown as the silent side.
+    pub fn core_version(&self) -> Option<crate::install::Version> {
+        self.install.as_ref().and_then(|i| i.version)
+    }
+
     /// Replace the environment config loads see. For tests: `.with_env(EnvMap::empty())`
     /// keeps a fixture project's `ansible.cfg` from being overridden by whatever
     /// `ANSIBLE_CONFIG`/`ANSIBLE_ROLES_PATH` the invoking shell happens to export.

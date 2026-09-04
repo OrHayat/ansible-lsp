@@ -267,6 +267,9 @@ pub struct VarUse {
     /// in a play that provably gathers no facts — so "it may be a fact" does not hold and
     /// the read is reported. See [`facts_possible`] for what "provably" means.
     pub no_facts_here: bool,
+    /// Set by [`undefined_uses`] when the name is a table row the detected ansible-core no
+    /// longer sets: the release that removed it, for the message.
+    pub removed_in: Option<crate::install::Version>,
 }
 
 /// Where a variable use is rendered, as far as the scope of an injected name goes (T-224).
@@ -385,6 +388,7 @@ fn push_uses(
             site: Site::default(),
             scope_gap: None,
             no_facts_here: false,
+            removed_in: None,
         });
     };
     for (name, s, e) in extract(expr) {
@@ -951,6 +955,7 @@ pub fn undefined_uses_in(
     let all = definitions_with_deps_in(path, nodes, cache).0;
     let declared = declared_names(nodes, text);
     let plays = facts_possible(nodes, cache.context(path).config.facts_persist());
+    let core = cache.core_version();
     let facts_at = |at: usize| {
         plays
             .iter()
@@ -977,7 +982,7 @@ pub fn undefined_uses_in(
                 // sound for them: the play var is definitely not what this read returns,
                 // whatever inventory holds. Claiming the read is *broken* needs T-062.
                 && !u.through_hostvars
-                && !provided_here(u, facts_at(u.span.start))
+                && !provided_here(u, facts_at(u.span.start), core)
                 && !declared.contains(&u.name)
                 // A `when: x is defined` on the task (or a block around it) keeps the read
                 // from running while `x` is undefined — that name, not a name it is a
@@ -994,6 +999,9 @@ pub fn undefined_uses_in(
             u.scope_gap = scope_gap(&u);
             u.no_facts_here = crate::injected::injected(&u.name).is_none()
                 && crate::injected::may_be_fact(&u.name);
+            u.removed_in = crate::injected::injected(&u.name)
+                .filter(|row| !row.present_on(core))
+                .and_then(|row| row.removed_in);
             u
         })
         .collect()
@@ -1013,12 +1021,12 @@ fn scope_gap(u: &VarUse) -> Option<crate::injected::Scope> {
     }
 }
 
-/// Whether ansible provides `u.name` at `u`'s site: a table row whose scope the site
-/// admits — or makes no claim about (a lazily rendered value) — or, where facts may exist,
-/// any `ansible_*` name at all.
-fn provided_here(u: &VarUse, facts_possible: bool) -> bool {
+/// Whether ansible provides `u.name` at `u`'s site: a table row the detected core still
+/// sets, whose scope the site admits — or makes no claim about (a lazily rendered value) —
+/// or, where facts may exist, any `ansible_*` name at all.
+fn provided_here(u: &VarUse, facts_possible: bool, core: Option<crate::install::Version>) -> bool {
     match crate::injected::injected(&u.name) {
-        Some(_) => scope_gap(u).is_none(),
+        Some(row) => row.present_on(core) && scope_gap(u).is_none(),
         None => facts_possible && crate::injected::may_be_fact(&u.name),
     }
 }
@@ -2151,6 +2159,33 @@ mod tests {
         assert!(undef(&format!("- import_playbook: other.yml\n{}", off("", ""))).is_empty());
         // Definition first: the name is the user's own here, prefix or not.
         assert!(undef(&off("  vars: { ansible_hostnme: x }\n", "")).is_empty());
+    }
+
+    /// A deprecated name is present until the release ansible named removes it, and the
+    /// gate is the detected core: `play_hosts` is silent on 2.21.2 and with no install
+    /// detected, and reported on 2.23.0 with the release in the message. The claim about
+    /// 2.23 is ansible's own deprecation warning, measured on 2.21.2; 2.23 itself is not
+    /// installable yet.
+    #[test]
+    fn a_removed_name_is_undefined_from_the_release_that_removes_it() {
+        use crate::fs::StdFs;
+        use crate::install::{AnsibleInstall, Version};
+        use std::sync::Arc;
+        let src = "- hosts: all\n  tasks:\n    - debug: { msg: \"{{ play_hosts }} {{ groups }}\" }\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let path = Path::new("/nonexistent-removed/play.yml");
+        let on = |core: Option<Version>| {
+            let install = AnsibleInstall { version: core, ..Default::default() };
+            let cache = ScanCache::new(StdFs).with_install(Some(Arc::new(install)));
+            undefined_uses_in(path, &nodes, src, &cache)
+                .into_iter()
+                .map(|u| (u.name, u.removed_in))
+                .collect::<Vec<_>>()
+        };
+        let v = |major, minor, patch| Some(Version { major, minor, patch });
+        assert!(on(None).is_empty());
+        assert!(on(v(2, 21, 2)).is_empty());
+        assert_eq!(on(v(2, 23, 0)), [("play_hosts".to_string(), v(2, 23, 0))]);
     }
 
     /// T-224: a persistent fact cache carries facts across runs (measured on 2.21.2 with
