@@ -94,13 +94,14 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
-| T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](open/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | M    | ~~T-095~~      |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
+| T-225 | **bug** · [A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads](open/T-225-a-configured-inventory-path-that-does-not-exist-drops-the-gr.md) | M    | —          |
+| T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -332,6 +333,7 @@ T-021 is now unblocked on that side.
 | T-223 | **bug** · [Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read](closed/T-223-undefined-softening-is-a-substring-match-so-a-name-containin.md) | done     |
 | T-217 | [A .j2 file has no syntax highlighting, because the extension contributes no language or grammar](closed/T-217-a-j2-file-has-no-syntax-highlighting-because-the-extension-c.md) | done     |
 | T-202 | **bug** · [A relative ansibleLsp.inventory resolves against folder 1, so a multi-root window answers from the wrong folder](closed/T-202-a-relative-ansiblelsp-inventory-resolves-against-folder-1-so.md) | done     |
+| T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](closed/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | done     |
 
 ## Settled — don't re-derive these
 

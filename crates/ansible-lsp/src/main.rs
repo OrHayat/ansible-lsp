@@ -774,6 +774,7 @@ impl State {
     fn inventory_diagnostics(&self, a: &Analysis, path: &Path) -> Vec<Diagnostic> {
         let inv = self.inventory_setting_for(path);
         let mut out = Backend::variable_coverage_diagnostics(a, path, &a.nodes, &inv, &self.var_cache);
+        out.extend(Backend::inert_import_var_diagnostics(a, path, &inv, &self.var_cache));
         let cache = ScanCache::default().with_inventory(inv).with_install(self.install());
         out.extend(Backend::unknown_host_diagnostics(a, path, &cache));
         out
@@ -1588,6 +1589,95 @@ impl Backend {
             .chain(bad_targets)
             .chain(redundant_role_vars)
             .collect()
+    }
+
+    /// A templated `import_playbook` whose variable the index *does* define — by a source
+    /// that cannot reach a parse-time import (T-136).
+    ///
+    /// `templated-import` (T-095) says what works on that line. This one says which
+    /// definition the author is relying on and why it is inert: the import is expanded when
+    /// the file is parsed, before any play, host or task exists, and every indexed source
+    /// needs one of those (`VarSource::can_supply_import_playbook`, exhaustive). It names the
+    /// file the author actually wrote, which is otherwise the thing they stare at.
+    ///
+    /// Never "the playbook fails": `-e env=prod` at launch is invisible here, and group_vars
+    /// as the default with `-e` as the override is an ordinary pattern. The claim is about
+    /// the definition, which is true whatever the command line — hence WARNING.
+    ///
+    /// Silent when the entry carries a `vars:` (the one in-file spelling that works — T-095
+    /// substitutes it, so a name it supplies never gets here, and a name it does not supply
+    /// is the author's deliberate choice of source for that line), when the name has no
+    /// indexed definition in scope (T-095's "requires `-e`" case), and under
+    /// `# noqa: inert-import-var`.
+    fn inert_import_var_diagnostics(
+        a: &Analysis,
+        path: &Path,
+        inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
+    ) -> Vec<Diagnostic> {
+        const RULE: &str = "inert-import-var";
+        let imports: Vec<&Reference> = a
+            .refs
+            .iter()
+            .map(|(r, _)| r)
+            .filter(|r| r.kind == ReferenceKind::ImportPlaybook && r.templated && r.playbook_entry)
+            .filter(|r| r.entry_vars.is_empty())
+            .filter(|r| !a.doc.is_suppressed(r.span.start, RULE))
+            .collect();
+        if imports.is_empty() {
+            return Vec::new();
+        }
+        let defs = cached_definitions(path, &a.nodes, &a.open, inv, cache, a.ctx.install.as_ref());
+        let mut ext: HashMap<PathBuf, Document> = HashMap::new();
+        let mut out = Vec::new();
+        for r in imports {
+            // Only what sits inside `{{ }}`: the rest of the value is a path, and `env.yml`
+            // is not a read of `env`.
+            let mut uses = Vec::new();
+            vars::template_uses(&r.value, 0, &mut uses);
+            let mut seen = HashSet::new();
+            for name in uses.into_iter().map(|u| u.name) {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                let inert: Vec<vars::Located> = defs
+                    .iter()
+                    .filter(|d| d.name == name && d.in_scope_at(path, r.span.start))
+                    .filter(|d| !d.source.can_supply_import_playbook())
+                    .cloned()
+                    .collect();
+                let Some(d) = vars::effective(&inert) else { continue };
+                let line = if d.file == *path {
+                    a.doc.line_of(d.span.start)
+                } else {
+                    ext.entry(d.file.clone())
+                        .or_insert_with(|| Document::new(a.open.read(&d.file).unwrap_or_default()))
+                        .line_of(d.span.start)
+                };
+                let more = match inert.len() {
+                    1 => String::new(),
+                    n => format!(" (and {} more definition{})", n - 1, if n > 2 { "s" } else { "" }),
+                };
+                let (sl, sc) = a.doc.byte_to_lsp(r.span.start);
+                let (el, ec) = a.doc.byte_to_lsp(r.span.end);
+                out.push(Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String(RULE.into())),
+                    message: format!(
+                        "`{name}` is defined in `{}:{line}` ({}){more}. That cannot supply an \
+                         `import_playbook`, which is expanded before any play or host exists — \
+                         only `-e {name}=…` or a `vars:` on this line can. The definition is \
+                         inert here, whatever you pass at run time.",
+                        shorten(&d.file, &a.ctx),
+                        source_label(d.source),
+                    ),
+                    ..Default::default()
+                });
+            }
+        }
+        out
     }
 
     /// Condition-aware definedness: a variable *used* under a `when:` that its *definitions*
@@ -10132,6 +10222,183 @@ mod tests {
                 if roots[0] == c { serde_json::json!([]) } else { serde_json::json!(["inv.ini"]) },
                 "{order}"
             );
+        }
+    }
+    // ---- T-136: a definition a parse-time import_playbook can never see ------------------
+
+    /// A project whose `group_vars/all.yml` defines `env`, with `site.yml` holding `text`.
+    fn t136_project(name: &str, text: &str) -> (std::path::PathBuf, super::Analysis) {
+        let root = ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[("group_vars/all.yml", "env: prod\n"), ("site.yml", text)],
+        );
+        let path = root.join("site.yml");
+        let a = super::Backend::analyze_text(text.to_string(), &path).expect("site.yml parses");
+        (path, a)
+    }
+
+    fn t136_diagnostics(path: &std::path::Path, a: &super::Analysis) -> Vec<super::Diagnostic> {
+        super::Backend::inert_import_var_diagnostics(a, path, &[], &no_cache())
+    }
+
+    /// The rule: a templated import whose variable the index defines names that file, its
+    /// line and its source, says the definition is inert, and never says the run fails.
+    #[test]
+    fn inert_import_var_names_the_definition_that_cannot_reach_the_import() {
+        let (path, a) = t136_project("t136-fires", "- import_playbook: \"{{ env }}-setup.yml\"\n");
+        let d = t136_diagnostics(&path, &a);
+        assert_eq!(d.len(), 1, "{d:#?}");
+        let m = &d[0].message;
+        for want in ["`env`", "group_vars/all.yml:1", "(group_vars/all)", "cannot supply", "-e env=", "vars:"] {
+            assert!(m.contains(want), "message must say {want:?}: {m}");
+        }
+        for never in ["fail", "broken", "cannot resolve"] {
+            assert!(!m.contains(never), "the message must not claim the run {never}s: {m}");
+        }
+        assert_eq!(d[0].severity, Some(super::DiagnosticSeverity::WARNING));
+        assert_eq!(d[0].code, Some(super::NumberOrString::String("inert-import-var".into())));
+        // The range is the import value, the same span `templated-import` marks: the two are
+        // one finding read from two sides, and they must land on the same token.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (line, _) = a.doc.byte_to_lsp(text.find("{{ env }}").unwrap());
+        assert_eq!(d[0].range.start.line, line);
+    }
+
+    /// The same-file case: a play's `vars:` is as inert as group_vars — it needs a play, and
+    /// the import is expanded before there is one. The line points into this file.
+    #[test]
+    fn inert_import_var_reports_a_play_var_in_the_same_file() {
+        let text = "- hosts: all\n  vars:\n    stage: prod\n\n- import_playbook: \"{{ stage }}-setup.yml\"\n";
+        let (path, a) = t136_project("t136-play-var", text);
+        let d = t136_diagnostics(&path, &a);
+        assert_eq!(d.len(), 1, "{d:#?}");
+        assert!(d[0].message.contains("site.yml:3` (play var)"), "{}", d[0].message);
+    }
+
+    /// Every shape that must stay silent, each for its own reason. A rule that fires on the
+    /// wrong-answer line and also on these is the false-positive machine the ticket warns of.
+    #[test]
+    fn inert_import_var_stays_silent_where_it_has_nothing_true_to_say() {
+        let cases: &[(&str, &str)] = &[
+            // T-095's case: nothing indexed defines it, so `templated-import` alone speaks.
+            ("unknown", "- import_playbook: \"{{ nowhere }}-setup.yml\"\n"),
+            // A `vars:` on the entry suppresses entirely — even one that supplies a different
+            // name: the author chose the in-file source for this line.
+            ("entry-vars", "- import_playbook: \"{{ env }}-setup.yml\"\n  vars:\n    other: x\n"),
+            // The one spelling that works, resolving to nothing to warn about.
+            ("entry-vars-supplies", "- import_playbook: \"{{ env }}.yml\"\n  vars:\n    env: imported\n"),
+            // A magic variable needs no play or host, and is not templated in our sense.
+            ("magic", "- import_playbook: \"{{ playbook_dir }}/env.yml\"\n"),
+            // Inside a task list ansible reads this as a module name, never as an import.
+            ("misplaced", "- hosts: all\n  tasks:\n    - import_playbook: \"{{ env }}-setup.yml\"\n"),
+            // The rule's own noqa, and the bare one.
+            ("noqa-rule", "- import_playbook: \"{{ env }}-setup.yml\"  # noqa: inert-import-var\n"),
+            ("noqa-bare", "- import_playbook: \"{{ env }}-setup.yml\"  # noqa\n"),
+        ];
+        for (name, text) in cases {
+            let (path, a) = t136_project(&format!("t136-silent-{name}"), text);
+            let d = t136_diagnostics(&path, &a);
+            assert!(d.is_empty(), "{name} must stay silent: {d:#?}");
+        }
+        // And the control that makes the silence mean something: the noqa for the *other*
+        // rule on the line does not silence this one, since the two say different things.
+        let (path, a) = t136_project(
+            "t136-silent-control",
+            "- import_playbook: \"{{ env }}-setup.yml\"  # noqa: templated-import\n",
+        );
+        assert_eq!(t136_diagnostics(&path, &a).len(), 1, "a foreign noqa is not this rule's");
+    }
+
+    /// The demo label is a claim (rule 4): exactly one `inert-import-var` in
+    /// `demo/playbook.yml`, on the `deploy_stage` row, naming `group_vars/all.yml`. The
+    /// `{{ env }}` rows above it stay clear because nothing reachable from that file defines
+    /// `env` — which is T-095's case, not this one's.
+    #[test]
+    fn demo_playbook_has_exactly_the_documented_inert_import_var() {
+        let path = std::path::Path::new("../../demo/playbook.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let d = t136_diagnostics(&path, &a);
+        assert_eq!(d.len(), 1, "{d:#?}");
+        let (line, _) = a.doc.byte_to_lsp(text.find("{{ deploy_stage }}").unwrap());
+        assert_eq!(d[0].range.start.line, line, "{}", d[0].message);
+        assert!(d[0].message.contains("group_vars/all.yml"), "{}", d[0].message);
+    }
+
+    /// The guard that keeps the rule from starting to fire elsewhere unnoticed.
+    #[test]
+    fn every_other_demo_file_is_free_of_inert_import_var_diagnostics() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "playbook.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = t136_diagnostics(&path, &a).into_iter().map(|d| d.message).collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-136's corpus gate, kept runnable rather than done once and described in a ticket.
+    ///
+    /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp inert_import_var_corpus -- --ignored --nocapture`
+    ///
+    /// Prints every hit with its file, line and message, because the gate is "read each
+    /// one": the rule's claim is about a specific definition, and a hit is a false positive
+    /// the moment that definition could in fact supply the import. The denominator printed
+    /// beside it is the number of templated playbook-level imports the tree holds, since a
+    /// rule firing on most of them says the framing is wrong, not the trees.
+    ///
+    /// **Zero is also what a broken sweep looks like**, so run the control first: this
+    /// repo's own `demo/` reports exactly 1, on the row labelled for the rule
+    /// (`demo_playbook_has_exactly_the_documented_inert_import_var` pins the same fact
+    /// without the env var). Ignored by default and env-gated so no corpus path is ever
+    /// written into this repo.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp inert_import_var_corpus -- --ignored --nocapture"]
+    fn inert_import_var_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        if !root.is_dir() {
+            return;
+        }
+        let cache = no_cache();
+        let (mut hits, mut templated, mut files) = (Vec::new(), 0usize, 0usize);
+        for f in ansible_core::workspace::yaml_files(&root) {
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            if !t.contains("import_playbook") {
+                continue;
+            }
+            files += 1;
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            templated += a
+                .refs
+                .iter()
+                .filter(|(r, _)| {
+                    r.kind == ansible_core::references::ReferenceKind::ImportPlaybook
+                        && r.templated
+                        && r.playbook_entry
+                })
+                .count();
+            for d in super::Backend::inert_import_var_diagnostics(&a, &f, &[], &cache) {
+                hits.push(format!(
+                    "{}:{}  {}",
+                    f.strip_prefix(&root).unwrap_or(&f).display(),
+                    d.range.start.line + 1,
+                    d.message
+                ));
+            }
+        }
+        println!(
+            "inert-import-var: {} hit(s); {templated} templated playbook-level import(s) across {files} file(s) mentioning import_playbook",
+            hits.len()
+        );
+        for h in &hits {
+            println!("  HIT {h}");
         }
     }
 }

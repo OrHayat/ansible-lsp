@@ -4,3 +4,6 @@
 # deterministic location, so it IS indexed (unlike group_vars kept beside a separate
 # inventory file, which needs the inventory's path).
 deploy_region: eu-west-1
+# Read by the `inert-import-var` row in playbook.yml: a definition that exists, and that an
+# `import_playbook` can never see, because the import is expanded before any host does.
+deploy_stage: prod

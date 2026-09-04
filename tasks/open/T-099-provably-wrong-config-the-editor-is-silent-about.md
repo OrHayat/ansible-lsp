@@ -38,7 +38,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [x] T-103 — A static field carrying a template is used literally
 - [x] T-104 — hostvars cannot see play, role or task vars
 - [ ] T-105 — delegate_to: empty template, and hosts not in inventory
-- [ ] T-136 — A var an import_playbook needs is defined by a source that cannot reach it
+- [x] T-136 — A var an import_playbook needs is defined by a source that cannot reach it
 - [x] T-155 — loop_control with no loop is dead config, and ansible never says so
 - [ ] T-157 — A block or import_tasks in handlers: makes the handler's name unnotifiable
 - [ ] T-164 — Role params in meta/main.yml dependencies get no diagnostic
