@@ -105,9 +105,12 @@ pub struct SemToken {
     pub default_library: bool,
 }
 
-/// `jinja2.defaults.DEFAULT_NAMESPACE` on Jinja 3.1.2, bound everywhere. The compiler binds
-/// the rest by position — `loop` in a `for`, `caller`/`varargs`/`kwargs` in a `macro`,
-/// `super` in a `block`, `self` at the root — which is what [`Known`] tracks.
+/// `jinja2.defaults.DEFAULT_NAMESPACE` on jinja2 3.1.6 (the one beside ansible-core 2.21.2),
+/// bound everywhere. The compiler binds the rest by position — `loop` in a `for`,
+/// `caller`/`varargs`/`kwargs` in a `macro`, `super` in a `block`, `self` at the root —
+/// which is what [`Known`] tracks. Each measured with `StrictUndefined`: inside its scope
+/// the name renders, outside it is `'<name>' is undefined`; `super` outside a block is
+/// undefined by name, inside it fails only for want of a parent template.
 const JINJA_GLOBALS: &[&str] = &["cycler", "dict", "joiner", "lipsum", "namespace", "range"];
 
 /// Operators the lexer returns as `Name` because they are spelled as words.
