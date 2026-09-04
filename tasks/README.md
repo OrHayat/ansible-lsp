@@ -103,6 +103,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-222 | **bug** · [Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment](open/T-222-four-names-ansible-always-provides-are-flagged-as-never-defi.md) | S    | —          |
+| T-224 | **bug** · [Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed](open/T-224-injected-names-are-a-prefix-guess-a-user-s-own-ansible-var-l.md) | M    | —          |
 
 ### P2 — coverage and usability
 
