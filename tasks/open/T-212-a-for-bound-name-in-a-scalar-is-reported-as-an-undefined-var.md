@@ -91,3 +91,21 @@ in the ticket — do not let it close this one.
 - [ ] the `{% set %}` exemption is replaced by the general rule, not left beside it
 - [ ] T-114's standing box honoured: no rule in this epic fires on the corpus without a human
       confirming the hit is real
+
+## Corpus, 2026-09-04
+
+Measured on the reference tree at `186c7ed5` (768 files), with the generated inventory
+present so the T-225 noise is out of the picture: 197 `var-undefined` hits, of which these
+are this ticket's, each read by hand:
+
+| shape | names | hits |
+| ----- | ----- | ---- |
+| `{% for X in … %}` in a block scalar or list-item string, then `{{ X.y }}` | `_ring`, `rpm`, `pool`, `dns`, `ip`, `scenario`, `host`, `vip`, `policy` | 12 |
+| `loop.index` inside such a `{% for %}` body | `loop` | 2 |
+| a keyword argument of a filter call, read as a name — `map(attribute='stdout')`, `int(base=16)` | `attribute`, `base` | 11 |
+| Go template text inside `{% raw %}…{% endraw %}` | `end` | 1 |
+
+The last two rows are not bindings, but they fall to the same fix: a real parse of the
+scalar does not see a call's keyword as a name and does not tokenise inside `raw`. Neither
+should get a spelling-specific patch beside the `{% set %}` one — that is the pattern the
+Cause section names.

@@ -60,6 +60,8 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-222 — Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment
 - [x] T-223 — Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read
 - [x] T-224 — Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed
+- [ ] T-225 — A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads
+- [ ] T-226 — A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line
 
 ## Done when
 
