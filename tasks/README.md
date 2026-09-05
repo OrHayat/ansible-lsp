@@ -209,7 +209,6 @@ T-021 is now unblocked on that side.
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
 | T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
-| T-173 | [Expand inventory_hostname when the play names a literal host](open/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | S    | —          |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
@@ -334,6 +333,7 @@ T-021 is now unblocked on that side.
 | T-136 | [A var an import_playbook needs is defined by a source that cannot reach it](closed/T-136-a-var-an-import-playbook-needs-is-defined-by-a-source-that-c.md) | done     |
 | T-225 | **bug** · [A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads](closed/T-225-a-configured-inventory-path-that-does-not-exist-drops-the-gr.md) | done     |
 | T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](closed/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | done     |
+| T-173 | [Expand inventory_hostname when the play names a literal host](closed/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -2422,8 +2422,14 @@ impl Backend {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
             return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache, install)
-                // Or on the host half of a `hostvars['web01']` read (T-171).
-                .or_else(|| Self::host_key_defs_at(doc, pos, path));
+                // Or on the host half of a `hostvars['web01']` read (T-171), or of a
+                // `hostvars[inventory_hostname]` read the play pins to one host (T-173).
+                .or_else(|| {
+                    let scan = ScanCache::new(OverlayFs(open.clone()))
+                        .with_inventory(inv.to_vec())
+                        .with_install(install.cloned());
+                    Self::host_key_defs_at(doc, nodes, pos, path, &scan)
+                });
         };
         let ctx = FileContext::discover(path).with_install(install.cloned());
         let res = resolve::Resolver { in_playbook, ..Default::default() }
@@ -2458,16 +2464,64 @@ impl Backend {
     /// inventory. What groups the host belongs to, and everything else a host "is", stays
     /// T-062's; answering only "where are this host's variables written" is what keeps the
     /// claim true without one.
-    fn host_key_defs_at(doc: &Document, pos: Position, path: &Path) -> Option<Vec<Location>> {
+    fn host_key_defs_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+        path: &Path,
+        scan: &ScanCache,
+    ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
-        let (host, _, _) = condition::hostvars_host_key_at(&doc.text, byte)?;
+        let host = match condition::hostvars_host_key_at(&doc.text, byte) {
+            Some((host, _, _)) => host,
+            None => {
+                condition::hostvars_magic_key_at(&doc.text, byte)?;
+                Self::expanded_host(nodes, byte, path, scan)?
+            }
+        };
         location_at(&host_vars_file(&host, path)?).map(|l| vec![l])
     }
 
-    /// Every host key in the file that resolves, as a paintable link.
-    fn host_key_links(doc: &Document, path: &Path) -> Vec<DocumentLink> {
-        condition::hostvars_host_keys(&doc.text)
+    /// T-173: the host `hostvars[inventory_hostname]` reads at byte `at`, when the play says
+    /// which one. `hosts: server1` fixes `inventory_hostname` to one value, and the read
+    /// then names the same file `hostvars['server1']` does.
+    ///
+    /// A group looks identical to a host in `hosts:`, and the file would be the wrong one:
+    /// measured on 2.21.2, a play on group `g` with `host_vars/g.yml` beside it reads
+    /// `host_vars/h1.yml` for its member — `g.yml` is inert. So when the inventory can be
+    /// read, a bare name it does not list as a host (or `add_host` does not create) is
+    /// declined. When it cannot — none resolved, dynamic — the `host_vars/` file the caller
+    /// goes on to require is the only signal left, and a group with a same-named host file
+    /// is the accepted edge. The implicit localhost spellings appear in no inventory and
+    /// pass on their own, as in [`Self::unknown_host_diagnostics`].
+    fn expanded_host(nodes: &[Node], at: usize, path: &Path, scan: &ScanCache) -> Option<String> {
+        let host = ansible_core::ast::literal_host_at(nodes, at)?;
+        if condition::IMPLICIT_HOSTS.contains(&host.as_str()) {
+            return Some(host);
+        }
+        if let Some(inventory) = vars::inventory_hosts(path, scan) {
+            let created = vars::created_hosts_in(path, nodes, scan).unwrap_or_default();
+            if !inventory.contains(&host) && !created.contains(&host) {
+                return None;
+            }
+        }
+        Some(host)
+    }
+
+    /// Every host key in the file that resolves, as a paintable link: the literal ones
+    /// (T-171) and the magic-name ones the play pins to a host (T-173).
+    fn host_key_links(
+        doc: &Document,
+        nodes: &[Node],
+        path: &Path,
+        scan: &ScanCache,
+    ) -> Vec<DocumentLink> {
+        let literal = condition::hostvars_host_keys(&doc.text).into_iter();
+        let magic = condition::hostvars_magic_keys(&doc.text)
             .into_iter()
+            .filter_map(|(s, e)| Some((Self::expanded_host(nodes, s, path, scan)?, s, e)));
+        literal
+            .chain(magic)
             .filter_map(|(host, s, e)| {
                 let target = host_vars_file(&host, path)?;
                 let (sl, sc) = doc.byte_to_lsp(s);
@@ -3840,7 +3894,13 @@ impl LanguageServer for Backend {
         let Some(a) = self.state.analyze(&p.text_document.uri) else {
             return Ok(None);
         };
-        Ok(Some(Self::document_links_of(&a, &p.text_document.uri)))
+        let inv = p
+            .text_document
+            .uri
+            .to_file_path()
+            .map(|path| self.state.inventory_setting_for(&path))
+            .unwrap_or_default();
+        Ok(Some(Self::document_links_of(&a, &p.text_document.uri, &inv)))
     }
 }
 
@@ -4070,7 +4130,7 @@ impl Backend {
     /// `goto_definition`, its test called the helper directly, and the missing paint
     /// reached the editor. A test that cannot see the assembly does not cover the
     /// assembly, and this is the second time that gap let something through.
-    fn document_links_of(a: &Analysis, uri: &Url) -> Vec<DocumentLink> {
+    fn document_links_of(a: &Analysis, uri: &Url, inv: &[PathBuf]) -> Vec<DocumentLink> {
         let mut links: Vec<DocumentLink> = a
             .refs
             .iter()
@@ -4091,7 +4151,10 @@ impl Backend {
         // Clickable but invisible is a feature nobody finds, and the demo row inviting a
         // click on both names reads as broken when only one of them is coloured.
         if let Ok(path) = uri.to_file_path() {
-            links.extend(Self::host_key_links(&a.doc, &path));
+            let scan = ScanCache::new(OverlayFs(a.open.clone()))
+                .with_inventory(inv.to_vec())
+                .with_install(a.ctx.install.clone());
+            links.extend(Self::host_key_links(&a.doc, &a.nodes, &path, &scan));
         }
         links
     }
@@ -5461,6 +5524,74 @@ mod tests {
         let line = text.lines().nth(ds[0].range.start.line as usize).unwrap();
         let (s, e) = (ds[0].range.start.character as usize, ds[0].range.end.character as usize);
         assert_eq!(&line[s..e], "web0143");
+    }
+
+    /// T-173: every reason the magic name stays plain, each against the control that jumps.
+    ///
+    /// The group case is the one that matters. Measured on 2.21.2 with `[g]\nh1` and both
+    /// `host_vars/g.yml` and `host_vars/h1.yml` present: a play on `g` reads `h1.yml`, never
+    /// `g.yml` — so a jump to `g.yml` would point at a file Ansible does not consult.
+    #[test]
+    fn a_pinned_inventory_hostname_jumps_only_for_a_host_the_play_provably_names() {
+        let d = std::env::temp_dir().join("ansible-lsp-t173");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("host_vars")).unwrap();
+        std::fs::write(d.join("hosts.ini"), "[g]\nh1\n").unwrap();
+        std::fs::write(d.join("dyn.yml"), "plugin: amazon.aws.aws_ec2\nregions: [us-east-1]\n").unwrap();
+        for f in ["g", "h1", "localhost", "nofile_host_in_inventory_only"] {
+            if f != "nofile_host_in_inventory_only" {
+                std::fs::write(d.join("host_vars").join(format!("{f}.yml")), "x: 1\n").unwrap();
+            }
+        }
+        let play = d.join("play.yml");
+
+        let jumps = |hosts: &str, inventory: Vec<std::path::PathBuf>| -> Option<String> {
+            let text = format!(
+                "- hosts: {hosts}\n  tasks:\n    - debug:\n        msg: \"{{{{ hostvars[inventory_hostname].x }}}}\"\n"
+            );
+            std::fs::write(&play, &text).unwrap();
+            let doc = ansible_core::parse::Document::new(text.clone());
+            let nodes = doc.parse().unwrap();
+            let at = text.find("inventory_hostname").unwrap() + 3;
+            let (line, character) = doc.byte_to_lsp(at);
+            let pos = tower_lsp::lsp_types::Position { line, character };
+            let scan = ScanCache::default().with_inventory(inventory);
+            super::Backend::host_key_defs_at(&doc, &nodes, pos, &play, &scan)
+                .map(|l| l[0].uri.path().rsplit('/').next().unwrap().to_string())
+        };
+        let ini = || vec![d.join("hosts.ini")];
+
+        // The control: a host the inventory lists, with a file to land in.
+        assert_eq!(jumps("h1", ini()).as_deref(), Some("h1.yml"));
+        // A group, with a same-named host file that Ansible never reads — declined.
+        assert_eq!(jumps("g", ini()), None, "a group is not a host");
+        // The implicit localhost is in no inventory and needs none.
+        assert_eq!(jumps("localhost", ini()).as_deref(), Some("localhost.yml"));
+        // A pattern, `all`, a template: several hosts or none we can read.
+        for several in ["all", "h1,localhost", "g:!h1", "h*", "\"{{ target }}\""] {
+            assert_eq!(jumps(several, ini()), None, "{several}");
+        }
+        // No file to land in, however sure the host is.
+        assert_eq!(jumps("nofile_host_in_inventory_only", ini()), None);
+        // When no inventory can be read, the file is the only signal left — and the
+        // filesystem alone cannot tell `g` from a host, which is the accepted edge.
+        assert_eq!(jumps("h1", vec![]).as_deref(), Some("h1.yml"));
+        assert_eq!(jumps("g", vec![]).as_deref(), Some("g.yml"), "no inventory: file decides");
+        assert_eq!(jumps("g", vec![d.join("dyn.yml")]).as_deref(), Some("g.yml"), "dynamic: file decides");
+        // `add_host` creates the host the play then runs on; it is not in the inventory
+        // and is still a host, so the file is read for it.
+        let created = format!(
+            "- hosts: localhost\n  tasks:\n    - add_host: {{name: h9}}\n- hosts: h9\n  tasks:\n    - debug:\n        msg: \"{{{{ hostvars[inventory_hostname].x }}}}\"\n"
+        );
+        std::fs::write(d.join("host_vars").join("h9.yml"), "x: 1\n").unwrap();
+        std::fs::write(&play, &created).unwrap();
+        let doc = ansible_core::parse::Document::new(created.clone());
+        let nodes = doc.parse().unwrap();
+        let (line, character) = doc.byte_to_lsp(created.find("inventory_hostname").unwrap() + 3);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        let scan = ScanCache::default().with_inventory(ini());
+        let got = super::Backend::host_key_defs_at(&doc, &nodes, pos, &play, &scan).expect("an add_host host jumps");
+        assert!(got[0].uri.path().ends_with("host_vars/h9.yml"));
     }
 
     /// Every reason to stay quiet, each asserted against a case that fires without it.
@@ -7429,7 +7560,7 @@ mod tests {
         // "'web01' isn't coloured", because nothing said it could be clicked.
         // Through `document_links_of`, so this covers what the editor is sent.
         let a_links = super::Backend::analyze_text(text.clone(), &path).unwrap();
-        let all = super::Backend::document_links_of(&a_links, &uri);
+        let all = super::Backend::document_links_of(&a_links, &uri, &[]);
         let painted: Vec<_> = all
             .into_iter()
             .filter(|l| l.target.as_ref().is_some_and(|t| t.path().ends_with("host_vars/web01.yml")))
@@ -7458,13 +7589,63 @@ mod tests {
         let dyn_key = text.find("hostvars[inventory_hostname]").unwrap() + "hostvars[".len() + 1;
         let (line, character) = doc.byte_to_lsp(dyn_key);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        assert!(super::Backend::host_key_defs_at(&doc, pos, &path).is_none());
+        assert!(super::Backend::host_key_defs_at(&doc, &nodes, pos, &path, &super::ScanCache::default()).is_none());
         // The variable half of the same line still wins its own click — the host-key
         // branch is last in the chain and must not shadow it.
         let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
         let pos = tower_lsp::lsp_types::Position { line, character };
         let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None).expect("var jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
+
+        // T-173, the second play: `hosts: localhost` pins `inventory_hostname`, so the magic
+        // name is the host half of the read and lands in host_vars/localhost.yml — through
+        // `definition_at`, the whole chain, on both spellings of the variable half.
+        // The play key, not the comment above it that quotes the same words.
+        let second = text.find("
+  hosts: localhost").unwrap();
+        let magic: Vec<usize> = text
+            .match_indices("hostvars[inventory_hostname]")
+            .map(|(i, _)| i + "hostvars[".len() + 4)
+            .filter(|i| *i > second)
+            .collect();
+        assert_eq!(magic.len(), 2, "the demo row reads it twice");
+        for at in &magic {
+            let (line, character) = doc.byte_to_lsp(*at);
+            let pos = tower_lsp::lsp_types::Position { line, character };
+            let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+                .expect("the pinned magic name jumps");
+            assert_eq!(locs.len(), 1);
+            assert!(locs[0].uri.path().ends_with("demo/host_vars/localhost.yml"), "{}", locs[0].uri);
+        }
+        // ...and painted, over the magic name only, so it is findable like 'web01' is.
+        let all = super::Backend::document_links_of(&a_links, &uri, &[]);
+        // The comment above the play spells `hostvars['localhost']` as a literal, and T-171
+        // paints that too — so count only the links that sit past the play's `hosts:`.
+        let (second_line, _) = doc.byte_to_lsp(second);
+        let painted: Vec<_> = all
+            .iter()
+            .filter(|l| l.target.as_ref().is_some_and(|t| t.path().ends_with("host_vars/localhost.yml")))
+            .filter(|l| l.range.start.line > second_line)
+            .collect();
+        assert_eq!(painted.len(), 2, "one link per read: {painted:?}");
+        for l in &painted {
+            let line = text.lines().nth(l.range.start.line as usize).unwrap();
+            let painted_text: String = line
+                .chars()
+                .skip(l.range.start.character as usize)
+                .take((l.range.end.character - l.range.start.character) as usize)
+                .collect();
+            assert_eq!(painted_text, "inventory_hostname");
+        }
+        // The variable half keeps its own click on the same line: the host-key branch
+        // answers only inside the magic name.
+        let var_at = text[second..].find("].deploy_region").unwrap() + second + 2;
+        let (line, character) = doc.byte_to_lsp(var_at);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+            .expect("the variable half jumps");
+        assert!(v[0].uri.path().ends_with("demo/host_vars/localhost.yml"));
+        assert_ne!(v[0].range.start.line, 0, "lands on the definition line, not the file top");
 
         for m in &msgs {
             assert!(m.starts_with("always undefined:"), "verdict first: {m}");

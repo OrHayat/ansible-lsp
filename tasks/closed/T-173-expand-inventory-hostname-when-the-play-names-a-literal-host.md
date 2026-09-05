@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P3       | S    | —          |
+| done   | task | P3       | S    | —          |
 
 ## Problem
 
@@ -50,9 +50,38 @@ not on "which host is this" — knowing the host is `server1` still says nothing
 
 ## Done when
 
-- [ ] `hosts: server1` + `hostvars[inventory_hostname]` jumps to `host_vars/server1.yml`
-- [ ] both subscript spellings resolve, matching T-171
-- [ ] a group-valued `hosts:` with no matching `host_vars/` file stays silent
-- [ ] a comma list or pattern stays silent
-- [ ] a templated `hosts:` stays silent (T-034's, not this one's)
-- [ ] a demo row, pinned by a test
+- [x] `hosts: server1` + `hostvars[inventory_hostname]` jumps to `host_vars/server1.yml`
+- [x] both subscript spellings resolve, matching T-171
+- [x] a group-valued `hosts:` with no matching `host_vars/` file stays silent
+- [x] a comma list or pattern stays silent
+- [x] a templated `hosts:` stays silent (T-034's, not this one's)
+- [x] a demo row, pinned by a test
+
+## Landed
+
+`condition::hostvars_magic_keys` / `hostvars_magic_key_at` find the `hostvars[inventory_hostname]`
+reads (the literal scan and this one now share `hostvars_subscripts`); `ast::literal_host_at`
+says whether the play containing a byte names one bare host; `Backend::expanded_host` turns
+that into the host the read consults, and both `host_key_defs_at` and `host_key_links` go
+through it, so the click and the paint cannot disagree (rule 3). The demo row is the second
+play in `demo/hostvars.yml`, pinned in `hostvars_reads_navigate_where_visible_and_warn_where_not`.
+
+### The group check the Approach asked for, measured
+
+On 2.21.2 with `[g]` / `h1` and both `host_vars/g.yml` and `host_vars/h1.yml` present:
+
+| `hosts:` | `hostvars[inventory_hostname].x` reads |
+| --- | --- |
+| `localhost` (file present) | `host_vars/localhost.yml`, both `.x` and `['x']` |
+| `h1` | `host_vars/h1.yml` |
+| `g` | **`host_vars/h1.yml`** — `g.yml` is never consulted |
+
+So the filesystem signal alone *would* mis-jump on a group with a same-named file. The
+inventory now has the last word when it can be read: a bare name it does not list as a host
+(nor `add_host` creates) is declined. When no inventory resolves, or it is dynamic, the
+`host_vars/` file is the only signal left and a same-named group file is the accepted edge —
+asserted as such in `a_pinned_inventory_hostname_jumps_only_for_a_host_the_play_provably_names`,
+alongside the control that jumps.
+
+The demo row itself was run: the second play prints `ap-south-1` twice from
+`host_vars/localhost.yml`.

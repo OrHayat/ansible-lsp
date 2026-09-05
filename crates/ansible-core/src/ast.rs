@@ -268,6 +268,25 @@ pub struct VarBinding {
     pub span: Span,
 }
 
+/// The one host `inventory_hostname` provably is inside the play containing byte `at`
+/// (T-173): a `hosts:` that is a single bare name. `all`, a pattern (`a,b`, `web:db`,
+/// `!x`, `web*`, `web[0:2]`), a list and a template each name several hosts or none we can
+/// read, so they give `None`. A bare name that is a *group* looks identical here and is
+/// the caller's to rule out — measured, a play on group `g` reads `host_vars/<member>.yml`
+/// and never `host_vars/g.yml`, so answering `g` would be a mis-jump.
+pub fn literal_host_at(nodes: &[Node], at: usize) -> Option<String> {
+    let seq = nodes.iter().find(|n| matches!(n, Node::Sequence { .. }))?;
+    let play = seq.items().iter().find(|it| {
+        let s = it.span();
+        s.start <= at && at < s.end
+    })?;
+    let hosts = play.get("hosts")?.as_str()?.trim();
+    let bare = !hosts.is_empty()
+        && hosts != "all"
+        && hosts.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    bare.then(|| hosts.to_owned())
+}
+
 /// Lift the raw document tree into the semantic model.
 pub fn build(nodes: &[Node]) -> Ast {
     // An Ansible file is a single YAML document that is a sequence (multiple `---`
@@ -878,6 +897,36 @@ mod tests {
         // the next line.
         assert_eq!(vf[0].span.slice(src), "- a.yml\n      - b.yml");
         assert_eq!(vf[1].alternatives.len(), 1);
+    }
+
+    /// T-173: only a single bare name is one host. Every other `hosts:` shape names several
+    /// or none we can read, and the byte has to be inside the play that carries it.
+    #[test]
+    fn a_play_names_one_host_only_when_hosts_is_a_bare_name() {
+        let host = |hosts: &str| {
+            let src = format!("- hosts: {hosts}\n  tasks:\n    - debug: {{msg: hi}}\n");
+            let nodes = Document::new(src.clone()).parse().expect("valid yaml");
+            literal_host_at(&nodes, src.find("debug").unwrap())
+        };
+        assert_eq!(host("server1").as_deref(), Some("server1"));
+        assert_eq!(host("web-01.example.com").as_deref(), Some("web-01.example.com"));
+        assert_eq!(host("'localhost'").as_deref(), Some("localhost"));
+        for several in [
+            "all", "a,b", "web:db", "web:!db", "web*", "web[0:2]", "~web\\d+", "[a, b]",
+            "\"{{ target }}\"", "''",
+        ] {
+            assert_eq!(host(several), None, "{several}");
+        }
+        // The byte has to sit in the play that says so: the second play here is `all`.
+        let src = "- hosts: server1\n  tasks:\n    - debug: {msg: one}\n\
+                   - hosts: all\n  tasks:\n    - debug: {msg: two}\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        assert_eq!(literal_host_at(&nodes, src.find("one").unwrap()).as_deref(), Some("server1"));
+        assert_eq!(literal_host_at(&nodes, src.find("two").unwrap()), None);
+        // A task file has no play, so no host.
+        let tasks = "- debug: {msg: hi}\n";
+        let nodes = Document::new(tasks.to_string()).parse().unwrap();
+        assert_eq!(literal_host_at(&nodes, 3), None);
     }
 
     #[test]

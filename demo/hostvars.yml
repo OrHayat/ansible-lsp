@@ -85,3 +85,26 @@
     - name: BAD a host the inventory does not have
       ansible.builtin.debug:
         msg: "{{ hostvars['web0143'].infiniband_ip }}"
+
+# `inventory_hostname` is a variable, so `hostvars[inventory_hostname]` names no host a
+# scan can read — until the play does. `hosts: localhost` fixes it to one value, and then
+# the read is `hostvars['localhost']` by another spelling: Cmd+click the magic name to land
+# in host_vars/localhost.yml, exactly as 'web01' above lands in web01.yml. Measured: this
+# prints `ap-south-1` from that file.
+#
+# Only a single bare host name unlocks it. `hosts: all` (the play above), a pattern, a list
+# or a template name several hosts or none we can read, and the name stays plain. A group
+# looks identical to a host here, so the inventory has the last word: a play on group `g`
+# reads host_vars/<each member>.yml and never host_vars/g.yml, measured — so a name the
+# inventory does not list as a host is declined, and only when no inventory can be read does
+# the host_vars/ file alone decide.
+- name: hostvars on a play that names its one host
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    # GOOD: two spellings of the variable half, and the host half is clickable on both.
+    - name: GOOD inventory_hostname is provably localhost here
+      ansible.builtin.debug:
+        msg:
+          - "{{ hostvars[inventory_hostname].deploy_region }}"
+          - "{{ hostvars[inventory_hostname]['deploy_region'] }}"

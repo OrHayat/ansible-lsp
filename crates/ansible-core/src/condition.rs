@@ -550,6 +550,54 @@ pub fn hostvars_host_key_at(text: &str, at: usize) -> Option<(String, usize, usi
 /// is what paints the links; [`hostvars_host_key_at`] is the same scan filtered to a cursor,
 /// so what is clickable and what is painted cannot disagree.
 pub fn hostvars_host_keys(text: &str) -> Vec<(String, usize, usize)> {
+    hostvars_subscripts(text)
+        .into_iter()
+        .filter_map(|(from, end)| {
+            // The key is the literal between the brackets, quotes excluded.
+            let inner = &text[from..end];
+            let open = inner.find(['\'', '"'])?;
+            let q = inner.as_bytes()[open];
+            let len = inner[open + 1..].find(q as char)?;
+            let (s, e) = (from + open + 1, from + open + 1 + len);
+            Some((text[s..e].to_string(), s, e))
+        })
+        .collect()
+}
+
+/// Every `hostvars[inventory_hostname]` read in `text`, as the span of the magic name
+/// (T-173). The literal scan above cannot answer these — the key is a variable — but the
+/// play sometimes can: `hosts: server1` fixes `inventory_hostname` to one value, and then
+/// the read names the same file `hostvars['server1']` does. Which host that is stays the
+/// caller's question, and it is only ever answerable from the play; this finds the reads.
+///
+/// Only the bare magic name. `hostvars['inventory_hostname']` is a *literal* naming a host
+/// spelled that way and belongs to the scan above; `hostvars[inventory_hostname_short]` is
+/// a different variable with a different value.
+pub fn hostvars_magic_keys(text: &str) -> Vec<(usize, usize)> {
+    hostvars_subscripts(text)
+        .into_iter()
+        .filter_map(|(from, end)| {
+            let inner = &text[from..end];
+            let open = inner.find('[')?;
+            let body = &inner[open + 1..inner.len() - 1];
+            let name = body.trim();
+            (name == "inventory_hostname").then(|| {
+                let s = from + open + 1 + (body.len() - body.trim_start().len());
+                (s, s + name.len())
+            })
+        })
+        .collect()
+}
+
+/// The [`hostvars_magic_keys`] span containing byte `at`, the cursor-filtered view of the
+/// same scan so what is painted and what is clickable cannot disagree.
+pub fn hostvars_magic_key_at(text: &str, at: usize) -> Option<(usize, usize)> {
+    hostvars_magic_keys(text).into_iter().find(|(s, e)| at >= *s && at <= *e)
+}
+
+/// Every `hostvars[...]` subscript in `text` as `(from, end)`: `from` is the byte after
+/// `hostvars`, `end` the byte past the closing bracket. The one scan both key readers share.
+fn hostvars_subscripts(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(rel) = text[from..].find("hostvars") {
@@ -563,14 +611,7 @@ pub fn hostvars_host_keys(text: &str) -> Vec<(String, usize, usize)> {
             continue;
         }
         let Some(end) = past_subscript(text, from) else { continue };
-        // The key is the literal between the brackets, quotes excluded.
-        let inner = &text[from..end];
-        let Some(open) = inner.find(['\'', '"']) else { continue };
-        let q = inner.as_bytes()[open];
-        let rest = &inner[open + 1..];
-        let Some(len) = rest.find(q as char) else { continue };
-        let (s, e) = (from + open + 1, from + open + 1 + len);
-        out.push((text[s..e].to_string(), s, e));
+        out.push((from, end));
         from = end;
     }
     out
@@ -1909,6 +1950,38 @@ mod tests {
         // Somebody else's attribute spelled the same is not the magic dict.
         let o = "{{ result.hostvars['web01'].x }}";
         assert!(hostvars_host_key_at(o, o.find("web01").unwrap()).is_none());
+    }
+
+    /// T-173: the magic-key read, found as a span so a play can decide what it names. Both
+    /// spellings of the variable half, whitespace inside the brackets, and every near miss
+    /// that is *not* this read — the literal spelling stays the literal scan's, and a
+    /// different magic variable is a different value.
+    #[test]
+    fn a_magic_hostvars_key_is_found_under_the_cursor_and_nowhere_else() {
+        let t = "msg: {{ hostvars[inventory_hostname].x }} {{ hostvars[ inventory_hostname ]['y'] }}";
+        let keys = hostvars_magic_keys(t);
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        for (s, e) in &keys {
+            assert_eq!(&t[*s..*e], "inventory_hostname");
+        }
+        let at = t.find("inventory_hostname").unwrap();
+        assert_eq!(hostvars_magic_key_at(t, at), Some(keys[0]));
+        assert_eq!(hostvars_magic_key_at(t, at + 3), Some(keys[0]));
+        // Outside the name — on `hostvars`, on the variable half — it declines.
+        assert!(hostvars_magic_key_at(t, t.find("hostvars").unwrap()).is_none());
+        assert!(hostvars_magic_key_at(t, t.find("].x").unwrap() + 2).is_none());
+        // The two scans partition the reads: neither claims the other's.
+        assert!(hostvars_host_keys(t).is_empty());
+        for miss in [
+            "{{ hostvars['inventory_hostname'].x }}",
+            "{{ hostvars[inventory_hostname_short].x }}",
+            "{{ hostvars[h].x }}",
+            "{{ result.hostvars[inventory_hostname].x }}",
+            "{{ hostvars[inventory_hostname | lower].x }}",
+        ] {
+            assert!(hostvars_magic_keys(miss).is_empty(), "{miss}");
+        }
+        assert_eq!(hostvars_host_keys("{{ hostvars['inventory_hostname'].x }}").len(), 1);
     }
 
     /// 45 of this repo's 56 import-level conditions are this shape.
