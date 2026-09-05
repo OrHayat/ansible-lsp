@@ -10,6 +10,8 @@
 //! keys of one node; and per-key value rules. The file-level shapes and the `mod_args` pair are
 //! later batches of the same ticket.
 
+use std::collections::HashSet;
+
 use crate::keywords;
 use crate::parse::{Node, Span};
 
@@ -50,6 +52,12 @@ pub const DEAD_META_LOOP_RULE_ID: &str = "dead-loop-on-meta";
 /// Row 30. Ours: every shape it covers crashes ansible with "this is probably a bug", which
 /// tells the author nothing. See `upstream/ansible-tags-member-types.md`.
 pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
+
+/// T-157, and ours: a `handlers:` entry whose `name:` is not a handler name. A `block:` entry
+/// flattens into its tasks and an `import_tasks:` entry is expanded at parse time, so in both
+/// the name on the page is a label nothing looks up. ansible-core loads it clean and says so
+/// only at run time, from the notifying task, and only when that task reports `changed`.
+pub const DEAD_HANDLER_NAME_RULE_ID: &str = "dead-handler-name";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -112,7 +120,11 @@ const IMPORT_PLAYBOOK_IN_TASKS: &str = "`import_playbook` is only valid as a top
 ///
 /// The play-shaped rules apply only to playbooks; the task-shaped ones run in both, since a
 /// role's `tasks/main.yml` reaches the same `load_list_of_tasks` that a play's `tasks:` does.
-pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
+///
+/// `error_on_missing_handler` is the project's `ERROR_ON_MISSING_HANDLER`
+/// ([`crate::config::AnsibleConfig::error_on_missing_handler`]), read only by
+/// [`dead_handler_name`] to pick its tier.
+pub fn problems(nodes: &[Node], src: &str, error_on_missing_handler: bool) -> Vec<Problem> {
     let mut out = Vec::new();
     // The same document selection `ast::build` makes, so the two agree on what a playbook is.
     let Some(seq) = nodes.iter().find(|n| matches!(n, Node::Sequence { .. })) else {
@@ -139,7 +151,7 @@ pub fn problems(nodes: &[Node], src: &str) -> Vec<Problem> {
     }
     for item in items {
         match item {
-            Node::Mapping { .. } => play(item, src, &mut out),
+            Node::Mapping { .. } => play(item, src, error_on_missing_handler, &mut out),
             // `if not isinstance(entry, dict)` (`playbook/__init__.py:88-91`). The other
             // three faults at that site — an empty file, a top-level mapping, a list with
             // no plays — need to know the file IS a playbook, which only the command line
@@ -740,7 +752,7 @@ fn error(span: Span, message: String) -> Problem {
     Problem { span, tier: Tier::Error, message, rule: RULE_ID }
 }
 
-fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
+fn play(node: &Node, src: &str, error_on_missing_handler: bool, out: &mut Vec<Problem>) {
     // An `import_playbook:` entry is not a Play — it loads as a PlaybookInclude and never
     // reaches any of these checks. It has one rule of its own on the way past.
     if node
@@ -762,14 +774,195 @@ fn play(node: &Node, src: &str, out: &mut Vec<Problem>) {
     // `pre_tasks`, `tasks`, `post_tasks` and `handlers` all reach the same
     // `load_list_of_tasks`, so the task-shaped rules apply identically in each. Only row 1
     // cares which list it is, and only below the top level.
+    // T-157's evidence, gathered once per play: every literal name this play notifies, and
+    // every name a `notify:` would actually find — so a dead name can be judged "notified
+    // and unanswered" rather than merely dead.
+    let mut notified = HashSet::new();
+    for key in keywords::PLAY_TASK_CONTAINERS {
+        for item in node.get(key).map(Node::items).unwrap_or_default() {
+            collect_notified(item, &mut notified);
+        }
+    }
+    let live = live_handler_names(node.get("handlers").map(Node::items).unwrap_or_default());
     for key in keywords::PLAY_TASK_CONTAINERS {
         let pos = if *key == "handlers" { Pos::HandlerEntry } else { Pos::PlayTasks };
         if let Some(list) = node.get(key) {
             for item in list.items() {
                 stmt(item, pos, out);
+                if pos == Pos::HandlerEntry {
+                    dead_handler_name(item, &notified, &live, error_on_missing_handler, out);
+                }
             }
         }
     }
+}
+
+/// T-157. Measured on 2.21.2, `notify: h` against each `handlers:` entry written `name: h`:
+///
+/// | entry            | result                                                          |
+/// | ---------------- | --------------------------------------------------------------- |
+/// | ordinary task    | runs                                                            |
+/// | `include_tasks:` | runs — and the names inside the included file notify too        |
+/// | `block:`         | `handler 'h' was not found`; the names of the tasks inside run  |
+/// | `import_tasks:`  | `handler 'h' was not found`, FQCN the same; the imported names run |
+///
+/// A Block is not a Handler: it flattens into its child tasks, each under its own name, and
+/// `import_tasks` is expanded at parse time the same way. `include_tasks` keeps working because
+/// the include itself stays in the handler list as an entry. All four are `--syntax-check`
+/// clean, and `ERROR_ON_MISSING_HANDLER` fires from the notifying task only when it actually
+/// reports `changed` — so a dead handler can sit for years and fail the first time the
+/// notifier changes.
+///
+/// Anchored on the `name:` value, which is the thing that lies. A WARNING: the playbook loads
+/// and runs, and if nothing notifies the lost name nothing goes wrong. Only a play's
+/// `handlers:` — a role's `handlers/main.yml` reads exactly like `tasks/main.yml`, where a
+/// named block is ordinary, so it stays a documented miss (see the note on [`problems`]).
+///
+/// **The tier is ansible's own decision, mirrored.** Whether a notified-but-missing handler
+/// kills the run is `ERROR_ON_MISSING_HANDLER` (default on; env over ini, like every setting),
+/// and it only ever applies when something notifies the name. So:
+///
+/// - the play notifies the dead name by literal, and no live handler or `listen:` topic
+///   answers it → the run provably {dies | warns and continues}, and the tier follows the
+///   setting: ERROR when on, WARNING when off;
+/// - nothing in the play notifies it → dead code, a WARNING whichever way the setting is.
+///
+/// A `notify:` from an included task file, or a templated one, is not evidence either way and
+/// falls into the second case.
+fn dead_handler_name(
+    node: &Node,
+    notified: &HashSet<String>,
+    live: &HashSet<String>,
+    error_on_missing_handler: bool,
+    out: &mut Vec<Problem>,
+) {
+    let Some((_, name_node)) =
+        node.entries().iter().rev().find(|(k, _)| k.as_str() == Some("name"))
+    else {
+        return;
+    };
+    let Some(name) = name_node.as_str().filter(|n| !n.trim().is_empty()) else { return };
+    let Some(shape) = dead_shape(node) else { return };
+
+    let outcome = if error_on_missing_handler {
+        "fails at run time"
+    } else {
+        "is skipped with a warning at run time (`error_on_missing_handler` is off)"
+    };
+    let proven = notified.contains(name) && !live.contains(name);
+    let consequence = if proven {
+        format!(
+            "`notify: {name}` in this play {outcome} (\"handler '{name}' was not found\") once \
+             the notifying task reports changed."
+        )
+    } else {
+        format!(
+            "Nothing in this play notifies `{name}`; a `notify:` of it {outcome} (\"handler \
+             '{name}' was not found\") once the notifying task reports changed."
+        )
+    };
+    let message = match shape {
+        DeadShape::Block => {
+            let inner: Vec<String> = inner_tasks(node)
+                .filter_map(name_of)
+                .map(|n| format!("`{n}`"))
+                .collect();
+            if inner.is_empty() {
+                format!(
+                    "`{name}` is not a handler name: a block flattens into its tasks and only \
+                     their names can be notified — and nothing inside this one is named, so no \
+                     `notify:` can reach it. Name the inner tasks, or make this a single task. \
+                     {consequence}"
+                )
+            } else {
+                format!(
+                    "`{name}` is not a handler name: a block flattens into its tasks and only \
+                     their names can be notified — {}. {consequence}",
+                    inner.join(", ")
+                )
+            }
+        }
+        DeadShape::Import(key) => format!(
+            "`{name}` is not a handler name: `{key}` is expanded at parse time, and only the \
+             names of the tasks inside the imported file can be notified. `include_tasks:` \
+             keeps this entry's name notifiable. {consequence}"
+        ),
+    };
+    out.push(Problem {
+        span: name_node.span(),
+        tier: if proven && error_on_missing_handler { Tier::Error } else { Tier::Warning },
+        message,
+        rule: DEAD_HANDLER_NAME_RULE_ID,
+    });
+}
+
+/// The two handler-entry shapes whose `name:` is not a handler name.
+enum DeadShape<'a> {
+    Block,
+    /// The `import_tasks` key as written, FQCN included.
+    Import(&'a str),
+}
+
+fn dead_shape(node: &Node) -> Option<DeadShape<'_>> {
+    if BODIES.iter().any(|k| node.get(k).is_some()) {
+        return Some(DeadShape::Block);
+    }
+    action_entry(node, "import_tasks").map(|(_, key, _)| DeadShape::Import(key))
+}
+
+/// The three task-holding keys of a block, which all flatten into the handler list.
+const BODIES: [&str; 3] = ["block", "rescue", "always"];
+
+fn inner_tasks(node: &Node) -> impl Iterator<Item = &Node> {
+    BODIES.iter().filter_map(|k| node.get(k)).flat_map(Node::items)
+}
+
+fn name_of(node: &Node) -> Option<String> {
+    node.get("name")?.as_str().filter(|n| !n.trim().is_empty()).map(str::to_owned)
+}
+
+/// The literal names under `key` (`notify:` / `listen:`): a scalar is the one-element
+/// shorthand, a sequence one per item. The same read [`crate::ast`] makes for `HandlerRef`.
+fn names_under(node: &Node, key: &str) -> Vec<String> {
+    match node.get(key) {
+        None => Vec::new(),
+        Some(Node::Sequence { items, .. }) => {
+            items.iter().filter_map(Node::as_str).map(str::to_owned).collect()
+        }
+        Some(scalar) => scalar.as_str().map(str::to_owned).into_iter().collect(),
+    }
+}
+
+/// Every literal `notify:` in a statement and, for a block, in everything it holds — a
+/// block-level `notify:` is inherited by its tasks, so it counts as much as theirs.
+fn collect_notified(node: &Node, out: &mut HashSet<String>) {
+    out.extend(names_under(node, "notify"));
+    for t in inner_tasks(node) {
+        collect_notified(t, out);
+    }
+}
+
+/// The names a `notify:` would actually find in this handler list: an ordinary entry's own
+/// `name:` and `listen:` topics, and for a block entry the names and topics of the tasks
+/// *inside* it — which is exactly what makes the entry's own name dead. An import's inner
+/// names live in another file and are unknowable here; that only ever withholds proof.
+fn live_handler_names(handlers: &[Node]) -> HashSet<String> {
+    let mut live = HashSet::new();
+    for h in handlers {
+        match dead_shape(h) {
+            Some(_) => {
+                for t in inner_tasks(h) {
+                    live.extend(name_of(t));
+                    live.extend(names_under(t, "listen"));
+                }
+            }
+            None => {
+                live.extend(name_of(h));
+                live.extend(names_under(h, "listen"));
+            }
+        }
+    }
+    live
 }
 
 /// Which node kind an [`Exclusion`] applies to. The two are checked at different call sites,
@@ -1067,9 +1260,17 @@ mod tests {
     use super::*;
     use crate::parse::Document;
 
+    /// Every message but T-157's. The handler rows below all use a `- name: h` block entry
+    /// as their fixture, and that name is genuinely dead — so the warning is correct there
+    /// and would land in every exact list. It has its own test, which also pins that the two
+    /// fire together on one entry rather than one hiding the other.
     fn check(src: &str) -> Vec<String> {
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
-        problems(&nodes, src).into_iter().map(|p| p.message).collect()
+        problems(&nodes, src, true)
+            .into_iter()
+            .filter(|p| p.rule != DEAD_HANDLER_NAME_RULE_ID)
+            .map(|p| p.message)
+            .collect()
     }
 
     /// Row 7, and the classifier fix underneath it. Before this, `Block.is_block`'s any-of-three
@@ -1145,6 +1346,111 @@ mod tests {
             check("- hosts: web\n  tasks:\n    - rescue:\n        - import_tasks: f.yml\n          loop: [1]\n"),
             ["'rescue' keyword cannot be used without 'block'", NO_LOOP_TASKS]
         );
+    }
+
+    /// T-157. Measured on 2.21.2, `notify: h` against a `handlers:` entry `name: h`: an ordinary
+    /// task and an `include_tasks:` run it; a `block:` and an `import_tasks:` — FQCN too — fail
+    /// with "handler 'h' was not found", and the names *inside* them run instead.
+    #[test]
+    fn a_handler_name_on_a_block_or_an_import_is_reported_as_dead() {
+        let dead_in = |src: &str| -> Vec<String> {
+            let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+            problems(&nodes, src, true)
+                .into_iter()
+                .filter(|p| p.rule == DEAD_HANDLER_NAME_RULE_ID)
+                .map(|p| {
+                    assert_eq!(p.tier, Tier::Warning);
+                    assert_eq!(&src[p.span.start..p.span.end], "h", "anchored on the name");
+                    p.message
+                })
+                .collect()
+        };
+        let dead = |body: &str| dead_in(&format!("- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n{body}"));
+
+        // A block whose tasks are named: those are what is notifiable, so the message says so.
+        let m = dead("      block:\n        - name: inner\n          debug: {msg: x}\n        - name: other\n          debug: {msg: y}\n");
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(m[0].contains("`inner`, `other`"), "{}", m[0]);
+        assert!(m[0].contains("handler 'h' was not found"), "{}", m[0]);
+        assert!(m[0].contains("reports changed"), "the failure is conditional: {}", m[0]);
+        // Names in `rescue:`/`always:` count — every container flattens.
+        let m = dead("      block:\n        - debug: {msg: x}\n      rescue:\n        - name: r\n          debug: {msg: r}\n");
+        assert!(m[0].contains("`r`"), "{}", m[0]);
+        // The common case: the entry is named and the body is not, so nothing is notifiable.
+        let m = dead("      block:\n        - debug: {msg: x}\n");
+        assert_eq!(m.len(), 1);
+        assert!(m[0].contains("nothing inside this one is named"), "{}", m[0]);
+        // `import_tasks`, every core spelling — and the fix it names is `include_tasks`.
+        for spelling in ["import_tasks", "ansible.builtin.import_tasks", "ansible.legacy.import_tasks"] {
+            let m = dead(&format!("      {spelling}: f.yml\n"));
+            assert_eq!(m.len(), 1, "{spelling}: {m:?}");
+            assert!(m[0].contains(&format!("`{spelling}`")), "{}", m[0]);
+            assert!(m[0].contains("`include_tasks:`"), "{}", m[0]);
+        }
+
+        // The controls: the shapes that keep their name, asserted silent.
+        for live in [
+            "      debug: {msg: h}\n",
+            "      include_tasks: f.yml\n",
+            "      ansible.builtin.include_tasks: f.yml\n",
+            // A collection's own `import_tasks` is not core's, and is not claimed.
+            "      acme.tools.import_tasks: f.yml\n",
+        ] {
+            assert!(dead(live).is_empty(), "{live:?}");
+        }
+        // Only a play's `handlers:`. A named block in `tasks:` is ordinary Ansible, and a
+        // standalone file cannot say whether it is `handlers/main.yml`.
+        assert!(dead_in("- hosts: web\n  tasks:\n    - name: h\n      block:\n        - debug: {msg: x}\n").is_empty());
+        assert!(dead_in("- name: h\n  block:\n    - debug: {msg: x}\n").is_empty());
+        // No name on the entry: nothing was ever notifiable by it, so nothing is lost.
+        assert!(dead_in("- hosts: web\n  tasks: []\n  handlers:\n    - block:\n        - name: inner\n          debug: {msg: x}\n").is_empty());
+
+        // The tier is ansible's `ERROR_ON_MISSING_HANDLER`, mirrored, and applies only when
+        // this play notifies the dead name. Measured: setting on, the run dies at the first
+        // missing name (exit 1); off, each is a `[WARNING]` and the run continues (exit 0).
+        let tiers = |src: &str, on: bool| -> Vec<(Tier, bool)> {
+            let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+            problems(&nodes, src, on)
+                .into_iter()
+                .filter(|p| p.rule == DEAD_HANDLER_NAME_RULE_ID)
+                // `true` = the message states the proof: this play's own `notify:`.
+                .map(|p| (p.tier, p.message.contains("`notify: h` in this play")))
+                .collect()
+        };
+        let dead_h = "  handlers:\n    - name: h\n      block:\n        - debug: {msg: x}\n";
+        let notified = format!("- hosts: web\n  tasks:\n    - debug: {{msg: x}}\n      notify: h\n{dead_h}");
+        assert_eq!(tiers(&notified, true), [(Tier::Error, true)], "notified, setting on");
+        assert_eq!(tiers(&notified, false), [(Tier::Warning, true)], "notified, setting off");
+        let unnotified = format!("- hosts: web\n  tasks:\n    - debug: {{msg: x}}\n{dead_h}");
+        assert_eq!(tiers(&unnotified, true), [(Tier::Warning, false)], "nothing notifies it");
+        assert_eq!(tiers(&unnotified, false), [(Tier::Warning, false)]);
+        // A `notify:` answered by something live is not a proven failure: a live handler of
+        // the same name, or a `listen:` topic spelled that way, both run — so no ERROR.
+        let twin = format!("{notified}    - name: h\n      debug: {{msg: live}}\n");
+        assert_eq!(tiers(&twin, true), [(Tier::Warning, false)], "a live twin answers it");
+        let listened = format!("{notified}    - name: other\n      debug: {{msg: l}}\n      listen: h\n");
+        assert_eq!(tiers(&listened, true), [(Tier::Warning, false)], "a listen topic answers it");
+        // The notify is found wherever it sits: a list, inside a block, on the block itself,
+        // and in another handler.
+        for src in [
+            format!("- hosts: web\n  tasks:\n    - debug: {{msg: x}}\n      notify: [a, h]\n{dead_h}"),
+            format!("- hosts: web\n  tasks:\n    - block:\n        - debug: {{msg: x}}\n          notify: h\n{dead_h}"),
+            format!("- hosts: web\n  tasks:\n    - block:\n        - debug: {{msg: x}}\n      notify: h\n{dead_h}"),
+            format!("- hosts: web\n  tasks: []\n{dead_h}    - name: chain\n      debug: {{msg: c}}\n      notify: h\n"),
+        ] {
+            assert_eq!(tiers(&src, true), [(Tier::Error, true)], "{src}");
+        }
+        // A templated notify names nothing we can read, so it proves nothing.
+        let templated = format!("- hosts: web\n  tasks:\n    - debug: {{msg: x}}\n      notify: \"{{{{ which }}}}\"\n{dead_h}");
+        assert_eq!(tiers(&templated, true), [(Tier::Warning, false)]);
+
+        // Row 1's fatal nesting and this warning are two faults on one entry, and both are
+        // reported: the block is refused *and* its name is dead. `check` filters this rule
+        // out for the row tests, so the coexistence is pinned here.
+        let both = "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - block:\n            - debug: {msg: x}\n";
+        let nodes = Document::new(both.to_string()).parse().unwrap();
+        let rules: Vec<&str> = problems(&nodes, both, true).iter().map(|p| p.rule).collect();
+        assert_eq!(rules, [RULE_ID, DEAD_HANDLER_NAME_RULE_ID]);
     }
 
     /// Row 1. `use_handlers` is only consulted by `load_list_of_tasks`, which a handler's own
@@ -1423,7 +1729,7 @@ mod tests {
     fn a_discarded_delegate_to_is_our_own_warning() {
         let src = "- hosts: web\n  tasks:\n    - local_action: debug msg=y\n      delegate_to: other\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].tier, Tier::Warning);
         assert_eq!(got[0].rule, DISCARDED_DELEGATE_TO_RULE_ID);
@@ -1530,7 +1836,7 @@ mod tests {
     fn import_playbook_in_a_task_list_is_our_own_rule() {
         let src = "- hosts: web\n  tasks:\n    - import_playbook: other.yml\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].rule, MISPLACED_IMPORT_PLAYBOOK_RULE_ID);
         assert_eq!(got[0].tier, Tier::Error);
@@ -1618,7 +1924,7 @@ mod tests {
     fn the_user_key_is_what_gets_underlined() {
         let src = "- hosts: web\n  user: alice\n  remote_user: bob\n  tasks: []\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let p = &problems(&nodes, src)[0];
+        let p = &problems(&nodes, src, true)[0];
         assert_eq!(p.span.slice(src), "user");
         assert_eq!(p.tier, Tier::Error);
     }
@@ -1734,7 +2040,7 @@ mod tests {
         let src = "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      \
                    tags: [untagged, all, tagged]\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(
             got.iter().map(|p| p.message.as_str()).collect::<Vec<_>>(),
             ["Found reserved tagnames in tags: ['all', 'tagged', 'untagged'], we do not \
@@ -1761,7 +2067,7 @@ mod tests {
     fn an_unhashable_tag_member_is_ours() {
         let src = "- hosts: web\n  tasks:\n    - debug: {msg: ok}\n      tags: [[a]]\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].rule, INVALID_TAG_MEMBER_RULE_ID);
         assert_eq!(got[0].tier, Tier::Error);
@@ -2023,7 +2329,7 @@ mod tests {
     fn a_loop_written_after_a_with_star_warns_on_its_own_rule() {
         let src = "- hosts: web\n  tasks:\n    - debug:\n      with_items: [a]\n      loop: [1]\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].tier, Tier::Warning, "Ansible runs this, so it is not an error");
         assert_eq!(got[0].rule, SHADOWED_LOOP_RULE_ID);
@@ -2137,7 +2443,7 @@ mod tests {
     fn a_loop_on_meta_warns_that_it_runs_zero_times() {
         let each = |src: &str| {
             let nodes = Document::new(src.to_string()).parse().unwrap();
-            problems(&nodes, src)
+            problems(&nodes, src, true)
         };
         for action in ["noop", "clear_host_errors", "flush_handlers", "end_batch"] {
             for loop_key in ["loop: [a, b]", "with_items: [a, b]"] {
@@ -2166,7 +2472,7 @@ mod tests {
         let src = "- hosts: web\n  tasks:\n    - debug:\n      loop_control:\n        \
                    loop_var: it\n        label: x\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        let got = problems(&nodes, src);
+        let got = problems(&nodes, src, true);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].tier, Tier::Warning);
         assert_eq!(got[0].rule, DEAD_LOOP_CONTROL_RULE_ID);
@@ -2175,7 +2481,7 @@ mod tests {
         // One key gets the singular verb.
         let one = "- hosts: web\n  tasks:\n    - debug:\n      loop_control: {loop_var: it}\n";
         let nodes = Document::new(one.to_string()).parse().unwrap();
-        assert!(problems(&nodes, one)[0].message.contains("`loop_var` has no effect"));
+        assert!(problems(&nodes, one, true)[0].message.contains("`loop_var` has no effect"));
     }
 
     /// T-155 reads the effective task, so the include and import actions count too — all
@@ -2233,7 +2539,7 @@ mod tests {
     fn the_loop_key_is_what_gets_underlined() {
         let src = "- hosts: web\n  tasks:\n    - import_tasks: f.yml\n      with_items: [1]\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
-        assert_eq!(problems(&nodes, src)[0].span.slice(src), "with_items");
+        assert_eq!(problems(&nodes, src, true)[0].span.slice(src), "with_items");
     }
 
     #[test]

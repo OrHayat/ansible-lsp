@@ -1,0 +1,78 @@
+---
+# A handler is found by its `name:`. Two entry shapes keep the name on the page and quietly
+# stop it being a handler name, and nothing says so at load — `--syntax-check` exits 0 on
+# every row here. Measured on 2.21.2, `notify:` the entry's own name:
+#
+#   ordinary task     runs
+#   include_tasks:    runs — and the names inside the included file notify too
+#   block:            "handler 'h' was not found" — only the names of the tasks INSIDE run
+#   import_tasks:     "handler 'h' was not found" — only the names inside the imported file
+#
+# A block is not a handler: it flattens into its tasks, each under its own name.
+# `import_tasks` is expanded at parse time and behaves the same. `include_tasks` stays in
+# the handler list as an entry of its own, which is why it keeps working.
+#
+# The failure is late and conditional. `ERROR_ON_MISSING_HANDLER` fires from the notifying
+# task, and only when that task reports `changed` — an unchanged task hides it, so a dead
+# handler can sit for years and fail the first time the notifier changes (T-157).
+#
+# The tier follows that setting, read the way ansible reads it — `[defaults]
+# error_on_missing_handler` in ansible.cfg, `ANSIBLE_ERROR_ON_MISSING_HANDLER` in the
+# environment, env winning, default on. Measured: on, the run dies at the first missing
+# name, exit 1; off, each is a `[WARNING]` and the run goes on, exit 0. So a dead name this
+# play notifies is an ERROR with the setting on and a WARNING with it off, and a dead name
+# nothing here notifies is a WARNING either way — dead code, not a proven failure.
+#
+#   ansible-playbook -i localhost, -c local dead_handler_names.yml
+
+- name: handler names that are not handler names
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: notify every handler below by the name written on it
+      ansible.builtin.command: /bin/true
+      changed_when: true
+      notify:
+        - restart app      # found
+        - refresh caches   # found — the include itself is a handler entry
+        - reload proxy     # not found at run time: the name is on a block
+        - rotate logs      # not found at run time: the name is on an import
+        - rebuild index    # not found, and nothing inside it is named either
+  handlers:
+    - name: restart app # GOOD: an ordinary handler, notifiable by this name
+      ansible.builtin.debug: { msg: restarting }
+
+    - name: refresh caches # GOOD: include_tasks stays in the handler list under its own name
+      ansible.builtin.include_tasks: tasks/sibling.yml
+
+    # BAD: a block flattens into its tasks, so `reload proxy` is a label nothing looks up.
+    # `notify: reload frontend` and `notify: reload backend` would work; this name will not.
+    - name: reload proxy
+      block:
+        - name: reload frontend
+          ansible.builtin.debug: { msg: frontend }
+        - name: reload backend
+          ansible.builtin.debug: { msg: backend }
+
+    # BAD: import_tasks is expanded at parse time; only the names inside tasks/sibling.yml
+    # are handler names here. include_tasks would keep this entry's name.
+    - name: rotate logs
+      ansible.builtin.import_tasks: tasks/sibling.yml
+
+    # BAD: the worst case, and the common one — people name the entry and leave the body
+    # unnamed, as handlers usually are. Nothing here can be notified at all.
+    - name: rebuild index
+      block:
+        - ansible.builtin.debug: { msg: rebuilding }
+
+    # WARNING, where the three above are ERRORs: the same dead name, but nothing in this
+    # play notifies it, so it is dead code rather than a proven failure.
+    - name: prune tmp
+      block:
+        - ansible.builtin.debug: { msg: pruning }
+
+    # SILENCED: the same shape, quieted. The `# noqa` sits on the line the warning is
+    # anchored to — the name.
+    - name: silenced block # noqa: dead-handler-name
+      block:
+        - ansible.builtin.debug: { msg: quiet }

@@ -1509,7 +1509,8 @@ impl Backend {
         // Shapes ansible-core refuses to load, where every key involved is spelled correctly
         // and legal where it sits — what is wrong is the structure around it, which the
         // keyword sets cannot see (T-110).
-        let misplaced: Vec<Diagnostic> = placement::problems(&a.nodes, &a.doc.text)
+        let misplaced: Vec<Diagnostic> =
+            placement::problems(&a.nodes, &a.doc.text, a.ctx.config.error_on_missing_handler)
             .into_iter()
             .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
             .map(|p| Diagnostic {
@@ -6937,6 +6938,112 @@ mod tests {
         let half = "- hosts: web\n  tasks:\n    - import_tasks: tasks/empty_target.yml # noqa: \
                     empty-task-file\n    - import_tasks: tasks/mapping_target.yml\n";
         assert_eq!(codes(half), ["invalid-task-file"]);
+    }
+
+    /// T-157 on its demo: the exact set of dead names, in file order, anchored on the `name:`
+    /// value — so the GOOD rows and the SILENCED row are asserted quiet by the same list. Then
+    /// every other demo file, where the one exception is counted rather than exempted:
+    /// `placement.yml`'s handler fixtures (rows 1, 2 and 6) hold six named block handlers and
+    /// one named import, dead by construction and said so in its comments.
+    #[test]
+    fn dead_handler_names_are_reported_on_the_demo_and_counted_everywhere_else() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let is_ours = |d: &tower_lsp::lsp_types::Diagnostic| {
+            matches!(&d.code, Some(NumberOrString::String(s)) if s == "dead-handler-name")
+        };
+        let path = std::path::Path::new("../../demo/dead_handler_names.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a).into_iter().filter(is_ours).collect();
+        let anchored: Vec<String> = got
+            .iter()
+            .map(|d| {
+                let line = text.lines().nth(d.range.start.line as usize).unwrap();
+                line[d.range.start.character as usize..d.range.end.character as usize].to_string()
+            })
+            .collect();
+        assert_eq!(anchored, ["reload proxy", "rotate logs", "rebuild index", "prune tmp"]);
+        // The demo's ansible.cfg leaves `error_on_missing_handler` at its default, on: the
+        // three names the task notifies are proven fatal, the one nothing notifies is dead.
+        let tiers: Vec<_> = got.iter().map(|d| d.severity.unwrap()).collect();
+        let (e, w) = (DiagnosticSeverity::ERROR, DiagnosticSeverity::WARNING);
+        assert_eq!(tiers, [e, e, e, w]);
+        for d in &got {
+            assert!(d.message.contains("handler '"), "names the run-time failure: {}", d.message);
+        }
+        assert!(got[0].message.contains("`reload frontend`, `reload backend`"), "{}", got[0].message);
+        assert!(got[0].message.contains("`notify: reload proxy` in this play fails"), "{}", got[0].message);
+        assert!(got[1].message.contains("`ansible.builtin.import_tasks`"), "{}", got[1].message);
+        assert!(got[1].message.contains("`include_tasks:`"), "{}", got[1].message);
+        assert!(got[2].message.contains("nothing inside this one is named"), "{}", got[2].message);
+        assert!(got[3].message.contains("Nothing in this play notifies `prune tmp`"), "{}", got[3].message);
+
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == "dead_handler_names.yml" {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let count = super::Backend::diagnostics_of(&a).iter().filter(|d| is_ours(d)).count();
+            let want = if name == "placement.yml" { 7 } else { 0 };
+            assert_eq!(count, want, "{}", path.display());
+        }
+    }
+
+    /// T-157: the tier reaches the editor from the project's `ansible.cfg`, the way the
+    /// setting reaches ansible — `[defaults] error_on_missing_handler = False` turns the
+    /// proven-fatal ERROR into the WARNING ansible itself downgrades to. The control is the
+    /// same play with the key set the other way, in the same fixture.
+    #[test]
+    fn dead_handler_name_tier_follows_the_projects_error_on_missing_handler() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let d = std::env::temp_dir().join("ansible-lsp-t157-cfg");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let play = d.join("play.yml");
+        let text = "- hosts: web\n  tasks:\n    - debug: {msg: x}\n      notify: h\n  handlers:\n    - name: h\n      block:\n        - debug: {msg: x}\n";
+        std::fs::write(&play, text).unwrap();
+        let with_cfg = |ini: &str| {
+            std::fs::write(d.join("ansible.cfg"), ini).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &play).unwrap();
+            let ours: Vec<_> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "dead-handler-name"))
+                .collect();
+            assert_eq!(ours.len(), 1, "{ours:?}");
+            (ours[0].severity.unwrap(), ours[0].message.clone())
+        };
+        let (tier, msg) = with_cfg("[defaults]\nerror_on_missing_handler = True\n");
+        assert_eq!(tier, DiagnosticSeverity::ERROR);
+        assert!(msg.contains("fails at run time"), "{msg}");
+        let (tier, msg) = with_cfg("[defaults]\nerror_on_missing_handler = False\n");
+        assert_eq!(tier, DiagnosticSeverity::WARNING);
+        assert!(msg.contains("is skipped with a warning"), "{msg}");
+    }
+
+    /// T-157: its own id, so `# noqa: dead-handler-name` on the name line silences it and
+    /// the placement id does not.
+    #[test]
+    fn noqa_suppresses_dead_handler_name_independently() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let codes = |text: &str| {
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "dead-handler-name"))
+                .count()
+        };
+        let noisy = "- hosts: web\n  tasks: []\n  handlers:\n    - name: h\n      block:\n        - debug: {msg: x}\n";
+        assert_eq!(codes(noisy), 1);
+        let silenced = noisy.replace("- name: h\n", "- name: h # noqa: dead-handler-name\n");
+        assert_eq!(codes(&silenced), 0);
+        let wrong_id = noisy.replace("- name: h\n", "- name: h # noqa: invalid-placement\n");
+        assert_eq!(codes(&wrong_id), 1, "invalid-placement must not silence dead-handler-name");
     }
 
     /// T-110: the divergent rule has its own id, so it suppresses on its own — and the
