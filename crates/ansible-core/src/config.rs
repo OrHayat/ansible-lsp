@@ -78,6 +78,12 @@ pub struct AnsibleConfig {
     /// default — makes an unknown task attribute a load error, false downgrades it to
     /// `Ignoring invalid attribute`. Task-level only; plays and blocks stay fatal. T-107.
     pub invalid_task_attribute_failed: bool,
+    /// `ERROR_ON_MISSING_HANDLER` — ini `[defaults] error_on_missing_handler`, env
+    /// `ANSIBLE_ERROR_ON_MISSING_HANDLER`, `type: boolean`, default true (`ansible-config
+    /// list`). Measured on 2.21.2: on, a `notify:` of a name no handler has kills the run
+    /// (`[ERROR]`, exit 1); off, it is a `[WARNING]` and the run continues, exit 0. Decides
+    /// the tier of T-157's dead-handler-name diagnostic when the play does notify the name.
+    pub error_on_missing_handler: bool,
     /// `DEFAULT_JINJA2_EXTENSIONS` — ini `[defaults] jinja2_extensions`, env
     /// `ANSIBLE_JINJA2_EXTENSIONS`, `type: list`, default `[]`, deprecated as of 2.23. An
     /// extension registers tags, so with one loaded a tag outside jinja's fourteen is legal
@@ -127,6 +133,7 @@ impl Default for AnsibleConfig {
             network_group_modules: None,
             duplicate_dict_key: DuplicateDictKey::default(),
             invalid_task_attribute_failed: true,
+            error_on_missing_handler: true,
             jinja2_extensions: Vec::new(),
             fact_caching: None,
             inventory_unparsed_warning: true,
@@ -271,6 +278,11 @@ impl AnsibleConfig {
                         cfg.invalid_task_attribute_failed = v;
                     }
                 }
+                "error_on_missing_handler" => {
+                    if let Some(v) = parse_bool(&value) {
+                        cfg.error_on_missing_handler = v;
+                    }
+                }
                 "fact_caching" => cfg.fact_caching = Some(value.trim().to_string()),
                 _ => {}
             }
@@ -313,6 +325,9 @@ impl AnsibleConfig {
         }
         if let Some(v) = env.var("ANSIBLE_INVALID_TASK_ATTRIBUTE_FAILED").and_then(parse_bool) {
             cfg.invalid_task_attribute_failed = v;
+        }
+        if let Some(v) = env.var("ANSIBLE_ERROR_ON_MISSING_HANDLER").and_then(parse_bool) {
+            cfg.error_on_missing_handler = v;
         }
         if let Some(v) = env.var("ANSIBLE_CACHE_PLUGIN") {
             cfg.fact_caching = Some(v.trim().to_string());
@@ -518,6 +533,25 @@ mod tests {
 
     fn cfg(text: &str) -> AnsibleConfig {
         AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::some(text)).env(&EnvMap::empty()).load()
+    }
+
+    /// T-157. The same contract as `invalid_task_attribute_failed`, measured the same way:
+    /// `ansible-config list` gives the names and the default, and a run with the ini key set
+    /// and the env var set the other way showed the env var winning.
+    #[test]
+    fn error_on_missing_handler_reads_ini_and_env() {
+        assert!(cfg("[defaults]\nroles_path = ./roles\n").error_on_missing_handler);
+        assert!(!cfg("[defaults]\nerror_on_missing_handler = False\n").error_on_missing_handler);
+        assert!(!cfg("[defaults]\nerror_on_missing_handler = no\n").error_on_missing_handler);
+        assert!(cfg("[defaults]\nerror_on_missing_handler = on\n").error_on_missing_handler);
+        assert!(cfg("[defaults]\nerror_on_missing_handler = maybe\n").error_on_missing_handler);
+
+        let env = EnvMap::from_pairs(&[("ANSIBLE_ERROR_ON_MISSING_HANDLER", "True")]);
+        let got = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nerror_on_missing_handler = False\n"))
+            .env(&env)
+            .load();
+        assert!(got.error_on_missing_handler, "env must beat the ini value");
     }
 
     /// T-107. Shipped default true; the ini key and env var flip it; env beats ini;

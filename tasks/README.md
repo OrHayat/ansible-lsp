@@ -145,7 +145,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
-| T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](open/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | S    | —    |
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
@@ -334,6 +333,7 @@ T-021 is now unblocked on that side.
 | T-225 | **bug** · [A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads](closed/T-225-a-configured-inventory-path-that-does-not-exist-drops-the-gr.md) | done     |
 | T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](closed/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | done     |
 | T-173 | [Expand inventory_hostname when the play names a literal host](closed/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | done     |
+| T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](closed/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | done     |
 
 ## Settled — don't re-derive these
 

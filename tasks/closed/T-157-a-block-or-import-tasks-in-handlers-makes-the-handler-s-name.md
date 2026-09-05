@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-099 | —          |
+| done   | task | P2       | S    | T-099 | —          |
 
 ## Problem
 
@@ -77,10 +77,58 @@ remaining rows could share.
 
 ## Done when
 
-- [ ] a `block:` handler entry warns that its `name:` is not notifiable, naming the inner
+- [x] a `block:` handler entry warns that its `name:` is not notifiable, naming the inner
       task names that are
-- [ ] the same for an `import_tasks:` handler entry, FQCN spellings included
-- [ ] an entry whose body has no names at all says so — nothing in it can be notified
-- [ ] `include_tasks:` entries and ordinary handlers stay silent, asserted both ways
-- [ ] its own rule id, `# noqa`-suppressible per T-010, WARNING severity
-- [ ] a demo fixture carries all four rows of the table above, good and bad
+- [x] the same for an `import_tasks:` handler entry, FQCN spellings included
+- [x] an entry whose body has no names at all says so — nothing in it can be notified
+- [x] `include_tasks:` entries and ordinary handlers stay silent, asserted both ways
+- [x] its own rule id, `# noqa`-suppressible per T-010, WARNING severity
+- [x] a demo fixture carries all four rows of the table above, good and bad
+
+## Landed
+
+`dead-handler-name`, in `placement.rs` beside the other rules that are ours rather than
+ansible-core's, anchored on the entry's `name:` value. A block entry names the inner task
+names that *are* notifiable, or says nothing inside is named; an `import_tasks` entry (any
+core spelling) points at `include_tasks`. Ordinary handlers and `include_tasks` entries are
+silent, and so is a named block in `tasks:` or in a standalone file, where it is ordinary
+Ansible. `# noqa: dead-handler-name` on the name line suppresses it; `invalid-placement` does
+not.
+
+The measurement was re-run rather than trusted (`notify: h` against each entry shape on
+2.21.2): ordinary and `include_tasks` run `h`; `block`, `import_tasks` and
+`ansible.builtin.import_tasks` fail with `handler 'h' was not found`; the names inside run.
+
+### The tier is ansible's, not a fixed WARNING
+
+The ticket said WARNING because "the playbook loads and runs, and if nobody notifies the lost
+name nothing goes wrong". Measured against the demo file, that undersells the notified case:
+
+| `ERROR_ON_MISSING_HANDLER` | a notified dead name at run time | exit |
+| --- | --- | --- |
+| on (default) | `[ERROR] The requested handler 'reload proxy' was not found` — the run dies | 1 |
+| off | one `[WARNING]` per missing name, the live handlers still run | 0 |
+| either | `--syntax-check` clean; an unchanged notifier reports nothing | 0 |
+
+So the setting is read the way ansible reads it — `AnsibleConfig::error_on_missing_handler`,
+ini `[defaults] error_on_missing_handler`, env `ANSIBLE_ERROR_ON_MISSING_HANDLER`, env over
+ini, default true, all confirmed with `ansible-config list` and a run with the two set against
+each other — and the tier follows it:
+
+- the play notifies the dead name by a literal `notify:` (a list item, inside a block, on a
+  block, or from another handler) and no live handler name or `listen:` topic answers it →
+  proven: **ERROR** with the setting on, **WARNING** with it off, and the message says which;
+- nothing in the play notifies it, or only a templated `notify:` does → dead code, **WARNING**
+  either way.
+
+Pinned in `a_handler_name_on_a_block_or_an_import_is_reported_as_dead` (every shape, both
+settings, the twin and `listen:` controls), `error_on_missing_handler_reads_ini_and_env`, and
+in `main.rs` by the demo pin (three ERRORs and one WARNING on `demo/dead_handler_names.yml`,
+every other demo file counted — `placement.yml` carries seven by construction) plus a fixture
+whose `ansible.cfg` flips the tier. Each was broken and seen red: setting ignored, live names
+ignored, config not threaded.
+
+The "only warn when some `notify:` names it" follow-up the Approach deferred to T-028 turned out
+not to need it: the play's own `notify:` values are in the parse tree, and that is exactly the
+evidence the tier rests on. What stays unknowable — a `notify:` inside an included file — only
+ever withholds the ERROR, never invents one.

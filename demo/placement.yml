@@ -261,8 +261,8 @@
       notify: [h1, h2, h3, h4]
   handlers:
     - name: h1 # GOOD: a top-level block under handlers: loads clean, measured exit 0.
-      block: # (It is not *harmless* — the handler's name is destroyed, so notify: can
-        - debug: { msg: x } # never match it. Ansible only says so at run time; a T-099 candidate, not ours.)
+      block: # (It is not *harmless* — the handler's name is destroyed, so notify: can never
+        - debug: { msg: x } # match it. That is T-157's `dead-handler-name` ERROR on each name here — the task above notifies all four — not row 1's.)
 
     - name: h2
       block:
