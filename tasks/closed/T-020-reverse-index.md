@@ -48,7 +48,12 @@ pairs they already compute.
   the didChange path. An open buffer's own analysis wins over the scan's, checked at read
   time and again at insert time — the same rule the scan's diagnostics follow. A rescan
   forgets sources it did not reach (deleted, or stopped parsing) unless a buffer owns them;
-  didClose re-reads the file from disk, since the buffer's edges may never have been saved.
+  didClose re-reads the file from disk **only when the buffer differed from it**, since the
+  buffer's edges may never have been saved. Unconditional re-analysis on close was the
+  first cut and was a visible regression in the editor: a jump closes the preview tab it
+  came from, and on a 2,100-file generated tree that close went 4 -> 219 ms (measured with
+  `scripts`-style stdio driving, old binary vs new). Same-text closes are 4 ms again; a
+  dirty close runs the analysis under `spawn_blocking` and logs its cost.
 - **Request:** `ansible/whoReferences` `{uri}` -> `{scanning, refs: [{uri, range, kind,
   templated}]}`. `scanning` is the honesty flag: while the scan runs the list is partial,
   and the client says so instead of "nothing reaches this file".
