@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | M    | T-114 | —          |
+| open   | task | P2       | M    | T-114 | T-227      |
 
 ## Problem
 
@@ -48,6 +48,17 @@ unknown-name rule once the union is trusted.
 Collection-provided filters/tests/lookups come from the same plugin dirs and are subject to
 `meta/runtime.yml` routing, so the diagnostic half also wants T-064.
 
+**Local plugins make the set open.** The loader also reads `filter_plugins/`, `test_plugins/`
+and `lookup_plugins/` beside the playbook and inside every legacy role (`plugins/loader.py:86-96`;
+reach measured in T-228's table), plus the `filter_plugins` / `test_plugins` / `lookup_plugins`
+cfg keys (`DEFAULT_*_PLUGIN_PATH`, env `ANSIBLE_FILTER_PLUGINS` etc. — the three settings T-144
+routes here). None is read today; T-227 supplies the walk. A lookup file is one name, the file
+name. A filter or test file is a `FilterModule.filters()` / `TestModule.tests()` dict of any
+size — core's `filter/core.py` is one file and 58 names — so its names are not knowable without
+running Python. Completion can offer whatever a best-effort read of a literal dict finds; the
+unknown-name diagnostic must stay silent wherever such a file is in reach, the rule T-228
+applies to vars plugins.
+
 ## Done when
 
 - [ ] the three name sets are generated from the checkout, not hand-typed, with the
@@ -55,4 +66,8 @@ Collection-provided filters/tests/lookups come from the same plugin dirs and are
 - [ ] aliases are all present
 - [ ] Jinja2's own builtins are in the union, with the Jinja version recorded
 - [ ] completion works for filters, tests and `with_*`
+- [ ] legacy `filter_plugins/`, `test_plugins/`, `lookup_plugins/` dirs and their cfg keys come
+      from T-227's walk; a lookup file adds its name to the index
+- [ ] a filter or test file in reach marks the set open and the diagnostic half is silent there,
+      pinned by a fixture with a one-line local filter
 - [ ] the unknown-name diagnostic is a separate, later decision — not shipped with the index
