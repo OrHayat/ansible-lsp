@@ -50,6 +50,25 @@ Severity matrix, live-verified 2026-08-02:
   'host0'`". We state it; the user, who knows the inventory, evaluates it.
 - **dynamic include cycle with no guard anywhere in the loop → WARNING.** Every host that
   enters recurses to death, but entry itself may be conditional, so not ERROR.
+- **static cycle → ERROR, unconditionally.** A loop whose every edge is `import_tasks`,
+  `import_role` or `import_playbook` is expanded while the play loads, before any
+  condition exists, so `when:` on the edges does not help. Live-verified 2026-09-07
+  (2.21.3): a 2-role `import_role` loop dies at load with the same "A recursion loop was
+  detected…" as a meta cycle, with an Origin line at the closing edge, `when: false` on
+  both edges or not. A 2-file `import_tasks` loop, a self-`import_tasks` and a 2-file
+  `import_playbook` loop all die with an **unhandled** RecursionError — "Unexpected
+  Exception, this is probably a bug: maximum recursion depth exceeded", exit 250 — naming
+  no file, so for those forms our ERROR is the only pointer the user gets (dossier:
+  `upstream/ansible-import-loop-crash.md`). Control: the
+  same 2-file shape as `include_tasks` with `when: false` on both edges ran clean
+  (ok=2, skipped=1).
+- **mixed loop (at least one dynamic edge) → the dynamic tiers.** The static edges are
+  expanded at load but the loop only closes when the dynamic edge runs, so it is a
+  runtime failure and a guard on the dynamic edge does stop it. Measured 2026-09-07:
+  `a --import_tasks--> b --include_tasks--> a` unguarded ran 124 includes and then died
+  with the RecursionError above; `when: false` on the include edge ran clean (ok=2,
+  skipped=1). So the tier is decided by the *weakest* edge: all static or meta → ERROR;
+  any dynamic edge → WARNING/INFO by the guard rule.
 - **Follow-up, after T-062 lands ini inventory parsing:** evaluate the guard conjunction
   against the parsed inventory for the vocabulary it covers (group membership,
   hostnames). If a concrete host satisfies every guard, promote the hint to a WARNING
@@ -85,6 +104,13 @@ never falsely reported. In-repo cycles are fully covered.
 - [ ] the three tiers pinned: meta cycle → ERROR even with `when:` on the edges;
       unguarded dynamic cycle → WARNING; guarded dynamic cycle → INFO hint whose message
       spells out the guard conjunction (the group_a/host0 counter-example verbatim)
+- [ ] a 2-file `import_tasks` cycle and a self-`import_tasks` both report ERROR, with
+      `when:` on the edges or not; the message says Ansible crashes at load naming no file
+- [ ] a 2-role `import_role` cycle reports ERROR at the closing edge, with `when:` on the
+      edges or not, quoting "A recursion loop was detected"
+- [ ] a 2-file `import_playbook` cycle reports ERROR, anchored at the entry that closes it
+- [ ] a mixed cycle (one `import_tasks` edge, one `include_tasks` edge) takes the dynamic
+      tiers: WARNING unguarded, INFO hint with `when:` on the include edge — never ERROR
 - [ ] cycles reached only through templated candidates do not warn
 - [ ] the real repo is checked; result recorded here either way
 - [ ] (post-T-062) hint promoted to WARNING naming the host when the parsed inventory
