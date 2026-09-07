@@ -103,46 +103,123 @@ host_vars files", which is wrong on both halves — measured below.
 
 2.21.3, default `VARIABLE_PRECEDENCE`, one plugin that answers differently per entity so a
 same-rung tie is distinguishable from a later-rung win. `scratchpad/t228_vars_plugin_precedence.sh`
-reruns it, with a not-enabled control. The merge is `vars/manager.py:288-299`: the precedence
+reruns it, with a not-enabled control; `scratchpad/t228_review_stage.sh` (from the independent
+review) adds the stage dimension. The merge is `vars/manager.py:288-299`: the precedence
 rungs `all_inventory, groups_inventory, all_plugins_inventory, all_plugins_play,
 groups_plugins_inventory, groups_plugins_play`, then `host.get_vars()`, then the plugins for the
 host, inventory-adjacent then play-adjacent.
 
-| Collision                                                              | Winner                                                                                                   |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| plugin's answer for the host vs its answer for a group                 | host — a later rung, regardless of plugin order                                                          |
-| plugin's answer for `all` vs its answer for a child group              | the child group, same reason                                                                             |
-| plugin vs `group_vars/<g>.yml` or `host_vars/<h>.yml`, same entity     | whichever runs **later in `vars_plugins_enabled`**: listed after `host_group_vars` the plugin wins, before it the file wins. A legacy plugin not in the list is primed first (`vars/plugins.py:18-23`) and loses |
-| plugin's host answer vs an inline inventory host var                   | plugin — `host.get_vars()` merges before the plugins (`manager.py:297-298`)                              |
-| plugin vs role `defaults/`                                             | plugin                                                                                                   |
-| plugin vs role `vars/`                                                 | role vars                                                                                                |
-| plugin vs play `vars:`                                                 | play vars                                                                                                |
+**Stage comes first.** A plugin that runs at the inventory stage — `stage: inventory`, or no
+`stage` under `run_vars_plugins = start` — has its output baked into `group.vars` / `host.vars`
+while the inventory parses (`inventory/manager.py:249-251`), so it lands on the `groups_inventory`
+and `host.get_vars()` rungs, *below* the task-stage plugin that loads `group_vars/` and
+`host_vars/`. A task-stage plugin (the default) lands on the plugin rungs beside that loader,
+where list order decides.
 
-Consequence for hover: the winner between a plugin and a YAML source is a function of which
-entity the plugin answered for and of its position in `vars_plugins_enabled`, neither of which is
-readable off the YAML. Hover can state the rule and name the plugin; it cannot rank the value
-unless rung 3 ran the plugin. The first probe of this section got the `all` row wrong for an
-hour because the plugin also answered for `ungrouped`, which lands a rung later — rule 2.
+| Collision                                                    | Task-stage plugin (default)                                                | Inventory-stage plugin                                                |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| plugin's answer for the host vs its answer for a group       | host — a later rung, whatever the order                                    | host — same                                                           |
+| plugin's answer for `all` vs its answer for a child group    | the child group                                                            | the child group; and it loses to an inline `[web:vars]` var too       |
+| plugin vs `group_vars/<g>.yml`, same entity                  | whichever is **later in `vars_plugins_enabled`**                           | the file, whatever the order                                          |
+| plugin's host answer vs `group_vars/<g>.yml`                 | plugin — a later rung                                                      | plugin — the inventory host rung is still above every group rung      |
+| plugin vs `host_vars/<h>.yml`, same entity                   | whichever is later in the list                                             | the file, whatever the order                                          |
+| plugin's host answer vs an inline inventory host var         | plugin — `host.get_vars()` merges first (`manager.py:297-298`)             | plugin — combined after the parse (`inventory/manager.py:251`)        |
+| plugin vs role `defaults/` / role `vars/` / play `vars:`     | plugin / role vars / play vars                                             | same                                                                  |
 
-## Beyond the fix — the ladder, cheapest first
+The list-order tie is measured with the plugin listed. An *unlisted* legacy plugin is primed
+first (`vars/plugins.py:18-23`) and loses every same-rung tie — `all`, a child group and the host
+— measured by the precedence script's `not listed` run.
 
-1. **Know it is there** (this ticket): locate, enabled list, reach, then the per-name rule in Fix.
-2. **Read the Python for literal names**: a returned dict literal, an item assignment with a
-   literal key, an `update` with a dict literal, inside `get_vars`. Feeds hover provenance and
-   completion only. A name the read does not find is still not undefined while the file is in
-   reach — the corpus plugin above is the proof that the read is incomplete by construction.
-   Ruff's parser crates are the in-process option; the install's own `ast` module through a
-   cached subprocess is the no-dependency one. Neither executes anything. Not pyo3: the metadata
-   holds no names (no `RETURN` for vars plugins), so "inspect" means import, which executes
-   module-level code, and linking a libpython into the server binary buys nothing a subprocess
-   does not.
-3. **Ask Ansible on a gesture**: `ansible-inventory --list --playbook-dir <dir>` runs
-   playbook-adjacent, cfg-path and collection plugins and prints their names per host (measured
-   on both fixtures). Role-local plugins need a playbook loaded, so a driver over the API that
-   loads the playbook and asks the variable manager per host. Same command and same rules as
-   T-176: press-only, cached, age shown.
-4. **Declare**: a setting mapping a plugin file to its names, as an override on top of 2. Cheap
-   and rots; only when someone asks.
+**On the corpus plugin, measured.** Collection-shipped, `stage: inventory`, listed after
+`host_group_vars`, answering for every entity. A temporary inventory outside the repo, two
+controls: `lustre_version` in `group_vars/all.yml` **loses** to the plugin, because the plugin's
+host answer sits above every group rung; `lustre_release_commit` in `host_vars/<host>.yml`
+**beats** the plugin, because the file loads at task stage and the plugin's host answer was baked
+in at inventory stage. The earlier "listed after, so it wins" reading was wrong on the host_vars
+half; the review's "inventory stage loses to the files" was wrong on the group_vars half. Only
+the run settled it.
+
+Consequence for hover: the winner depends on the plugin's stage (readable — DOCUMENTATION
+default, its ini section, env, or `run_vars_plugins`), the entity it answered for (not readable),
+and its list position (readable). Hover can state the rule and name the plugin; it cannot rank
+the value unless rung 3 ran the plugin. The first probe of this section got the `all` row wrong
+for an hour because the plugin also answered for `ungrouped`, which lands a rung later — rule 2.
+
+## Beyond the fix — every option, cheapest first
+
+The fix above is rung 1. The rest is how the tool learns *which* names a plugin publishes, so
+those names become definitions instead of hedged warnings. The rungs are independent; the
+per-name rule is the same under all of them.
+
+1. **Know it is there.** Locate, enabled list, stage, reach, then the per-name rule. With no
+   names known, every use in reach keeps a hedged warning.
+
+2. **Read the Python.** A bounded chase over the plugin's syntax tree — ruff's parser crates in
+   process, or the install's `ast` module through a cached subprocess; neither executes
+   anything. Seven rules, each pinned by a test:
+   - the returned expression is a dict literal (its keys are names), or `X` / `dict(X)` for a
+     variable `X`, which is then tracked
+   - `X[literal] = …` adds a name
+   - `X.update(EXPR)` adds what `EXPR` yields; `EXPR or {}` unwraps to `EXPR`
+   - a call to a function in the same file, or imported from the same collection's
+     `module_utils`, is followed into its return statements, to a depth limit
+   - a returned dict literal yields its keys
+   - a tracked dict passed as an argument is tracked as that parameter inside the callee
+   - conditions are not evaluated: every branch contributes, so a name the plugin *may* publish
+     counts as known — the silence direction, the same as `-e`
+
+   Checked against real code: the corpus plugin yields 3 of 3 (`dict(_CACHE)`, one `update`
+   through `derive()` to `_fields` one file away, one literal subscript); lilatomic's `gitroot`
+   and `knownhostentry` yield their one name each with no chase; `dhall_vars` yields nothing.
+   What the chase cannot promise: a shape outside the rules — `update(**kw)`, a key built with
+   `%`, a loop over a list of names — yields "unknown", never a wrong name. Feeds hover
+   provenance, go-to-definition, and completion once T-127 exists.
+
+3. **Read the data files a file-backed plugin reads.** A plugin that is group_vars in another
+   format — lilatomic's `dhall_vars`, any JSON/TOML/INI loader — calls
+   `loader.find_vars_files(path=…, name=entity.name, extensions=[…])` under a literal
+   `"host_vars"` / `"group_vars"`, so rung 2's reader recognises the shape and the extension
+   list (an editor setting can say the same for a plugin whose code is less tidy). The
+   group_vars walk then reads those files with a reader per format: JSON, TOML and INI give
+   exact names; Dhall gives them for a plain record `{ port = 80 }` and says "unknown" for a
+   file built from a `let`, an import or a `//` merge. Definitions land on the data file, with
+   the plugin named in hover — better than the plugin file, because the value is there.
+   Precedence is the plugin's, since the plugin returns the values.
+
+4. **Ask Ansible on a gesture.** Two mechanisms, both measured:
+   - `ansible-inventory --list [--playbook-dir <dir>]` runs cfg-path, collection and, given the
+     dir, playbook-adjacent plugins, and prints every host's variables. The corpus plugin's
+     three names on all six hosts came out this way, with the plugin disabled as the control.
+     Role-local plugins do not show, because no playbook is loaded.
+   - `scratchpad/t228_varsdump.py`: 25 lines over Ansible's API that load the playbook as
+     `ansible-playbook` does — which is what adds the role plugin dirs — then ask the variable
+     manager for each host's variables per play. No task runs. On the fixture it lists the role
+     plugin's name in play 1, matching the reach table; renaming the role's dir removes it.
+
+   Only the plugins execute, with the editor's environment, so this is a button, cached, age
+   shown, never automatic — T-176's command extended to vars plugins. It gives exact names
+   *and* values, so hover can rank precedence for real. It is the only route for a data-driven
+   plugin — database rows, an API, Vault — whose names do not exist until runtime, and one
+   press clears every hedged warning such a plugin caused.
+
+5. **Declare.** For a plugin one owns, `PROVIDES` (Fix, above): a literal tuple at class level,
+   self-checked, read by rung 2 with no chase. A convention of ours, not Ansible's, and
+   optional — rung 2 reads the corpus plugin without it. For a plugin one does not own, the
+   same list in an editor setting mapping the plugin to its names. A declared set is closed:
+   declared names are definitions, everything else keeps its plain warning.
+
+What each rung gives for the real cases:
+
+| Plugin                                  | Rung 2          | Rung 3                            | Rung 4                                | Rung 5                          |
+| --------------------------------------- | --------------- | --------------------------------- | ------------------------------------- | ------------------------------- |
+| corpus `acme.lustre.version`            | 3 of 3 by chase | not file-backed                   | all three, no playbook dir needed     | one line                        |
+| lilatomic `gitroot`, `knownhostentry`   | 1 of 1 each     | —                                 | yes                                   | an upstream PR                  |
+| lilatomic `dhall_vars`                  | nothing         | plain records yes, computed no    | yes                                   | only if the user knows the names |
+| a database / API / Vault plugin         | nothing         | —                                 | yes — the only route                  | nobody knows the names          |
+
+Not pyo3: the metadata holds no names (no `RETURN` for vars plugins), so "inspect" means
+import, which executes module-level code, and linking a libpython into the server binary buys
+nothing a subprocess does not.
 
 ## Cause
 
@@ -159,13 +236,22 @@ Measured on 2.21.3, one plugin per location, each row with a control:
 | --------- | ------- |
 | `vars_plugins/` beside the playbook | every play; nothing to enable (`playbook/__init__.py:64`) |
 | `vars_plugins/` beside an `import_playbook` target | every play, including those before the import |
-| a role's `vars_plugins/`, role in `roles:` of any play | every play, including those before the role's play (`role/__init__.py:283` runs at load) |
-| the same role reached only by `include_role` | the include onward; an earlier play sees nothing |
+| a role's `vars_plugins/`, role in `roles:` of any play — or pulled in by `import_role` or a `meta/main.yml` dependency | every play, including those before the role's play (`role/__init__.py:283` runs at load) |
+| the same role reached only by `include_role` | the include onward in **execution** order (`pre_tasks`, `roles`, `tasks`, `post_tasks`, handlers), not text order; an earlier play sees nothing, and under a false `when:` no later play does either |
+| a collection-hosted role's `vars_plugins/` | nothing, ever — `role/__init__.py:278` takes the other branch and never calls `add_all_plugin_dirs` |
 | a dir on the `vars_plugins` cfg key | every play |
 | `vars_plugins/` beside an included task file | nothing — never read |
-| a collection's `plugins/vars/` | nothing until the FQCN is in `vars_plugins_enabled`; then every play. `REQUIRES_ENABLED` is ignored there, with a warning (`vars/plugins.py:62-67`) |
+| a collection's `plugins/vars/` | nothing until the FQCN is in `vars_plugins_enabled`; then every play. A `REQUIRES_ENABLED` attribute there, either value, only draws a warning (`vars/plugins.py:60-66`; read, not run) |
 | a legacy plugin with `REQUIRES_ENABLED = True` | nothing until its name is in `vars_plugins_enabled` |
 | the dir removed (control) | fatal, undefined |
+
+**Every row above is at the default task stage.** With `stage: inventory` on the plugin, or
+`run_vars_plugins = start` for a plugin that sets no `stage`, the playbook-adjacent, imported-
+playbook and role rows all become *nothing*: those dirs join the loader after the inventory has
+parsed, and an inventory-stage plugin never runs again (`scratchpad/t228_review_stage.sh`, from
+the independent review). Only the cfg-path and collection rows survive an inventory-stage plugin.
+The review also reports that an inventory given as a host list (`-i localhost,`) gives an
+inventory-stage plugin no path to run for (`vars/plugins.py:82`); not re-verified here.
 
 The names a plugin yields are not knowable statically — they come out of Python (the article's
 example computes them from git). So the legal set is *open* wherever an active plugin reaches,
@@ -184,8 +270,9 @@ it: the scan reports 133 undefined uses there, 9 of them the plugin's. Silencing
 plugin reaches — the whole project, since it is enabled from the cfg — would throw away 124
 findings to fix 9. So the rule is per name, never per file:
 
-- **Known names are a definition source.** When the plugin's names are known — from a user
-  declaration, the literal read, or a press-to-run result — each is a `VarSource::VarsPlugin`
+- **Known names are a definition source.** When the plugin's names are known — from a
+  `PROVIDES` declaration in the plugin (below), a user setting for plugins one does not own, the
+  literal read, or a press-to-run result — each is a `VarSource::VarsPlugin`
   definition located at the plugin file: `var-undefined` is satisfied, hover and go-to-definition
   land on the plugin, and every other name keeps its warning.
 - **Unknown names are a concession, not a silence.** When nothing yields the names, the warning
@@ -198,13 +285,41 @@ findings to fix 9. So the rule is per name, never per file:
 
 `host_group_vars` is not "custom" — it is the ported behaviour and must not trip the record.
 
+**An optional convention for plugins one owns: `PROVIDES`.** Ours, not Ansible's, and not
+required — rung 2 below reads the corpus plugin's names without it; this is insurance against
+the dict-filling growing past the chase's rules. A class-level tuple of string literals on
+`VarsModule` naming every variable the plugin can publish, with the plugin checking itself
+against it so the list cannot go stale:
+
+```python
+class VarsModule(BaseVarsPlugin):
+    PROVIDES = ("lustre_version", "lustre_version_short", "lustre_release_commit")
+
+    def get_vars(self, loader, path, entities):
+        ...
+        published, declared = set(out), set(self.PROVIDES)
+        if not published.issubset(declared):
+            raise AnsibleError("undeclared names: %s" % sorted(published.difference(declared)))
+        return out
+```
+
+Measured 2.21.3: a plugin carrying the attribute and the check runs unchanged; the name is
+unused anywhere in core and `BaseVarsPlugin` defines only `is_stateless`. The reader wants
+exactly that shape — a literal tuple at class level, no call, no comprehension — and treats a
+declared set as *closed*: the declared names are definitions at the plugin file, every other
+name keeps its plain warning with no hedge. The corpus plugin is the motivating case: its names
+are three calls away in `module_utils` and unreadable, and one line makes them readable. A
+plugin one cannot edit gets the same effect from the user setting.
+
 Traps:
 
-- `stage` / `run_vars_plugins` decide *when* a plugin runs (inventory or task), not whether its
-  names exist by task time. Assumed irrelevant to definedness; measure before relying on it.
+- `stage` / `run_vars_plugins` decide *whether* a plugin exists, per location — the stage note
+  under the reach table. The reader takes `stage` from the plugin's DOCUMENTATION default, its
+  ini section and env, and `run_vars_plugins` from the cfg, before applying the table.
 - `REQUIRES_ENABLED` on a legacy plugin is Python. A literal class-level `REQUIRES_ENABLED = True`
-  is greppable; anything else counts as enabled — the safe direction, since an over-recorded
-  plugin only silences.
+  is greppable; anything else marks the plugin *uncertain*. With names known, an over-recorded
+  plugin is a false silence, so an uncertain plugin's names take the concession path, never the
+  definition path.
 - The demo: a `vars_plugins/` directly under `demo/` puts every demo file in reach and silences
   the `var-undefined` assertions there. The fixture needs its own playbook dir (`demo/vars-plugin/`
   or similar) so reach stays inside it; rule 4's `every_other_demo_file_is_free_of_<rule>` guard
@@ -214,12 +329,23 @@ Traps:
 
 - [ ] the five locations and the enabled list are read, with the ini/env spellings above, and
       `host_group_vars` never counts as custom
-- [ ] reach follows the table — `roles:` and `import_playbook` playbook-wide, `include_role`
-      forward-only, an included task file's dir nothing — one test per row
+- [ ] reach follows the table — `roles:`, `import_role`, `meta/main.yml` dependencies and
+      `import_playbook` playbook-wide, `include_role` forward-only in execution order and nothing
+      under a false `when:`, an included task file's dir and a collection-hosted role's dir
+      nothing — one test per row
+- [ ] `stage` and `run_vars_plugins` are read, and an inventory-stage plugin reaches only from
+      the cfg-path and collection rows, pinned by the stage script's rows
 - [ ] a demo fixture in its own playbook dir has a plugin-provided use; the test asserts the
       exact diagnostics for it, and every other demo file's diagnostics are unchanged
-- [ ] hover on a name in reach names the plugin file; nothing is navigable, because there is
-      nothing to navigate to
+- [ ] hover on a name in reach names the plugin file, and go-to-definition on a *known* name
+      lands on the plugin file (the file, not a byte span into it); an unknown name stays
+      unnavigable
+- [ ] every reader of the index answers for `VarSource::VarsPlugin` on purpose (rule 3): the
+      exhaustive matches (`vars.rs:81`, `:131`, `:193`, `main.rs:2900`, `:2926`), the
+      non-exhaustive ones that would silently omit it (`vars.rs:158` `host_scoped`, `:883`
+      `value_span_source`), and the readers that open the definition file as YAML or take a byte
+      span into it (`main.rs:1687`, `:1764`, `:2453`, `:2516`, `:2684`, `:2768`, `:4335`) never
+      open a `.py` as a document — one test per reader
 - [ ] the scan output lists active vars plugins per project root, next to its config line
 - [ ] no plugin is ever executed, pinned the way T-176 pins it
 - [ ] a known name is a definition at the plugin file, an unknown name keeps its warning with

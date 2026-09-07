@@ -63,6 +63,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-225 — A configured inventory path that does not exist drops the group_vars and host_vars beside it, which ansible still reads
 - [ ] T-226 — A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line
 - [ ] T-228 — A variable from an active vars plugin is reported undefined
+- [ ] T-229 — vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway
 
 ## Done when
 

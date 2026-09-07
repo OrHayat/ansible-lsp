@@ -9,6 +9,8 @@
 #                    v_hostonly_vs_inv -> plugin-host (inline inventory var merges first);
 #                    v_any_vs_default -> plugin; v_any_vs_rolevars -> role_vars; v_any_vs_play -> play_vars
 #   control        : plugin not enabled -> every YAML/inventory value, v_both undefined
+#   not listed     : the plugin without REQUIRES_ENABLED, auto-loaded, absent from the list -> loses all
+#                    three same-rung ties (all, web, host files win); the rest as in both orders
 PB=${ANSIBLE_PLAYBOOK:-ansible-playbook}
 D=$(mktemp -d); cd "$D" || exit 1
 mkdir -p vars_plugins group_vars host_vars roles/r/defaults roles/r/vars
@@ -51,3 +53,6 @@ run() { echo "=== $1"; shift; env "$@" $PB -i hosts.ini play.yml 2>&1 | grep -oE
 run "order prec,host_group_vars"  ANSIBLE_VARS_ENABLED=prec,host_group_vars
 run "order host_group_vars,prec"  ANSIBLE_VARS_ENABLED=host_group_vars,prec
 run "control: plugin not enabled" ANSIBLE_VARS_ENABLED=host_group_vars
+# The same plugin without REQUIRES_ENABLED: a legacy plugin that is auto-loaded and never listed.
+sed -i.bak '/REQUIRES_ENABLED = True/d' vars_plugins/prec.py
+run "not listed: legacy auto-loaded, default list" ANSIBLE_VARS_ENABLED=host_group_vars
