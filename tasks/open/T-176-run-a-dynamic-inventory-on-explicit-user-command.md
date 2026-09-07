@@ -43,6 +43,16 @@ assuming:
   declined inventory. With a successful run cached, that silence can lift for the hosts the
   run reported — which is the actual payoff and the reason this is worth doing at all.
 
+## Vars plugins ride the same button
+
+T-228's rung 4 is this command with one more source: the plugins that supply variables, not
+hosts. `ansible-inventory --list` already runs the cfg-path and collection ones, and the
+playbook-adjacent ones given `--playbook-dir`; a plugin inside a role needs the playbook loaded,
+which `scratchpad/t228_varsdump.py` does through the API — load the playbook as
+`ansible-playbook` does, then ask the variable manager per host and play, no task run. Same
+gesture, same cache, same age display; the result feeds the index as known plugin names with
+their values.
+
 ## Not in this pass
 
 Running anything automatically, on save, on open, or on a timer. The trigger is a press,
