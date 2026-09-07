@@ -79,14 +79,14 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 
 | ID    | Title                                                       | Size | Blocked by |
 | ----- | ----------------------------------------------------------- | ---- | ---------- |
-| T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | T-020   |
+| T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | ~~T-020~~   |
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
 | T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | ~~T-062~~ |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
-| T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | T-020 |
+| T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | ~~T-020~~ |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs T-042/1, T-064 |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
@@ -94,11 +94,11 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
-| T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | T-020      |
+| T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
-| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | T-020      |
+| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | ~~T-020~~      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 
@@ -108,7 +108,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | ----- | -------------------------------------------------------- | ---- | ---- |
 | T-015 | [`src:` + local-vs-remote table](open/T-015-src-paths.md) | L    | 385  |
 | T-019 | [Package as a .vsix](open/T-019-package-vsix.md)          | M    | —    |
-| T-020 | [Reverse index](open/T-020-reverse-index.md)              | M    | —    |
 | T-017 | [`include_vars`](open/T-017-include-vars.md)              | M    | 30   |
 | T-034 | [Templating that only looks dynamic](open/T-034-statically-knowable-templating.md) | M | 21 |
 | T-031 | [`import_playbook` + `when:`](open/T-031-import-playbook-when.md) | M | 48 |
@@ -142,7 +141,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-128 | **epic** · [ansible-lint parity](open/T-128-ansible-lint-parity.md) | L    | —    |
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
-| T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | T-020 |
+| T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | ~~T-020~~ |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
@@ -180,8 +179,8 @@ T-021 is now unblocked on that side.
 
 | ID    | Title                                                          | Size | Blocked by |
 | ----- | -------------------------------------------------------------- | ---- | ---------- |
-| T-021 | [`unused-file` / `unused-role` as faded hints](open/T-021-unused-hints.md) | M | T-020 |
-| T-022 | [`circular-include` warning](open/T-022-circular-include.md)    | S    | T-020      |
+| T-021 | [`unused-file` / `unused-role` as faded hints](open/T-021-unused-hints.md) | M | ~~T-020~~ |
+| T-022 | [`circular-include` warning](open/T-022-circular-include.md)    | S    | ~~T-020~~      |
 | T-023 | [`shadowed-file` / `duplicate-role` hints](open/T-023-shadowed-and-duplicate.md) | M | — |
 | T-024 | [Execution tree as a TreeView](open/T-024-execution-treeview.md) | L   | —          |
 | T-025 | [Settings — toggle rules, override severity](open/T-025-settings.md) | M | —      |
@@ -189,12 +188,12 @@ T-021 is now unblocked on that side.
 | T-027 | [Differential harness vs the legacy plugin](open/T-027-differential-harness.md) | M | — |
 | T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
-| T-054 | [Find variable references](open/T-054-variable-references.md)    | M    | T-049, T-020 |
+| T-054 | [Find variable references](open/T-054-variable-references.md)    | M    | T-049, ~~T-020~~ |
 | T-058 | [Warn when a module ships no `DOCUMENTATION`](open/T-058-module-doc-missing-warn.md) | S | T-057, T-010 |
 | T-070 | [`inventory_dir` from real inventory sources](open/T-070-inventory-dir.md) | M | — |
 | T-071 | [`unconstrained-path-var`: the value set a path implies](open/T-071-unconstrained-path-var.md) | S | — |
 | T-080 | [Resolution-aware FQCN, exempting local modules](open/T-080-resolution-aware-fqcn.md) | M | T-042/T-064, T-025 |
-| T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | T-020 |
+| T-079 | [`Extract to collection` refactor](open/T-079-extract-legacy-plugin-to-collection.md) | L | ~~T-020~~ |
 | T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | L    | —          |
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
@@ -206,8 +205,8 @@ T-021 is now unblocked on that side.
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
-| T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | T-020      |
-| T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | T-020      |
+| T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | ~~T-020~~      |
+| T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | ~~T-020~~      |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
@@ -334,6 +333,7 @@ T-021 is now unblocked on that side.
 | T-215 | **bug** · [requirement() drops matches_default so an All clause that runs by default reads as required](closed/T-215-requirement-drops-matches-default-so-an-all-clause-that-runs.md) | done     |
 | T-173 | [Expand inventory_hostname when the play names a literal host](closed/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | done     |
 | T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](closed/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | done     |
+| T-020 | [Reverse index](closed/T-020-reverse-index.md)                 | done     |
 
 ## Settled — don't re-derive these
 

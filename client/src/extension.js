@@ -820,6 +820,53 @@ function activate(context) {
       vscode.window.visibleTextEditors.forEach(repaint);
       vscode.window.setStatusBarMessage("Ansible LSP restarted", 2000);
     }),
+    // "Who includes this?" — the reverse index (T-020), as a quick pick of every reference
+    // in the workspace that reaches the active file. A custom request rather than
+    // `textDocument/references`: that one is symbol-scoped, and this answer is about a file.
+    vscode.commands.registerCommand("ansibleLsp.whoReferences", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.uri.scheme !== "file" || !client?.isRunning()) return;
+      const answer = await client.sendRequest("ansible/whoReferences", {
+        uri: editor.document.uri.toString(),
+      });
+      const refs = (answer && answer.refs) || [];
+      const name = vscode.workspace.asRelativePath(editor.document.uri);
+      if (refs.length === 0) {
+        // While the scan is running the index is partial, and "nothing" would be a claim
+        // the server cannot make yet.
+        vscode.window.showInformationMessage(
+          answer && answer.scanning
+            ? `The workspace scan is still running; ask again for ${name} when it finishes.`
+            : `No reference in the workspace reaches ${name}.`
+        );
+        return;
+      }
+      const items = refs.map((r) => {
+        const uri = vscode.Uri.parse(r.uri);
+        return {
+          label: `${vscode.workspace.asRelativePath(uri)}:${r.range.start.line + 1}`,
+          description: r.kind + (r.templated ? "  (one of several the line may reach)" : ""),
+          uri,
+          range: r.range,
+        };
+      });
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder:
+          refs.length === 1
+            ? `1 reference reaches ${name}`
+            : `${refs.length} references reach ${name}`,
+        matchOnDescription: true,
+      });
+      if (!pick) return;
+      const doc = await vscode.workspace.openTextDocument(pick.uri);
+      const range = new vscode.Range(
+        pick.range.start.line,
+        pick.range.start.character,
+        pick.range.end.line,
+        pick.range.end.character
+      );
+      await vscode.window.showTextDocument(doc, { selection: range });
+    }),
     // Settings take effect immediately; the server asks VS Code to re-request hints.
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (

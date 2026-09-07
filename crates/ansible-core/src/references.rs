@@ -38,6 +38,24 @@ pub enum ReferenceKind {
     VarsFiles,
 }
 
+impl ReferenceKind {
+    /// The snake_case name `scan` prints and `ansible/whoReferences` returns.
+    pub fn name(self) -> &'static str {
+        match self {
+            ReferenceKind::IncludeTasks => "include_tasks",
+            ReferenceKind::ImportTasks => "import_tasks",
+            ReferenceKind::Role => "role",
+            ReferenceKind::TasksFrom => "tasks_from",
+            ReferenceKind::Module => "module",
+            ReferenceKind::ImportPlaybook => "import_playbook",
+            ReferenceKind::IncludeVars => "include_vars",
+            ReferenceKind::IncludeVarsDir => "include_vars_dir",
+            ReferenceKind::VarsFiles => "vars_files",
+            ReferenceKind::TemplateSrc => "template_src",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Reference {
     pub kind: ReferenceKind,

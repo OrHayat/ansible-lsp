@@ -39,7 +39,7 @@ the one child here that is finished by being abandoned.
 
 - [x] T-011 — Execution tree via LSP call hierarchy (**rejected** — see above)
 - [ ] T-012 — File watcher and precise invalidation
-- [ ] T-020 — Reverse index
+- [x] T-020 — Reverse index
 - [ ] T-021 — `unused-file` / `unused-role` as faded hints
 - [ ] T-022 — `circular-include` warning
 - [ ] T-024 — Execution tree as a TreeView

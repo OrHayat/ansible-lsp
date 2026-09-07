@@ -553,3 +553,47 @@ fn the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too() {
     // — and a fifth for chain-c's re-include of its own `vars/main.yml`, the T-207 fixture.
     assert_eq!(resolved, 5, "so the knowable one joins the four literal paths:\n{text}");
 }
+
+/// `--reverse` prints the reverse index (T-020): every target, then each reference reaching
+/// it as `source:line  kind`, with a templated edge marked as one of several. Without the
+/// flag only the summary line appears, because on a real tree the listing is longer than
+/// the rest of the report.
+#[test]
+fn reverse_prints_who_references_each_target() {
+    let d = tree("ansible-lsp-scan-reverse");
+    write(&d, "tasks/real.yml", "- ansible.builtin.debug:\n    msg: hi\n");
+    write(&d, "tasks/validate-a.yml", "- ansible.builtin.debug:\n    msg: a\n");
+    write(&d, "tasks/validate-b.yml", "- ansible.builtin.debug:\n    msg: b\n");
+    write(
+        &d,
+        "play.yml",
+        "- hosts: all\n  tasks:\n    - ansible.builtin.import_tasks: tasks/real.yml\n    \
+         - ansible.builtin.include_tasks: \"tasks/validate-{{ which }}.yml\"\n",
+    );
+
+    let (ok, text) = scan(&d);
+    assert!(ok, "{text}");
+    assert!(text.contains("reverse index: 3 edges -> 3 targets"), "the summary is always printed:\n{text}");
+    assert!(!text.contains("REFERENCED BY"), "the listing is opt-in:\n{text}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_scan"))
+        .arg(&d)
+        .arg("--reverse")
+        .output()
+        .expect("the scan binary runs");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let listing = text.split("REFERENCED BY (3 targets):").nth(1).expect(&format!("the listing:\n{text}"));
+    let lines: Vec<&str> = listing.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "  tasks/real.yml",
+            "    play.yml:3  import_tasks",
+            "  tasks/validate-a.yml",
+            "    play.yml:4  include_tasks  (templated)",
+            "  tasks/validate-b.yml",
+            "    play.yml:4  include_tasks  (templated)",
+        ],
+        "{text}"
+    );
+}

@@ -76,6 +76,11 @@
         "command": "ansibleLsp.pickInventory",
         "title": "Select Inventory",
         "category": "Ansible LSP"
+      },
+      {
+        "command": "ansibleLsp.whoReferences",
+        "title": "Who References This File",
+        "category": "Ansible LSP"
       }
     ],
     "configuration": {

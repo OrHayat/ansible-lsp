@@ -21,6 +21,7 @@ pub mod parse_libyaml;
 pub mod placement;
 pub mod references;
 pub mod resolve;
+pub mod reverse;
 pub mod splitter;
 pub mod static_fields;
 #[cfg(any(test, feature = "test-fixtures"))]
