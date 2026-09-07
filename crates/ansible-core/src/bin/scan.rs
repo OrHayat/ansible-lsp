@@ -13,24 +13,16 @@ use ansible_core::workspace::yaml_files;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-fn kind_name(k: ReferenceKind) -> &'static str {
-    match k {
-        ReferenceKind::IncludeTasks => "include_tasks",
-        ReferenceKind::ImportTasks => "import_tasks",
-        ReferenceKind::Role => "role",
-        ReferenceKind::TasksFrom => "tasks_from",
-        ReferenceKind::Module => "module",
-        ReferenceKind::ImportPlaybook => "import_playbook",
-        ReferenceKind::IncludeVars => "include_vars",
-        ReferenceKind::IncludeVarsDir => "include_vars_dir",
-        ReferenceKind::VarsFiles => "vars_files",
-        ReferenceKind::TemplateSrc => "template_src",
-    }
-}
 
 fn main() {
-    let root = std::env::args()
-        .nth(1)
+    // `scan [ROOT] [--reverse]`. The reverse index (T-020) is always built — it is one map
+    // insert per resolved reference — and printed in full only on request, since on a real
+    // tree it is longer than everything else together.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let print_reverse = args.iter().any(|a| a == "--reverse");
+    let root = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
@@ -53,6 +45,7 @@ fn main() {
     // Per project root: the ansible.cfg that governed it, and how many files it covers
     // (T-098). Rootless files group under `None`.
     let mut configs_used: BTreeMap<Option<PathBuf>, (Option<PathBuf>, usize)> = BTreeMap::new();
+    let mut reverse = ansible_core::reverse::ReverseIndex::default();
 
     for path in &files {
         // Through the cache: one read *and* one parse per file, shared with the var walk
@@ -132,6 +125,8 @@ fn main() {
             std::collections::HashMap::new()
         };
 
+        let mut resolved: Vec<(ansible_core::references::Reference, ansible_core::resolve::Resolution)> =
+            Vec::with_capacity(refs.len());
         for r in refs {
             // Substitution is navigation only: `resolve_with` stamps `SkipReason::Templated`
             // and turns Missing into Skipped, so a computed path can never fail the gate.
@@ -199,7 +194,7 @@ fn main() {
                     rest = &after[j + 2..];
                 }
             }
-            let entry = totals.entry(kind_name(r.kind)).or_default();
+            let entry = totals.entry(r.kind.name()).or_default();
             let rel = path.strip_prefix(&root).unwrap_or(path).display();
             let (line, _) = doc.byte_to_lsp(r.span.start);
             match res.status {
@@ -225,7 +220,9 @@ fn main() {
                     }
                 }
             }
+            resolved.push((r, res));
         }
+        reverse.replace(ansible_core::reverse::edges_of(&cache, path, &resolved, &doc));
 
         // T-051 base case: a warning, never part of the exit code — inventory and `-e`
         // are invisible here, so this can only ever say "not found where we can see".
@@ -265,9 +262,10 @@ fn main() {
     );
     println!(
         "var-walk: {} edges -> {} files ({} uncached), {} reads, {} contexts, \
-         {} ansible.cfg, {} defs\n",
+         {} ansible.cfg, {} defs",
         c.edges, c.files, c.uncached, c.reads, c.contexts, c.configs, c.defs
     );
+    println!("reverse index: {} edges -> {} targets\n", reverse.len(), reverse.targets().len());
     println!("{:<16} {:>9} {:>8} {:>8}", "kind", "resolved", "missing", "skipped");
     for (k, [r, m, s]) in &totals {
         println!("{k:<16} {r:>9} {m:>8} {s:>8}");
@@ -345,6 +343,29 @@ fn main() {
         }
     }
 
+
+    // Every target and what reaches it, in path order. A templated edge is marked because
+    // it is one of several the line may reach, not the one file it names.
+    if print_reverse {
+        let croot = ansible_core::reverse::canon(&root);
+        let rel = |p: &std::path::Path| {
+            ansible_core::posix_display(p.strip_prefix(&croot).unwrap_or(p))
+        };
+        let targets = reverse.targets();
+        println!("\nREFERENCED BY ({} targets):", targets.len());
+        for (target, edges) in targets {
+            println!("  {}", rel(target));
+            for e in edges {
+                println!(
+                    "    {}:{}  {}{}",
+                    rel(&e.source),
+                    e.line + 1,
+                    e.kind.name(),
+                    if e.templated { "  (templated)" } else { "" }
+                );
+            }
+        }
+    }
 
     std::process::exit(if missing.is_empty() { 0 } else { 1 });
 }

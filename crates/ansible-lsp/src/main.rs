@@ -26,6 +26,7 @@ use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id_for, Resolution, SkipReason, Status};
+use ansible_core::reverse;
 use ansible_core::static_fields;
 use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
@@ -41,6 +42,27 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 #[derive(Debug, Deserialize)]
 struct ReferencesParams {
     uri: Url,
+}
+
+/// One inbound edge of `ansible/whoReferences` (T-020): where in the workspace a reference
+/// to the asked-for file is written.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct InboundRef {
+    uri: Url,
+    range: Range,
+    /// The reference kind, as `scan` names it — `include_tasks`, `role`, `vars_files`…
+    kind: String,
+    /// The value was templated, so this is one of several files that line may reach.
+    templated: bool,
+}
+
+/// `ansible/whoReferences`' answer. `scanning` is the honesty flag: while the workspace
+/// scan is still running the list is partial, and "nothing reaches this file" would be a
+/// claim the server cannot yet make.
+#[derive(Debug, Serialize)]
+struct WhoReferences {
+    scanning: bool,
+    refs: Vec<InboundRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -450,6 +472,13 @@ struct State {
     /// and any way to know it ran. `shutdown` has somewhere to `abort()` from now, and a test
     /// has something exact to await instead of polling for an effect.
     scan_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The reverse index (T-020): target file -> every reference reaching it.
+    ///
+    /// Filled by the workspace scan from the resolutions it already computes, then kept
+    /// current per file by the didChange path. The scan reads from disk while edits arrive,
+    /// so an open buffer's own analysis wins over the scan's: the scan skips a file that is
+    /// open at read time and again at insert time, the same rule its diagnostics follow.
+    reverse: Mutex<ansible_core::reverse::ReverseIndex>,
 }
 
 struct Backend {
@@ -591,6 +620,39 @@ impl State {
                     .or_else(|| containing.first().map(|r| r.join(&p)))
                     .or_else(|| first.as_ref().map(|r| r.join(&p)))
                     .unwrap_or(p)
+            })
+            .collect()
+    }
+
+    /// The reverse index's answer for `target`, as locations. The span is a byte range in a
+    /// file that may not be open, so the source text is read to convert it — the open
+    /// buffer if there is one, else disk. A source that cannot be read any more falls back
+    /// to the line the index recorded, so the entry still points somewhere true.
+    fn inbound_refs(&self, target: &Path) -> Vec<InboundRef> {
+        let Ok(idx) = self.reverse.lock() else { return Vec::new() };
+        let open = self.open_docs();
+        let mut docs: HashMap<Arc<Path>, Option<Document>> = HashMap::new();
+        idx.inbound(target)
+            .iter()
+            .filter_map(|e| {
+                let uri = Url::from_file_path(&e.source).ok()?;
+                let doc = docs
+                    .entry(e.source.clone())
+                    .or_insert_with(|| open.read(&e.source).map(Document::new));
+                let range = match doc {
+                    Some(d) => {
+                        let (sl, sc) = d.byte_to_lsp(e.span.start);
+                        let (el, ec) = d.byte_to_lsp(e.span.end);
+                        Range::new(Position::new(sl, sc), Position::new(el, ec))
+                    }
+                    None => Range::new(Position::new(e.line, 0), Position::new(e.line, 0)),
+                };
+                Some(InboundRef {
+                    uri,
+                    range,
+                    kind: e.kind.name().to_string(),
+                    templated: e.templated,
+                })
             })
             .collect()
     }
@@ -1172,9 +1234,21 @@ impl Backend {
             // fail — so it's an error, not a silent gap.
             let diags = self.state.unparseable_diagnostic(uri);
             self.state.track(uri, &diags);
+            // An unparseable file contributes no edges (T-020) — and none of its old ones.
+            if let Ok(path) = uri.to_file_path() {
+                if let Ok(mut idx) = self.state.reverse.lock() {
+                    idx.remove(&path);
+                }
+            }
             self.client.publish_diagnostics(uri.clone(), diags, None).await;
             return;
         };
+        if let Ok(path) = uri.to_file_path() {
+            let edges = reverse::edges_of(&StdFs, &path, &a.refs, &a.doc);
+            if let Ok(mut idx) = self.state.reverse.lock() {
+                idx.replace(edges);
+            }
+        }
         let mut diagnostics = Self::diagnostics_of(&a);
         diagnostics.extend(Self::duplicate_key_diagnostics(&a));
         diagnostics.extend(self.state.mutated_condition_diagnostics(&a));
@@ -2232,8 +2306,12 @@ impl Backend {
             .map(|s| s.in_flight())
             .unwrap_or(4)
             .max(1);
-        let mut set: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, ScanTimings)>> =
+        let mut set: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, ScanTimings, reverse::SourceEdges)>> =
             tokio::task::JoinSet::new();
+        // Sources this pass produced edges for. Anything else in the index at the end is a
+        // file that was deleted or stopped parsing since the last pass — unless it is open,
+        // in which case the didChange path owns its entry.
+        let mut indexed: HashSet<PathBuf> = HashSet::new();
 
         // Publishing stays here on one task, so `still_flagged` needs no lock and the
         // open-buffer re-check keeps happening immediately before the publish it guards.
@@ -2242,8 +2320,17 @@ impl Backend {
         macro_rules! drain_one {
             () => {
                 if let Some(done) = set.join_next().await {
-                    if let Some((uri, diagnostics, ft)) = done.ok().flatten() {
+                    if let Some((uri, diagnostics, ft, edges)) = done.ok().flatten() {
                         t.add(&ft);
+                        // Re-checked here, not only at read time: a file opened while its
+                        // analysis was in flight has a buffer whose own publish already
+                        // replaced these edges from newer text.
+                        if state.text_of(&uri).is_none() {
+                            indexed.insert(edges.source.clone());
+                            if let Ok(mut idx) = state.reverse.lock() {
+                                idx.replace(edges);
+                            }
+                        }
                         if !diagnostics.is_empty() && state.text_of(&uri).is_none() {
                             still_flagged.insert(uri.clone());
                             client.publish_diagnostics(uri, diagnostics, None).await;
@@ -2277,7 +2364,8 @@ impl Backend {
                     ft.files = 1;
                     let mut diagnostics = Self::diagnostics_of(&a);
                     diagnostics.extend(st.mutated_condition_diagnostics(&a));
-                    Some((uri, diagnostics, ft))
+                    let edges = reverse::edges_of(&*sc, &path, &a.refs, &a.doc);
+                    Some((uri, diagnostics, ft, edges))
                 });
             }
         }
@@ -2303,6 +2391,11 @@ impl Backend {
         // a wholesale `*f = still_flagged` would drop those.
         if let Ok(mut f) = state.flagged.lock() {
             f.extend(still_flagged);
+        }
+        // Forget sources this pass did not reach and no buffer owns.
+        let open: HashSet<PathBuf> = state.open_docs().0.into_keys().collect();
+        if let Ok(mut idx) = state.reverse.lock() {
+            idx.retain_sources(|s| indexed.contains(s) || open.contains(s));
         }
 
         // Startup perf metrics (T-074), to the *Ansible LSP* output channel. Phases are
@@ -2345,6 +2438,18 @@ impl Backend {
     }
 
     /// Every resolvable reference and how many files it reaches.
+    /// Every reference in the workspace that reaches the asked-for file (T-020). Not
+    /// `textDocument/references`: that request is symbol-scoped, and T-011 is the record of
+    /// what forcing file-scoped data into it looks like.
+    async fn who_references(&self, p: ReferencesParams) -> Result<WhoReferences> {
+        let scanning = self.state.scanning.load(Ordering::SeqCst);
+        let Ok(path) = p.uri.to_file_path() else {
+            return Ok(WhoReferences { scanning, refs: Vec::new() });
+        };
+        let refs = self.state.inbound_refs(&path);
+        Ok(WhoReferences { scanning, refs })
+    }
+
     async fn resolved_references(&self, p: ReferencesParams) -> Result<Vec<ResolvedRef>> {
         let Some(a) = self.state.analyze(&p.uri) else {
             return Ok(Vec::new());
@@ -3783,6 +3888,22 @@ impl LanguageServer for Backend {
         if let Ok(mut d) = self.state.docs.lock() {
             d.remove(&p.text_document.uri);
         }
+        // The index held edges from the buffer, which may never have been saved. Re-read
+        // the file as the next scan would see it (T-020); gone or unparseable means no edges.
+        if let Ok(path) = p.text_document.uri.to_file_path() {
+            let edges = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| {
+                    Self::analyze_text_in(text, &path, &self.state.open_docs(), &self.state.var_cache)
+                })
+                .map(|a| reverse::edges_of(&StdFs, &path, &a.refs, &a.doc));
+            if let Ok(mut idx) = self.state.reverse.lock() {
+                match edges {
+                    Some(e) => idx.replace(e),
+                    None => idx.remove(&path),
+                }
+            }
+        }
         self.client
             .publish_diagnostics(p.text_document.uri, vec![], None)
             .await;
@@ -4223,11 +4344,13 @@ async fn main() {
             scanning: AtomicBool::new(false),
             var_cache: Mutex::new(VarCache::default()),
             scan_task: Mutex::new(None),
+            reverse: Default::default(),
             ansible_path: Mutex::new(None),
             install: Mutex::new(None),
         }),
     })
     .custom_method("ansible/references", Backend::resolved_references)
+    .custom_method("ansible/whoReferences", Backend::who_references)
     .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -8323,6 +8446,7 @@ mod tests {
             inventory: std::sync::Mutex::new(Vec::new()),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
             startup_note: std::sync::Mutex::new(String::new()),
@@ -9000,9 +9124,55 @@ mod tests {
 
     impl T199Server {
         fn new(name: &str) -> Self {
-            let root = t199_project(name);
+            Self::over(t199_project(name))
+        }
+
+        fn over(root: std::path::PathBuf) -> Self {
             let state = scan_state(&root);
             Self { service: lsp_service(state), root }
+        }
+
+        fn state(&self) -> std::sync::Arc<super::State> {
+            self.backend().state.clone()
+        }
+
+        /// The workspace scan, awaited — the detached form `initialized` spawns is the same
+        /// future.
+        async fn scan(&self) {
+            super::Backend::scan_workspace(self.state(), self.backend().client.clone()).await;
+        }
+
+        /// `textDocument/didClose`.
+        async fn close(&self, rel: &str) {
+            use tower_lsp::LanguageServer;
+            self.backend()
+                .did_close(tower_lsp::lsp_types::DidCloseTextDocumentParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: self.uri(rel) },
+                })
+                .await;
+        }
+
+        /// `ansible/whoReferences` on `rel`, flattened to what a reader compares: the source
+        /// relative to the project, its 1-based line, the kind, and the templated flag.
+        async fn who(&self, rel: &str) -> Vec<(String, u32, String, bool)> {
+            self.who_full(rel)
+                .await
+                .refs
+                .into_iter()
+                .map(|r| {
+                    let p = r.uri.to_file_path().unwrap();
+                    let p = super::canon(&p);
+                    let rel = p.strip_prefix(super::canon(&self.root)).unwrap_or(&p);
+                    (ansible_core::posix_display(rel), r.range.start.line + 1, r.kind, r.templated)
+                })
+                .collect()
+        }
+
+        async fn who_full(&self, rel: &str) -> super::WhoReferences {
+            self.backend()
+                .who_references(super::ReferencesParams { uri: self.uri(rel) })
+                .await
+                .expect("whoReferences does not error")
         }
 
         fn backend(&self) -> &super::Backend {
@@ -9097,6 +9267,159 @@ mod tests {
                 other => panic!("expected a definition, got {other:?}"),
             }
         }
+    }
+
+    // ---- T-020: the reverse index --------------------------------------------------------
+
+    const T020_PLAY: &str = concat!(
+        "- hosts: all\n",
+        "  roles:\n",
+        "    - top\n",
+        "  tasks:\n",
+        "    - import_tasks: tasks/a.yml\n",
+        "    - include_tasks: tasks/a.yml\n",
+        "    - include_tasks: \"tasks/validate-{{ op }}.yml\"\n",
+    );
+
+    fn t020_project(name: &str) -> std::path::PathBuf {
+        ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                ("tasks/a.yml", "- debug: {msg: a}\n"),
+                ("tasks/b.yml", "- debug: {msg: b}\n"),
+                ("tasks/validate-expose.yml", "- debug: {msg: expose}\n"),
+                ("tasks/validate-attach.yml", "- debug: {msg: attach}\n"),
+                ("roles/top/meta/main.yml", "dependencies:\n  - dep\n"),
+                ("roles/top/tasks/main.yml", "- debug: {msg: top}\n"),
+                ("roles/dep/tasks/main.yml", "- debug: {msg: dep}\n"),
+                ("play.yml", T020_PLAY),
+            ],
+        )
+    }
+
+    fn edge(src: &str, line: u32, kind: &str, templated: bool) -> (String, u32, String, bool) {
+        (src.to_string(), line, kind.to_string(), templated)
+    }
+
+    /// The scan fills the index and `ansible/whoReferences` answers from it: one edge per
+    /// reference line, one per candidate of a templated line, and a role's `meta/main.yml`
+    /// dependency counted like any other reference (T-018).
+    #[tokio::test]
+    async fn the_workspace_scan_builds_the_reverse_index_and_who_references_reads_it() {
+        let s = T199Server::over(t020_project("t020-scan"));
+
+        // Control: nothing is indexed before the scan, and the answer says so honestly —
+        // not "no references", which it cannot know yet.
+        assert!(s.who("tasks/a.yml").await.is_empty());
+
+        s.scan().await;
+
+        assert_eq!(
+            s.who("tasks/a.yml").await,
+            vec![edge("play.yml", 5, "import_tasks", false), edge("play.yml", 6, "include_tasks", false)],
+            "two lines naming one file are two edges"
+        );
+        assert_eq!(
+            s.who("tasks/validate-expose.yml").await,
+            vec![edge("play.yml", 7, "include_tasks", true)]
+        );
+        assert_eq!(
+            s.who("tasks/validate-attach.yml").await,
+            vec![edge("play.yml", 7, "include_tasks", true)],
+            "a templated line reaches every candidate"
+        );
+        assert_eq!(
+            s.who("roles/top/tasks/main.yml").await,
+            vec![edge("play.yml", 3, "role", false)]
+        );
+        assert_eq!(
+            s.who("roles/dep/tasks/main.yml").await,
+            vec![edge("roles/top/meta/main.yml", 2, "role", false)],
+            "a meta dependency is an edge"
+        );
+        // Controls: a file nothing names, and one the templated glob does not match.
+        assert!(s.who("play.yml").await.is_empty());
+        assert!(s.who("tasks/b.yml").await.is_empty());
+
+        // The range is the reference value itself, so the editor lands on the path.
+        let full = s.who_full("tasks/a.yml").await;
+        assert!(!full.scanning);
+        let doc = super::Document::new(T020_PLAY.to_string());
+        let (l, c) = doc.byte_to_lsp(T020_PLAY.find("tasks/a.yml").unwrap());
+        assert_eq!(full.refs[0].range.start, tower_lsp::lsp_types::Position::new(l, c));
+        assert_eq!(full.refs[0].range.end.character, c + "tasks/a.yml".len() as u32);
+    }
+
+    /// The editor's buffer owns a file's edges while it is open: an edit replaces them, a
+    /// parse failure removes them, and closing re-reads whatever is on disk.
+    #[tokio::test]
+    async fn an_edit_replaces_the_files_edges_and_closing_re_reads_disk() {
+        let s = T199Server::over(t020_project("t020-edit"));
+        s.scan().await;
+        s.open("play.yml", T020_PLAY).await;
+        assert_eq!(s.who("tasks/a.yml").await.len(), 2, "opening changes nothing");
+
+        s.change("play.yml", "- hosts: all\n  tasks:\n    - import_tasks: tasks/b.yml\n").await;
+        assert!(s.who("tasks/a.yml").await.is_empty(), "the old edges are gone");
+        assert_eq!(s.who("tasks/b.yml").await, vec![edge("play.yml", 3, "import_tasks", false)]);
+        assert!(s.who("roles/top/tasks/main.yml").await.is_empty());
+
+        s.change("play.yml", "- hosts: all\n  tasks:\n   - bad\n  indent: [\n").await;
+        assert!(s.who("tasks/b.yml").await.is_empty(), "an unparseable file contributes no edges");
+
+        // Never saved, so disk still has the original and the index must say so again.
+        s.close("play.yml").await;
+        assert_eq!(s.who("tasks/a.yml").await.len(), 2);
+        assert!(s.who("tasks/b.yml").await.is_empty());
+    }
+
+    /// A source deleted between scans takes its edges with it — otherwise a "who includes
+    /// this" would name a file that no longer exists.
+    #[tokio::test]
+    async fn a_rescan_forgets_a_deleted_source() {
+        let s = T199Server::over(t020_project("t020-rescan"));
+        s.scan().await;
+        assert_eq!(s.who("tasks/a.yml").await.len(), 2);
+
+        std::fs::remove_file(s.root.join("play.yml")).unwrap();
+        // Control: the index does not watch the filesystem, so nothing moves until a scan.
+        assert_eq!(s.who("tasks/a.yml").await.len(), 2);
+
+        s.scan().await;
+        assert!(s.who("tasks/a.yml").await.is_empty());
+        assert!(s.who("roles/top/tasks/main.yml").await.is_empty());
+        assert_eq!(
+            s.who("roles/dep/tasks/main.yml").await,
+            vec![edge("roles/top/meta/main.yml", 2, "role", false)],
+            "and a source that still exists keeps its edges"
+        );
+    }
+
+    /// Rule 4: the demo's shape is a claim, so pin it. Three targets whose inbound sets
+    /// exercise the three edge kinds the ticket names — a plain include, a templated include
+    /// with two candidates, and a `meta/main.yml` dependency.
+    #[tokio::test]
+    async fn demo_reverse_index_pins_a_plain_include_a_templated_pair_and_a_meta_dependency() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let s = T199Server::over(demo);
+        s.scan().await;
+        assert_eq!(
+            s.who("roles/notifier/tasks/shared.yml").await,
+            vec![edge("roles/notifier/handlers/main.yml", 14, "include_tasks", false)]
+        );
+        assert_eq!(
+            s.who("tasks/ftp_target/check.yml").await,
+            vec![edge("tasks/main.yml", 81, "include_tasks", true)]
+        );
+        assert_eq!(
+            s.who("tasks/http_target/check.yml").await,
+            vec![edge("tasks/main.yml", 81, "include_tasks", true)]
+        );
+        assert_eq!(
+            s.who("roles/chain-b/tasks/main.yml").await,
+            vec![edge("roles/chain-a/meta/main.yml", 3, "role", false)]
+        );
     }
 
     /// T-199, consumer 1 of 2 (rule 3): the hover states a *value*, so reading disk while the
@@ -9205,6 +9528,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         };
@@ -9815,6 +10139,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         })
@@ -9887,6 +10212,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         });
@@ -10067,6 +10393,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         });
@@ -10173,6 +10500,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         });
@@ -10380,6 +10708,7 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
         });
