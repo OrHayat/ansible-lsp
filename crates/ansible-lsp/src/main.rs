@@ -3880,33 +3880,66 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
-        if let Ok(path) = p.text_document.uri.to_file_path() {
+        let uri = p.text_document.uri;
+        if let Ok(path) = uri.to_file_path() {
             // The buffer is gone, so every later answer must come from disk again.
             invalidate_var_cache(&self.state.var_cache, &path);
             invalidate_render_sites(&self.state, &path);
         }
-        if let Ok(mut d) = self.state.docs.lock() {
-            d.remove(&p.text_document.uri);
-        }
-        // The index held edges from the buffer, which may never have been saved. Re-read
-        // the file as the next scan would see it (T-020); gone or unparseable means no edges.
-        if let Ok(path) = p.text_document.uri.to_file_path() {
-            let edges = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| {
-                    Self::analyze_text_in(text, &path, &self.state.open_docs(), &self.state.var_cache)
-                })
-                .map(|a| reverse::edges_of(&StdFs, &path, &a.refs, &a.doc));
-            if let Ok(mut idx) = self.state.reverse.lock() {
-                match edges {
-                    Some(e) => idx.replace(e),
-                    None => idx.remove(&path),
+        let buffer = self.state.docs.lock().ok().and_then(|mut d| d.remove(&uri));
+        // The index held edges from the buffer, which may never have been saved (T-020).
+        // Only when the buffer and the file differ is there anything to redo — the edges
+        // were computed from that exact text. Re-analysing unconditionally cost 219 ms per
+        // close on a 2,100-file tree (4 ms before the index), and a jump closes the preview
+        // tab it came from, so every "who references" landed on it.
+        if let Ok(path) = uri.to_file_path() {
+            let disk = std::fs::read_to_string(&path).ok();
+            if disk.as_deref() != buffer.as_deref() {
+                match disk {
+                    None => {
+                        if let Ok(mut idx) = self.state.reverse.lock() {
+                            idx.remove(&path);
+                        }
+                    }
+                    Some(text) => {
+                        // Off the runtime: the analysis walks the file's whole variable
+                        // graph, and a request must not queue behind it. Awaited, so a
+                        // test that closes and then asks sees the answer.
+                        let state = self.state.clone();
+                        let closed = uri.clone();
+                        let started = std::time::Instant::now();
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let edges = Self::analyze_text_in(text, &path, &state.open_docs(), &state.var_cache)
+                                .map(|a| reverse::edges_of(&StdFs, &path, &a.refs, &a.doc));
+                            // Reopened meanwhile: that buffer's own publish owns the entry.
+                            if state.text_of(&closed).is_some() {
+                                return None;
+                            }
+                            if let Ok(mut idx) = state.reverse.lock() {
+                                match edges {
+                                    Some(e) => idx.replace(e),
+                                    None => idx.remove(&path),
+                                }
+                            }
+                            Some(path)
+                        });
+                        if let Ok(Some(path)) = handle.await {
+                            self.client
+                                .log_message(
+                                    MessageType::INFO,
+                                    format!(
+                                        "ansible-lsp: re-read {} on close, its buffer differed from disk ({:.0} ms)",
+                                        path.display(),
+                                        started.elapsed().as_secs_f64() * 1e3
+                                    ),
+                                )
+                                .await;
+                        }
+                    }
                 }
             }
         }
-        self.client
-            .publish_diagnostics(p.text_document.uri, vec![], None)
-            .await;
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     async fn goto_definition(
