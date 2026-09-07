@@ -47,6 +47,17 @@ plus the consequence, never a claim that the path won't resolve.
 Also worth knowing: `include_vars` is a task, so it can carry `when:`/`loop:`. That's already
 captured by `TaskContext` and needs nothing new.
 
+## The pattern that makes the templated form matter
+
+[G-Research's write-up](https://www.gresearch.com/news/thinking-outside-the-box-with-ansible/)
+replaces `group_vars/` with a `loadvars` role at the top of every playbook that walks a
+region → env → product → service → customer directory tree with `include_vars`, choosing each
+path from the host's inventory tags at run time, under `hash_behaviour: merge`. Every variable
+in such an estate is loaded by a templated `include_vars`. T-228 records the consequence for
+definedness: from that role onward the variable set is open, and `var-undefined` on a name it
+may have loaded is a false warning. The templated-form box below is where that silence has to
+be decided, not only where the glob goes.
+
 ## Done when
 
 - [x] bare, `file:` and `dir:` forms all handled distinctly (incl. free-form `dir=` k=v)

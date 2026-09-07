@@ -22,6 +22,11 @@ Known candidates already spotted while closing T-098, none yet recorded in their
 | `DEFAULT_FILTER_PLUGIN_PATH`, `DEFAULT_TEST_PLUGIN_PATH` | T-115     |
 | `DEFAULT_LOOKUP_PLUGIN_PATH`                            | T-038      |
 | `DEFAULT_HASH_BEHAVIOUR` (changes how var dicts merge)  | T-051/T-112 |
+| `VARIABLE_PLUGINS_ENABLED`, `DEFAULT_VARS_PLUGIN_PATH`, `RUN_VARS_PLUGINS` | T-228 |
+| `DEFAULT_<TYPE>_PLUGIN_PATH` for every type not yet read (ini `<type>_plugins`) | T-227 |
+| `DEFAULT_STRATEGY`, `DEFAULT_BECOME_METHOD` — the cfg defaults behind T-109's keyword values | T-109 |
+| `INVENTORY_ENABLED` (`[inventory] enable_plugins`) — unread, so a `yaml` source disabled there is still indexed | T-152 |
+| `PLUGIN_FILTERS_CFG` — a rejectlist that blocks modules at load; a blocked module resolves fine for us. Unverified | T-118 |
 
 ## Approach
 
@@ -33,6 +38,16 @@ and its env/ini hooks, following the precedence pattern T-098's Cause section do
 (env → ini → default; the extra `vars`/`cli`/`keyword` rungs fire only when declared, and
 parse-time path settings declare none). A relevant setting with no owning ticket is a new
 ticket, filed as part of this one.
+
+## Recorded as runtime-only
+
+From the plugin-type survey of 2026-09-07 (2.21.3), settings that change how a play runs and
+nothing we compute: `CALLBACKS_ENABLED`, `DEFAULT_STDOUT_CALLBACK`, `DEFAULT_CALLBACK_PLUGIN_PATH`
+and the callback family; `DEFAULT_SHELL_PLUGIN_PATH`, `DEFAULT_TERMINAL_PLUGIN_PATH`,
+`DEFAULT_CLICONF_PLUGIN_PATH`, `DEFAULT_HTTPAPI_PLUGIN_PATH`, `DEFAULT_NETCONF_PLUGIN_PATH`;
+`DEFAULT_CACHE_PLUGIN_PATH` and the `CACHE_PLUGIN_*` tuning (only `CACHE_PLUGIN` itself matters,
+and is read). `DOC_FRAGMENT_PLUGIN_PATH` joins this list unless T-057 ever merges user-supplied
+fragments. T-227's type table is the per-type register these came from.
 
 ## Done when
 

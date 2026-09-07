@@ -48,6 +48,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [ ] T-119 — meta/runtime.yml has no schema validation anywhere
 - [x] T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
 - [ ] T-133 — NotInWorkspace hover lumps three different situations into one vague message
+- [ ] T-227 — One loader-path model for every plugin-type dir and cfg path
 
 ## Done when
 

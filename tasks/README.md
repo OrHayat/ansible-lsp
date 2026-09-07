@@ -101,6 +101,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | ~~T-020~~      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
+| T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | T-227      |
 
 ### P2 — coverage and usability
 
@@ -127,7 +128,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
 | T-113 | **epic** · [Workspace graph: the reverse index and what it unblocks](open/T-113-workspace-graph-the-reverse-index-and-what-it-unblocks.md) | L    | —    |
 | T-114 | **epic** · [Jinja and templating model](open/T-114-jinja-and-templating-model.md) | L    | —    |
-| T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | —    |
 | T-116 | [Undefined propagation: the Marker model](open/T-116-undefined-propagation-the-marker-model.md) | M    | —    |
 | T-118 | **epic** · [Collections and routing metadata](open/T-118-collections-and-routing-metadata.md) | L    | —    |
 | T-119 | [meta/runtime.yml has no schema validation anywhere](open/T-119-meta-runtime-yml-has-no-schema-validation-anywhere.md) | S    | T-064 |
@@ -164,6 +164,8 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
+| T-227 | [One loader-path model for every plugin-type dir and cfg path](open/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | S    | —    |
+| T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | T-227 |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
