@@ -107,6 +107,17 @@ pub struct Reference {
     /// what makes it the second half of `when_propagates` (T-166).
     pub apply_when: Vec<String>,
     pub apply_when_span: Option<Span>,
+    /// `vars:` written inside a dynamic include's `apply:`, as (name, value span) in
+    /// written order. They bind on the tasks the include brings in and **not** on the
+    /// including file — measured on 2.21.2: a task after the include reads the name as
+    /// undefined, while the included file and a further include nested inside it both see
+    /// it (T-167). Same Block mechanism as [`Reference::apply_when`], so the precedence is
+    /// block vars' (16): measured to beat a role's `vars/main.yml` and to lose to a task
+    /// `vars:`, `include_vars`, `set_fact` and an include param of the same name.
+    pub apply_vars: Vec<(String, Span)>,
+    /// Span of the whole `apply:` value, which is the range in *this* file those vars are
+    /// confined to.
+    pub apply_span: Option<Span>,
     /// The containing task has a `loop:`/`with_*`, so it may happen many times.
     pub repeated: bool,
     /// The containing task's `name:`, for labelling an execution tree.
@@ -171,6 +182,8 @@ impl Reference {
             when_propagates: false,
             apply_when: Vec::new(),
             apply_when_span: None,
+            apply_vars: Vec::new(),
+            apply_span: None,
             playbook_entry: false,
         }
     }
@@ -335,13 +348,29 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
         "import_tasks" | "import_role"
     );
     // A dynamic include's `apply:` is a Block wrapping what it brings in, so a `when:`
-    // inside it is inherited by every one of those tasks. Only the mapping spelling has
-    // one; `apply` on an import is an error and never reaches here (T-101).
-    let apply_when = action
-        .args
-        .get("apply")
-        .and_then(|a| a.get("when"))
-        .map(|w| (clauses_of(w), w.span()));
+    // inside it is inherited by every one of those tasks, and its `vars:` bind on them
+    // (T-167). Only the mapping spelling has one.
+    //
+    // Read **only** on the dynamic forms. `apply` on an import is not merely unsupported,
+    // it stops the run: measured on 2.21.2, both `import_tasks` and `import_role` die with
+    // "Invalid options for import_tasks: apply" before any task executes. An earlier
+    // comment here asserted such a task "never reaches here" — it does, measured on our own
+    // extractor, which handed an `ImportTasks` reference the entries. Reading them would
+    // have us answer a hover for a name that never binds, on a playbook that never runs.
+    let apply = matches!(crate::keywords::core_action(&action.name), "include_tasks" | "include_role")
+        .then(|| action.args.get("apply"))
+        .flatten();
+    let apply_when = apply.and_then(|a| a.get("when")).map(|w| (clauses_of(w), w.span()));
+    // The same Block's `vars:`, which bind on what the include brings in (T-167).
+    let apply_vars: Vec<(String, Span)> = apply
+        .and_then(|a| a.get("vars"))
+        .map(|v| {
+            v.entries()
+                .iter()
+                .filter_map(|(k, val)| Some((k.as_str()?.to_owned(), val.span())))
+                .collect()
+        })
+        .unwrap_or_default();
     // The task's `when:`/`loop:`/`name:` belong to every reference it produced.
     for r in &mut out[before..] {
         r.conditional = t.when_span.is_some();
@@ -352,6 +381,10 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
         if let Some((cl, sp)) = &apply_when {
             r.apply_when = cl.clone();
             r.apply_when_span = Some(*sp);
+        }
+        if !apply_vars.is_empty() {
+            r.apply_vars = apply_vars.clone();
+            r.apply_span = apply.map(Node::span);
         }
         r.repeated = t.looped;
         r.task_name = t.name.clone();
@@ -574,6 +607,69 @@ mod tests {
     /// The two are independent gates — measured, own `when: true` with
     /// `apply: {when: false}` skips the included task and so does the reverse — so the
     /// apply condition is kept beside the task's rather than replacing it.
+    /// `apply:` is include-only, and reading it anywhere else is a wrong answer rather than
+    /// a harmless one.
+    ///
+    /// Measured on 2.21.2: `include_tasks` and `include_role` both carry it, while
+    /// `import_tasks` and `import_role` die before any task runs — "Invalid options for
+    /// import_tasks: apply". So an import's `apply:` describes a playbook that cannot
+    /// execute, and indexing its `vars:` would offer a definition for a name that never
+    /// binds. Both halves are asserted here: without the two positive rows this would also
+    /// pass on an extractor that read `apply:` from nothing at all.
+    #[test]
+    fn apply_is_read_on_the_dynamic_includes_and_never_on_an_import() {
+        let of_action = |action: &str, arg: &str| {
+            let src = format!(
+                "- hosts: all\n  tasks:\n    - {action}:\n        {arg}\n        apply:\n          \
+                 vars:\n            applied: 1\n          when: go\n"
+            );
+            let nodes = Document::new(src).parse().expect("fixture parses");
+            let refs = extract(&nodes).refs;
+            assert!(!refs.is_empty(), "{action} produced a reference at all");
+            refs.iter()
+                .map(|r| {
+                    (
+                        r.apply_vars.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+                        r.apply_when.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let applied = (vec!["applied".to_string()], vec!["go".to_string()]);
+        let none: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+
+        assert_eq!(of_action("include_tasks", "file: inc.yml"), vec![applied.clone()]);
+        assert_eq!(of_action("include_role", "name: r"), vec![applied]);
+        assert_eq!(of_action("import_tasks", "file: inc.yml"), vec![none.clone()]);
+        assert_eq!(of_action("import_role", "name: r"), vec![none]);
+    }
+
+    /// A play's `roles:` entry is the third place `apply:` can be written, and it is neither
+    /// applied nor rejected there.
+    ///
+    /// Measured on 2.21.2: the role read `applied_var` as UNDEF while a variable literally
+    /// named `apply` held the whole mapping — `{'vars': {'applied_var': 'from_apply'}}`. It
+    /// is the T-100 shape, an unknown key in a `roles:` entry silently becoming a role param,
+    /// and `apply` is already on T-100's list of keys worth warning about. So the entry must
+    /// contribute no apply vars: indexing them would claim a binding the run does not make.
+    #[test]
+    fn a_roles_entry_apply_binds_nothing() {
+        let src = "- hosts: all
+  roles:
+    - role: re
+      apply:
+        vars:
+          applied: 1
+";
+        let nodes = Document::new(src.to_string()).parse().expect("fixture parses");
+        let refs = extract(&nodes).refs;
+        let role: Vec<_> = refs.iter().filter(|r| r.kind == ReferenceKind::Role).collect();
+        assert_eq!(role.len(), 1, "the entry still resolves as a role: {refs:#?}");
+        assert!(role[0].apply_vars.is_empty(), "and carries no apply vars");
+        assert!(role[0].apply_when.is_empty(), "nor an apply when");
+    }
+
     #[test]
     fn an_apply_when_propagates_while_the_includes_own_when_does_not() {
         let src = "- hosts: all\n  tasks:\n    - include_tasks:\n        file: t.yml\n        \

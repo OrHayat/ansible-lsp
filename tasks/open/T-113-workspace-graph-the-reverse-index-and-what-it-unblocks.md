@@ -47,7 +47,7 @@ the one child here that is finished by being abandoned.
 - [ ] T-068 — `role_path` from invocation chains, not folder shape
 - [ ] T-079 — "Extract to collection": move a local plugin/module and rewrite every reference
 - [ ] T-137 — playbook_dir in task files is the invoking playbook's dir, not a guess
-- [ ] T-167 — apply: vars: are invisible to the variable index
+- [x] T-167 — apply: vars: are invisible to the variable index
 
 ## Done when
 

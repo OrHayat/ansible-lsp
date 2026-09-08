@@ -47,6 +47,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-197 — A notify resolved only by a later dynamic include_role is fatal on order alone
 - [ ] T-198 — A handler with a templated name and no listen: can never be notified
 - [ ] T-205 — A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens
+- [ ] T-230 — tags: on a dynamic include without apply: tags: reaches none of the included tasks
 
 ## Done when
 

@@ -1,0 +1,12 @@
+# Reached only from demo/apply_vars.yml, which passes both names through `apply: vars:`.
+#
+# GOOD: each resolves to that call site — the definition is written in a file this one never
+# names, which is why it needs the reverse index (T-020) to be findable at all.
+- name: read what the caller applied
+  ansible.builtin.debug:
+    msg: "{{ apply_endpoint }} retries={{ apply_retries }}"
+
+# GOOD: an apply var reaches a further include too — measured, the Block wraps everything the
+# include loads, however deep.
+- name: and one level deeper
+  ansible.builtin.include_tasks: apply_deeper.yml

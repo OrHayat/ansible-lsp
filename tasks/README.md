@@ -167,6 +167,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-227 | [One loader-path model for every plugin-type dir and cfg path](open/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | S    | —    |
 | T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | T-227 |
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
+| T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](open/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -209,7 +210,6 @@ T-021 is now unblocked on that side.
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | ~~T-020~~      |
-| T-167 | [apply: vars: are invisible to the variable index](open/T-167-apply-vars-are-invisible-to-the-variable-index.md) | S    | ~~T-020~~      |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
@@ -337,6 +337,7 @@ T-021 is now unblocked on that side.
 | T-173 | [Expand inventory_hostname when the play names a literal host](closed/T-173-expand-inventory-hostname-when-the-play-names-a-literal-host.md) | done     |
 | T-157 | [A block or import_tasks in handlers: makes the handler's name unnotifiable](closed/T-157-a-block-or-import-tasks-in-handlers-makes-the-handler-s-name.md) | done     |
 | T-020 | [Reverse index](closed/T-020-reverse-index.md)                 | done     |
+| T-167 | [apply: vars: are invisible to the variable index](closed/T-167-apply-vars-are-invisible-to-the-variable-index.md) | done     |
 
 ## Settled — don't re-derive these
 

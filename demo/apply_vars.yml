@@ -1,0 +1,26 @@
+# T-167 — `apply:` on a dynamic include takes task keywords, `vars:` among them, and they
+# bind on every task the include brings in rather than on the include's own line.
+#
+# Live-verified on 2.21.2 before these labels were written: the names below print inside
+# `tasks/apply_target.yml` and inside the file that one includes further down, and read as
+# undefined again in this play once the include returns.
+- name: apply vars reach the file the include brings in
+  hosts: all
+  gather_facts: false
+  tasks:
+    # GOOD: inside tasks/apply_target.yml both names hover as `apply: vars` with the values
+    # written here, and Cmd+click lands on the value rather than on the key.
+    - name: include with apply vars
+      ansible.builtin.include_tasks:
+        file: tasks/apply_target.yml
+        apply:
+          vars:
+            apply_endpoint: https://api.internal:8443
+            apply_retries: 3
+
+    # NO HINT: the same name in this play, after the include returns. Ansible reads it as
+    # undefined here and so do we — the binding belongs to the included tasks, not to the
+    # play that wrote it.
+    - name: not defined here any more
+      ansible.builtin.debug:
+        msg: "{{ apply_endpoint | default('gone') }}"
