@@ -225,8 +225,59 @@ fn canon(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
+/// What every `apply: vars:` written on an include of `target` defines *inside* `target`
+/// (T-167).
+///
+/// The reverse direction, which is why this waited for T-020: the binding is written in the
+/// calling file and belongs to the called one, so neither file's own walk can see it. Read
+/// straight off the index — the edges already carry the entries — so this is a lookup, not a
+/// walk, and nothing is read from disk.
+///
+/// `file`/`span` point at the caller, because that is where the value is written and where a
+/// jump should land. `via` carries the include edge, so a hover can say how the definition
+/// got here rather than claiming a block this file does not have. `scope` is the `apply:`
+/// block itself, so the same name used in the *calling* file outside that block is not
+/// satisfied by it — measured on 2.21.2, where a task after the include reads it undefined.
+fn apply_var_definitions(rev: &Mutex<reverse::ReverseIndex>, target: &Path) -> Vec<vars::Located> {
+    let Ok(idx) = rev.lock() else { return Vec::new() };
+    idx.inbound(target)
+        .iter()
+        .filter_map(|e| Some((e, e.apply.as_ref()?)))
+        .flat_map(|(e, a)| {
+            let source = e.source.to_path_buf();
+            let edge_span = e.span;
+            let conditions = (!a.conditions.is_empty()).then(|| a.conditions.join(" and "));
+            a.vars.iter().map(move |(name, span)| vars::Located {
+                name: name.clone(),
+                source: vars::VarSource::ApplyVars,
+                span: *span,
+                file: source.clone(),
+                // The include's own `when:` decides whether it runs at all, so these bind
+                // only where it holds. `None` would read as "always defined".
+                condition: conditions.clone(),
+                via: vec![(source.clone(), edge_span)],
+                // Deliberately `None`. The scoping is structural — this definition only ever
+                // enters the *included* file's list, so it cannot reach the caller's own
+                // tasks. `Located::scope` is a range in `self.file`, which here is the
+                // caller, and the range that would actually be right is "the whole of the
+                // included file" — something that field cannot express. Filling it with the
+                // `apply:` block's span would be inert in every ordinary case and wrong in
+                // the one where it fires: a file that includes itself, where the included
+                // content is the whole file rather than the block.
+                scope: None,
+                // Bound by a task in another file, so every use in `target` is after it.
+                after: Some((source.clone(), edge_span.start)),
+            })
+        })
+        .collect()
+}
+
 /// Cached `vars::definitions`. On a miss, compute it and record its dependency files in the
 /// reverse map so later invalidation is precise.
+///
+/// `rev` adds the caller-side half (T-167). `None` means "do not ask the workspace graph",
+/// which is what the workspace scan passes: the graph is still being built while it runs, so
+/// an answer from it would depend on file order.
 fn cached_definitions(
     path: &Path,
     nodes: &[Node],
@@ -234,8 +285,9 @@ fn cached_definitions(
     inv: &[PathBuf],
     cache: &Mutex<VarCache>,
     install: Option<&Arc<AnsibleInstall>>,
+    rev: Option<&Mutex<reverse::ReverseIndex>>,
 ) -> Arc<Vec<vars::Located>> {
-    cached_definitions_in(
+    let walked = cached_definitions_in(
         path,
         nodes,
         &ScanCache::new(OverlayFs(open.clone()))
@@ -243,7 +295,19 @@ fn cached_definitions(
             .with_install(install.cloned()),
         inv,
         cache,
-    )
+    );
+    // Appended here rather than inside the memoized walk, and deliberately: these come from
+    // the workspace graph, so an edit to a *caller* changes them and the walk's own
+    // dependency set has no reason to record that file. Every reader of the definitions
+    // comes through this function, which is where a rule about them belongs (rule 3).
+    let Some(rev) = rev else { return walked };
+    let applied = apply_var_definitions(rev, path);
+    if applied.is_empty() {
+        return walked;
+    }
+    let mut all = (*walked).clone();
+    all.extend(applied);
+    Arc::new(all)
 }
 
 
@@ -835,8 +899,10 @@ impl State {
     /// file's folder, not the window's first (T-202).
     fn inventory_diagnostics(&self, a: &Analysis, path: &Path) -> Vec<Diagnostic> {
         let inv = self.inventory_setting_for(path);
-        let mut out = Backend::variable_coverage_diagnostics(a, path, &a.nodes, &inv, &self.var_cache);
-        out.extend(Backend::inert_import_var_diagnostics(a, path, &inv, &self.var_cache));
+        let rev = Some(&self.reverse);
+        let mut out =
+            Backend::variable_coverage_diagnostics(a, path, &a.nodes, &inv, &self.var_cache, rev);
+        out.extend(Backend::inert_import_var_diagnostics(a, path, &inv, &self.var_cache, rev));
         let cache = ScanCache::default().with_inventory(inv).with_install(self.install());
         out.extend(Backend::unknown_host_diagnostics(a, path, &cache));
         out
@@ -1689,6 +1755,7 @@ impl Backend {
         path: &Path,
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Vec<Diagnostic> {
         const RULE: &str = "inert-import-var";
         let imports: Vec<&Reference> = a
@@ -1702,7 +1769,7 @@ impl Backend {
         if imports.is_empty() {
             return Vec::new();
         }
-        let defs = cached_definitions(path, &a.nodes, &a.open, inv, cache, a.ctx.install.as_ref());
+        let defs = cached_definitions(path, &a.nodes, &a.open, inv, cache, a.ctx.install.as_ref(), rev);
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut out = Vec::new();
         for r in imports {
@@ -1767,8 +1834,9 @@ impl Backend {
         nodes: &[Node],
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Vec<Diagnostic> {
-        let defs = cached_definitions(path, nodes, &a.open, inv, cache, a.ctx.install.as_ref());
+        let defs = cached_definitions(path, nodes, &a.open, inv, cache, a.ctx.install.as_ref(), rev);
         let mut out = Vec::new();
         for u in vars::uses(nodes) {
             if u.guard.is_empty() {
@@ -2486,6 +2554,7 @@ impl Backend {
                 &self.state.inventory_setting_for(&path),
                 &self.state.var_cache,
                 self.state.install().as_ref(),
+                Some(&self.state.reverse),
             );
             for u in vars::uses(nodes) {
                 // In-effect count depends on the use position (a later set_fact hasn't run),
@@ -2523,11 +2592,12 @@ impl Backend {
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
         install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<Vec<Location>> {
         let Some((reference, in_playbook)) = Self::reference_at(doc, nodes, pos) else {
             // Not on a file/role/module reference — maybe on a variable use. Jump to where
             // it's defined in this file (cross-file sources are a later step).
-            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache, install)
+            return Self::variable_defs_at(doc, nodes, pos, uri, open, inv, cache, install, rev)
                 // Or on the host half of a `hostvars['web01']` read (T-171), or of a
                 // `hostvars[inventory_hostname]` read the play pins to one host (T-173).
                 .or_else(|| {
@@ -2655,6 +2725,7 @@ impl Backend {
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
         install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<Vec<Location>> {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         // The full view, not the rule-facing one: a definition of `ansible_custom` is a
@@ -2663,7 +2734,7 @@ impl Backend {
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
-        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache, install)
+        let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache, install, rev)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
             .cloned()
@@ -2691,12 +2762,13 @@ impl Backend {
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
         install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<(String, Range)> {
         let idents = template_idents(&r.value);
         if idents.is_empty() {
             return None;
         }
-        let defs = cached_definitions(path, nodes, open, inv, cache, install);
+        let defs = cached_definitions(path, nodes, open, inv, cache, install, rev);
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
@@ -2774,6 +2846,7 @@ impl Backend {
         inv: &[PathBuf],
         cache: &Mutex<VarCache>,
         install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<(String, Range)> {
         // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
         // ones, so asking it first and falling back to a second, complementary scan walked
@@ -2781,7 +2854,7 @@ impl Backend {
         let use_ = vars::any_uses(nodes)
             .into_iter()
             .find(|u| byte >= u.span.start && byte < u.span.end)?;
-        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install)
+        let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install, rev)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
             .cloned()
@@ -2916,6 +2989,10 @@ fn source_label(s: vars::VarSource) -> &'static str {
         RoleParams => "role param",
         RoleEntryVars => "roles: entry vars",
         AddHost => "add_host",
+        // Not "block var": the block is written in another file, on the include that
+        // brought this one in, so naming it after the keyword the user wrote is the only
+        // label that leads back to it.
+        ApplyVars => "apply: vars",
     }
 }
 
@@ -2928,7 +3005,7 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
         | GroupVarsAll | GroupVars | HostVars | Inventory | IncludeVars | RoleParams
-        | RoleEntryVars | AddHost => {
+        | RoleEntryVars | AddHost | ApplyVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
                 return None;
@@ -3584,6 +3661,7 @@ fn hover_at(
     inv: &[PathBuf],
     cache: &Mutex<VarCache>,
     install: Option<&Arc<AnsibleInstall>>,
+    rev: Option<&Mutex<reverse::ReverseIndex>>,
 ) -> Option<(String, Range)> {
     let ctx = FileContext::discover(path).with_install(install.cloned());
     let range = |s: Span| {
@@ -3623,12 +3701,12 @@ fn hover_at(
         // Resolve just this reference. A templated path gets the substitution hover
         // (what the `{{ }}` expands to and where those values are defined); a literal
         // one gets the resolved target and the candidates tried, winner marked.
-        let defs = cached_definitions(path, nodes, open, inv, cache, install);
+        let defs = cached_definitions(path, nodes, open, inv, cache, install, rev);
         let literals = vars::known_literals(&defs, path, &doc.text);
         let res = resolve::Resolver { literals: Some(&literals), in_playbook, ..Default::default() }
             .resolve(r, &ctx);
         if r.templated {
-            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache, install) {
+            if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache, install, rev) {
                 return Some(hit);
             }
         }
@@ -3672,7 +3750,7 @@ fn hover_at(
     }
 
     // Variable hover: where the variable under the cursor is defined, and its value.
-    Backend::variable_hover_at(doc, nodes, byte, path, open, inv, cache, ctx.install.as_ref())
+    Backend::variable_hover_at(doc, nodes, byte, path, open, inv, cache, ctx.install.as_ref(), rev)
 }
 
 #[tower_lsp::async_trait]
@@ -3829,6 +3907,7 @@ impl LanguageServer for Backend {
                 &inv,
                 &self.state.var_cache,
                 self.state.install().as_ref(),
+                Some(&self.state.reverse),
             )
             .map(
                 |(value, range)| Hover {
@@ -3981,6 +4060,7 @@ impl LanguageServer for Backend {
                 &self.state.inventory_setting_for(&path),
                 &self.state.var_cache,
                 self.state.install().as_ref(),
+                Some(&self.state.reverse),
             )
                 .map(GotoDefinitionResponse::Array),
         )
@@ -4480,13 +4560,13 @@ mod tests {
 
         let hover = |needle: &str| {
             let byte = text.find(needle).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .map(|h| h.0)
         };
         let jump = |needle: &str| {
             let byte = text.find(needle).unwrap() + 3;
             let (l, c) = doc.byte_to_lsp(byte);
-            super::Backend::variable_defs_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &no_buffers(), &[], &no_cache(), None)
+            super::Backend::variable_defs_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &no_buffers(), &[], &no_cache(), None, None)
         };
 
         for name in ["ansible_custom", "plain_custom"] {
@@ -4523,7 +4603,7 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
         let msgs: Vec<String> =
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -4550,7 +4630,7 @@ mod tests {
         let run = |text: &str| -> Vec<Diagnostic> {
             std::fs::write(&path, text).unwrap();
             let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-deprecated"))
                 .collect()
@@ -4577,7 +4657,7 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
         let msgs: Vec<String> =
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -7502,7 +7582,7 @@ mod tests {
         let doc = ansible_core::parse::Document::new(text.clone());
         let nodes = doc.parse().unwrap();
         let byte = text.find("{{ shared_endpoint }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
             .expect("hover expected");
         assert!(md.contains("vars_files"), "provenance label in: {md}");
         assert!(md.contains("vars/shared.yml"), "defining file in: {md}");
@@ -7524,7 +7604,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("demo fixture");
         let a = super::Backend::analyze_text(text, &path).unwrap();
         let undefined: Vec<String> =
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -7555,7 +7635,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
 
         let byte = text.find("{{ pod_namespace }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
             .expect("hover on an add_host-defined variable");
         assert!(md.contains("add_host"), "provenance label in: {md}");
         // The value, which is why the definition's span points at it rather than at the
@@ -7573,6 +7653,7 @@ mod tests {
                         &[],
                             &no_cache(),
                             None,
+                            None,
             )
         .expect("jump from an add_host-defined variable");
         assert_eq!(locs.len(), 1, "{locs:?}");
@@ -7589,7 +7670,7 @@ mod tests {
         // hover working at all: the consumed parameter beside it defines nothing, so
         // neither consumer may answer for it.
         let consumed = text.find("{{ name }}").unwrap() + 3;
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, consumed, &path, &no_buffers(), &[], &no_cache(), None, None).is_none());
         let (line, character) = doc.byte_to_lsp(consumed);
         assert!(super::Backend::definition_at(
             &doc,
@@ -7600,6 +7681,7 @@ mod tests {
         , &no_buffers(),
                 &[],
                             &no_cache(),
+                            None,
                             None,
             )
         .is_none());
@@ -7669,7 +7751,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let byte = text.rfind("{{ other }}").unwrap() + 3;
         let h = super::Backend::variable_hover_at(
-            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None,
         )
         .expect("hover answers for a name the include defines")
         .0;
@@ -7710,7 +7792,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let hover_at_last = |name: &str| {
             let byte = text.rfind(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None).map(|h| h.0)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None).map(|h| h.0)
         };
 
         // Used inside its own entry: in scope, so the definition is offered.
@@ -7724,7 +7806,7 @@ mod tests {
 
         // ...and that warning names the real problem instead of "never defined".
         let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
-        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
             .into_iter()
             .map(|d| d.message)
             .collect();
@@ -7756,14 +7838,14 @@ mod tests {
         // is defined in three and its value depends on group membership we cannot know.
         {
             let byte = at("'web01'].web01_ib_ip");
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .expect("no hover on the host_vars read")
                 .0;
             assert!(md.contains("10.0.0.1"), "hover shows the value: {md}");
             let (line, character) = doc.byte_to_lsp(byte);
             let pos = tower_lsp::lsp_types::Position { line, character };
             assert!(
-                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None).is_some(),
+                super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None, None).is_some(),
                 "no jump target on the host_vars read"
             );
         }
@@ -7771,10 +7853,10 @@ mod tests {
         // INVISIBLE: a play var. Hover declines and go-to-definition declines, because
         // offering the play var would point at a value this read can never produce.
         let byte = at("'web01'].play_scoped");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None).is_none());
         let (line, character) = doc.byte_to_lsp(byte);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, pos, &uri, &no_buffers(), &[], &no_cache(), None, None).is_none());
 
         // ...and the warning takes over on exactly the two BAD rows, naming the source it
         // found rather than claiming the variable was never defined.
@@ -7784,7 +7866,7 @@ mod tests {
         // unsound while inventory is unparsed: a name in play `vars:` AND in inventory
         // reads fine through hostvars, measured. So the demo's BAD rows are BAD about
         // *Ansible*, and we stay quiet about them until T-062.
-        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache());
+        let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None);
         let msgs: Vec<String> = ds.into_iter().map(|d| d.message).collect();
         assert!(msgs.is_empty(), "no claim about a hostvars read: {msgs:?}");
         // The control that keeps that silence meaningful: the same check is alive in this
@@ -7795,11 +7877,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes, &[], &no_cache()).len(),
+            super::Backend::variable_coverage_diagnostics(&live, &path, &live.nodes, &[], &no_cache(), None).len(),
             1
         );
         let inv = at("'web01'].infiniband_ip");
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, inv, &path, &no_buffers(), &[], &no_cache(), None, None).is_none());
 
         // T-171, the other half of the same line: the HOST key. `host_vars/web01.yml` is a
         // deterministic path — the filename is the host name — so this resolves without an
@@ -7810,7 +7892,7 @@ mod tests {
         let key = text.find("hostvars['web01']").unwrap() + "hostvars['".len() + 1;
         let (line, character) = doc.byte_to_lsp(key);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+        let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None, None)
             .expect("host key jumps");
         assert_eq!(locs.len(), 1);
         assert!(
@@ -7857,7 +7939,7 @@ mod tests {
         // branch is last in the chain and must not shadow it.
         let (line, character) = doc.byte_to_lsp(at("'web01'].web01_ib_ip"));
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None).expect("var jumps");
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None, None).expect("var jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/web01.yml"));
 
         // T-173, the second play: `hosts: localhost` pins `inventory_hostname`, so the magic
@@ -7875,7 +7957,7 @@ mod tests {
         for at in &magic {
             let (line, character) = doc.byte_to_lsp(*at);
             let pos = tower_lsp::lsp_types::Position { line, character };
-            let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+            let locs = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .expect("the pinned magic name jumps");
             assert_eq!(locs.len(), 1);
             assert!(locs[0].uri.path().ends_with("demo/host_vars/localhost.yml"), "{}", locs[0].uri);
@@ -7905,7 +7987,7 @@ mod tests {
         let var_at = text[second..].find("].deploy_region").unwrap() + second + 2;
         let (line, character) = doc.byte_to_lsp(var_at);
         let pos = tower_lsp::lsp_types::Position { line, character };
-        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+        let v = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None, None)
             .expect("the variable half jumps");
         assert!(v[0].uri.path().ends_with("demo/host_vars/localhost.yml"));
         assert_ne!(v[0].range.start.line, 0, "lands on the definition line, not the file top");
@@ -7947,12 +8029,12 @@ mod tests {
         let nested_key = key_on("nested_map:");
 
         for (byte, what) in [(set_fact_key, "set_fact"), (set_stats_key, "set_stats data")] {
-            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            let md = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .unwrap_or_else(|| panic!("no hover on the {what} key"))
                 .0;
             assert!(md.contains("my_result"), "{what} hover shows the play var: {md}");
 
-            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[], &no_cache(), None)
+            let locs = super::Backend::variable_defs_at(&doc, &nodes, at(byte), &uri, &no_buffers(), &[], &no_cache(), None, None)
                 .unwrap_or_else(|| panic!("no jump target on the {what} key"));
             // Jumps to the play var it reads, not to the key it sits in.
             assert_eq!(locs.len(), 1, "{what}: {locs:?}");
@@ -7966,8 +8048,8 @@ mod tests {
 
         // The boundary row: nested in a fact's value the braces are data, so both views
         // stay silent rather than claiming a name Ansible keeps literal.
-        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[], &no_cache(), None).is_none());
-        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::variable_hover_at(&doc, &nodes, nested_key, &path, &no_buffers(), &[], &no_cache(), None, None).is_none());
+        assert!(super::Backend::variable_defs_at(&doc, &nodes, at(nested_key), &uri, &no_buffers(), &[], &no_cache(), None, None).is_none());
     }
 
     #[test]
@@ -7981,7 +8063,7 @@ mod tests {
 
         let hover = |name: &str| {
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .expect("hover expected")
                 .0
         };
@@ -8005,7 +8087,7 @@ mod tests {
         for depth in 0..=5usize {
             let name = format!("chain_depth{depth}");
             let byte = text.find(&format!("{{{{ {name} }}}}")).unwrap() + 3;
-            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .expect("hover expected");
             println!("--- {name} ---\n{md}\n");
             // One nested "dependency of" line per hop.
@@ -8025,7 +8107,7 @@ mod tests {
 
         // include_vars through the chain: mechanism on the def line, route underneath.
         let byte = text.find("{{ chain_included }}").unwrap() + 3;
-        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
             .expect("hover expected");
         println!("--- chain_included ---\n{md}\n");
         assert!(md.contains("include_vars"), "wrong source:\n{md}");
@@ -8061,7 +8143,7 @@ mod tests {
             let byte = text.find(&format!("{label} {{{{ thing }}}}")).unwrap() + label.len() + 4;
             plain(
                 &super::Backend::variable_hover_at(
-                    &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+                    &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None,
                 )
                 .expect("hover answers")
                 .0,
@@ -8289,7 +8371,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let byte = text.rfind("{{ thing }}").unwrap() + 3;
         let (md, _) = super::Backend::variable_hover_at(
-            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None,
         )
         .expect("hover answers");
         let flat = plain(&md);
@@ -8317,7 +8399,7 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let byte = text.rfind("{{ chain_c_tuning }}").unwrap() + 3;
         let (md, _) = super::Backend::variable_hover_at(
-            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None,
+            &doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None,
         )
         .expect("hover answers for the twice-loaded name");
         let flat = plain(&md);
@@ -8552,7 +8634,7 @@ mod tests {
         assert!(!res.targets.is_empty(), "fixture: the substitution must resolve");
 
         let (md, range) =
-            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[], &no_cache(), None).expect("hover");
+            super::Backend::path_substitution_hover(&doc, &nodes, r, &res, &play, &no_buffers(), &[], &no_cache(), None, None).expect("hover");
         assert!(md.contains("prod.yml"), "the target it reached: {md}");
         assert!(md.contains("Substituting"), "the section header: {md}");
         assert!(md.contains("env"), "the variable substituted: {md}");
@@ -8567,7 +8649,7 @@ mod tests {
             let pres = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
             .resolve(pr, &ctx);
             assert!(
-                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache(), None).is_none(),
+                super::Backend::path_substitution_hover(&doc, &nodes, pr, &pres, &play, &no_buffers(), &[], &no_cache(), None, None).is_none(),
                 "a literal path has nothing to substitute"
             );
         }
@@ -8582,7 +8664,7 @@ mod tests {
         let r2 = &refs2[0];
         let res2 = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
             .resolve(r2, &ctx);
-        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache(), None).is_none());
+        assert!(super::Backend::path_substitution_hover(&d2, &n2, r2, &res2, &play, &no_buffers(), &[], &no_cache(), None, None).is_none());
     }
 
     /// T-029 box 4: a resolved module hovers one line of provenance — collection and
@@ -8858,7 +8940,7 @@ mod tests {
         for hints in [true, false] {
             let settings = Settings { hints, ..Settings::default() };
             let hover = |byte: usize| {
-                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[], &no_cache(), None)
+                super::hover_at(&doc, &nodes, &path, byte, settings, &no_buffers(), &[], &no_cache(), None, None)
                     .unwrap_or_else(|| panic!("hover expected at {byte} (hints={hints})"))
                     .0
             };
@@ -8895,13 +8977,13 @@ mod tests {
         let nodes = doc.parse().unwrap();
         let settings = Settings { hints: true, ..Settings::default() };
 
-        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None)
+        let md = super::hover_at(&doc, &nodes, &path, text.find("ping:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None, None)
             .expect("module hover expected")
             .0;
         assert!(md.contains("ansible.legacy"), "provenance, not the condition, in: {md}");
 
         // And the condition is still reachable — on its keyword.
-        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None)
+        let kw = super::hover_at(&doc, &nodes, &path, text.find("when:").unwrap() + 1, settings, &no_buffers(), &[], &no_cache(), None, None)
             .expect("when hover expected")
             .0;
         assert!(plain(&kw).contains("when:"), "condition on its keyword in: {kw}");
@@ -9074,7 +9156,7 @@ mod tests {
             let nodes = doc.parse().expect("fixture parses");
             let needle = format!("vars/{{{{ {name} }}}}.yml");
             let byte = PLAY.find(&needle).expect("fixture carries the path") + 1;
-            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None)
+            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None, None)
                 .map(|h| h.0)
                 .unwrap_or_default()
         };
@@ -9183,6 +9265,70 @@ mod tests {
                     text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: self.uri(rel) },
                 })
                 .await;
+        }
+
+        /// Open `rel` as it is on disk. The hover and definition handlers answer from the
+        /// buffer, so a file has to be open before it can be asked about.
+        async fn open_disk(&self, rel: &str) {
+            let text = std::fs::read_to_string(self.root.join(rel)).expect("fixture readable");
+            self.open(rel, &text).await;
+        }
+
+        /// The byte offset of `needle` in `rel`, plus `off`, as an LSP position.
+        fn at(&self, rel: &str, needle: &str, off: usize) -> tower_lsp::lsp_types::Position {
+            let text = std::fs::read_to_string(self.root.join(rel)).expect("fixture readable");
+            let byte = text.find(needle).unwrap_or_else(|| panic!("{rel} carries {needle:?}")) + off;
+            let (l, c) = super::Document::new(text).byte_to_lsp(byte);
+            tower_lsp::lsp_types::Position::new(l, c)
+        }
+
+        /// `textDocument/hover` at `needle` in `rel`, as markdown.
+        async fn hover_in(&self, rel: &str, needle: &str, off: usize) -> Option<String> {
+            use tower_lsp::LanguageServer;
+            let p = tower_lsp::lsp_types::HoverParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: self.uri(rel) },
+                    position: self.at(rel, needle, off),
+                },
+                work_done_progress_params: Default::default(),
+            };
+            match self.backend().hover(p).await.expect("hover does not error") {
+                Some(h) => match h.contents {
+                    tower_lsp::lsp_types::HoverContents::Markup(m) => Some(m.value),
+                    other => panic!("unexpected hover shape: {other:?}"),
+                },
+                None => None,
+            }
+        }
+
+        /// `textDocument/definition` at `needle` in `rel`, as (file relative to the project,
+        /// the text the target range covers).
+        async fn def_in(&self, rel: &str, needle: &str, off: usize) -> Vec<(String, String)> {
+            use tower_lsp::LanguageServer;
+            let p = tower_lsp::lsp_types::GotoDefinitionParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: self.uri(rel) },
+                    position: self.at(rel, needle, off),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            };
+            let locs = match self.backend().goto_definition(p).await.expect("definition does not error") {
+                Some(tower_lsp::lsp_types::GotoDefinitionResponse::Scalar(l)) => vec![l],
+                Some(tower_lsp::lsp_types::GotoDefinitionResponse::Array(v)) => v,
+                _ => Vec::new(),
+            };
+            locs.into_iter()
+                .map(|l| {
+                    let path = super::canon(&l.uri.to_file_path().unwrap());
+                    let rel = path.strip_prefix(super::canon(&self.root)).unwrap_or(&path).to_path_buf();
+                    let text = std::fs::read_to_string(&path).expect("target readable");
+                    let doc = super::Document::new(text.clone());
+                    let a = doc.lsp_to_byte(l.range.start.line, l.range.start.character);
+                    let b = doc.lsp_to_byte(l.range.end.line, l.range.end.character);
+                    (ansible_core::posix_display(&rel), text[a..b].to_string())
+                })
+                .collect()
         }
 
         /// `ansible/whoReferences` on `rel`, flattened to what a reader compares: the source
@@ -9300,6 +9446,205 @@ mod tests {
                 other => panic!("expected a definition, got {other:?}"),
             }
         }
+    }
+
+    // ---- T-167: apply: vars: --------------------------------------------------------
+    //
+    // Every claim below was measured against 2.21.2 before it was written (rule 1). The run:
+    // `apply: {vars: {applied_var: from_apply}}` over a file reading `{{ applied_var }}`
+    // printed `from_apply` inside the included file and a *further* include nested in it,
+    // while a task after the include in the same play read it undefined. Collisions, both
+    // directions: it beat a role's `vars/main.yml` and lost to a task `vars:`,
+    // `include_vars`, `set_fact` and an include param — i.e. block vars, level 16.
+
+    fn t167_project(name: &str) -> std::path::PathBuf {
+        ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                ("inc.yml", "- debug:\n    msg: \"{{ applied_var }}\"\n"),
+                (
+                    "play.yml",
+                    concat!(
+                        "- hosts: all\n",
+                        "  tasks:\n",
+                        "    - include_tasks:\n",
+                        "        file: inc.yml\n",
+                        "        apply:\n",
+                        "          vars:\n",
+                        "            applied_var: from_apply\n",
+                        "    - debug:\n",
+                        "        msg: \"{{ applied_var }}\"\n",
+                    ),
+                ),
+            ],
+        )
+    }
+
+    /// Box 1: the included file's use resolves to the `apply: vars:` entry at its call site,
+    /// and the jump lands on the *value*.
+    ///
+    /// Both consumers, not one (rule 3): hover and go-to-definition read the same list, and
+    /// T-100 is the record of what happens when a rule about definitions reaches only one of
+    /// them — the tool called a name undefined while the hover pointed at its definition.
+    #[tokio::test]
+    async fn an_apply_var_is_defined_inside_the_file_the_include_brings_in() {
+        let s = T199Server::over(t167_project("t167-inside"));
+        s.scan().await;
+        s.open_disk("inc.yml").await;
+
+        assert_eq!(
+            s.def_in("inc.yml", "{{ applied_var }}", 3).await,
+            vec![("play.yml".to_string(), "from_apply".to_string())],
+            "the jump lands on the value written at the call site"
+        );
+
+        let md = s.hover_in("inc.yml", "{{ applied_var }}", 3).await.expect("hover");
+        assert!(md.contains("apply: vars"), "labelled by the keyword the user wrote: {md}");
+        assert!(md.contains("from_apply"), "with its value: {md}");
+        assert!(md.contains("play.yml"), "and the file it came from: {md}");
+        // Not "block var" — the block is in another file, and that label leads nowhere.
+        assert!(!md.contains("block var"), "{md}");
+    }
+
+    /// Box 2: the same name in the *calling* play is undefined, which is what ansible does —
+    /// measured, a task after the include read it as undefined.
+    ///
+    /// The control is the test above: the identical expression one file away does resolve, so
+    /// a version of this that passed by indexing nothing at all would fail there.
+    #[tokio::test]
+    async fn an_apply_var_does_not_leak_into_the_calling_play() {
+        let s = T199Server::over(t167_project("t167-leak"));
+        s.scan().await;
+        s.open_disk("play.yml").await;
+
+        // The second `{{ applied_var }}` in play.yml is the one after the include.
+        let text = std::fs::read_to_string(s.root.join("play.yml")).unwrap();
+        let after = text.rfind("{{ applied_var }}").unwrap() + 3;
+        let (l, c) = super::Document::new(text).byte_to_lsp(after);
+        let pos = tower_lsp::lsp_types::Position::new(l, c);
+
+        use tower_lsp::LanguageServer;
+        let d = s
+            .backend()
+            .goto_definition(tower_lsp::lsp_types::GotoDefinitionParams {
+                text_document_position_params: tower_lsp::lsp_types::TextDocumentPositionParams {
+                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: s.uri("play.yml") },
+                    position: pos,
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .await
+            .expect("definition does not error");
+        assert!(d.is_none(), "the apply vars bind on the include's tasks, not on the play: {d:?}");
+    }
+
+    /// The definitions come from the workspace graph, so an edit to the *caller* changes what
+    /// the callee sees. Nothing else in the index re-reads a file it did not itself change,
+    /// which is why this is worth a test rather than an assumption.
+    #[tokio::test]
+    async fn editing_the_callers_apply_block_changes_what_the_included_file_sees() {
+        let s = T199Server::over(t167_project("t167-edit"));
+        s.scan().await;
+        s.open_disk("inc.yml").await;
+        assert_eq!(s.def_in("inc.yml", "{{ applied_var }}", 3).await.len(), 1, "control");
+
+        s.open_disk("play.yml").await;
+        s.change(
+            "play.yml",
+            concat!(
+                "- hosts: all\n",
+                "  tasks:\n",
+                "    - include_tasks:\n",
+                "        file: inc.yml\n",
+                "        apply:\n",
+                "          vars:\n",
+                "            something_else: 1\n",
+            ),
+        )
+        .await;
+        assert!(
+            s.def_in("inc.yml", "{{ applied_var }}", 3).await.is_empty(),
+            "the entry the caller dropped stops defining anything"
+        );
+    }
+
+    /// Rule 4: `demo/apply_vars.yml` and the two files it reaches carry GOOD / NO HINT
+    /// labels, and each is a claim about what this tool does. The whole fixture was run
+    /// against 2.21.2 first: `apply_target.yml` printed both values, `apply_deeper.yml`
+    /// printed the endpoint, and the play's own task after the include printed `gone`.
+    #[tokio::test]
+    async fn demo_apply_vars_labels_hold() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let s = T199Server::over(demo);
+        s.scan().await;
+        s.open_disk("tasks/apply_target.yml").await;
+
+        // GOOD, both names, jumping to the value at the call site.
+        assert_eq!(
+            s.def_in("tasks/apply_target.yml", "{{ apply_endpoint }}", 3).await,
+            vec![("apply_vars.yml".to_string(), "https://api.internal:8443".to_string())]
+        );
+        assert_eq!(
+            s.def_in("tasks/apply_target.yml", "{{ apply_retries }}", 3).await,
+            vec![("apply_vars.yml".to_string(), "3".to_string())]
+        );
+        let md = s.hover_in("tasks/apply_target.yml", "{{ apply_endpoint }}", 3).await.expect("hover");
+        assert!(md.contains("apply: vars"), "{md}");
+        assert!(md.contains("https://api.internal:8443"), "{md}");
+
+        // NO HINT, one level deeper: true at runtime, out of our reach, and silent rather
+        // than wrong. The label says exactly that.
+        s.open_disk("tasks/apply_deeper.yml").await;
+        assert!(
+            s.def_in("tasks/apply_deeper.yml", "{{ apply_endpoint", 3).await.is_empty(),
+            "the transitive case is a documented miss, not an answer"
+        );
+
+        // NO HINT, back in the calling play once the include has returned.
+        s.open_disk("apply_vars.yml").await;
+        assert!(
+            s.def_in("apply_vars.yml", "{{ apply_endpoint | default", 3).await.is_empty(),
+            "the binding does not outlive the include"
+        );
+    }
+
+    /// The `every_other_demo_file_is_free_of_…` half (rule 4): exactly one demo include
+    /// carries `apply: vars:`, so the feature cannot start answering elsewhere unnoticed.
+    #[tokio::test]
+    async fn no_other_demo_include_carries_apply_vars() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let root = super::canon(&demo);
+        let s = T199Server::over(demo);
+        s.scan().await;
+
+        let state = s.state();
+        let idx = state.reverse.lock().unwrap();
+        let mut carried: Vec<(String, String, Vec<String>)> = Vec::new();
+        for (target, edges) in idx.targets() {
+            for e in edges {
+                let Some(a) = e.apply.as_ref() else { continue };
+                let rel = |p: &std::path::Path| {
+                    ansible_core::posix_display(p.strip_prefix(&root).unwrap_or(p))
+                };
+                carried.push((
+                    rel(&e.source),
+                    rel(target),
+                    a.vars.iter().map(|(n, _)| n.clone()).collect(),
+                ));
+            }
+        }
+        carried.sort();
+        assert_eq!(
+            carried,
+            vec![(
+                "apply_vars.yml".to_string(),
+                "tasks/apply_target.yml".to_string(),
+                vec!["apply_endpoint".to_string(), "apply_retries".to_string()],
+            )],
+            "one include in the demo passes apply vars, and it is the fixture that documents them"
+        );
     }
 
     // ---- T-020: the reverse index --------------------------------------------------------
@@ -9581,7 +9926,7 @@ mod tests {
         let doc = super::Document::new(T201_PLAY.to_string());
         let nodes = doc.parse().expect("fixture parses");
         let byte = T201_PLAY.find("vars/{{ control }}.yml").expect("fixture carries the path") + 1;
-        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv, cache, None)
+        super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), inv, cache, None, None)
             .map(|h| h.0)
             .unwrap_or_default()
     }
@@ -10957,7 +11302,7 @@ mod tests {
     }
 
     fn t136_diagnostics(path: &std::path::Path, a: &super::Analysis) -> Vec<super::Diagnostic> {
-        super::Backend::inert_import_var_diagnostics(a, path, &[], &no_cache())
+        super::Backend::inert_import_var_diagnostics(a, path, &[], &no_cache(), None)
     }
 
     /// The rule: a templated import whose variable the index defines names that file, its
@@ -11102,7 +11447,7 @@ mod tests {
                         && r.playbook_entry
                 })
                 .count();
-            for d in super::Backend::inert_import_var_diagnostics(&a, &f, &[], &cache) {
+            for d in super::Backend::inert_import_var_diagnostics(&a, &f, &[], &cache, None) {
                 hits.push(format!(
                     "{}:{}  {}",
                     f.strip_prefix(&root).unwrap_or(&f).display(),
@@ -11157,7 +11502,7 @@ mod tests {
     fn a_var_beside_a_missing_inventory_is_not_reported_undefined() {
         let undefined = |root: &std::path::Path| -> Vec<String> {
             let (path, _, _, a) = t225_analysis(root);
-            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache())
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(super::NumberOrString::String(s)) if s == "var-undefined"))
                 .map(|d| d.message)
@@ -11175,7 +11520,7 @@ mod tests {
         let hover = |root: &std::path::Path| -> Option<String> {
             let (path, doc, nodes, _) = t225_analysis(root);
             let byte = T225_PLAY.find("gv_only").unwrap() + 1;
-            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None)
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &path, &no_buffers(), &[], &no_cache(), None, None)
                 .map(|h| h.0)
         };
         let with = hover(&t225_project("t225-hover-with", true)).expect("a hover");
@@ -11191,7 +11536,7 @@ mod tests {
             let (line, character) = doc.byte_to_lsp(T225_PLAY.find("gv_only").unwrap() + 1);
             let pos = super::Position { line, character };
             let uri = super::Url::from_file_path(&path).unwrap();
-            super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None)
+            super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), None, None)
         };
         let with = definition(&t225_project("t225-def-with", true)).expect("a definition");
         assert_eq!(with.len(), 1);

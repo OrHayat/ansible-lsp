@@ -21,6 +21,25 @@ use crate::parse::{Document, Span};
 use crate::references::{Reference, ReferenceKind};
 use crate::resolve::Resolution;
 
+/// The `apply:` block on the include that produced an edge (T-167).
+///
+/// Its `vars:` bind on the tasks the include brings in, so they are definitions belonging to
+/// the *target* file while being written in the source — which is why they travel on the
+/// edge and not in either file's own walk. Shared behind an `Arc` between every edge one
+/// reference produced, so a templated include reaching twenty candidates carries one copy.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApplySite {
+    /// (name, span of the value) in written order.
+    pub vars: Vec<(String, Span)>,
+    /// The whole `apply:` value's range in the source file — outside it, in that file,
+    /// these names are not defined.
+    pub span: Span,
+    /// The including task's `when:`, which decides whether the include happens at all and
+    /// therefore whether these bind. Kept so a hover says "defined only when …" rather
+    /// than claiming a guarded definition unconditionally.
+    pub conditions: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
     /// The file the reference is written in, canonical. Shared between every edge of one
@@ -35,6 +54,8 @@ pub struct Edge {
     /// The value carried a Jinja expression, so this is one of the candidates that line may
     /// reach rather than the one file it names.
     pub templated: bool,
+    /// The `apply:` on this include, when it wrote any `vars:` (T-167).
+    pub apply: Option<Arc<ApplySite>>,
 }
 
 /// Keys are canonical absolute paths, so two spellings of one target collapse.
@@ -75,10 +96,25 @@ pub fn edges_of(fs: &dyn Fs, source: &Path, refs: &[(Reference, Resolution)], do
             continue;
         }
         let (line, _) = doc.byte_to_lsp(r.span.start);
+        let apply = match (r.apply_vars.is_empty(), r.apply_span) {
+            (false, Some(span)) => Some(Arc::new(ApplySite {
+                vars: r.apply_vars.clone(),
+                span,
+                conditions: r.conditions.clone(),
+            })),
+            _ => None,
+        };
         for target in &res.targets {
             edges.push((
                 key(target),
-                Edge { source: shared.clone(), span: r.span, line, kind: r.kind, templated: r.templated },
+                Edge {
+                    source: shared.clone(),
+                    span: r.span,
+                    line,
+                    kind: r.kind,
+                    templated: r.templated,
+                    apply: apply.clone(),
+                },
             ));
         }
     }
@@ -177,6 +213,70 @@ mod tests {
         let refs: Vec<(Reference, Resolution)> =
             extracted.refs.into_iter().map(|r| { let res = resolver.resolve(&r, &ctx); (r, res) }).collect();
         edges_of(&cache, &path, &refs, &doc)
+    }
+
+    /// The `apply: vars:` names each inbound edge of `rel` carries, with the text each
+    /// value span covers — the shape the server turns into definitions.
+    fn applied(idx: &ReverseIndex, root: &Path, rel: &str, src: &str) -> Vec<(String, String)> {
+        idx.inbound(&canon(root).join(rel))
+            .iter()
+            .filter_map(|e| e.apply.as_ref())
+            .flat_map(|a| a.vars.iter().map(|(n, s)| (n.clone(), s.slice(src).to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn an_apply_vars_entry_rides_the_edge_to_the_file_it_binds_on() {
+        const PLAY: &str = "- hosts: all\n  tasks:\n    - include_tasks:\n        file: inc.yml\n        apply:\n          vars:\n            applied: from_apply\n            other: 7\n";
+        let root = crate::testing::project(
+            "t167-edge",
+            "[defaults]\n",
+            &[("inc.yml", "- debug: {msg: \"{{ applied }}\"}\n"), ("play.yml", PLAY)],
+        );
+        let mut idx = ReverseIndex::default();
+        idx.replace(edges(&root, "play.yml"));
+
+        assert_eq!(
+            applied(&idx, &root, "inc.yml", PLAY),
+            vec![("applied".to_string(), "from_apply".to_string()), ("other".to_string(), "7".to_string())],
+            "both entries ride the edge, each pointing at its own value"
+        );
+        // Control: an include with no `apply:` carries none, so the field cannot be junk
+        // that happens to be present everywhere.
+        let root = crate::testing::project(
+            "t167-edge-none",
+            "[defaults]\n",
+            &[("inc.yml", "- debug: {msg: hi}\n"), ("play.yml", "- hosts: all\n  tasks:\n    - include_tasks: inc.yml\n")],
+        );
+        let mut idx = ReverseIndex::default();
+        idx.replace(edges(&root, "play.yml"));
+        assert_eq!(idx.inbound(&canon(&root).join("inc.yml")).len(), 1, "the edge is there");
+        assert!(applied(&idx, &root, "inc.yml", "").is_empty(), "and carries no apply vars");
+    }
+
+    /// A templated include reaches several files and every one of them gets the vars — the
+    /// same overcount rule the edges themselves follow.
+    #[test]
+    fn a_templated_include_applies_its_vars_to_every_candidate() {
+        const PLAY: &str = "- hosts: all\n  tasks:\n    - include_tasks:\n        file: \"check-{{ env }}.yml\"\n        apply:\n          vars:\n            applied: from_apply\n";
+        let root = crate::testing::project(
+            "t167-edge-templated",
+            "[defaults]\n",
+            &[
+                ("check-prod.yml", "- debug: {msg: p}\n"),
+                ("check-dev.yml", "- debug: {msg: d}\n"),
+                ("play.yml", PLAY),
+            ],
+        );
+        let mut idx = ReverseIndex::default();
+        idx.replace(edges(&root, "play.yml"));
+        for f in ["check-prod.yml", "check-dev.yml"] {
+            assert_eq!(
+                applied(&idx, &root, f, PLAY),
+                vec![("applied".to_string(), "from_apply".to_string())],
+                "{f}"
+            );
+        }
     }
 
     fn lines_into<'a>(idx: &'a ReverseIndex, root: &Path, rel: &str) -> Vec<(String, u32, ReferenceKind, bool)> {

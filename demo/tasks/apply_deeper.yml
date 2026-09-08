@@ -1,0 +1,7 @@
+# Reached from tasks/apply_target.yml, which is itself included with `apply: vars:`.
+#
+# NO HINT: we do not follow the apply block transitively — the definition is one edge further
+# than the index is asked for, so this is a documented miss (T-167), never a wrong answer.
+- name: still set at runtime, but out of our reach
+  ansible.builtin.debug:
+    msg: "{{ apply_endpoint | default('not modelled') }}"

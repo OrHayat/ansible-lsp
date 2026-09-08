@@ -62,6 +62,13 @@ pub enum VarSource {
     /// A param on a play's `roles:` entry — any key the entry wrote that
     /// `RoleInclude.fattributes` does not claim (T-100).
     RoleParams,
+    /// A key under a dynamic include's `apply: vars:`, read from the *calling* file
+    /// (T-167). Distinct from [`VarSource::BlockVars`], which it shares a precedence with,
+    /// because the block is not written in the file the use is in — the definition's
+    /// `file`/`span` point at the caller and `via` carries the include edge that brought
+    /// it here, so a hover can say where it came from instead of claiming a block this
+    /// file does not have.
+    ApplyVars,
     /// A key under a `vars:` written on a play's `roles:` entry. Distinct from
     /// [`VarSource::RoleParams`] because it is the documented spelling and because it is
     /// combined *after* the params (`role/__init__.py:552-558`), so it wins a collision.
@@ -99,7 +106,11 @@ impl VarSource {
             VarSource::PlayVars => 12,
             VarSource::VarsFiles => 14,
             VarSource::RoleVars => 15,
-            VarSource::BlockVars => 16,
+            // Level 16: `apply:` *is* a Block wrapping the included tasks, so its `vars:`
+            // are block vars. Measured on 2.21.2 from both sides — they beat a role's
+            // `vars/main.yml` (15) and lose to a task `vars:` (17), `include_vars` (18),
+            // `set_fact` (19) and an include param (21).
+            VarSource::BlockVars | VarSource::ApplyVars => 16,
             VarSource::TaskVars => 17,
             VarSource::IncludeVars => 18,
             VarSource::SetFact | VarSource::Register => 19,
@@ -132,6 +143,11 @@ impl VarSource {
             // Need a play.
             VarSource::PlayVars
             | VarSource::BlockVars
+            // Unreachable rather than merely play-scoped: an `import_playbook` inside a file
+            // an `include_tasks: {apply: …}` loads is not a play-level import at all — it is
+            // parsed as a task and hard-fails, "Action 'ansible.builtin.import_playbook' does
+            // not support raw params" (2.21.2). So no apply var can ever supply one.
+            | VarSource::ApplyVars
             | VarSource::TaskVars
             | VarSource::VarsFiles
             | VarSource::RoleDefaults
@@ -201,6 +217,10 @@ impl VarSource {
             | VarSource::Register => true,
             VarSource::PlayVars
             | VarSource::BlockVars
+            // Measured 2.21.2 with a live control in the same run: `hostvars[h].applied_var`
+            // read INVISIBLE while a `set_fact` in the same included file read back its
+            // value through the same expression. `apply:` hangs off the Block, not the host.
+            | VarSource::ApplyVars
             | VarSource::TaskVars
             | VarSource::VarsFiles
             | VarSource::RoleDefaults
@@ -885,6 +905,14 @@ fn value_span_source(s: VarSource) -> bool {
         s,
         VarSource::PlayVars
             | VarSource::BlockVars
+            // The span is the apply entry's value and the value is not host-dependent, so it
+            // reads like any other. Included here because an apply var genuinely *does* reach
+            // a templated path written inside the included file — measured 2.21.2:
+            // `apply: {vars: {leaf: alpha}}` over a file whose `include_tasks:
+            // "{{ leaf }}-leaf.yml"` resolved and ran. (The include's *own* path is the
+            // opposite case and is not ours to substitute: T-167 measured that one failing
+            // inside ansible with "'which' is undefined".)
+            | VarSource::ApplyVars
             | VarSource::TaskVars
             | VarSource::VarsFiles
             | VarSource::RoleDefaults
