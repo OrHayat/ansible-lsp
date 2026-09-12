@@ -194,6 +194,14 @@ pub struct Action {
     /// The args node: a scalar (`include_tasks: f.yml`) or a mapping (`{ file: f.yml }` /
     /// module parameters). Kept whole so callers can read `file:`/`name:`/`tasks_from:`.
     pub args: Node,
+    /// The name came from `action:`/`local_action:` rather than from the module key.
+    ///
+    /// It changes *when* ansible-core rejects an unusable name, not whether: the key form
+    /// dies in `ModuleArgsParser` at parse time and the play never starts, while these two
+    /// reach `Task._post_validate_args` and fail that one task at run time — measured on
+    /// 2.21.2, `scratchpad/t042_two_part_tier_probe.sh`, where a task *before* the bad one
+    /// ran for `action:`/`local_action:` and did not for the key form.
+    pub from_action_keyword: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -782,6 +790,7 @@ fn find_action(node: &Node) -> Option<Action> {
                     name,
                     key_span: v.span(),
                     args: v.clone(),
+                    from_action_keyword: true,
                 });
             }
         }
@@ -794,6 +803,7 @@ fn find_action(node: &Node) -> Option<Action> {
                 name: key.to_string(),
                 key_span: k.span(),
                 args: v.clone(),
+                from_action_keyword: false,
             });
         }
     }

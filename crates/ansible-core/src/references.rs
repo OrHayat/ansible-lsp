@@ -149,6 +149,10 @@ pub struct Reference {
     /// `t042_cross_file_probe.sh`), and that one we still get wrong: it needs the caller,
     /// not the file.
     pub collections: Vec<String>,
+    /// The module name was written as an `action:`/`local_action:` value, not as the task's
+    /// module key. Only affects *when* an unusable name is rejected — see
+    /// [`crate::ast::Action::from_action_keyword`].
+    pub action_keyword: bool,
     /// A genuine playbook-level `import_playbook:` entry, not the same key written inside a
     /// task list. Ansible loads only the first as a playbook; the second is read as a module
     /// name and fails on its parameters (T-110 row `ip`), so its target is never opened and
@@ -198,6 +202,7 @@ impl Reference {
             apply_vars: Vec::new(),
             apply_span: None,
             collections: Vec::new(),
+            action_keyword: false,
             playbook_entry: false,
         }
     }
@@ -564,11 +569,14 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
         _ => {
             // The AST already knows this key is the module. A 3-part dotted name is a
             // collection FQCN; a bare name is implicitly `ansible.legacy.<name>` — valid
-            // Ansible, resolved through the legacy search order. 2-part names stay
-            // unextracted (never valid; the T-042 ERROR will need them extracted first).
+            // Ansible, resolved through the legacy search order. A 2-part name is neither
+            // and can never resolve ([`crate::resolve::impossible_module_name`]); it is
+            // extracted so the rule can say so, and the resolver gives it `Missing`.
             let dots = a.name.split('.').count();
-            if (dots == 1 || dots == 3) && !a.name.contains(' ') && !a.name.contains('{') {
-                out.push(Reference::new(ReferenceKind::Module, &a.name, a.key_span));
+            if dots <= 3 && !a.name.contains(' ') && !a.name.contains('{') {
+                let mut r = Reference::new(ReferenceKind::Module, &a.name, a.key_span);
+                r.action_keyword = a.from_action_keyword;
+                out.push(r);
             }
         }
     }

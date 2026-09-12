@@ -1523,10 +1523,18 @@ impl Backend {
                 range: range_of(r.span),
                 // A miss is a warning because the play still runs; a directory stops it
                 // before its first task, which is the unparseable-file tier.
-                severity: Some(match res.directory {
-                    Some(_) => DiagnosticSeverity::ERROR,
-                    None => DiagnosticSeverity::WARNING,
-                }),
+                severity: Some(
+                    if res.directory.is_some()
+                        || rule_id_for(r, res)
+                            == ansible_core::resolve::INVALID_MODULE_NAME_RULE_ID
+                    {
+                        // The play does not start, or the task cannot run — either way
+                        // not the "ansible skips it and carries on" tier a miss gets.
+                        DiagnosticSeverity::ERROR
+                    } else {
+                        DiagnosticSeverity::WARNING
+                    },
+                ),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(rule_id_for(r, res).into())),
                 message: message_for(r, res, &a.ctx),
@@ -3120,6 +3128,32 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
     // user arguments and exits 4. Say that, name the only two sources that work, and name
     // the escape hatch, because "I do pass -e" is a legitimate answer only the author has.
     // Live-verified against ansible-core 2.21.2; T-095.
+    // A two-part name can never be a module, whatever is installed, so this is said before
+    // any lookup talk — there are no candidate paths to list, because Ansible tries none.
+    // The two spellings fail at different moments, measured on 2.21.2
+    // (`scratchpad/t042_two_part_tier_probe.sh`): the module key dies in `ModuleArgsParser`
+    // and the play never starts, while `action:`/`local_action:` reach
+    // `Task._post_validate_args` and fail that task after earlier ones have run. Quoting
+    // the wrong one of the two would send someone looking at the wrong failure.
+    if r.kind == ReferenceKind::Module && ansible_core::resolve::impossible_module_name(&r.value) {
+        let (ns, rest) = r.value.split_once('.').unwrap_or((&r.value, ""));
+        let when = if r.action_keyword {
+            format!(
+                "Ansible fails this task at run time with `Cannot resolve '{}' to an action or module.`, after the tasks before it have run",
+                r.value
+            )
+        } else {
+            format!(
+                "Ansible fails while parsing the file, with `couldn't resolve module/action '{}'`, so the play never starts",
+                r.value
+            )
+        };
+        return format!(
+            "`{}` can never name a module: a collection is always `namespace.name`, so a qualified module has three parts (`{ns}.<collection>.{rest}`) and a short one has one (`{rest}`). {when}.",
+            r.value
+        );
+    }
+
     if r.templated && r.kind == ReferenceKind::ImportPlaybook {
         return format!(
             "`{}` is resolved when this file is parsed, before any play or host exists. \
@@ -7116,6 +7150,78 @@ mod tests {
         // The control: at playbook level, both rules are exactly right to fire.
         assert_eq!(ids("- import_playbook: nope.yml\n"), ["missing-file"]);
         assert_eq!(ids("- import_playbook: plays/empty_playbook.yml\n"), ["empty-playbook"]);
+    }
+
+    /// T-042 item 4: a two-part module name is an ERROR, not the missing-file warning tier,
+    /// and the message quotes the failure the *written spelling* actually produces.
+    ///
+    /// Measured on 2.21.2 (`scratchpad/t042_two_part_tier_probe.sh`) with a `debug:` task
+    /// placed before the bad one: the module-key form died in `ModuleArgsParser` and that
+    /// first task never ran, while `action:`/`local_action:` reached
+    /// `Task._post_validate_args` and failed only after it had. Quoting the wrong one sends
+    /// the reader looking for the wrong failure — the ticket had the `task.py` text filed
+    /// against the key form for two years.
+    #[test]
+    fn a_two_part_module_name_is_an_error_quoting_its_own_failure() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo").canonicalize().unwrap().join("probe.yml");
+        let one = |src: &str| {
+            let a = super::Backend::analyze_text(src.to_string(), &path).unwrap();
+            let mut d: Vec<_> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-module-name")
+                })
+                .collect();
+            assert_eq!(d.len(), 1, "exactly one for {src:?}");
+            d.pop().unwrap()
+        };
+
+        let key = one("- hosts: all\n  tasks:\n    - builtin.debug:\n        msg: x\n");
+        assert_eq!(key.severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            key.message.contains("couldn't resolve module/action 'builtin.debug'")
+                && key.message.contains("the play never starts"),
+            "{}",
+            key.message
+        );
+
+        let act = one("- hosts: all\n  tasks:\n    - local_action: builtin.debug msg=x\n");
+        assert_eq!(act.severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            act.message.contains("Cannot resolve 'builtin.debug' to an action or module.")
+                && act.message.contains("after the tasks before it have run"),
+            "{}",
+            act.message
+        );
+        // The two must not share a message: they are different failures.
+        assert_ne!(key.message, act.message);
+
+        // The controls. A legal short name and an FQCN that resolves nowhere here both stay
+        // clear of this rule — the second is usually a collection installed elsewhere.
+        for src in [
+            "- hosts: all\n  tasks:\n    - debug:\n        msg: x\n",
+            "- hosts: all\n  tasks:\n    - community.docker.docker_container:\n        name: x\n",
+        ] {
+            let a = super::Backend::analyze_text(src.to_string(), &path).unwrap();
+            assert!(
+                super::Backend::diagnostics_of(&a).iter().all(|d| {
+                    !matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-module-name")
+                }),
+                "{src:?}"
+            );
+        }
+
+        // And it is suppressible by its own id, like every other rule.
+        let a = super::Backend::analyze_text(
+            "- hosts: all\n  tasks:\n    - builtin.debug: # noqa: invalid-module-name\n        msg: x\n"
+                .to_string(),
+            &path,
+        )
+        .unwrap();
+        assert!(super::Backend::diagnostics_of(&a).iter().all(|d| {
+            !matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-module-name")
+        }));
     }
 
     /// Row 29. Its own id, because someone using a reserved name on purpose wants to silence

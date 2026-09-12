@@ -90,6 +90,27 @@ impl Resolution {
     }
 }
 
+/// `# noqa` id and display name for a module name that can never name a module.
+pub const INVALID_MODULE_NAME_RULE_ID: &str = "invalid-module-name";
+
+/// A module name with exactly two dotted parts, which ansible-core can never resolve.
+///
+/// A collection is always `namespace.name`, so a fully-qualified module is
+/// `namespace.name.module` — three parts — and a short name is one. Two parts can only be
+/// read as "this collection, no module", and a module name cannot contain a dot, so there
+/// is no third reading. Measured on 2.21.2: `builtin.debug`, `ansible.debug` and
+/// `legacy.debug` all fail while `debug`, `ansible.builtin.debug` and `ansible.legacy.debug`
+/// all run (`scratchpad/t042_name_shapes_probe.sh`).
+///
+/// This is the one unresolved shape worth reporting. An unresolved *three*-part name
+/// usually means a collection that is not installed on this machine, which is not a
+/// mistake in the file — hence [`SkipReason::NotInWorkspace`] and silence. A two-part name
+/// is wrong whatever is installed, so no amount of missing local state can make the
+/// diagnostic a false positive.
+pub fn impossible_module_name(value: &str) -> bool {
+    value.split('.').count() == 2 && !value.contains('{')
+}
+
 /// A `vars_files:` entry whose lookup stops at a directory (T-087). Its own id, not
 /// `missing-file`: that rule's whole message is that ansible silently skips and the play
 /// runs on, and here the play does not start at all. Two opposite claims must not share
@@ -108,6 +129,9 @@ pub fn rule_id_for(r: &Reference, res: &Resolution) -> &'static str {
 
 /// Diagnostic rule id, for `# noqa: <id>` and for display.
 pub fn rule_id(r: &Reference) -> &'static str {
+    if r.kind == ReferenceKind::Module && impossible_module_name(&r.value) {
+        return INVALID_MODULE_NAME_RULE_ID;
+    }
     match (r.kind, r.templated) {
         (ReferenceKind::ImportPlaybook, true) => "templated-import",
         (ReferenceKind::IncludeVarsDir, _) => "missing-dir",
@@ -867,6 +891,18 @@ fn resolve_module(
                     .then(|| collection_module_redirect(ns, coll, module, ctx, fs))
                     .flatten();
                 (res, redirect)
+            }
+            // Two parts: never a module, whatever is installed. `Missing` rather than
+            // `Skipped` is what makes it reportable — see [`impossible_module_name`].
+            // No candidates, because there is no path Ansible would have tried.
+            _ if impossible_module_name(&name) => {
+                return Resolution {
+                    status: Status::Missing,
+                    targets: Vec::new(),
+                    candidates: Vec::new(),
+                    skip_reason: None,
+                    directory: None,
+                }
             }
             _ => return Resolution::skipped(SkipReason::NotInWorkspace),
         };
@@ -2069,10 +2105,62 @@ mod tests {
             ),
             _ => assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace)),
         }
+    }
 
-        // 2-part names are never valid Ansible; pinned unextracted until T-042's ERROR.
-        let out = resolve_src(&file, "- builtin.debug:\n    msg: hi\n");
-        assert!(out.iter().all(|(r, _)| r.kind != ReferenceKind::Module));
+    /// T-042 item 4. A two-part name can never be a module — a collection is always
+    /// `namespace.name`, so a qualified module has three parts and a short one has one, and
+    /// a module name cannot contain a dot. Measured on 2.21.2
+    /// (`scratchpad/t042_name_shapes_probe.sh`): `debug`, `ansible.builtin.debug` and
+    /// `ansible.legacy.debug` all run; `builtin.debug`, `ansible.debug` and `legacy.debug`
+    /// all fail.
+    ///
+    /// `Missing`, not `Skipped`, is the whole point — it is the one unresolved shape that
+    /// is wrong whatever is installed on the machine, so reporting it can never be a false
+    /// positive the way reporting an uninstalled collection would be.
+    #[test]
+    fn a_two_part_module_name_is_missing_with_its_own_rule() {
+        let fs = crate::testing::MemFs::new(&[("/p/site.yml", "")]);
+
+        for name in ["builtin.debug", "ansible.debug", "legacy.debug"] {
+            let out = mem_src("/p/site.yml", &format!("- hosts: all\n  tasks:\n    - {name}:\n"), &fs);
+            let (r, res) = out
+                .iter()
+                .find(|(r, _)| r.kind == ReferenceKind::Module)
+                .unwrap_or_else(|| panic!("{name} must be extracted before it can be reported"));
+            assert_eq!(res.status, Status::Missing, "{name}");
+            assert_eq!(rule_id(r), INVALID_MODULE_NAME_RULE_ID, "{name}");
+            // Nothing to list: Ansible tries no path for a name it cannot parse.
+            assert!(res.candidates.is_empty(), "{name}: {:?}", res.candidates);
+        }
+
+        // The controls, both of which must stay quiet. One part is a legal short name; three
+        // parts that resolve nowhere here usually mean a collection installed elsewhere,
+        // which is not a mistake in this file.
+        for name in ["debug", "community.docker.docker_container"] {
+            let out = mem_src("/p/site.yml", &format!("- hosts: all\n  tasks:\n    - {name}:\n"), &fs);
+            let res = first(&out, ReferenceKind::Module);
+            assert_ne!(res.status, Status::Missing, "{name} must not be reported");
+        }
+    }
+
+    /// Rows EA–EC: which spelling named the module decides *when* Ansible rejects it, so the
+    /// flag that carries it has to survive extraction. Measured — a task placed before the
+    /// bad one ran for `action:`/`local_action:` and did not for the module-key form.
+    #[test]
+    fn the_action_keyword_spelling_is_recorded_on_the_reference() {
+        let fs = crate::testing::MemFs::new(&[("/p/site.yml", "")]);
+        let flag = |src: &str| {
+            let out = mem_src("/p/site.yml", src, &fs);
+            out.iter()
+                .find(|(r, _)| r.kind == ReferenceKind::Module)
+                .expect("a module reference")
+                .0
+                .action_keyword
+        };
+
+        assert!(!flag("- hosts: all\n  tasks:\n    - builtin.debug:\n"), "module key");
+        assert!(flag("- hosts: all\n  tasks:\n    - local_action: builtin.debug msg=x\n"));
+        assert!(flag("- hosts: all\n  tasks:\n    - action: builtin.debug msg=x\n"));
     }
 
     /// The tree the `collections:` cases share. `ns.a` and `ns.b` both ship `dup`, so the

@@ -188,6 +188,60 @@ file's. Left unfixed, pinned by the ignored
 `a_plays_collections_list_reaches_a_file_it_includes` — it wants the invocation chain, the
 same thing [[T-068]] needs.
 
+### Item 4, measured properly and shipped
+
+`scratchpad/t042_name_shapes_probe.sh` (which shapes are legal) and
+`t042_two_part_tier_probe.sh` (when each one fails).
+
+| Name | Parts | 2.21.2 |
+| ---- | ----- | ------ |
+| `debug` | 1 | runs |
+| `ansible.builtin.debug` | 3 | runs |
+| `ansible.legacy.debug` | 3 | runs |
+| `builtin.debug` | 2 | `couldn't resolve module/action 'builtin.debug'` |
+| `ansible.debug` | 2 | same |
+| `legacy.debug` | 2 | same |
+| `ansible.builtin.nosuch` | 3 | **same message** |
+
+The last row is the one that shapes the rule. The message does not distinguish "impossible
+shape" from "collection not installed here", so it cannot be the thing we key on. What can
+is the shape itself: a collection is always `namespace.name`, so a qualified module has
+three parts and a short one has one, and a module name cannot contain a dot — two parts has
+no third reading. **A two-part name is wrong whatever is installed**, which is exactly why
+it can be reported when an unresolved three-part name still cannot be.
+
+| Row | Spelling | First task before it |
+| --- | -------- | -------------------- |
+| EA | `- builtin.debug:` | **did not run** — `ModuleArgsParser`, parse time, the play never starts |
+| EB | `- action: {module: builtin.debug}` | ran — `Task._post_validate_args`, run time |
+| EC | `- local_action: builtin.debug` | ran — same |
+
+Two different failures, so two different messages. `ast::Action::from_action_keyword` and
+`Reference::action_keyword` carry which spelling was written; without them the diagnostic
+would quote one failure while describing the other, which is the mistake this ticket's own
+box made for two years.
+
+`impossible_module_name` is the shared predicate (on the data, per rule 3): the extractor
+uses it to decide the name is worth a reference, `resolve_module` to return `Missing`
+rather than `Skipped`, and `rule_id` to hand back `invalid-module-name`. Severity is ERROR
+— the play does not start, or the task cannot run; neither is the "ansible skips it and
+carries on" tier a missing file gets. Suppressible by its own id.
+
+The old `assert!(out.iter().all(|(r, _)| r.kind != ReferenceKind::Module))` in
+`bare_module_names_resolve_in_the_loaders_order` is gone: it pinned the gap, and it sat
+*after* that test's `package_dir.is_none()` early return, so on a machine with no Ansible
+install it never ran at all.
+
+| Test | Covers |
+| ---- | ------ |
+| `a_two_part_module_name_is_missing_with_its_own_rule` | all three 2-part spellings → `Missing` + the rule id + no candidates; controls: 1-part and an uninstalled 3-part stay quiet |
+| `the_action_keyword_spelling_is_recorded_on_the_reference` | EA/EB/EC's flag survives extraction |
+| `a_two_part_module_name_is_an_error_quoting_its_own_failure` (lsp) | ERROR severity, the right quote per spelling, the two messages differ, both controls quiet, `# noqa` works |
+
+Each was confirmed red under a break of what it covers: the predicate, the extraction, the
+severity, and the spelling flag. The demo scan is byte-identical — no two-part name exists
+in `demo/`, so the rule fires nowhere yet.
+
 ## What landed
 
 - `ast::Play`/`Block`/`Task` gained `collections: Vec<String>` (`collections_of`), templated
@@ -259,8 +313,10 @@ a play's list into a role.
       `demo/library/ping.py`; order documented on `resolve_module_bare`), including the
       split-table redirect from `ansible_builtin_runtime.yml`. Corpus: module resolutions
       3665 → 5894, still 0 missing. Redirect chains and per-collection tables stay T-064.
-- [ ] a 2-part name (`builtin.debug`) gets an ERROR quoting the message its shape actually
-      produces — `couldn't resolve module/action '…'` for the module-as-key form, not the
-      `task.py` text this ticket used to quote (rows X1–X4), pinned by fixture
+- [x] a 2-part name (`builtin.debug`) gets an ERROR quoting the message its shape actually
+      produces — `couldn't resolve module/action '…'` for the module-as-key form (the play
+      never starts), `Cannot resolve … to an action or module.` for `action:`/`local_action:`
+      (that task fails after earlier ones ran). Own rule id `invalid-module-name`, pinned by
+      fixture in `resolve.rs` and `main.rs`
 
 Docs: https://docs.ansible.com/ansible/latest/collections_guide/collections_using_playbooks.html
