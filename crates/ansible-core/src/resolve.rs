@@ -620,7 +620,12 @@ impl<'a> Resolver<'a> {
                 }
             }
 
-            ReferenceKind::Role => match role_dir(&r.value, ctx, fs) {
+            ReferenceKind::Role => match role_dir(
+                &r.value,
+                &collections_in_scope(r, ctx, self.exts, fs),
+                ctx,
+                fs,
+            ) {
                 Some(dir) => {
                     let probe = self.exts.candidates(&dir.join("tasks"), "main", false);
                     let res = Resolution::from_candidates(probe, fs);
@@ -651,14 +656,19 @@ impl<'a> Resolver<'a> {
             },
 
             ReferenceKind::TasksFrom => {
-                let Some(role) = r.role.as_deref().and_then(|n| role_dir(n, ctx, fs)) else {
+                let collections = collections_in_scope(r, ctx, self.exts, fs);
+                let Some(role) =
+                    r.role.as_deref().and_then(|n| role_dir(n, &collections, ctx, fs))
+                else {
                     return Resolution::skipped(SkipReason::NotInWorkspace);
                 };
                 let probe = self.exts.candidates(&role.join("tasks"), &r.value, true);
                 Resolution::from_candidates(probe, fs)
             }
 
-            ReferenceKind::Module => resolve_module(&r.value, ctx, fs),
+            ReferenceKind::Module => {
+                resolve_module(&r.value, &collections_in_scope(r, ctx, self.exts, fs), ctx, fs)
+            }
         }
     }
 }
@@ -693,6 +703,90 @@ fn is_module_named(p: &Path, name: &str) -> bool {
     stem == name && !MODULE_IGNORE_EXTS.iter().any(|ext| f.ends_with(ext))
 }
 
+/// The `collections:` search list a reference resolves under: the one written in its own
+/// scope, else — for a file inside a role — that role's `meta/main.yml`.
+///
+/// The role file is the one place the list is not in the file being resolved, because a
+/// play's list does **not** reach a role it calls (measured, T-042 row J) while the role's
+/// own does (row I). Read only for a bare name, since an FQCN ignores the list entirely
+/// and would otherwise pay a file read per task.
+fn collections_in_scope(
+    r: &Reference,
+    ctx: &FileContext,
+    exts: RoleExts,
+    fs: &dyn Fs,
+) -> Vec<String> {
+    if !r.collections.is_empty() || r.value.split('.').count() == 3 {
+        return r.collections.clone();
+    }
+    let Some(role) = &ctx.role_dir else { return Vec::new() };
+    exts.candidates(&role.join("meta"), "main", false)
+        .iter()
+        .find_map(|p| fs.read(p))
+        .and_then(|text| crate::parse::Document::new(text).parse())
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| n.get("collections"))
+                .flat_map(|c| match c {
+                    crate::parse::Node::Sequence { items, .. } => {
+                        items.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect()
+                    }
+                    other => other.as_str().map(str::to_owned).into_iter().collect::<Vec<_>>(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Where `ns.coll.module` could be, in the loader's order: `plugins/modules/` then
+/// `plugins/action/` under every collection root, with `ansible.builtin` coming from the
+/// ansible package first because it is not a collection tree.
+///
+/// Shared by the FQCN arm and the bare arm — a `collections:` entry is resolved by
+/// building exactly these candidates for `<entry>.<bare>`, which is what makes a listed
+/// collection indistinguishable from a written-out FQCN once the name is formed (T-042).
+fn fqcn_module_candidates(
+    ns: &str,
+    coll: &str,
+    module: &str,
+    ctx: &FileContext,
+    fs: &dyn Fs,
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for root in ctx.collection_roots() {
+        let base = root.join(ns).join(coll).join("plugins");
+        let found = module_files_named(&base.join("modules"), module, fs);
+        if found.is_empty() {
+            candidates.push(base.join("modules").join(format!("{module}.py")));
+        } else {
+            candidates.extend(found);
+        }
+        // Action plugins are controller-side Python classes, so their loader
+        // hard-requires `.py` (`loader.py:782-784`) — no glob here.
+        candidates.push(base.join("action").join(format!("{module}.py")));
+    }
+    // ansible.builtin lives in the ansible package, not a collection tree.
+    if (ns, coll) == ("ansible", "builtin") {
+        if let Some(p) = ctx.install.as_ref().and_then(|i| i.builtin_module(module)) {
+            candidates.insert(0, p);
+        }
+    }
+    candidates
+}
+
+/// One `collections:` entry split into its namespace and collection, or `None` if it can
+/// never name one: a template (unknowable statically) or anything but two parts.
+fn collection_entry(entry: &str) -> Option<(&str, &str)> {
+    if entry.contains("{{") {
+        return None;
+    }
+    match entry.split('.').collect::<Vec<_>>()[..] {
+        [ns, coll] => Some((ns, coll)),
+        _ => None,
+    }
+}
+
 /// Module resolution with redirect chasing — the loader's `while` loop
 /// (`loader.py:740-748`) transcribed: resolve the current name; if nothing on disk but a
 /// routing table renames it, follow the rename and try again. The visited set is the
@@ -722,7 +816,12 @@ fn is_module_named(p: &Path, name: &str) -> bool {
 /// In `plugins/modules/` and the legacy dirs a module matches with ANY extension or none —
 /// modules are executables shipped to the target, not controller classes, so their loader
 /// has no `.py` suffix (`loader.py:786-788`; T-093). `plugins/action/` stays `.py`-only.
-fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
+fn resolve_module(
+    value: &str,
+    collections: &[String],
+    ctx: &FileContext,
+    fs: &dyn Fs,
+) -> Resolution {
     let mut trail: Vec<PathBuf> = Vec::new();
     let mut visited: Vec<String> = vec![value.to_string()];
     let mut name = value.to_string();
@@ -731,6 +830,14 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
         let (res, redirect) = match parts[..] {
             [bare] => {
                 let mut candidates: Vec<PathBuf> = Vec::new();
+                // The `collections:` search list comes first, entry by entry in written
+                // order, *ahead* of `ansible.legacy` — measured on 2.21.2: a listed
+                // collection's `ping` beat the workspace's own `library/ping.py`
+                // (T-042 row E), and reversing a two-entry list reversed the winner (K1/K2).
+                for entry in collections {
+                    let Some((ns, coll)) = collection_entry(entry) else { continue };
+                    candidates.extend(fqcn_module_candidates(ns, coll, bare, ctx, fs));
+                }
                 for dir in ctx.legacy_module_dirs() {
                     let found = module_files_named(&dir, bare, fs);
                     if found.is_empty() {
@@ -754,27 +861,7 @@ fn resolve_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> Resolution {
                 (res, redirect)
             }
             [ns, coll, module] => {
-                let mut candidates: Vec<PathBuf> = Vec::new();
-                for root in ctx.collection_roots() {
-                    let base = root.join(ns).join(coll).join("plugins");
-                    let found = module_files_named(&base.join("modules"), module, fs);
-                    if found.is_empty() {
-                        candidates.push(base.join("modules").join(format!("{module}.py")));
-                    } else {
-                        candidates.extend(found);
-                    }
-                    // Action plugins are controller-side Python classes, so their loader
-                    // hard-requires `.py` (`loader.py:782-784`) — no glob here.
-                    candidates.push(base.join("action").join(format!("{module}.py")));
-                }
-                // ansible.builtin lives in the ansible package, not a collection tree.
-                if (ns, coll) == ("ansible", "builtin") {
-                    if let Some(p) =
-                        ctx.install.as_ref().and_then(|i| i.builtin_module(module))
-                    {
-                        candidates.insert(0, p);
-                    }
-                }
+                let candidates = fqcn_module_candidates(ns, coll, module, ctx, fs);
                 let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
                     .then(|| collection_module_redirect(ns, coll, module, ctx, fs))
@@ -822,17 +909,34 @@ fn collection_module_redirect(
 }
 
 /// Role name -> its directory. Handles plain names and 3-part FQCNs.
-fn role_dir(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Option<PathBuf> {
+fn role_dir(
+    name: &str,
+    collections: &[String],
+    ctx: &FileContext,
+    fs: &dyn Fs,
+) -> Option<PathBuf> {
     if name.contains("{{") {
         return None;
     }
-    let parts: Vec<&str> = name.split('.').collect();
-    if let [ns, coll, role] = parts[..] {
-        return ctx
-            .collection_roots()
+    let in_collection = |ns: &str, coll: &str, role: &str| {
+        ctx.collection_roots()
             .iter()
             .map(|r| r.join(ns).join(coll).join("roles").join(role))
-            .find(|p| fs.is_dir(p));
+            .find(|p| fs.is_dir(p))
+    };
+    let parts: Vec<&str> = name.split('.').collect();
+    if let [ns, coll, role] = parts[..] {
+        return in_collection(ns, coll, role);
+    }
+    // The list applies to roles as well as modules, and wins over `roles_path` — measured
+    // on 2.21.2 with both `roles/setup` and `ns.a.setup` present under
+    // `collections: [ns.a]`: ansible ran the collection's (T-042 rows AF/AG). `roles:`
+    // entries and `include_role:` alike.
+    for entry in collections {
+        let Some((ns, coll)) = collection_entry(entry) else { continue };
+        if let Some(p) = in_collection(ns, coll, name) {
+            return Some(p);
+        }
     }
     ctx.roles_roots()
         .iter()
@@ -1969,6 +2073,428 @@ mod tests {
         // 2-part names are never valid Ansible; pinned unextracted until T-042's ERROR.
         let out = resolve_src(&file, "- builtin.debug:\n    msg: hi\n");
         assert!(out.iter().all(|(r, _)| r.kind != ReferenceKind::Module));
+    }
+
+    /// The tree the `collections:` cases share. `ns.a` and `ns.b` both ship `dup`, so the
+    /// list's *order* is measurable; `ns.coll` ships a `ping` that collides with the
+    /// workspace `library/ping.py`, so "list vs legacy" is measurable too. `roles_path` is
+    /// pinned so the search order is the config's and not this machine's defaults.
+    fn collections_fs() -> crate::testing::MemFs {
+        crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
+            // A real playbook carrying the list, so an implementation that wrongly made it
+            // project-wide would be caught by the role cases below rather than passing.
+            ("/p/site.yml", "- hosts: all\n  collections: [ns.coll]\n  roles: [bare]\n"),
+            ("/p/library/ping.py", ""),
+            ("/p/collections/ansible_collections/ns/a/plugins/modules/dup.py", ""),
+            ("/p/collections/ansible_collections/ns/b/plugins/modules/dup.py", ""),
+            ("/p/collections/ansible_collections/ns/b/plugins/modules/only_b.py", ""),
+            ("/p/collections/ansible_collections/ns/coll/plugins/modules/probe_mod.py", ""),
+            ("/p/collections/ansible_collections/ns/coll/plugins/modules/ping.py", ""),
+            ("/p/collections/ansible_collections/ns/coll/roles/setup/tasks/main.yml", ""),
+            ("/p/roles/local_only/tasks/main.yml", ""),
+            // The same short role name in both places, for "which wins" (rows AF/AG).
+            ("/p/collections/ansible_collections/ns/coll/roles/shared/tasks/main.yml", ""),
+            ("/p/roles/shared/tasks/main.yml", ""),
+            // A task file the playbook pulls in, for the cross-file gap (rows CA/CB).
+            ("/p/inc.yml", ""),
+            ("/p/roles/r/tasks/main.yml", ""),
+            ("/p/roles/r/meta/main.yml", "collections: [ns.coll]\n"),
+            ("/p/roles/bare/tasks/main.yml", ""),
+        ])
+    }
+
+    /// Control for the whole `collections:` group: with no list in reach, a short name that
+    /// only a collection provides resolves nowhere — and neither does one whose collection
+    /// is absent from the list that *is* in reach. Rows A and P of
+    /// `scratchpad/t042_collections_keyword_probe.sh` and
+    /// `t042_collections_order_probe.sh`, where ansible-core 2.21.2 dies at parse time with
+    /// `couldn't resolve module/action 'probe_mod'` (`mod_args.py:364`) — the play never
+    /// starts. We stay silent rather than warn (see [`resolve_module`]); what matters here
+    /// is that we never claim to have *found* it.
+    #[test]
+    fn a_short_module_name_no_list_reaches_resolves_nowhere() {
+        let fs = collections_fs();
+
+        let out = mem_src("/p/pb.yml", "- hosts: all\n  tasks:\n    - probe_mod:\n", &fs);
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "A: got {:?}", res.targets);
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a]\n  tasks:\n    - only_b:\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "P: got {:?}", res.targets);
+    }
+
+    /// Row B: `collections:` is a search list, and a short name is tried as
+    /// `<entry>.<name>` before anything else. Measured — ansible-core 2.21.2 ran
+    /// `ns.coll.probe_mod` for a bare `probe_mod:` under `collections: [ns.coll]`, and
+    /// failed for the same task without the line.
+    #[test]
+    fn a_short_module_name_resolves_through_the_plays_collections_list() {
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - probe_mod:\n",
+            &collections_fs(),
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from(
+                "/p/collections/ansible_collections/ns/coll/plugins/modules/probe_mod.py"
+            )]
+        );
+    }
+
+    /// Rows K1/K2: the list is ordered, first entry wins. Both collections ship `dup`;
+    /// reversing the list reversed which one ran, so this is a real collision and not a
+    /// one-candidate probe.
+    #[test]
+    fn the_collections_list_is_searched_in_order() {
+        let fs = collections_fs();
+        let a = PathBuf::from("/p/collections/ansible_collections/ns/a/plugins/modules/dup.py");
+        let b = PathBuf::from("/p/collections/ansible_collections/ns/b/plugins/modules/dup.py");
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a, ns.b]\n  tasks:\n    - dup:\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Module).targets, vec![a], "K1");
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.b, ns.a]\n  tasks:\n    - dup:\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Module).targets, vec![b], "K2");
+    }
+
+    /// Row E: the list goes *ahead* of `ansible.legacy`, so a listed collection shadows the
+    /// workspace's own `library/`. Measured with `library/ping.py` present and `ns.coll`
+    /// shipping a `ping` — `ns.coll.ping` ran. This is the row that makes the list more than
+    /// a fallback.
+    #[test]
+    fn a_listed_collection_shadows_the_workspace_library() {
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - ping:\n",
+            &collections_fs(),
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from(
+                "/p/collections/ansible_collections/ns/coll/plugins/modules/ping.py"
+            )]
+        );
+    }
+
+    /// Row V, the other half of the one above and the guard on it: when no listed collection
+    /// ships the name, the search falls through to `ansible.legacy` as before — `library/`
+    /// first, then the builtin package (row W, which needs a real install and is covered by
+    /// [`bare_module_names_resolve_in_the_loaders_order`]). Passes today because we ignore
+    /// the list entirely; it must keep passing once we do not.
+    #[test]
+    fn an_unlisted_name_still_falls_through_to_ansible_legacy() {
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a]\n  tasks:\n    - ping:\n",
+            &collections_fs(),
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/library/ping.py")]);
+    }
+
+    /// Rows C and O: an FQCN never consults the list. `ns.b.dup` resolved under
+    /// `collections: [ns.a]`, and `ansible.builtin.ping` under `collections: [ns.coll]`
+    /// still ran the builtin (row F) even though `ns.coll` ships a `ping`. Passes today;
+    /// it is the over-application guard for the fix.
+    #[test]
+    fn an_fqcn_ignores_the_collections_list() {
+        let fs = collections_fs();
+
+        let out = mem_src("/p/pb.yml", "- hosts: all\n  tasks:\n    - ns.coll.probe_mod:\n", &fs);
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "C: tried {:#?}", res.candidates);
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a]\n  tasks:\n    - ns.b.dup:\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from("/p/collections/ansible_collections/ns/b/plugins/modules/dup.py")],
+            "O: the list must not redirect an FQCN"
+        );
+    }
+
+    /// Rows M and N: `collections:` is a `CollectionSearch` field, so a block and a task
+    /// carry their own. Both ran `ns.b.only_b` with no play-level list at all.
+    #[test]
+    fn collections_on_a_block_or_a_task_applies_to_that_scope() {
+        let fs = collections_fs();
+        let want = vec![PathBuf::from(
+            "/p/collections/ansible_collections/ns/b/plugins/modules/only_b.py",
+        )];
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  tasks:\n    - only_b:\n      collections: [ns.b]\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Module).targets, want, "M: task level");
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  tasks:\n    - block:\n        - only_b:\n      collections: [ns.b]\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Module).targets, want, "N: block level");
+    }
+
+    /// Row I: a role's own `meta/main.yml` list applies to the role's tasks.
+    #[test]
+    fn a_roles_own_meta_collections_list_applies_to_its_tasks() {
+        let out = mem_src("/p/roles/r/tasks/main.yml", "- probe_mod:\n", &collections_fs());
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from(
+                "/p/collections/ansible_collections/ns/coll/plugins/modules/probe_mod.py"
+            )]
+        );
+    }
+
+    /// Rows H and J, the scope control. `/p/site.yml` carries `collections: [ns.coll]` and
+    /// calls `roles/bare`, which has no `meta/main.yml` — and ansible-core still failed to
+    /// resolve a bare `probe_mod:` inside that role. The play's list does not reach a role
+    /// it calls. Passes today for the trivial reason that we read no list at all; it is here
+    /// so the fix cannot be built by indexing the lists project-wide.
+    #[test]
+    fn a_plays_collections_list_does_not_reach_a_role_it_calls() {
+        let out = mem_src("/p/roles/bare/tasks/main.yml", "- probe_mod:\n", &collections_fs());
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "got {:?}", res.targets);
+    }
+
+    /// T-042 item 2, rows Q and R: a collection-hosted role resolves by FQCN from the
+    /// collection roots, from `include_role:` and from a `roles:` entry alike. Both ran
+    /// under ansible-core 2.21.2 with no `collections:` line anywhere. This already works —
+    /// the ticket asked for a test that proves it.
+    #[test]
+    fn a_collection_hosted_role_resolves_by_fqcn() {
+        let fs = collections_fs();
+        let want =
+            PathBuf::from("/p/collections/ansible_collections/ns/coll/roles/setup/tasks/main.yml");
+
+        let out = mem_src("/p/pb.yml", "- include_role:\n    name: ns.coll.setup\n", &fs);
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.status, Status::Resolved, "Q: tried {:#?}", res.candidates);
+        assert_eq!(res.targets[0], want);
+
+        let out = mem_src("/p/pb.yml", "- hosts: all\n  roles:\n    - ns.coll.setup\n", &fs);
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.status, Status::Resolved, "R: tried {:#?}", res.candidates);
+        assert_eq!(res.targets[0], want);
+    }
+
+    /// Rows S and U, the control for the pair above: without a list, a short role name is
+    /// only ever looked up along `roles_path` — ansible-core reported
+    /// `The role 'setup' was not found in: …` for the collection-hosted one, and ran
+    /// `roles/local_only` for the local one even with a list in scope.
+    #[test]
+    fn a_short_role_name_outside_any_list_uses_roles_path_only() {
+        let fs = collections_fs();
+
+        let out = mem_src("/p/pb.yml", "- include_role:\n    name: setup\n", &fs);
+        let res = first(&out, ReferenceKind::Role);
+        assert_ne!(res.status, Status::Resolved, "S: got {:?}", res.targets);
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  roles:\n    - local_only\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.status, Status::Resolved, "U: tried {:#?}", res.candidates);
+        assert_eq!(res.targets[0], PathBuf::from("/p/roles/local_only/tasks/main.yml"));
+    }
+
+    /// Row T: the list applies to *roles* too, not only modules — `include_role: {name:
+    /// setup}` under `collections: [ns.coll]` ran `ns.coll.setup`. The ticket's item 2 only
+    /// asked about FQCNs; this row is the half of it that does not work yet.
+    #[test]
+    fn a_short_role_name_resolves_through_the_collections_list() {
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - include_role:\n        name: setup\n",
+            &collections_fs(),
+        );
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(
+            res.targets[0],
+            PathBuf::from("/p/collections/ansible_collections/ns/coll/roles/setup/tasks/main.yml")
+        );
+    }
+
+    /// Rows BA–BD, the rule that decides how the scopes combine: an inner `collections:`
+    /// **replaces** the enclosing one, it does not extend it. Measured on 2.21.2 — a module
+    /// only the play's collection ships became unresolvable the moment the task wrote a list
+    /// of its own, and the same for a block and for a task inside a role. The control (BB)
+    /// is the same shape with the module in the *inner* collection, which resolves; without
+    /// it this test could not tell "replaced" from "resolves nothing either way".
+    #[test]
+    fn an_inner_collections_list_replaces_the_outer_one() {
+        let fs = collections_fs();
+
+        // BA: play [ns.a], task [ns.b] — `dup` is in both, so the inner one answers.
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a]\n  tasks:\n    - dup:\n      collections: [ns.b]\n",
+            &fs,
+        );
+        assert_eq!(
+            first(&out, ReferenceKind::Module).targets,
+            vec![PathBuf::from("/p/collections/ansible_collections/ns/b/plugins/modules/dup.py")],
+            "AA: the nearest list answers"
+        );
+
+        // The half that proves it is a replacement: `only_b` is in ns.b alone, so under an
+        // inner [ns.a] the outer [ns.b] must not rescue it.
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.b]\n  tasks:\n    - only_b:\n      collections: [ns.a]\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "BA: got {:?}", res.targets);
+
+        // BB, the control: same shape, module in the inner collection — still resolves, so
+        // the assertion above is about the outer list and not about the setup being broken.
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.a]\n  tasks:\n    - only_b:\n      collections: [ns.b]\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "BB: tried {:#?}", res.candidates);
+
+        // BC: a block replaces the play's for the statements inside it.
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.b]\n  tasks:\n    - block:\n        - only_b:\n      collections: [ns.a]\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "BC: got {:?}", res.targets);
+    }
+
+    /// Row BD/AD: inside a role, a task's own list replaces the role's `meta/main.yml` one
+    /// — the same replacement rule, with the outer list coming off disk rather than out of
+    /// the file. `roles/r` declares `collections: [ns.coll]`; `ns.coll` ships `probe_mod`
+    /// and `ns.b` does not.
+    #[test]
+    fn a_task_in_a_role_replaces_the_roles_meta_collections_list() {
+        let fs = collections_fs();
+
+        let out = mem_src(
+            "/p/roles/r/tasks/main.yml",
+            "- probe_mod:\n  collections: [ns.b]\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "BD: got {:?}", res.targets);
+
+        // The control: the same task without a list of its own still reaches ns.coll
+        // through the role's meta (row AE).
+        let out = mem_src("/p/roles/r/tasks/main.yml", "- probe_mod:\n", &fs);
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "AE: tried {:#?}", res.candidates);
+    }
+
+    /// Rows DA/DB: `collections` is `static=True` upstream, so a `{{ }}` entry is never
+    /// rendered — it is taken literally and matches nothing. It still **replaces** the
+    /// enclosing list, so a task that writes one loses its play's. Measured: `only_a` in
+    /// `ns.a`, play `collections: [ns.a]`, task `collections: ["{{ c }}"]` with `c: ns.a`
+    /// set — ansible-core still died with `couldn't resolve module/action 'only_a'`.
+    ///
+    /// This is why [`crate::ast`] keeps templated entries rather than dropping them:
+    /// dropping would leave an empty list, and an empty list means "inherit".
+    #[test]
+    fn a_templated_entry_is_dead_but_still_replaces_the_outer_list() {
+        let fs = collections_fs();
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - probe_mod:\n      collections: [\"{{ c }}\"]\n",
+            &fs,
+        );
+        let res = first(&out, ReferenceKind::Module);
+        assert_ne!(res.status, Status::Resolved, "DA: got {:?}", res.targets);
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - probe_mod:\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Module).status, Status::Resolved, "DB");
+    }
+
+    /// Rows AF/AG: for a short role name the list beats `roles_path`, the same way it beats
+    /// `library/` for a module. `roles/shared` and `ns.coll.shared` both exist here, and
+    /// ansible-core ran the collection's from `include_role:` and from a `roles:` entry
+    /// alike.
+    #[test]
+    fn a_listed_collection_shadows_a_role_of_the_same_name_in_roles_path() {
+        let fs = collections_fs();
+        let collection =
+            PathBuf::from("/p/collections/ansible_collections/ns/coll/roles/shared/tasks/main.yml");
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  tasks:\n    - include_role:\n        name: shared\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Role).targets[0], collection, "AF");
+
+        let out = mem_src(
+            "/p/pb.yml",
+            "- hosts: all\n  collections: [ns.coll]\n  roles:\n    - shared\n",
+            &fs,
+        );
+        assert_eq!(first(&out, ReferenceKind::Role).targets[0], collection, "AG");
+
+        // Without the list the local one wins, so the rows above are a real collision.
+        let out = mem_src("/p/pb.yml", "- hosts: all\n  roles:\n    - shared\n", &fs);
+        assert_eq!(
+            first(&out, ReferenceKind::Role).targets[0],
+            PathBuf::from("/p/roles/shared/tasks/main.yml"),
+            "control: no list, roles_path answers"
+        );
+    }
+
+    /// Rows CA/CB, the gap that is left. A play's `collections:` **does** reach a file it
+    /// pulls in with `include_tasks`/`import_tasks` — measured, both ran `ns.coll.probe_mod`
+    /// — unlike a role, which resets the search (row J). We resolve one file at a time and
+    /// `/p/inc.yml` has no play in it, so we cannot see the list from here: it is the
+    /// caller's, not the file's, and needs the invocation chain.
+    #[test]
+    #[ignore = "needs the caller's list, which per-file resolution cannot see — T-042"]
+    fn a_plays_collections_list_reaches_a_file_it_includes() {
+        let out = mem_src("/p/inc.yml", "- probe_mod:\n", &collections_fs());
+        let res = first(&out, ReferenceKind::Module);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
     }
 
     /// Modules are any executable: the legacy finder caches every library/ file by its

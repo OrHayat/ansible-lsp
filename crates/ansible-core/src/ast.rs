@@ -71,6 +71,9 @@ pub struct Play {
     /// rule can report them (T-087). Recorded here, at the one place that already decides
     /// what a valid entry is, so the diagnostic and the navigation cannot disagree.
     pub invalid_vars_files: Vec<InvalidVarsFilesEntry>,
+    /// The `collections:` search list written on this play. See [`collections_of`] —
+    /// nearest one wins, it does not merge with an inner scope's.
+    pub collections: Vec<String>,
     /// Play-level directives other than the ones captured structurally above.
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this play.
@@ -135,6 +138,9 @@ pub struct Block {
     /// (`NOTIFIABLE` is in Block's set, `keywords.rs`) — unlike `listen:`, which is not,
     /// and so has no field on this type.
     pub notify: Vec<HandlerRef>,
+    /// The `collections:` search list written on this block, replacing the play's for the
+    /// statements inside it.
+    pub collections: Vec<String>,
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this block.
     pub unknown_keys: Vec<UnknownKey>,
@@ -171,6 +177,9 @@ pub struct Task {
     /// already reported as an invalid attribute, so filling the field regardless keeps
     /// that verdict in one place instead of two.
     pub listen: Vec<HandlerRef>,
+    /// The `collections:` search list written on this task, replacing its block's or
+    /// play's.
+    pub collections: Vec<String>,
     pub directives: Vec<Directive>,
     /// Keys Ansible would reject on this task (or under its `loop_control:`).
     pub unknown_keys: Vec<UnknownKey>,
@@ -330,6 +339,19 @@ fn unknown_keys_of(
 
 fn name_of(node: &Node) -> Option<String> {
     node.get("name").and_then(|n| n.as_str()).map(str::to_owned)
+}
+
+/// The `collections:` search list on a play, block or task — a scalar is Ansible's
+/// one-element-list shorthand, same as `when:`.
+///
+/// Templated entries are kept rather than dropped. An inner list **replaces** the outer
+/// one instead of extending it (measured on 2.21.2, `scratchpad/t042_merge_probe.sh`: a
+/// module only the play's collection ships is unresolvable under a task-level list), so
+/// "a list is written here but nothing in it is usable" has to stay distinguishable from
+/// "no list is written here" — dropping the entries would collapse the two and silently
+/// hand the task its play's search list.
+fn collections_of(node: &Node) -> Vec<String> {
+    node.get("collections").map(clauses).unwrap_or_default()
 }
 
 /// A `when:` is either one expression or a list of them (ANDed).
@@ -572,6 +594,7 @@ fn build_play(node: &Node) -> Play {
         vars: vars_of(node),
         vars_files: vars_files_split.0,
         invalid_vars_files: vars_files_split.1,
+        collections: collections_of(node),
         directives: collect_directives(node, |k| {
             keywords::is_play_directive(k) && !STRUCTURAL.contains(&k)
         }),
@@ -683,6 +706,7 @@ fn build_block(node: &Node, handlers: bool) -> Block {
         when_span: when.map(|w| w.span()),
         vars: vars_of(node),
         notify: handler_refs(node, "notify"),
+        collections: collections_of(node),
         directives: collect_directives(node, |k| {
             keywords::is_block_directive(k)
                 && k != "name"
@@ -736,6 +760,7 @@ fn build_task(node: &Node, handlers: bool) -> Task {
         vars: vars_of(node),
         notify: handler_refs(node, "notify"),
         listen: handler_refs(node, "listen"),
+        collections: collections_of(node),
         directives: collect_directives(node, |k| {
             keywords::is_task_directive(k) && !TASK_STRUCTURAL.contains(&k)
         }),

@@ -136,6 +136,19 @@ pub struct Reference {
     /// before anything else, because at parse time it is one of only two sources Ansible
     /// can read (the other, `-e`, is invisible to us) — T-095.
     pub entry_vars: Vec<(String, String)>,
+    /// The `collections:` search list in scope where this reference is written — the
+    /// *nearest* one, task before block before play, because an inner list replaces the
+    /// outer rather than extending it (measured, `scratchpad/t042_merge_probe.sh`). A short
+    /// module or role name is tried as `<entry>.<name>` for each entry in order, ahead of
+    /// `ansible.legacy`; an FQCN ignores it entirely (T-042).
+    ///
+    /// Empty in a task file, which has no play to inherit from. The one list that reaches
+    /// such a file is its own role's `meta/main.yml`, which is on disk rather than in the
+    /// file — [`crate::resolve`] reads it from [`crate::resolve::FileContext::role_dir`].
+    /// A play's list *does* reach a plain `include_tasks`/`import_tasks` target (measured,
+    /// `t042_cross_file_probe.sh`), and that one we still get wrong: it needs the caller,
+    /// not the file.
+    pub collections: Vec<String>,
     /// A genuine playbook-level `import_playbook:` entry, not the same key written inside a
     /// task list. Ansible loads only the first as a playbook; the second is read as a module
     /// name and fails on its parameters (T-110 row `ip`), so its target is never opened and
@@ -184,6 +197,7 @@ impl Reference {
             apply_when_span: None,
             apply_vars: Vec::new(),
             apply_span: None,
+            collections: Vec::new(),
             playbook_entry: false,
         }
     }
@@ -234,7 +248,9 @@ pub fn extract(nodes: &[Node]) -> Extracted {
             true
         }
         Ast::Tasks(stmts) => {
-            stmts.iter().for_each(|s| stmt(s, &mut refs));
+            // No play to inherit from. A role's own `meta/main.yml` list is the one that
+            // reaches here, and it is read at resolve time from the file's role dir.
+            stmts.iter().for_each(|s| stmt(s, &mut refs, &[]));
             false
         }
         Ast::Other => false,
@@ -258,6 +274,7 @@ fn play(p: &Play, out: &mut Vec<Reference>) {
         r.conditions = role.when.clone();
         r.condition_span = role.when_span;
         r.when_propagates = true;
+        r.collections = p.collections.clone();
         out.push(r);
     }
     for entry in &p.vars_files {
@@ -284,7 +301,7 @@ fn play(p: &Play, out: &mut Vec<Reference>) {
         .chain(&p.post_tasks)
         .chain(&p.handlers)
     {
-        stmt(s, out);
+        stmt(s, out, &p.collections);
     }
 }
 
@@ -310,17 +327,27 @@ fn import_playbook(i: &Import, out: &mut Vec<Reference>) {
     }
 }
 
-fn stmt(s: &Stmt, out: &mut Vec<Reference>) {
+/// The list an inner scope sees: its own if it wrote one, else the enclosing scope's.
+/// Never the two concatenated — measured on 2.21.2, a module only the outer collection
+/// ships is unresolvable once an inner scope writes a list of its own.
+fn nearest<'a>(own: &'a [String], outer: &'a [String]) -> &'a [String] {
+    if own.is_empty() { outer } else { own }
+}
+
+fn stmt(s: &Stmt, out: &mut Vec<Reference>, collections: &[String]) {
     match s {
-        Stmt::Task(t) => task(t, out),
+        Stmt::Task(t) => task(t, out, collections),
         // A block-level `when:` propagates to each contained task at runtime, but that's
-        // the resolver's concern; here a block only nests statements.
-        Stmt::Block(b) => b
-            .block
-            .iter()
-            .chain(&b.rescue)
-            .chain(&b.always)
-            .for_each(|s| stmt(s, out)),
+        // the resolver's concern; here a block only nests statements — and replaces the
+        // collection search list for them if it writes one.
+        Stmt::Block(b) => {
+            let inner = nearest(&b.collections, collections);
+            b.block
+                .iter()
+                .chain(&b.rescue)
+                .chain(&b.always)
+                .for_each(|s| stmt(s, out, inner))
+        }
     }
 }
 
@@ -335,7 +362,7 @@ fn clauses_of(when: &Node) -> Vec<String> {
     }
 }
 
-fn task(t: &Task, out: &mut Vec<Reference>) {
+fn task(t: &Task, out: &mut Vec<Reference>, collections: &[String]) {
     let Some(action) = &t.action else { return };
     let before = out.len();
     module_refs(action, out);
@@ -388,6 +415,7 @@ fn task(t: &Task, out: &mut Vec<Reference>) {
         }
         r.repeated = t.looped;
         r.task_name = t.name.clone();
+        r.collections = nearest(&t.collections, collections).to_vec();
     }
 }
 
