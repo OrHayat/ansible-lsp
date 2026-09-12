@@ -39,7 +39,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 ## Children
 
 - [ ] T-039 — `requirements.yml` ↔ installed-collections cross-check
-- [ ] T-042 — Close resolver gaps: collections keyword, collection roles, `*_from`
+- [x] T-042 — Close resolver gaps: collections keyword, collection roles, `*_from`
 - [ ] T-064 — Plugin routing: redirects, deprecations, tombstones (+ rename autofix)
 - [x] T-072 — Network modules: one platform action plugin handles the whole family
 - [x] T-073 — Legacy `action_plugins/` dirs are invisible to the action-plugin check
@@ -49,6 +49,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [x] T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
 - [ ] T-133 — NotInWorkspace hover lumps three different situations into one vague message
 - [ ] T-227 — One loader-path model for every plugin-type dir and cfg path
+- [ ] T-231 — A short module name in an included task file cannot see the caller's collections: list
 
 ## Done when
 

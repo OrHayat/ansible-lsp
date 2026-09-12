@@ -2576,9 +2576,10 @@ mod tests {
     /// pulls in with `include_tasks`/`import_tasks` — measured, both ran `ns.coll.probe_mod`
     /// — unlike a role, which resets the search (row J). We resolve one file at a time and
     /// `/p/inc.yml` has no play in it, so we cannot see the list from here: it is the
-    /// caller's, not the file's, and needs the invocation chain.
+    /// caller's, not the file's, and needs the invocation chain — T-231, which also holds
+    /// the two-caller case that makes this more than a lookup.
     #[test]
-    #[ignore = "needs the caller's list, which per-file resolution cannot see — T-042"]
+    #[ignore = "needs the caller's list, which per-file resolution cannot see — T-231"]
     fn a_plays_collections_list_reaches_a_file_it_includes() {
         let out = mem_src("/p/inc.yml", "- probe_mod:\n", &collections_fs());
         let res = first(&out, ReferenceKind::Module);

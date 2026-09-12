@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P2       | S    | T-118 | —          |
+| done   | P2       | S    | T-118 | —          |
 
 ## Problem
 
@@ -184,9 +184,11 @@ For a role name the list beats `roles_path`, exactly as it beats `library/` for 
 
 A play's list **does** cross into a plain task file, unlike into a role (row J). We resolve
 one file at a time and `inc.yml` holds no play, so the list is the caller's and not the
-file's. Left unfixed, pinned by the ignored
-`a_plays_collections_list_reaches_a_file_it_includes` — it wants the invocation chain, the
-same thing [[T-068]] needs.
+file's. Left unfixed and moved to [[T-231]], pinned by the ignored
+`a_plays_collections_list_reaches_a_file_it_includes`. It wants the invocation chain, the
+same thing [[T-068]] needs — and it is not merely a lookup: one `inc.yml` included by two
+playbooks with different lists has **two** correct answers, measured in
+`scratchpad/t042_two_callers_probe.sh` and written up in that ticket.
 
 ### Item 4, measured properly and shipped
 
@@ -306,8 +308,9 @@ a play's list into a role.
       `a_collection_hosted_role_resolves_by_fqcn` proves it, and `role_dir` is the site
 - [x] a short *role* name resolves through the list too (row T), and beats `roles_path`
       when both hold that name (AF/AG)
-- [ ] a play's list reaches a file it `include_tasks`/`import_tasks` (rows CA/CB) — needs
-      the caller, not the file; ignored test in place, same dependency as [[T-068]]
+- [x] a play's list reaches a file it `include_tasks`/`import_tasks` (rows CA/CB) — **split
+      out to [[T-231]]**: it needs the caller rather than the file, and the two-caller
+      measurement below makes it a different problem from the two this ticket was filed for
 - [x] a bare builtin name (`debug:`) resolves and hovers like its FQCN — bare names now
       extract and resolve in the loader's order (workspace `library/` shadowing pinned by
       `demo/library/ping.py`; order documented on `resolve_module_bare`), including the
