@@ -55,8 +55,24 @@ name to the playbook directory. Measured by applying it to a copy of 2.21.2
 | absolute path, from `/tmp` | ran | ran |
 
 The answer stops depending on the shell. For a relative name the patched candidate is
-`<playbook_dir>/<name>` — identical to the fourth root already in the list — so the fallback
-becomes a duplicate for relative names and only still matters for absolute ones.
+`<playbook_dir>/<name>` — identical to the fourth root already in the list — so for relative
+names the fallback becomes a duplicate check.
+
+What the fallback is actually *for* is `~` and `$VAR`. `unfrackpath` expands both before it
+joins, while the root loop joins first (`<root>/~/roles/x`, where `~` no longer leads and never
+expands). Measured with three builds (`scratchpad/t067_fallback_shapes_probe.sh`), cwd = the
+project root:
+
+| Name | 2.21.2 | #87268 | fallback deleted |
+| ---- | ------ | ------ | ---------------- |
+| `shared/myrole` | found (via CWD) | — | — |
+| absolute path | found | found | found |
+| `~/t067roles/homerole` | found | found | — |
+| `$HOME/t067roles/homerole` | found | found | — |
+
+An absolute name never needed the fallback: `os.path.join(root, "/abs")` is `"/abs"`, so the
+first root already finds it. The PR keeps the one thing only the fallback does and removes the
+accident; the redundant check for plain relative names is harmless.
 
 ## Why this repo cares
 
@@ -65,3 +81,7 @@ modelled — it depends on the operator's shell — so such a role stays unresol
 calling it a bug means that policy is not an under-approximation to apologise for: it is the
 behaviour ansible is moving to. Nothing needs adding when #87268 lands either: the anchored
 form is `<playbook_dir>/<name>`, which T-067's list already has as its fourth root.
+
+The `~`/`$VAR` rows are a separate thing we must model regardless: they resolve in every build,
+so a role named `~/roles/x` is valid, and a resolver that only joins the name onto its roots
+reports it missing.
