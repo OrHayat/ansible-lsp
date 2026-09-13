@@ -44,14 +44,24 @@ Same files, same command, only the shell's directory changed. And the failure li
 — the CWD candidate, the one that decides, is not among them.
 
 **The proposed fix** (#87268) passes `basedir=self._loader.get_basedir()`, anchoring a relative
-name to the playbook directory. Not yet verified against our fixture; when it lands, re-run the
-probe — the `/tmp` and `playbooks/` rows should still fail (the role is not under
-`playbooks/`), and the project-root row should start failing too.
+name to the playbook directory. Measured by applying it to a copy of 2.21.2
+(`scratchpad/t067_pr87268_probe.sh`), same fixture:
+
+| Run from | before | after |
+| -------- | ------ | ----- |
+| the project root | ran | not found |
+| `/tmp` | not found | not found |
+| `playbooks/` | not found | not found |
+| absolute path, from `/tmp` | ran | ran |
+
+The answer stops depending on the shell. For a relative name the patched candidate is
+`<playbook_dir>/<name>` — identical to the fourth root already in the list — so the fallback
+becomes a duplicate for relative names and only still matters for absolute ones.
 
 ## Why this repo cares
 
 T-067 must decide what to do with a role reachable only through this fallback. It cannot be
 modelled — it depends on the operator's shell — so such a role stays unresolved. Upstream
 calling it a bug means that policy is not an under-approximation to apologise for: it is the
-behaviour ansible is moving to. Once #87268 lands, the anchored form is modellable
-(`<playbook_dir>/<name>`) and T-067 should add it as a fifth root.
+behaviour ansible is moving to. Nothing needs adding when #87268 lands either: the anchored
+form is `<playbook_dir>/<name>`, which T-067's list already has as its fourth root.
