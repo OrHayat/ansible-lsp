@@ -26,7 +26,7 @@ the same argument applied one layer up.
 
 ## Children
 
-- [ ] T-067 — Role search order doesn't match Ansible's
+- [x] T-067 — Role search order doesn't match Ansible's
 - [x] T-036 — Parse the YAML that Ansible parses (lenient oracle, maybe a swap)
 - [x] T-047 — Move the resolvers onto the AST
 - [x] T-091 — with_ext misses .json and extensionless, and tasks_from flips the order

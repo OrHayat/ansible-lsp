@@ -48,17 +48,17 @@
 
 - name: Role by name
   ansible.builtin.include_role:
-    name: demo
+    name: notifier
 
 - name: Role with a specific tasks file
   ansible.builtin.include_role:
-    name: demo
-    tasks_from: sibling
+    name: notifier
+    tasks_from: restart
 
 - name: The flow form the legacy plugin gets wrong
   # Everything is on one line, so the legacy ±6-line scan can't pair tasks_from
   # with its name. Here they're siblings in one mapping node.
-  ansible.builtin.include_role: { name: demo, tasks_from: sibling }
+  ansible.builtin.include_role: { name: notifier, tasks_from: restart }
 
 - name: Role that does not exist — warns
   ansible.builtin.include_role:
@@ -67,7 +67,7 @@
 - name: Role with no tasks/main.yml — silent, because tasks_from supplies the file
   # roles/cib-batch in the real repo is exactly this: begin/commit/abort.yml and
   # no main.yml. Real working references depend on this not warning.
-  ansible.builtin.include_role: { name: demo, tasks_from: sibling }
+  ansible.builtin.include_role: { name: tasks-from-only, tasks_from: begin }
 
 - name: "The roles: list form lives in demo/playbook.yml"
   debug:

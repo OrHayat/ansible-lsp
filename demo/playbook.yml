@@ -3,9 +3,13 @@
 - name: Demo play
   hosts: localhost
   roles:
-    - demo              # bare string
-    - role: demo        # dict form
-    - no_such_role      # unresolvable, stays plain
+    - notifier          # bare string, roles/notifier
+    - role: notifier    # dict form
+    - no_such_role      # unresolvable, warns
+    # BAD: warns, and ansible agrees: The role 'demo' was not found. Nothing named demo
+    # is on the search list - this folder's roles/, then roles_path, then this folder
+    # itself. It used to resolve because the folder ABOVE the demo was searched (T-067).
+    - demo
 
 # ---------------------------------------------------------- import_playbook
 # Play-level, static. Resolved against this file's directory, then the project

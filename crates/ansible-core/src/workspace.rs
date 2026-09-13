@@ -151,26 +151,55 @@ impl FileContext {
             && matches!(path.extension().and_then(|e| e.to_str()), Some("yml" | "yaml"))
     }
 
-    /// Directories that contain roles, in search order.
-    pub fn roles_roots(&self) -> Vec<PathBuf> {
+    /// Directories that contain roles, in Ansible's search order —
+    /// `definition.py:_load_role_path`, measured on 2.21.2 (T-067,
+    /// `scratchpad/t067_search_order_probe.sh`):
+    ///
+    /// 1. `<playbook_dir>/roles`, always first — it beat a same-named role in `roles_path`
+    /// 2. `roles_path`, or the built-in defaults when nothing set it
+    /// 3. the depending role's parent, **only** while a role's `meta/main.yml` dependencies
+    ///    load (`role/metadata.py:88`) — a sibling named by `include_role`/`import_role` from
+    ///    inside a role was not found
+    /// 4. `<playbook_dir>` itself — a role directory next to the playbook ran
+    ///
+    /// The last resort after these, the name treated as a path against the process CWD, is
+    /// not modelled: it depends on the operator's shell, and upstream calls it a bug
+    /// (`upstream/ansible-role-name-cwd-fallback.md`).
+    ///
+    /// `<playbook_dir>` is the loader's basedir, which only a playbook knows is its own
+    /// directory. Anywhere else it is whichever playbook ran the file, so `project_root`
+    /// and the file's own `roles/` stand in for it and item 4 is left out rather than
+    /// guessed (T-096).
+    pub fn roles_roots(&self, in_playbook: bool) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        for p in self.config.roles_path.iter().flatten() {
-            push_unique(&mut dirs, Some(p.clone()));
-        }
-        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("roles")));
-        // A role may include a sibling role, so the current role's parent is a root.
-        push_unique(
-            &mut dirs,
-            self.role_dir.as_ref().and_then(|r| r.parent()).map(Path::to_path_buf),
-        );
-        push_unique(&mut dirs, Some(self.file_dir.join("roles")));
-        // Ansible's built-in defaults apply only when nothing set roles_path — a set
-        // value replaces them rather than extending them, and set-but-empty counts as set.
-        if self.config.roles_path.is_none() {
-            push_unique(&mut dirs, self.config.ansible_home.as_ref().map(|h| h.join("roles")));
-            for d in ["/usr/share/ansible/roles", "/etc/ansible/roles"] {
-                push_unique(&mut dirs, Some(PathBuf::from(d)));
+        let playbook_dir = if in_playbook { Some(&self.file_dir) } else { self.project_root.as_ref() };
+        push_unique(&mut dirs, playbook_dir.map(|d| d.join("roles")));
+        // A set roles_path replaces the defaults rather than extending them, and set-but-empty
+        // counts as set — measured: a role in `~/.ansible/roles` stopped resolving the moment
+        // `roles_path = ./roles` was set.
+        match &self.config.roles_path {
+            Some(paths) => paths.iter().for_each(|p| push_unique(&mut dirs, Some(p.clone()))),
+            None => {
+                push_unique(&mut dirs, self.config.ansible_home.as_ref().map(|h| h.join("roles")));
+                for d in ["/usr/share/ansible/roles", "/etc/ansible/roles"] {
+                    push_unique(&mut dirs, Some(PathBuf::from(d)));
+                }
             }
+        }
+        // Dependency context is a property of the file: every `meta/main.yml` dependency is
+        // resolved with that file's own context, and nothing else in it is a role reference.
+        if let Some(role) = &self.role_dir {
+            if self.file_dir == role.join("meta") {
+                push_unique(&mut dirs, role.parent().map(Path::to_path_buf));
+            }
+        }
+        if in_playbook {
+            push_unique(&mut dirs, Some(self.file_dir.clone()));
+        } else {
+            // Not a root Ansible has: a stand-in for the unknown playbook dir, kept from before
+            // T-067 so a task file without a project root does not start reporting roles
+            // that sit right next to it as missing. Last, so it can only add a resolution.
+            push_unique(&mut dirs, Some(self.file_dir.join("roles")));
         }
         dirs
     }
@@ -372,13 +401,13 @@ mod tests {
             AnsibleConfig::builder(root).fs(&fs).env(&env).load()
         });
 
-        assert!(ctx.roles_roots().contains(&PathBuf::from("/opt/ans/roles")));
+        assert!(ctx.roles_roots(true).contains(&PathBuf::from("/opt/ans/roles")));
         assert!(ctx.legacy_module_dirs().contains(&PathBuf::from("/opt/ans/plugins/modules")));
         assert!(ctx
             .legacy_action_plugin_dirs()
             .contains(&PathBuf::from("/opt/ans/plugins/action")));
         let all: Vec<_> = ctx
-            .roles_roots()
+            .roles_roots(true)
             .into_iter()
             .chain(ctx.legacy_module_dirs())
             .chain(ctx.legacy_action_plugin_dirs())
@@ -400,7 +429,7 @@ mod tests {
             AnsibleConfig::builder(root).fs(&fs).env(&env).load()
         });
         assert!(ctx.project_root.is_none(), "fixture really is rootless");
-        assert!(ctx.roles_roots().contains(&PathBuf::from("/home/t/.ansible/roles")));
+        assert!(ctx.roles_roots(true).contains(&PathBuf::from("/home/t/.ansible/roles")));
         assert!(ctx
             .legacy_module_dirs()
             .contains(&PathBuf::from("/home/t/.ansible/plugins/modules")));
@@ -417,7 +446,7 @@ mod tests {
         let ctx = FileContext::discover_with(Path::new("/p/play.yml"), &fs, |root| {
             AnsibleConfig::builder(root).fs(&fs).env(&env).load()
         });
-        let roots = ctx.roles_roots();
+        let roots = ctx.roles_roots(true);
         assert!(
             !roots.contains(&PathBuf::from("/home/t/.ansible/roles"))
                 && !roots.contains(&PathBuf::from("/usr/share/ansible/roles")),
@@ -455,6 +484,6 @@ mod tests {
             c.role_anchor_dir
         );
         assert!(c.project_root.as_ref().unwrap().ends_with("ansible-lsp-nested-role"));
-        assert!(c.roles_roots().iter().any(|r| r.ends_with("ansible-lsp-nested-role/roles")));
+        assert!(c.roles_roots(false).iter().any(|r| r.ends_with("ansible-lsp-nested-role/roles")));
     }
 }

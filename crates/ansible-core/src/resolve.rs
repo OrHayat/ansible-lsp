@@ -647,6 +647,7 @@ impl<'a> Resolver<'a> {
             ReferenceKind::Role => match role_dir(
                 &r.value,
                 &collections_in_scope(r, ctx, self.exts, fs),
+                self.in_playbook,
                 ctx,
                 fs,
             ) {
@@ -673,7 +674,7 @@ impl<'a> Resolver<'a> {
                 None => Resolution {
                     status: Status::Missing,
                     targets: Vec::new(),
-                    candidates: ctx.roles_roots().iter().map(|d| d.join(&r.value)).collect(),
+                    candidates: ctx.roles_roots(self.in_playbook).iter().map(|d| d.join(&r.value)).collect(),
                     skip_reason: None,
                     directory: None,
                 },
@@ -682,7 +683,7 @@ impl<'a> Resolver<'a> {
             ReferenceKind::TasksFrom => {
                 let collections = collections_in_scope(r, ctx, self.exts, fs);
                 let Some(role) =
-                    r.role.as_deref().and_then(|n| role_dir(n, &collections, ctx, fs))
+                    r.role.as_deref().and_then(|n| role_dir(n, &collections, self.in_playbook, ctx, fs))
                 else {
                     return Resolution::skipped(SkipReason::NotInWorkspace);
                 };
@@ -948,6 +949,7 @@ fn collection_module_redirect(
 fn role_dir(
     name: &str,
     collections: &[String],
+    in_playbook: bool,
     ctx: &FileContext,
     fs: &dyn Fs,
 ) -> Option<PathBuf> {
@@ -974,7 +976,7 @@ fn role_dir(
             return Some(p);
         }
     }
-    ctx.roles_roots()
+    ctx.roles_roots(in_playbook)
         .iter()
         .map(|r| r.join(name))
         .find(|p| fs.is_dir(p))
@@ -3490,6 +3492,138 @@ mod tests {
         // Same file, same value, no `vars:` — nothing here can supply it, so it warns.
         let out = mem_src("/p/site.yml", "- import_playbook: \"{{ env }}-setup.yml\"\n", &fs);
         assert_eq!(first(&out, ReferenceKind::ImportPlaybook).status, Status::Missing);
+    }
+
+    /// The tree the T-067 search-order cases share, transcribed from
+    /// `scratchpad/t067_search_order_probe.sh` and `t067_playbook_dir_root_probe.sh`. The
+    /// playbook sits one level below the project root, so `<playbook_dir>` and the project
+    /// root are different directories and a resolver that confuses them is visible.
+    fn search_order_fs() -> crate::testing::MemFs {
+        crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./cfgroles\n"),
+            ("/p/playbooks/site.yml", ""),
+            // A1: the same name in `<playbook_dir>/roles` and in `roles_path`.
+            ("/p/playbooks/roles/dup/tasks/main.yml", ""),
+            ("/p/cfgroles/dup/tasks/main.yml", ""),
+            // B1: the same name in `roles_path` and in `<playbook_dir>` itself.
+            ("/p/cfgroles/dup2/tasks/main.yml", ""),
+            ("/p/playbooks/dup2/tasks/main.yml", ""),
+            // B2: only in `<playbook_dir>` itself.
+            ("/p/playbooks/beside/tasks/main.yml", ""),
+            // C: two sibling roles under a directory no root names.
+            ("/p/other/a/meta/main.yml", "dependencies: [b]\n"),
+            ("/p/other/a/tasks/main.yml", ""),
+            ("/p/other/b/tasks/main.yml", ""),
+        ])
+    }
+
+    /// Rows A1/A2, B1: `definition.py:_load_role_path` builds `<playbook_dir>/roles`, then
+    /// `roles_path`, then `<playbook_dir>`. Measured on 2.21.2 — with `dup` in both
+    /// `playbooks/roles` and `roles_path` the playbook's copy ran, and with `dup2` in both
+    /// `roles_path` and `playbooks/` the `roles_path` copy ran. Each pair is a real collision,
+    /// so the order is what decides.
+    #[test]
+    fn a_play_role_searches_playbook_roles_then_roles_path_then_the_playbook_dir() {
+        let fs = search_order_fs();
+
+        let out = mem_src("/p/playbooks/site.yml", "- hosts: all\n  roles: [dup]\n", &fs);
+        assert_eq!(
+            first(&out, ReferenceKind::Role).targets,
+            vec![PathBuf::from("/p/playbooks/roles/dup/tasks/main.yml")],
+            "A1: <playbook_dir>/roles comes before roles_path"
+        );
+
+        let out = mem_src("/p/playbooks/site.yml", "- hosts: all\n  roles: [dup2]\n", &fs);
+        assert_eq!(
+            first(&out, ReferenceKind::Role).targets,
+            vec![PathBuf::from("/p/cfgroles/dup2/tasks/main.yml")],
+            "B1: roles_path comes before <playbook_dir> itself"
+        );
+    }
+
+    /// Row B2/B3: `<playbook_dir>` itself, without `roles/`, is the last listed root —
+    /// `roles: [dup]` ran a `dup/` sitting next to the playbook, and the miss once it was
+    /// removed printed `playbooks/roles : nowhere : playbooks`.
+    #[test]
+    fn a_play_role_beside_the_playbook_resolves() {
+        let out =
+            mem_src("/p/playbooks/site.yml", "- hosts: all\n  roles: [beside]\n", &search_order_fs());
+        let res = first(&out, ReferenceKind::Role);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/playbooks/beside/tasks/main.yml")]);
+    }
+
+    /// Row C1: the depending role's parent is a root **while its `meta/main.yml`
+    /// dependencies load** — `_load_dependencies` passes `role_basedir =
+    /// os.path.dirname(owner._role_path)` (`role/metadata.py:88`). `b` sits beside `a` under
+    /// a directory no other root names, and it ran.
+    #[test]
+    fn a_meta_dependency_finds_a_sibling_role() {
+        let fs = search_order_fs();
+        let src = "dependencies: [b]\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let file = Path::new("/p/other/a/meta/main.yml");
+        let ctx = FileContext::discover_with(file, &fs, |root| {
+            crate::config::AnsibleConfig::builder(root).fs(&fs).env(&crate::config::EnvMap::empty()).load()
+        });
+        let dep = crate::references::meta_dependencies(&nodes).pop().expect("one dependency");
+        let res = super::Resolver { fs: &fs, ..Default::default() }.resolve(&dep, &ctx);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/other/b/tasks/main.yml")]);
+    }
+
+    /// Rows C2/C3: only the dependency loader passes that basedir. The same sibling named by
+    /// `include_role` or `import_role` from inside `a`'s tasks was **not found** — measured,
+    /// both died with `The role 'b' was not found`. Our old rule added the role's parent for
+    /// every file, which answered these as found.
+    #[test]
+    fn a_role_include_does_not_find_a_sibling_role() {
+        let fs = search_order_fs();
+        for action in ["include_role", "import_role"] {
+            let out = mem_src("/p/other/a/tasks/main.yml", &format!("- {action}:\n    name: b\n"), &fs);
+            let res = first(&out, ReferenceKind::Role);
+            assert_eq!(res.status, Status::Missing, "{action}: got {:?}", res.targets);
+        }
+    }
+
+    /// T-067's demo rows, pinned (rule 4). Every label on a role reference in
+    /// `demo/playbook.yml` and `demo/tasks/main.yml`'s ROLES section is a claim about the
+    /// verdict, and two of them used to be false: `roles: - demo` and
+    /// `include_role: name: demo` resolved only through the folder above `demo/`, which
+    /// Ansible never searches — measured, both die with `The role 'demo' was not found`.
+    #[test]
+    fn demo_role_rows_match_their_labels() {
+        let demo = PathBuf::from("../../demo").canonicalize().unwrap();
+        let verdicts = |file: &str| -> Vec<(String, Status, Option<SkipReason>)> {
+            let path = demo.join(file);
+            let src = std::fs::read_to_string(&path).unwrap();
+            resolve_src(&path, &src)
+                .into_iter()
+                .filter(|(r, _)| r.kind == ReferenceKind::Role)
+                .map(|(r, res)| (r.value, res.status, res.skip_reason))
+                .collect()
+        };
+        let row = |v: &str, s: Status, k: Option<SkipReason>| (v.to_string(), s, k);
+
+        assert_eq!(
+            verdicts("playbook.yml"),
+            vec![
+                row("notifier", Status::Resolved, None),
+                row("notifier", Status::Resolved, None),
+                row("no_such_role", Status::Missing, None),
+                row("demo", Status::Missing, None),
+            ]
+        );
+        assert_eq!(
+            verdicts("tasks/main.yml"),
+            vec![
+                row("notifier", Status::Resolved, None),
+                row("notifier", Status::Resolved, None),
+                row("notifier", Status::Resolved, None),
+                row("no_such_role", Status::Missing, None),
+                row("tasks-from-only", Status::Skipped, Some(SkipReason::RoleWithoutMainTasks)),
+            ]
+        );
     }
 
     /// The tree the role cases share. `podman` is an ordinary role; `cib-batch` has entry

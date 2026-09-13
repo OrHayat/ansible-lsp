@@ -85,7 +85,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | ~~T-062~~ |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
-| T-067 | [Role search order doesn't match Ansible's](open/T-067-role-search-order.md) | M | — |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | ~~T-020~~ |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs ~~T-042~~/1, T-064 |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
@@ -339,6 +338,7 @@ T-021 is now unblocked on that side.
 | T-020 | [Reverse index](closed/T-020-reverse-index.md)                 | done     |
 | T-167 | [apply: vars: are invisible to the variable index](closed/T-167-apply-vars-are-invisible-to-the-variable-index.md) | done     |
 | T-042 | [Resolver gaps: collections, `*_from`](closed/T-042-resolver-gaps.md) | done     |
+| T-067 | [Role search order doesn't match Ansible's](closed/T-067-role-search-order.md) | done     |
 
 ## Settled — don't re-derive these
 
