@@ -167,6 +167,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
 | T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](open/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | S    | —    |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
+| T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.

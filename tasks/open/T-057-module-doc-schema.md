@@ -42,6 +42,14 @@ stat:
 **This is exactly what `ansible-doc` reads** — it loads the module, pulls those constants,
 parses them as YAML, prints them. It never runs or analyzes the code.
 
+> **Corrected 2026-09-16 (T-233): the input half of this paragraph is wrong.**
+> `DOCUMENTATION.options` is not what `argument_spec` is built from; the spec is written by hand
+> in code and they disagree. Measured: 2.20 documents `script.decrypt` and rejects it
+> ("Unsupported parameters … decrypt"); `lineinfile.others` was a doc-only placeholder; removals
+> live only in the spec (`removed_in_version`, `deprecated_aliases`), never in the docs. An
+> unknown-parameter hint must come from the captured enforced spec — T-233. Docs stay the
+> source for option *descriptions* and for `RETURN`.
+
 **Why not read the code instead?** For *inputs* it's largely moot — `DOCUMENTATION.options` is
 authoritative and also what `AnsibleModule(argument_spec=...)` is built from. For *outputs*,
 reading the code is only *partially* possible: keys given as literals in `exit_json(stdout=...)`

@@ -49,6 +49,7 @@ provider today (T-124's epic). This one supplies the data; that one supplies the
 - [ ] T-063 — Port the full `include_role` / `import_role` parameter surface
 - [ ] T-149 — Validate meta/argument_specs.yml itself, not just call sites
 - [ ] T-153 — Playbook .meta files: the playbook-level argument_specs
+- [ ] T-233 — Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table
 
 ## Done when
 
