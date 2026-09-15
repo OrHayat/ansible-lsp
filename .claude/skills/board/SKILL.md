@@ -19,7 +19,7 @@ cargo run -q -p board -- new "Title" -p P1|P2|P3 -s S|M|L [-k bug|epic] [-e T-0N
 cargo run -q -p board -- close T-0NN [--rejected]
 cargo run -q -p board -- reopen T-0NN
 cargo run -q -p board -- sync T-0NN
-cargo run -q -p board -- upstream [NAME]
+cargo run -q -p board -- upstream [NAME] [--released] [--live]
 ```
 
 Global flags: `--dry-run` (print planned changes, write nothing), `--dir <path>` (tests only).
@@ -59,10 +59,37 @@ not the checkboxes, so a stale box can't lie.
 ## Upstream dossiers
 
 A bug in `ansible/ansible` lives as prose in `upstream/*.md` and is **never also a ticket** —
-one finding, one home. `board upstream` indexes them (issue count, and whether they're filed
-upstream, derived from the github links in the text); `board upstream <name>` lists one
-dossier's issues. Nothing about that format is CLI-owned — the files are written for humans
-and the parse reads them as-is, so don't reformat one to suit the tool.
+one finding, one home. `board upstream` indexes them (status, github refs, issue count);
+`board upstream <name>` lists one dossier's issues. Nothing about that format is CLI-owned —
+the files are written for humans and the parse reads them as-is, so don't reformat one to
+suit the tool.
+
+**Status line.** A dossier may carry one hand-written line, near the top. The CLI reads it and
+never writes it:
+
+```
+**Status:** merged 2026-09-14 (8e6e4a7) · fragment ssh-tty-parser-worker-crash.yml
+**Status:** released in 2.21.5, 2.22.0 · merged 2026-09-14 (8e6e4a7) · fragment ssh-tty-parser-worker-crash.yml
+```
+
+- States: `not filed`, `filed`, `merged`, `released in <X.Y.Z>[, <X.Y.Z>]`, `rejected`. With no
+  line, the old rule answers: a github link reads as `filed`, none as `not filed`.
+- `merged` must name the PR's changelog **fragment** filename — it is the tracking key.
+  Backports keep the devel fragment's name, so one name finds the fix on every branch; a PR
+  number does not (a backport commit can cite a different PR).
+- `released` lists **final** versions only — every series it shipped in, backports included.
+  A fix seen only in an rc/beta is still `merged`.
+- `rejected` means upstream decided against the *fix and the issue*. A PR closed unmerged over
+  an issue that is still open is `filed` — `ansible-vars_files` is that case.
+- A line that doesn't parse fails `board upstream` with exit 2, never a silent fallback; the
+  board crate's `every_dossier_in_the_repo_parses` test runs it over the real directory.
+- Released dossiers leave the default listing; `--released` shows them (like `list --closed`).
+
+**`--live`** fetches `changelogs/changelog.yaml` from every `stable-2.N` branch head (N ≥ 10)
+through `gh` — about 7s — and for each dossier with a fragment prints `ok`, `not released yet`,
+`in 2.22.0rc1, no final release yet`, or `DRIFT` with the exact status line to write. It
+reports only; any fetch failing fails the whole run, so a missing branch never reads as "not
+released there".
 
 What *we* do about an upstream bug is an ordinary ticket that cites the dossier path.
 
@@ -84,6 +111,14 @@ What *we* do about an upstream bug is an ordinary ticket that cites the dossier 
   `~~T-0NN~~` through the id in other tickets' Blocked-by cells — struck means no longer
   blocking. Close only when every `- [ ]` box in the ticket's "Done when" section is checked;
   the boxes are the definition of done, not the README.
+- **An upstream PR merged** → confirm with `gh pr view <N> -R ansible/ansible` (state, merge
+  commit, date) and read the PR's `changelogs/fragments/*.yml` filename from its files. Add
+  `**Status:** merged <date> (<sha7>) · fragment <file>.yml` to the dossier, and update any
+  prose that still says the PR is open.
+- **"Did it ship?"** → `upstream --live`. On `DRIFT`, write the status line it prints, then
+  check that the dossier drops out of the default listing. The user saying "it's in the 2.22.0
+  release notes" is also enough to write `released in 2.22.0` — run `--live` anyway to catch
+  backports into other series.
 - **Edit a ticket** → body text: just edit the file. Status: `close`/`reopen`, never the
   status line by hand. Header fields (priority/size/depends): edit the file's header table,
   then run `sync T-0NN` — the drift check fails until you do.

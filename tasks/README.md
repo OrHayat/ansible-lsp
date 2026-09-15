@@ -13,7 +13,7 @@ cargo run -p board -- reopen T-0NN
 cargo run -p board -- sync T-0NN        # after hand-editing priority/size/kind/blocked-by
 cargo run -p board -- list [-p P1] [-s S] [-k bug] [-e T-090] [--unblocked] [--closed]
 cargo run -p board -- show T-0NN        # an epic also lists its children
-cargo run -p board -- upstream [NAME]   # the dossiers in upstream/
+cargo run -p board -- upstream [NAME] [--released] [--live]   # the dossiers in upstream/; --live asks GitHub what shipped
 ```
 
 ```

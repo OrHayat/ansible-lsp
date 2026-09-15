@@ -1,7 +1,12 @@
 # Upstream issue to file against ansible/ansible — a malformed `ssh_args` kills the worker process instead of failing the task
 
-Filed as [PR #87219](https://github.com/ansible/ansible/pull/87219) (open, head `3b115058a7`),
-being reworked to the maintainer direction recorded below. Measured on `origin/devel` at
+**Status:** merged 2026-09-14 (8e6e4a7) · fragment ssh-tty-parser-worker-crash.yml
+
+Filed as [PR #87219](https://github.com/ansible/ansible/pull/87219), reworked to the maintainer
+direction recorded below, and squash-merged to `devel` as `8e6e4a7` on 2026-09-14 — the merged
+patch is the suggested fix below, line for line. `devel` was `2.22.0.dev0` and no backport PR
+turned up, so 2.22.0 is the expected release; `board upstream --live` says when a changelog
+lists the fragment. Measured on `origin/devel` at
 `3827d66` (2026-09-04) under Python 3.14 and OpenSSH 10.3p1. The same function has two more
 findings in `ansible-ssh-requesttty.md`, and the retry cost of the fixed behaviour is
 `ansible-ssh-retry-parse-errors.md`.

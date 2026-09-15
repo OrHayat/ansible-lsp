@@ -48,6 +48,10 @@ COMMANDS
                                   bugs in ansible/ansible, not our tickets,
                                   so they live as prose, not in tasks/
       <NAME>                      show one dossier's issues
+      --released                  list released dossiers instead
+      --live                      ask GitHub (via gh) which release changelogs
+                                  list each dossier's fragment; reports drift
+                                  from its **Status:** line, writes nothing
   help
 
 GLOBAL OPTIONS
@@ -526,6 +530,19 @@ impl Board {
     /// Nothing is migrated to make this work: the shape below is read off the files as
     /// they're already written.
     fn upstream(&self, args: &[String]) -> Result<String, Error> {
+        let mut released = false;
+        let mut live = false;
+        let mut want = None;
+        for a in args {
+            match a.as_str() {
+                "--released" => released = true,
+                "--live" => live = true,
+                _ if a.starts_with('-') => {
+                    return Err(Error::Usage(format!("unexpected argument `{a}`")));
+                }
+                _ => want = Some(a.clone()),
+            }
+        }
         let dir = self.dir.join("../upstream");
         let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
             .map_err(|e| Error::Op(format!("{}: {e}", dir.display())))?
@@ -538,38 +555,55 @@ impl Board {
             })
             .collect();
         files.sort_by(|a, b| a.0.cmp(&b.0));
+        // A malformed status line fails the whole command: falling back to the link rule
+        // would print "filed" for a dossier someone meant to mark released.
+        let dossiers: Vec<Dossier> = files
+            .iter()
+            .map(|(n, t)| Dossier::parse(n, t))
+            .collect::<Result<_, _>>()?;
 
-        if let Some(want) = args.iter().find(|a| !a.starts_with('-')) {
-            let (name, text) = files
-                .into_iter()
-                .find(|(n, _)| n == want || n.ends_with(want.as_str()))
+        if live {
+            return live_report(&dossiers, &gh_changelogs()?);
+        }
+
+        if let Some(want) = want {
+            let d = dossiers
+                .iter()
+                .find(|d| d.name == want || d.name.ends_with(want.as_str()))
                 .ok_or_else(|| Error::Op(format!("no dossier `{want}` in upstream/")))?;
-            let d = Dossier::parse(&name, &text);
-            let mut out = format!("{}  {}\n  upstream/{name}.md\n", d.name, d.title);
+            let mut out = format!("{}  {}\n  upstream/{}.md\n", d.name, d.title, d.name);
             for (n, issue) in d.issues.iter().enumerate() {
                 out.push_str(&format!("  {}. {issue}\n", n + 1));
             }
+            out.push_str(&format!("  status: {}\n", d.state_label()));
+            if let Some(f) = d.status.as_ref().and_then(|s| s.fragment.as_ref()) {
+                out.push_str(&format!("  fragment: {f}\n"));
+            }
             if !d.refs.is_empty() {
-                out.push_str(&format!("  filed: {}\n", d.refs.join(", ")));
+                out.push_str(&format!("  refs: {}\n", d.refs.join(", ")));
             }
             return Ok(out);
         }
 
+        let shown: Vec<&Dossier> = dossiers.iter().filter(|d| d.is_released() == released).collect();
+        let name_w = shown.iter().map(|d| d.name.len()).max().unwrap_or(0);
+        let state_w = shown.iter().map(|d| d.state_label().len()).max().unwrap_or(0);
+        let refs_w = shown.iter().map(|d| d.refs.join(",").len().max(1)).max().unwrap_or(0);
         let mut out = String::new();
-        for (name, text) in &files {
-            let d = Dossier::parse(name, text);
+        for d in shown {
             // A single-topic dossier has no `## Issue N` headings but is still one issue.
             let n = d.issues.len().max(1);
             out.push_str(&format!(
-                "{:<24}  {:<22}  {n} issue{}  {}\n",
+                "{:<name_w$}  {:<state_w$}  {:<refs_w$}  {n} issue{}  {}\n",
                 d.name,
-                if d.refs.is_empty() { "not filed".into() } else { d.refs.join(",") },
+                d.state_label(),
+                if d.refs.is_empty() { "—".into() } else { d.refs.join(",") },
                 if n == 1 { "" } else { "s" },
                 d.title,
             ));
         }
         if out.is_empty() {
-            out = "no dossiers in upstream/\n".into();
+            out = if released { "no released dossiers\n" } else { "no dossiers in upstream/\n" }.into();
         }
         Ok(out)
     }
@@ -1040,10 +1074,76 @@ struct Dossier {
     title: String,
     issues: Vec<String>,
     refs: Vec<String>,
+    status: Option<Status>,
+}
+
+/// The one hand-written line a dossier may carry, read so the index can say more than
+/// "has a github link":
+///
+/// ```text
+/// **Status:** merged 2026-09-14 (8e6e4a7) · fragment ssh-tty-parser-worker-crash.yml
+/// **Status:** released in 2.21.5, 2.22.0 · merged 2026-09-14 (8e6e4a7) · fragment ...
+/// ```
+///
+/// The fragment is the tracking key: backports keep the devel PR's fragment filename, and
+/// every release's `changelog.yaml` lists the fragments it shipped, so one name finds the
+/// fix on any branch. A PR number does not — a backport's commit can cite a different PR.
+struct Status {
+    state: &'static str,
+    versions: Vec<String>,
+    fragment: Option<String>,
+}
+
+const STATES: [&str; 5] = ["not filed", "filed", "merged", "released", "rejected"];
+
+impl Status {
+    fn parse(file: &str, line: &str) -> Result<Self, Error> {
+        let bad = |why: String| Error::Op(format!("upstream/{file}.md: **Status:** {why}"));
+        let mut parts = line.split(" · ").map(str::trim);
+        let head = parts.next().unwrap_or_default();
+        let state = STATES
+            .iter()
+            .find(|s| head == **s || head.starts_with(&format!("{s} ")))
+            .ok_or_else(|| bad(format!("`{head}` is not one of {}", STATES.join(", "))))?;
+        let mut versions = Vec::new();
+        if *state == "released" {
+            let list = head
+                .strip_prefix("released in ")
+                .ok_or_else(|| bad("released needs `released in <version>`".into()))?;
+            for v in list.split(',').map(str::trim) {
+                // A pre-release is not a release; `--live` reports those separately.
+                if final_version(v).as_deref() != Some(v) {
+                    return Err(bad(format!("`{v}` is not a final X.Y.Z release")));
+                }
+                versions.push(v.to_string());
+            }
+        }
+        let fragment = parts
+            .find_map(|p| p.strip_prefix("fragment "))
+            .map(|f| f.trim_matches('`').to_string());
+        if *state == "merged" && fragment.is_none() {
+            return Err(bad("merged needs `· fragment <file>.yml` — it is what --live tracks".into()));
+        }
+        Ok(Self { state, versions, fragment })
+    }
 }
 
 impl Dossier {
-    fn parse(name: &str, text: &str) -> Self {
+    fn is_released(&self) -> bool {
+        self.status.as_ref().is_some_and(|s| s.state == "released")
+    }
+
+    /// Without a status line, the old rule: any github link reads as filed.
+    fn state_label(&self) -> String {
+        match &self.status {
+            Some(s) if s.state == "released" => format!("released {}", s.versions.join(",")),
+            Some(s) => s.state.to_string(),
+            None if self.refs.is_empty() => "not filed".into(),
+            None => "filed".into(),
+        }
+    }
+
+    fn parse(name: &str, text: &str) -> Result<Self, Error> {
         let title = text
             .lines()
             .find_map(|l| l.strip_prefix("# "))
@@ -1073,8 +1173,153 @@ impl Dossier {
                 }
             }
         }
-        Self { name: name.to_string(), title, issues, refs }
+        let status = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("**Status:**"))
+            .map(|l| Status::parse(name, l.trim()))
+            .transpose()?;
+        Ok(Self { name: name.to_string(), title, issues, refs, status })
     }
+}
+
+/// `2.21.4rc1` -> `2.21.4`; `2.22.0` -> itself; anything else -> None.
+fn final_version(v: &str) -> Option<String> {
+    let mut end = 0;
+    for (i, part) in v.splitn(3, '.').enumerate() {
+        let digits = part.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 || (i < 2 && digits != part.len()) {
+            return None;
+        }
+        end += digits + usize::from(i > 0);
+        if i == 2 {
+            return Some(v[..end].to_string());
+        }
+    }
+    None
+}
+
+/// Release keys in an antsibull `changelog.yaml` whose `fragments:` list names `fragment`.
+/// Read by indentation, not with a YAML parser, to keep the crate std-only: releases sit at
+/// two spaces under `releases:`, and a release's `fragments:` items at four.
+fn releases_listing(changelog: &str, fragment: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut release: Option<&str> = None;
+    let mut in_fragments = false;
+    for line in changelog.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let body = line.trim();
+        if indent == 2 && body.ends_with(':') {
+            release = Some(body.trim_end_matches(':').trim_matches('\''));
+            in_fragments = false;
+        } else if indent == 4 && body == "fragments:" {
+            in_fragments = true;
+        } else if indent == 4 && in_fragments && body.starts_with("- ") {
+            if body[2..].trim() == fragment {
+                if let Some(r) = release.filter(|r| !out.iter().any(|o| o == r)) {
+                    out.push(r.to_string());
+                }
+            }
+        } else if indent <= 4 {
+            in_fragments = false;
+        }
+    }
+    out
+}
+
+/// What the changelogs say about one fragment: the final releases that shipped it, and any
+/// pre-release whose final has not happened yet. A fragment lands in `2.21.4rc1`; the final
+/// `2.21.4` lists only its summary, so "released" means the rc's final key also exists.
+fn shipped(changelogs: &[(String, String)], fragment: &str) -> (Vec<String>, Vec<String>) {
+    let mut finals: Vec<String> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for (_, text) in changelogs {
+        for r in releases_listing(text, fragment) {
+            let Some(base) = final_version(&r) else { continue };
+            let has_final = text.lines().any(|l| l.trim_end() == format!("  {base}:"));
+            if has_final {
+                if !finals.contains(&base) {
+                    finals.push(base);
+                }
+            } else if !pending.contains(&r) {
+                pending.push(r);
+            }
+        }
+    }
+    let key = |v: &String| v.split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    finals.sort_by_key(key);
+    (finals, pending)
+}
+
+/// `changelog.yaml` from every `stable-2.N` branch head, N >= 10 (the antsibull-changelog
+/// era). A branch head holds every release of its series so far. Any fetch failing fails
+/// the report: a missing branch would read as "not released there".
+fn gh_changelogs() -> Result<Vec<(String, String)>, Error> {
+    let gh = |args: &[&str]| -> Result<String, Error> {
+        let out = std::process::Command::new("gh")
+            .args(args)
+            .output()
+            .map_err(|e| Error::Op(format!("--live needs the `gh` CLI: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Op(format!(
+                "gh {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let branches = gh(&["api", "repos/ansible/ansible/branches", "--paginate", "--jq", ".[].name"])?;
+    let mut out = Vec::new();
+    for b in branches.lines() {
+        let Some(minor) = b.strip_prefix("stable-2.").and_then(|m| m.parse::<u32>().ok()) else {
+            continue;
+        };
+        if minor < 10 {
+            continue;
+        }
+        let path = format!("repos/ansible/ansible/contents/changelogs/changelog.yaml?ref={b}");
+        out.push((b.to_string(), gh(&["api", &path, "-H", "Accept: application/vnd.github.raw"])?));
+    }
+    if out.is_empty() {
+        return Err(Error::Op("gh listed no stable-2.N branches".into()));
+    }
+    Ok(out)
+}
+
+/// One line per dossier that names a fragment. Reports only: the status line stays
+/// hand-written, so a GitHub hiccup can never write a wrong answer into a dossier.
+fn live_report(dossiers: &[Dossier], changelogs: &[(String, String)]) -> Result<String, Error> {
+    let mut out = format!(
+        "checked changelog.yaml on {}\n",
+        changelogs.iter().map(|(b, _)| b.as_str()).collect::<Vec<_>>().join(", ")
+    );
+    for d in dossiers {
+        let Some(s) = &d.status else { continue };
+        let Some(fragment) = &s.fragment else { continue };
+        let (finals, pending) = shipped(changelogs, fragment);
+        let verdict = if !finals.is_empty() && s.state == "released" && s.versions == finals {
+            format!("ok — released in {}", finals.join(", "))
+        } else if !finals.is_empty() {
+            format!(
+                "DRIFT — recorded `{}`, changelogs say released in {}: set `**Status:** released in {}`",
+                d.state_label(),
+                finals.join(", "),
+                finals.join(", ")
+            )
+        } else if s.state == "released" {
+            format!(
+                "DRIFT — recorded `{}`, but no changelog lists {fragment}: check the fragment name",
+                d.state_label()
+            )
+        } else {
+            format!("not released yet (recorded `{}`)", d.state_label())
+        };
+        out.push_str(&format!("{}  {verdict}\n", d.name));
+        if !pending.is_empty() {
+            out.push_str(&format!("  in {}, no final release yet\n", pending.join(", ")));
+        }
+    }
+    Ok(out)
 }
 
 fn slug(title: &str) -> String {
@@ -1503,6 +1748,150 @@ prose that must survive
         let one = go(&d, &["upstream", "include_vars"]).unwrap();
         assert!(one.contains("1. ignore_files is treated as a regex"), "{one}");
         let _ = std::fs::remove_dir_all(&up);
+    }
+
+    /// Its own root per test: `fixture()` dirs share a parent, so their `../upstream` would
+    /// be one directory that parallel tests overwrite.
+    fn dossier_fixture(name: &str, dossiers: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("board-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let d = root.join("tasks");
+        let up = root.join("upstream");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::create_dir_all(&up).unwrap();
+        for (file, body) in dossiers {
+            std::fs::write(up.join(format!("{file}.md")), body).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn status_line_drives_the_index_and_released_hides() {
+        let d = dossier_fixture("upstream-status", &[
+            (
+                "ansible-merged",
+                "# Upstream — a merged fix\n\n\
+                 **Status:** merged 2026-09-14 (8e6e4a7) · fragment `worker-crash.yml`\n\n\
+                 [PR #87219](https://github.com/ansible/ansible/pull/87219)\n",
+            ),
+            (
+                "ansible-shipped",
+                "# Upstream — a shipped fix\n\n\
+                 **Status:** released in 2.21.5, 2.22.0 · fragment shipped.yml\n",
+            ),
+            (
+                "ansible-linked",
+                "# Upstream — only a link\n\n[#80483](https://github.com/ansible/ansible/issues/80483)\n",
+            ),
+        ]);
+
+        let out = go(&d, &["upstream"]).unwrap();
+        let line = |name: &str| out.lines().find(|l| l.starts_with(name)).map(str::to_string);
+        assert!(line("ansible-merged").is_some_and(|l| l.contains(" merged ")), "{out}");
+        // No status line: the link rule still answers.
+        assert!(line("ansible-linked").is_some_and(|l| l.contains(" filed ")), "{out}");
+        assert!(line("ansible-shipped").is_none(), "released is hidden by default: {out}");
+
+        let rel = go(&d, &["upstream", "--released"]).unwrap();
+        assert!(rel.contains("released 2.21.5,2.22.0"), "{rel}");
+        assert!(!rel.contains("ansible-merged") && !rel.contains("ansible-linked"), "{rel}");
+
+        let one = go(&d, &["upstream", "merged"]).unwrap();
+        assert!(one.contains("status: merged") && one.contains("fragment: worker-crash.yml"), "{one}");
+        let _ = std::fs::remove_dir_all(d.join(".."));
+    }
+
+    /// A typo must not quietly fall back to the link rule and print "filed".
+    #[test]
+    fn a_malformed_status_line_fails_the_command() {
+        for (line, why) in [
+            ("relased in 2.22.0 · fragment x.yml", "unknown state"),
+            ("merged 2026-09-14 (8e6e4a7)", "merged with no fragment to track"),
+            ("released in 2.22.0rc1 · fragment x.yml", "a pre-release is not a release"),
+            ("released · fragment x.yml", "released with no version"),
+        ] {
+            let d = dossier_fixture("upstream-bad", &[(
+                "ansible-bad",
+                &format!("# Upstream — bad\n\n**Status:** {line}\n"),
+            )]);
+            let got = go(&d, &["upstream"]);
+            assert!(
+                matches!(&got, Err(Error::Op(m)) if m.contains("ansible-bad.md")),
+                "{why}: {got:?}"
+            );
+            let _ = std::fs::remove_dir_all(d.join(".."));
+        }
+    }
+
+    /// Shaped on stable-2.21's real changelog.yaml: a fragment is listed under the rc, and
+    /// the final lists only its summary.
+    const CHANGELOG: &str = "\
+ancestor: 2.20.0
+releases:
+  2.21.4:
+    changes:
+      release_summary: '| Release Date: 2026-09-08
+
+        | not fixed: decoy.yml
+
+        '
+    fragments:
+    - 2.21.4_summary.yaml
+    release_date: '2026-09-08'
+  2.21.4rc1:
+    changes:
+      bugfixes:
+      - mask the url
+    fragments:
+    - 2.21.4rc1_summary.yaml
+    - mask_url.yml
+    release_date: '2026-08-31'
+  2.21.5rc1:
+    fragments:
+    - worker-crash.yml
+    modules:
+    - decoy.yml
+    release_date: '2026-09-20'
+";
+
+    #[test]
+    fn changelog_fragments_decide_released_and_pending() {
+        let logs = vec![("stable-2.21".to_string(), CHANGELOG.to_string())];
+        assert_eq!(shipped(&logs, "mask_url.yml"), (vec!["2.21.4".to_string()], vec![]));
+        assert_eq!(shipped(&logs, "worker-crash.yml"), (vec![], vec!["2.21.5rc1".to_string()]));
+        // Named in a summary string and in a modules list, never under fragments:.
+        assert_eq!(shipped(&logs, "decoy.yml"), (vec![], vec![]));
+        assert_eq!(final_version("2.21.4rc1").as_deref(), Some("2.21.4"));
+        assert_eq!(final_version("2.22"), None);
+    }
+
+    #[test]
+    fn live_report_names_drift_against_the_status_line() {
+        let parse = |name: &str, status: &str| {
+            Dossier::parse(name, &format!("# Upstream — t\n\n**Status:** {status}\n")).unwrap()
+        };
+        let dossiers = [
+            parse("stale", "merged 2026-08-01 (abc1234) · fragment mask_url.yml"),
+            parse("current", "released in 2.21.4 · fragment mask_url.yml"),
+            parse("waiting", "merged 2026-09-14 (8e6e4a7) · fragment worker-crash.yml"),
+            parse("wrong", "released in 2.21.4 · fragment typo.yml"),
+        ];
+        let logs = vec![("stable-2.21".to_string(), CHANGELOG.to_string())];
+        let out = live_report(&dossiers, &logs).unwrap();
+        let line = |name: &str| out.lines().find(|l| l.starts_with(name)).unwrap_or_default();
+        assert!(line("stale").contains("DRIFT") && line("stale").contains("released in 2.21.4"), "{out}");
+        assert!(line("current").contains("ok — released in 2.21.4"), "{out}");
+        assert!(line("waiting").contains("not released yet"), "{out}");
+        assert!(out.contains("in 2.21.5rc1, no final release yet"), "{out}");
+        assert!(line("wrong").contains("DRIFT") && line("wrong").contains("typo.yml"), "{out}");
+    }
+
+    /// The real dossiers, not a fixture: a hand-typed status line that stops parsing fails here.
+    #[test]
+    fn every_dossier_in_the_repo_parses() {
+        let tasks = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tasks");
+        let got = go(&tasks, &["upstream"]).and_then(|_| go(&tasks, &["upstream", "--released"]));
+        assert!(got.is_ok(), "{got:?}");
     }
 
     /// The case `new -e` can't cover: by the time you know a ticket belongs in a group, it
