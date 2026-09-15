@@ -73,22 +73,29 @@ merge` is the other half — T-144 already routes it to T-112, and it changes wh
 access resolves to (T-221).
 
 **The corpus has one, and it is the collection case.** `acme.lustre.version`, enabled by FQCN
-in the workspace `ansible.cfg`, `stage: inventory`, publishing `lustre_version` and
-`lustre_release_commit` for every host from a submodule pin, and publishing nothing when the
-checkout has neither source so `-e` can supply the pair. Measured 2026-09-07:
+in the workspace `ansible.cfg`, `stage: inventory`, publishing `lustre_version`,
+`lustre_version_short`, `lustre_semver` (a `{major, minor, patch}` dict of ints, so every
+downstream read is a dotted access — T-221's shape) and `lustre_release_commit` for every host
+from a submodule pin, and publishing nothing when the checkout has neither source so `-e` can
+supply the identity. The plugin changed twice on 2026-09-07 while this ticket was written — from
+two names to three to four — so the numbers below are from the re-measurement of 2026-09-08:
 
-- our scan flags 9 uses across two playbooks as `var-undefined`, out of 133 undefined uses it
-  reports for the whole corpus; the other 26 files that use
+- our scan flags 12 uses as `var-undefined` (10 of `lustre_version`, one each of the short
+  name and the commit; `lustre_semver` has no use yet), out of 136 undefined uses it reports for
+  the whole corpus; the other files that use
   the names are quiet only because some reachable YAML defines the same name (a role default of
   `""`, another inventory file, a `set_fact`)
-- a single-file literal read finds nothing: the return is `dict(_CACHE)`, filled through a
-  `derive()` in `module_utils` three calls away. Inside the plugin the names appear only as a
-  shape-check table's keys and in the docstring prose. A literal reader says "open" here,
-  correctly, and adds no provenance
-- `ansible-inventory --list` with no extra flags shows both names on all six hosts, because the
-  plugin is collection-shipped and inventory-staged; with the plugin disabled by env they are
-  absent. The listing ran the derivation and printed the plugin's own divergence warning, which
-  is the execution-risk reminder: user gesture only
+- a single-file literal read finds two of four: `_CACHE["lustre_version_short"] = …` and
+  `_CACHE["lustre_semver"] = …` are literal subscripts on the returned dict. The other two are
+  filled by `_CACHE.update(derive(…))`, with `derive()` in `module_utils` three calls away, so
+  they need the chase in rung 2. Without it a literal reader says "open" for those two,
+  correctly
+- `ansible-inventory --list` with no extra flags shows all four names on all six hosts, because
+  the plugin is collection-shipped and inventory-staged; with the plugin disabled by env they are
+  absent, and no YAML in the tree defines any of them. Re-measured 2026-09-15 on 2.21.3 against
+  the plugin branch's tip. The listing runs the derivation, git subprocesses included, and with
+  the submodule checked out off its pin it printed the plugin's own divergence warning — at the
+  pin, none. That is the execution-risk reminder: user gesture only
 
 **[Ansible vars plugins — OneUptime](https://oneuptime.com/blog/post/2026-01-30-ansible-vars-plugins/view)**
 is the tutorial shape: `vars_plugins = ./plugins/vars`, `vars_plugins_enabled = host_group_vars,
@@ -168,8 +175,8 @@ per-name rule is the same under all of them.
    - conditions are not evaluated: every branch contributes, so a name the plugin *may* publish
      counts as known — the silence direction, the same as `-e`
 
-   Checked against real code: the corpus plugin yields 3 of 3 (`dict(_CACHE)`, one `update`
-   through `derive()` to `_fields` one file away, one literal subscript); lilatomic's `gitroot`
+   Checked against real code: the corpus plugin yields 4 of 4 — two by literal subscript with no
+   chase at all, two through `_CACHE.update(derive(…))` into `_fields` one file away; lilatomic's `gitroot`
    and `knownhostentry` yield their one name each with no chase; `dhall_vars` yields nothing.
    What the chase cannot promise: a shape outside the rules — `update(**kw)`, a key built with
    `%`, a loop over a list of names — yields "unknown", never a wrong name. Feeds hover
@@ -189,7 +196,7 @@ per-name rule is the same under all of them.
 4. **Ask Ansible on a gesture.** Two mechanisms, both measured:
    - `ansible-inventory --list [--playbook-dir <dir>]` runs cfg-path, collection and, given the
      dir, playbook-adjacent plugins, and prints every host's variables. The corpus plugin's
-     three names on all six hosts came out this way, with the plugin disabled as the control.
+     four names on all six hosts came out this way, with the plugin disabled as the control.
      Role-local plugins do not show, because no playbook is loaded.
    - `scratchpad/t228_varsdump.py`: 25 lines over Ansible's API that load the playbook as
      `ansible-playbook` does — which is what adds the role plugin dirs — then ask the variable
@@ -197,7 +204,11 @@ per-name rule is the same under all of them.
      plugin's name in play 1, matching the reach table; renaming the role's dir removes it.
 
    Only the plugins execute, with the editor's environment, so this is a button, cached, age
-   shown, never automatic — T-176's command extended to vars plugins. It gives exact names
+   shown, never automatic — T-176's command extended to vars plugins. A plugin may *fail*
+   rather than answer: the corpus one raises `AnsibleError` from `get_vars` on a malformed
+   derived value or a partial `-e` override, so the listing exits non-zero instead of printing.
+   A failed run is no result, never a partial one (T-176 box 4), and the command passes no `-e`
+   of its own — extra vars are command-line only, nothing in the environment can smuggle one in. It gives exact names
    *and* values, so hover can rank precedence for real. It is the only route for a data-driven
    plugin — database rows, an API, Vault — whose names do not exist until runtime, and one
    press clears every hedged warning such a plugin caused.
@@ -212,7 +223,7 @@ What each rung gives for the real cases:
 
 | Plugin                                  | Rung 2          | Rung 3                            | Rung 4                                | Rung 5                          |
 | --------------------------------------- | --------------- | --------------------------------- | ------------------------------------- | ------------------------------- |
-| corpus `acme.lustre.version`            | 3 of 3 by chase | not file-backed                   | all three, no playbook dir needed     | one line                        |
+| corpus `acme.lustre.version`            | 4 of 4, two without a chase | not file-backed       | all four, no playbook dir needed      | one line, optional              |
 | lilatomic `gitroot`, `knownhostentry`   | 1 of 1 each     | —                                 | yes                                   | an upstream PR                  |
 | lilatomic `dhall_vars`                  | nothing         | plain records yes, computed no    | yes                                   | only if the user knows the names |
 | a database / API / Vault plugin         | nothing         | —                                 | yes — the only route                  | nobody knows the names          |
@@ -266,9 +277,9 @@ way declined inventories are recorded — reach per the table, so a role-local p
 every playbook that lists the role and an `include_role` one reaches only what follows.
 
 What the record changes is how `var-undefined` treats a name in reach, and the corpus decides
-it: the scan reports 133 undefined uses there, 9 of them the plugin's. Silencing every file the
+it: the scan reports 136 undefined uses there, 12 of them the plugin's. Silencing every file the
 plugin reaches — the whole project, since it is enabled from the cfg — would throw away 124
-findings to fix 9. So the rule is per name, never per file:
+findings to fix 12. So the rule is per name, never per file:
 
 - **Known names are a definition source.** When the plugin's names are known — from a
   `PROVIDES` declaration in the plugin (below), a user setting for plugins one does not own, the
@@ -293,7 +304,7 @@ against it so the list cannot go stale:
 
 ```python
 class VarsModule(BaseVarsPlugin):
-    PROVIDES = ("lustre_version", "lustre_version_short", "lustre_release_commit")
+    PROVIDES = ("lustre_version", "lustre_version_short", "lustre_semver", "lustre_release_commit")
 
     def get_vars(self, loader, path, entities):
         ...
@@ -352,4 +363,5 @@ Traps:
       the plugin conceded in the message, and no file is ever silenced wholesale — pinned by a
       test with two names in one file, one declared and one not
 - [ ] the corpus scan's undefined count moves by exactly the plugin's names once they are
-      declared or read, and by zero before that
+      declared or read, and by zero before that — 12 of 136 on 2026-09-08; re-count before
+      pinning, the plugin has changed three times in two days
