@@ -1,8 +1,8 @@
 # T-029 — Hover showing the candidates tried
 
-| Status          | Priority | Size | Epic  | Depends on |
-| --------------- | -------- | ---- | ----- | ---------- |
-| **partly done** | P3       | S    | T-121 | —          |
+| Status | Priority | Size | Epic  | Depends on |
+| ------ | -------- | ---- | ----- | ---------- |
+| done   | P3       | S    | T-121 | —          |
 
 ## Problem
 
@@ -53,6 +53,12 @@ are equally possible until runtime) or explains the skip when nothing matches. A
 ambiguous ref (≥2 targets) hovers regardless of `candidatesOnResolved`: no single target
 is a click away, and the decoration only gives the count. Pinned by
 `hover_lists_glob_targets_for_unknown_value_templated_paths` against the real demo.
+
+**Re-verified 2026-09-15 before closing**, box by box over LSP against the release binary.
+Boxes 1–3 held. Box 4 did not: only the workspace origin worked in the editor, because the
+server never stored the install it detected (T-232), and the box's pinned test had been
+returning before its assertions. With T-232 fixed, all three origins hover — this workspace,
+the Ansible install, an installed collection — and the pin runs.
 
 ## Done when
 

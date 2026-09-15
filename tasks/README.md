@@ -189,7 +189,6 @@ T-021 is now unblocked on that side.
 | T-025 | [Settings — toggle rules, override severity](open/T-025-settings.md) | M | —      |
 | T-026 | [Neovim lspconfig entry](open/T-026-neovim.md)                  | S    | —          |
 | T-027 | [Differential harness vs the legacy plugin](open/T-027-differential-harness.md) | M | — |
-| T-029 | [Hover showing the candidates tried](open/T-029-hover-candidates.md) | S | —      |
 | T-035 | [Evaluate `when:` under a run profile](open/T-035-evaluate-when-under-profile.md) | L | T-033 |
 | T-054 | [Find variable references](open/T-054-variable-references.md)    | M    | T-049, ~~T-020~~ |
 | T-058 | [Warn when a module ships no `DOCUMENTATION`](open/T-058-module-doc-missing-warn.md) | S | T-057, T-010 |
@@ -339,6 +338,8 @@ T-021 is now unblocked on that side.
 | T-167 | [apply: vars: are invisible to the variable index](closed/T-167-apply-vars-are-invisible-to-the-variable-index.md) | done     |
 | T-042 | [Resolver gaps: collections, `*_from`](closed/T-042-resolver-gaps.md) | done     |
 | T-067 | [Role search order doesn't match Ansible's](closed/T-067-role-search-order.md) | done     |
+| T-232 | **bug** · [The server detects the Ansible install but never stores it, so the editor answers as if Ansible were absent](closed/T-232-the-server-detects-the-ansible-install-but-never-stores-it-s.md) | done     |
+| T-029 | [Hover showing the candidates tried](closed/T-029-hover-candidates.md) | done     |
 
 ## Settled — don't re-derive these
 

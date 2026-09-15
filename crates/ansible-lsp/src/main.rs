@@ -2003,6 +2003,10 @@ impl Backend {
         // tool is broken". In-repo files, roles, and modules still work. The status
         // notification drives a persistent status-bar item; the toast is the immediate nudge.
         let found = install.package_dir.is_some();
+        // T-232: every consumer reads the install from `state`; logging it is not storing it.
+        if let Ok(mut slot) = state.install.lock() {
+            *slot = Some(Arc::new(install));
+        }
         let _ = client
             .send_notification::<AnsibleStatus>(serde_json::json!({ "found": found }))
             .await;
@@ -8778,7 +8782,8 @@ mod tests {
     /// twin in core, so the documentation-only caveat must appear.
     #[test]
     fn hover_shows_module_provenance_not_paths() {
-        if ansible_core::install::AnsibleInstall::detect(None).package_dir.is_none() {
+        let install = ansible_core::install::AnsibleInstall::detect(None);
+        if install.package_dir.is_none() {
             return; // ansible not on PATH
         }
         let path = std::path::Path::new("../../demo/tasks/modules.yml")
@@ -8787,7 +8792,10 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let doc = ansible_core::parse::Document::new(text);
         let nodes = doc.parse().unwrap();
-        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        // T-232: this used to discover a context with no install and return early when the
+        // builtin then failed to resolve — which it always did, so nothing below ever ran.
+        let ctx = ansible_core::workspace::FileContext::discover(&path)
+            .with_install(Some(std::sync::Arc::new(install)));
         let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs
             .iter()
@@ -8795,9 +8803,12 @@ mod tests {
             .expect("ref in demo");
         let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
             .resolve(r, &ctx);
-        if res.status != ansible_core::resolve::Status::Resolved {
-            return; // install detected but builtins not resolvable in this layout
-        }
+        assert_eq!(
+            res.status,
+            ansible_core::resolve::Status::Resolved,
+            "an install was detected, so the builtin must resolve: {:?}",
+            res.candidates
+        );
         let md = super::reference_hover(r, &res, &ctx, false).expect("hover expected").render();
         assert!(plain(&md).contains("ansible.builtin"), "collection in: {md}");
         assert!(md.contains("the Ansible install"), "origin in: {md}");
@@ -11097,6 +11108,100 @@ mod tests {
         assert!(
             !state.var_cache.lock().unwrap().entries.is_empty(),
             "and the scan it started must have indexed the workspace"
+        );
+    }
+
+    /// Catches: `startup` detects the install and never stores it (T-232).
+    ///
+    /// `867a217` moved the install off a process-wide `OnceLock` onto `State`, and the store
+    /// was lost in the move: `startup` logged the detection and told the status bar "found",
+    /// while every consumer read `None`. Builtins and installed collections hovered
+    /// "not in this workspace" for three weeks with the suite green, because every test
+    /// below the handler builds its own install. The install here is a fake package dir
+    /// handed over through `ansiblePath`, so the answer does not depend on the machine.
+    #[tokio::test]
+    async fn startup_stores_the_detected_install_for_hover_and_definition() {
+        use tower_lsp::LanguageServer;
+        use tower_lsp::lsp_types as lsp;
+        let pkg_rel = "venv/lib/site-packages/ansible";
+        let root = ansible_core::testing::project(
+            "t232-startup-install",
+            "[defaults]\n",
+            &[
+                ("play.yml", "- hosts: all\n  tasks:\n    - ansible.builtin.debug:\n        msg: x\n"),
+                (&format!("{pkg_rel}/modules/debug.py"), "# module\n"),
+                (&format!("{pkg_rel}/plugins/action/debug.py"), "# action\n"),
+            ],
+        );
+        let pkg = root.join(pkg_rel);
+        let state = scan_state(&root);
+        let service = lsp_service(state.clone());
+        let b = service.inner();
+        b.initialize(init_params(&root, serde_json::json!({ "ansiblePath": pkg.to_string_lossy() })))
+            .await
+            .expect("initialize succeeds");
+
+        let uri = lsp::Url::from_file_path(root.join("play.yml")).unwrap();
+        b.did_open(lsp::DidOpenTextDocumentParams {
+            text_document: lsp::TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "ansible".into(),
+                version: 1,
+                text: std::fs::read_to_string(root.join("play.yml")).unwrap(),
+            },
+        })
+        .await;
+        let at = lsp::TextDocumentPositionParams {
+            text_document: lsp::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp::Position::new(2, 10),
+        };
+        async fn hover(b: &super::Backend, at: lsp::TextDocumentPositionParams) -> String {
+            b.hover(lsp::HoverParams { text_document_position_params: at, work_done_progress_params: Default::default() })
+                .await
+                .expect("hover does not error")
+                .map(|h| match h.contents {
+                    lsp::HoverContents::Markup(m) => m.value,
+                    other => format!("{other:?}"),
+                })
+                .unwrap_or_default()
+        }
+
+        // Control: before startup has run there is no install, and the hover says so.
+        assert!(state.install().is_none(), "no install before startup");
+        let md = hover(b, at.clone()).await;
+        assert!(md.contains("not in this workspace"), "control hover: {md}");
+
+        b.initialized(lsp::InitializedParams {}).await;
+        let task = state.scan_task.lock().unwrap().take().expect("initialized starts startup");
+        task.await.expect("startup runs to completion");
+
+        assert_eq!(
+            state.install().and_then(|i| i.package_dir.clone()),
+            Some(pkg.clone()),
+            "startup must store the install it detected"
+        );
+        let md = hover(b, at.clone()).await;
+        assert!(md.contains("from the Ansible install"), "hover reads the stored install: {md}");
+
+        let def = b
+            .goto_definition(lsp::GotoDefinitionParams {
+                text_document_position_params: at.clone(),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .await
+            .expect("definition does not error");
+        let targets: Vec<lsp::Url> = match def {
+            Some(lsp::GotoDefinitionResponse::Scalar(l)) => vec![l.uri],
+            Some(lsp::GotoDefinitionResponse::Array(ls)) => ls.into_iter().map(|l| l.uri).collect(),
+            Some(lsp::GotoDefinitionResponse::Link(ls)) => ls.into_iter().map(|l| l.target_uri).collect(),
+            None => vec![],
+        };
+        let module = lsp::Url::from_file_path(pkg.join("modules/debug.py").canonicalize().unwrap()).unwrap();
+        assert!(
+            targets.iter().any(|t| t.to_file_path().ok().and_then(|p| p.canonicalize().ok())
+                == module.to_file_path().ok()),
+            "definition jumps into the stored install: {targets:?}"
         );
     }
 

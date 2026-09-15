@@ -35,7 +35,7 @@ Sequencing:
 
 ## Children
 
-- [ ] T-029 — Hover showing the candidates tried
+- [x] T-029 — Hover showing the candidates tried
 - [ ] T-031 — `import_playbook` + `when:`: say what it actually does
 - [ ] T-032 — Static `when:` evaluation
 - [x] T-033 — Variables in `when:` that are defined nowhere
