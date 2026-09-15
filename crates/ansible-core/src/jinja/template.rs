@@ -75,7 +75,6 @@ pub struct Block {
 
 /// Where a scan is.
 enum State {
-    Data,
     Comment,
     Statement,
     Expression,
@@ -320,7 +319,6 @@ impl<'a> Scanner<'a> {
                     let n = self.d.line_comment_prefix.as_ref().map_or(0, String::len);
                     self.scan_line_comment(n)?
                 }
-                State::Data => unreachable!("`next_delimiter` never reports data"),
             }
         }
         Ok(())
