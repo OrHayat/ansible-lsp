@@ -18,6 +18,26 @@ an install.
 input options from `DOCUMENTATION`, and says that is what `AnsibleModule(argument_spec=...)` is
 built from. Measured below: it is not, and a warning built on the docs gives wrong answers.
 
+**Nothing else catches it on `uri` either.** The case that surfaced this: a role looking up a
+cloud region through two `uri` calls under `failed_when: false`, where a `return_contents`
+typo would have published an empty region with no error. Measured 2026-09-16 on core 2.21.3
+and ansible-lint 26.1.1 (which bundles core 2.20.0):
+
+- Ansible checks parameters only when the task runs. `--syntax-check` passes
+  `return_contents`, `timout` and `banana` on `uri`, and a task skipped by `when:` never
+  checks them. The run fails with `Unsupported parameters for (ansible.legacy.uri) module:
+  return_contents`.
+- `failed_when: false` turns that failure into `ok` with `failed=False`. The message survives
+  only in the registered `.msg`, so a `.content | default('')` downstream yields `''`.
+- ansible-lint's `args` rule is silent on `uri` for all three typos and for a missing required
+  `url`, while the same typos on `get_url` and `community.general.ini_file` are `args[module]`
+  warnings. Its source skips modules "implemented as action plugin" (the `hasattr(module,
+  "main")` return in `rules/args.py`), and core ships `plugins/action/uri.py`. That cause is
+  read, not measured; so is whether `copy`, `template`, `command`, `dnf`, `service` and
+  `unarchive`, which also have action plugins, are skipped the same way.
+- `--profile production` hides every `args` finding (the rule is tagged experimental): 2
+  warnings without a profile, 0 with it.
+
 ## Measured, 2026-09-16
 
 Latest patch of every minor, 2.14.18 through 2.21.4, each pulled into a throwaway `uv` env.
