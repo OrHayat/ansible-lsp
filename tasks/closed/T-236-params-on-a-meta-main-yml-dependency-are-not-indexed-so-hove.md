@@ -128,6 +128,33 @@ off its guard, and the warning names the role name. Pinned by
 `a_role_entrys_when_does_not_guard_its_role_name` and
 `a_role_entrys_when_guards_its_params_and_not_its_name`.
 
-Still wrong and not fixed here: inventory `group_vars`/`host_vars`/inline vars do not reach a
-role name (measured, all four spellings fail, with a task-read control proving each inventory
-loads), and we treat them as defining it — silent, and the hover shows the value.
+### What exists when a role name is rendered
+
+Only the play's `vars:` and `vars_files:`. The name is rendered when the play loads, before any
+host or task. Inventory is read earlier than that, measured with an inventory script that left a
+marker even though the play died at load, but its variables are stored per host, and no host has
+been picked yet. Measured on 2.21.3 with the name on a play's `roles:` entry. Every row has a
+control playbook that reads the same variable from a task and prints `flavor=web`:
+
+| source                                                                  | role name  |
+| ----------------------------------------------------------------------- | ---------- |
+| play `vars:`, `vars_files:`                                             | runs       |
+| `group_vars/all`, `group_vars/<group>`, beside the playbook or the inventory | undefined |
+| `host_vars/<host>`, inline host var, `[all:vars]`                       | undefined  |
+| `set_fact`, `register`, `include_vars`, `add_host` in `pre_tasks`       | undefined  |
+| block `vars:`, task `vars:` in `pre_tasks`                              | undefined  |
+| an earlier role's defaults, its vars                                    | undefined  |
+
+Before, all twelve undefined rows were silent, the paint coloured the name, and ten hovers
+showed the value. `VarSource::reaches_role_name` now holds the table, `Located::reaches` applies
+it, and `path_substitution_hover` judges candidates by `reaches` on the use rather than by
+position. The warning names the source. Pinned by `a_role_name_reads_only_play_vars_and_vars_files`
+(all twelve, warning + hover + paint) and its controls
+`play_vars_and_vars_files_still_reach_a_role_name_and_inventory_still_reaches_a_task`.
+
+Corpus gate `role_name_reach_corpus`: 0 hits, because no tree holds a templated play `roles:`
+name (the one `- role: '{{ … }}'` is data in a defaults file). The same sweep over the fixtures
+above reports 12 of 12.
+
+Not covered: `meta/main.yml` dependency names and `import_role`/`include_role` names are not
+marked as role names, and nothing about them was measured.

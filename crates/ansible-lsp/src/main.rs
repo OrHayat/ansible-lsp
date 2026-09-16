@@ -1941,14 +1941,15 @@ impl Backend {
                          run, or extra-vars (-e).",
                         u.name
                     )
-                } else if u.defined_out_of_scope && u.site.role_name {
+                } else if let Some(source) = u.defined_out_of_scope.filter(|_| u.site.role_name) {
                     format!(
-                        "`{}` is set on a `roles:` entry, but a role name cannot read it — the \
-                         name is rendered when the play loads, before any entry's variables \
-                         apply. Set it in the play's `vars:` or `vars_files:`.",
-                        u.name
+                        "`{}` is defined ({}), but a role name cannot read it — the name is \
+                         rendered when the play loads, before any host or task, and only the \
+                         play's `vars:` and `vars_files:` exist then.",
+                        u.name,
+                        source_label(source)
                     )
-                } else if u.defined_out_of_scope {
+                } else if u.defined_out_of_scope.is_some() {
                     // It IS defined in this file — pointing at "never defined" sends the
                     // reader off to add a definition that already exists a few lines up.
                     format!(
@@ -2788,12 +2789,22 @@ impl Backend {
             return None;
         }
         let defs = cached_definitions(path, nodes, open, inv, cache, install, rev);
+        // The uses inside this reference, so a candidate is judged by the same `reaches` the
+        // warning and the variable hover apply — a role name, for one, reads almost nothing.
+        let uses: Vec<vars::VarUse> = vars::any_uses(nodes)
+            .into_iter()
+            .filter(|u| r.span.start <= u.span.start && u.span.end <= r.span.end)
+            .collect();
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
+            let use_ = uses.iter().find(|u| u.name == token);
             let cands: Vec<vars::Located> = defs
                 .iter()
-                .filter(|d| d.name == token && d.in_scope_at(path, r.span.start))
+                .filter(|d| {
+                    d.name == token
+                        && use_.map_or_else(|| d.in_scope_at(path, r.span.start), |u| d.reaches(u, path))
+                })
                 .cloned()
                 .collect();
             let Some(d) = vars::effective(&cands) else {
@@ -10105,6 +10116,125 @@ mod tests {
         );
     }
 
+    /// A project for the role-name source table below: roles `web` and `db`, an inventory
+    /// with `localhost` in group `g`, plus `extra` files.
+    fn role_name_source_project(name: &str, extra: &[(&str, &str)]) -> std::path::PathBuf {
+        let mut files = vec![
+            ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+            ("roles/db/tasks/main.yml", "- debug: {msg: hi}\n"),
+            ("inv/hosts", "[g]\nlocalhost ansible_connection=local\n"),
+        ];
+        files.extend_from_slice(extra);
+        ansible_core::testing::project(name, "[defaults]\ninventory = inv/hosts\n", &files)
+    }
+
+    /// Only a play's `vars:` and `vars_files:` exist when a role name is rendered. Every other
+    /// source was measured on 2.21.3 with the name in the play's `roles:` — "'flavor' is
+    /// undefined" — and with a control playbook reading the same variable from a task, which
+    /// printed `flavor=web` for each, so the source itself loads. Before, all twelve were
+    /// silent, the paint coloured the name, and ten hovers showed `flavor` = `web`.
+    #[tokio::test]
+    async fn a_role_name_reads_only_play_vars_and_vars_files() {
+        const HEAD: &str = "- hosts: all\n  gather_facts: false\n";
+        const ROLE: &str = "  roles:\n    - role: \"{{ flavor }}\"\n";
+        let pre = |task: &str| format!("{HEAD}  pre_tasks:\n{task}{ROLE}");
+        let cases: Vec<(&str, &str, String, Vec<(&str, &str)>)> = vec![
+            ("group_vars/all", "t236-src-gva", format!("{HEAD}{ROLE}"), vec![("group_vars/all.yml", "flavor: web\n")]),
+            ("group_vars", "t236-src-gv", format!("{HEAD}{ROLE}"), vec![("group_vars/g.yml", "flavor: web\n")]),
+            ("host_vars", "t236-src-hv", format!("{HEAD}{ROLE}"), vec![("host_vars/localhost.yml", "flavor: web\n")]),
+            (
+                "inventory",
+                "t236-src-inv",
+                format!("{HEAD}{ROLE}"),
+                vec![("inv/hosts", "[g]\nlocalhost ansible_connection=local\n\n[all:vars]\nflavor=web\n")],
+            ),
+            ("set_fact", "t236-src-sf", pre("    - set_fact: {flavor: web}\n"), vec![]),
+            ("register", "t236-src-reg", pre("    - command: echo web\n      register: flavor\n"), vec![]),
+            ("include_vars", "t236-src-iv", pre("    - include_vars: iv.yml\n"), vec![("iv.yml", "flavor: web\n")]),
+            ("block var", "t236-src-bv", pre("    - block:\n        - debug: {msg: hi}\n      vars: {flavor: web}\n"), vec![]),
+            ("task var", "t236-src-tv", pre("    - debug: {msg: hi}\n      vars: {flavor: web}\n"), vec![]),
+            ("add_host", "t236-src-ah", pre("    - add_host: {name: localhost, flavor: web}\n"), vec![]),
+            (
+                "role default",
+                "t236-src-rd",
+                format!("{HEAD}  roles:\n    - db\n    - role: \"{{{{ flavor }}}}\"\n"),
+                vec![("roles/db/defaults/main.yml", "flavor: web\n")],
+            ),
+            (
+                "role var",
+                "t236-src-rv",
+                format!("{HEAD}  roles:\n    - db\n    - role: \"{{{{ flavor }}}}\"\n"),
+                vec![("roles/db/vars/main.yml", "flavor: web\n")],
+            ),
+        ];
+        let mut wrong: Vec<String> = Vec::new();
+        for (label, name, play, extra) in cases {
+            let mut files = extra.clone();
+            files.push(("play.yml", play.as_str()));
+            let root = role_name_source_project(name, &files);
+            let path = root.join("play.yml");
+            let a = super::Backend::analyze_text(play.clone(), &path).unwrap();
+            let undefined: Vec<String> =
+                super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+                    .into_iter()
+                    .filter(|d| matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == "var-undefined"))
+                    .map(|d| d.message)
+                    .collect();
+            let warned = undefined.len() == 1
+                && undefined[0].contains("role name")
+                && undefined[0].contains(&format!("({label})"));
+            if !warned {
+                wrong.push(format!("{label}: warning {undefined:?}"));
+            }
+
+            let s = T199Server::over(root);
+            s.scan().await;
+            s.open_disk("play.yml").await;
+            let md = s.hover_in("play.yml", "\"{{ flavor }}\"", 4).await.unwrap_or_default();
+            if md.contains("Substituting") {
+                wrong.push(format!("{label}: hover {md:?}"));
+            }
+            let painted = painted_vars(&s, "play.yml").await;
+            if !painted.is_empty() {
+                wrong.push(format!("{label}: painted {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The controls for the table above. The two sources that do exist at load still answer,
+    /// and the rule is about the role name, not the source: the same inventory variable read
+    /// by a task is fine (measured, `flavor=web`).
+    #[tokio::test]
+    async fn play_vars_and_vars_files_still_reach_a_role_name_and_inventory_still_reaches_a_task() {
+        const HEAD: &str = "- hosts: all\n  gather_facts: false\n";
+        const ROLE: &str = "  roles:\n    - role: \"{{ flavor }}\"\n";
+        for (label, name, play, extra) in [
+            ("play var", "t236-ctl-pv", format!("{HEAD}  vars: {{flavor: web}}\n{ROLE}"), vec![]),
+            ("vars_files", "t236-ctl-vf", format!("{HEAD}  vars_files: [vf.yml]\n{ROLE}"), vec![("vf.yml", "flavor: web\n")]),
+        ] {
+            let mut files: Vec<(&str, &str)> = extra;
+            files.push(("play.yml", play.as_str()));
+            let root = role_name_source_project(name, &files);
+            let path = root.join("play.yml");
+            let a = super::Backend::analyze_text(play.clone(), &path).unwrap();
+            let diags = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None);
+            assert!(diags.is_empty(), "{label}: {diags:#?}");
+            let s = T199Server::over(root);
+            s.scan().await;
+            s.open_disk("play.yml").await;
+            let md = s.hover_in("play.yml", "\"{{ flavor }}\"", 4).await.expect("hover");
+            assert!(md.contains("Substituting") && md.contains(label), "{label}: {md}");
+        }
+
+        let task = format!("{HEAD}  tasks:\n    - debug: {{msg: \"{{{{ flavor }}}}\"}}\n");
+        let root = role_name_source_project("t236-ctl-task", &[("group_vars/all.yml", "flavor: web\n"), ("play.yml", task.as_str())]);
+        let path = root.join("play.yml");
+        let a = super::Backend::analyze_text(task.clone(), &path).unwrap();
+        let diags = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None);
+        assert!(diags.is_empty(), "{diags:#?}");
+    }
+
     // ---- T-020: the reverse index --------------------------------------------------------
 
     const T020_PLAY: &str = concat!(
@@ -12012,6 +12142,55 @@ mod tests {
             "inert-import-var: {} hit(s); {templated} templated playbook-level import(s) across {files} file(s) mentioning import_playbook",
             hits.len()
         );
+        for h in &hits {
+            println!("  HIT {h}");
+        }
+    }
+
+    /// The corpus gate for the role-name reach rule (`VarSource::reaches_role_name`): every
+    /// `var-undefined` it raises on a `roles:` entry name, to be read one by one, beside the
+    /// number of templated role names the sweep saw — zero hits over zero names is a sweep
+    /// that looked at nothing.
+    ///
+    /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp role_name_reach_corpus -- --ignored --nocapture`
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp role_name_reach_corpus -- --ignored --nocapture"]
+    fn role_name_reach_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        if !root.is_dir() {
+            return;
+        }
+        let cache = no_cache();
+        let (mut hits, mut names) = (Vec::new(), 0usize);
+        for f in ansible_core::workspace::yaml_files(&root) {
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            if !t.contains("roles") || !t.contains("{{") {
+                continue;
+            }
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            let at_names: Vec<ansible_core::parse::Span> = ansible_core::vars::any_uses(&a.nodes)
+                .into_iter()
+                .filter(|u| u.site.role_name)
+                .map(|u| u.span)
+                .collect();
+            if at_names.is_empty() {
+                continue;
+            }
+            names += at_names.len();
+            for d in super::Backend::variable_coverage_diagnostics(&a, &f, &a.nodes, &[], &cache, None) {
+                let at = a.doc.lsp_to_byte(d.range.start.line, d.range.start.character);
+                if at_names.iter().any(|s| s.start == at) {
+                    hits.push(format!(
+                        "{}:{}  {}",
+                        f.strip_prefix(&root).unwrap_or(&f).display(),
+                        d.range.start.line + 1,
+                        d.message
+                    ));
+                }
+            }
+        }
+        println!("role-name reach: {} hit(s) over {names} templated role name use(s)", hits.len());
         for h in &hits {
             println!("  HIT {h}");
         }

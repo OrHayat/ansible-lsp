@@ -229,6 +229,19 @@ impl VarSource {
             | VarSource::RoleEntryVars => false,
         }
     }
+
+    /// Whether this source exists when a play's `roles:` entry name is rendered
+    /// ([`Site::role_name`]). That happens when the play loads, with no host and no task yet,
+    /// so only the play's own `vars:` and `vars_files:` are there.
+    ///
+    /// Measured on 2.21.3 for every other source a playbook can hold — `group_vars` (all,
+    /// a group, beside the playbook and beside the inventory), `host_vars`, `[all:vars]` in
+    /// the inventory, a `set_fact`/`register`/`include_vars`/`add_host`/block or task var in
+    /// `pre_tasks`, and an earlier role's defaults and vars: each is "'flavor' is undefined".
+    /// Each had a control playbook reading the same variable from a task, which printed it.
+    pub fn reaches_role_name(self) -> bool {
+        matches!(self, VarSource::PlayVars | VarSource::VarsFiles)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -318,10 +331,11 @@ pub struct VarUse {
     pub guard: Vec<String>,
     /// Set by [`undefined_uses`] when a definition of this name *does* exist in the file
     /// but does not reach here — a `roles:` entry's params and `vars:` read from the play's
-    /// tasks (T-100), or a play-scoped source read through `hostvars` (T-104). The
-    /// distinction is the whole message: "never defined" sends the reader to add a
-    /// definition that is already eleven lines up.
-    pub defined_out_of_scope: bool,
+    /// tasks (T-100), a play-scoped source read through `hostvars` (T-104), or anything but
+    /// a play's `vars:`/`vars_files:` read by a role name. The source (the highest-precedence
+    /// one, when there are several) is for the message: "never defined" sends the reader to
+    /// add a definition that is already eleven lines up.
+    pub defined_out_of_scope: Option<VarSource>,
     /// Read through `hostvars[...]`, which is assembled with no play and no task — so only
     /// the sources [`VarSource::visible_to_hostvars`] admits can satisfy it (T-104).
     pub through_hostvars: bool,
@@ -460,7 +474,7 @@ fn push_uses(
             name,
             span: Span { start: base + s, end: base + e },
             guard: Vec::new(),
-            defined_out_of_scope: false,
+            defined_out_of_scope: None,
             through_hostvars,
             expr: Span { start: base, end: base + expr.len() },
             site: Site::default(),
@@ -880,15 +894,17 @@ impl Located {
     }
 
     /// Can this definition satisfy `use_` at all? Scope (T-100), plus — for a read through
-    /// `hostvars[...]` — whether the source survives into host storage (T-104).
+    /// `hostvars[...]` — whether the source survives into host storage (T-104), and — for a
+    /// role name — whether the source exists yet ([`VarSource::reaches_role_name`]).
     ///
-    /// Both rules live here rather than in one caller, which is the T-100 lesson: the scope
+    /// These rules live here rather than in one caller, which is the T-100 lesson: the scope
     /// check once sat in `undefined_uses` alone, and hover went on pointing at a definition
     /// the warning called missing. A second reachability rule split the same way would
     /// reproduce that exactly.
     pub fn reaches(&self, use_: &VarUse, use_file: &Path) -> bool {
         self.in_scope_at(use_file, use_.span.start)
             && (!use_.through_hostvars || self.source.visible_to_hostvars())
+            && (!use_.site.role_name || self.source.reaches_role_name())
     }
 
     /// [`reaches`] plus run order — what hover and go-to-definition want, since they answer
@@ -1094,7 +1110,11 @@ pub fn undefined_uses_in(
                 })
         })
         .map(|mut u| {
-            u.defined_out_of_scope = all.iter().any(|d| d.name == u.name);
+            u.defined_out_of_scope = all
+                .iter()
+                .filter(|d| d.name == u.name)
+                .max_by_key(|d| d.source.precedence())
+                .map(|d| d.source);
             u.scope_gap = scope_gap(&u);
             u.no_facts_here = crate::injected::injected(&u.name).is_none()
                 && crate::injected::may_be_fact(&u.name);
@@ -3183,7 +3203,7 @@ mod tests {
             let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
             undefined_uses(&p, &nodes, src)
                 .into_iter()
-                .map(|u| (u.name, u.defined_out_of_scope))
+                .map(|u| (u.name, u.defined_out_of_scope.is_some()))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
