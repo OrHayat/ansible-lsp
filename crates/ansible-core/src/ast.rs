@@ -209,9 +209,10 @@ pub struct RoleUse {
     pub name: String,
     pub span: Span,
     /// The whole entry, not just the name. Role params and the entry's `vars:` are in
-    /// scope *within* it — one param can be built from another (`app_config_dir:
-    /// /etc/x/{{ app_env }}`) — and out of scope in the play's own tasks, so a reader
-    /// deciding whether a name is defined needs to know which side of this it is on.
+    /// scope *within* it, the name aside ([`crate::vars::EntryScope`]) — one param can be
+    /// built from another (`app_config_dir: /etc/x/{{ app_env }}`) — and out of scope in the
+    /// play's own tasks, so a reader deciding whether a name is defined needs to know which
+    /// side of this it is on.
     pub entry_span: Span,
     /// Keys of the entry outside `RoleInclude.fattributes`, which ansible-core turns into
     /// variables scoped to this role rather than rejecting (`definition.py:200-224`).

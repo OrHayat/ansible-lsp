@@ -2784,8 +2784,11 @@ impl Backend {
         let mut ext: HashMap<PathBuf, Document> = HashMap::new();
         let mut lines = Vec::new();
         for token in idents {
-            let cands: Vec<vars::Located> =
-                defs.iter().filter(|d| d.name == token).cloned().collect();
+            let cands: Vec<vars::Located> = defs
+                .iter()
+                .filter(|d| d.name == token && d.in_scope_at(path, r.span.start))
+                .cloned()
+                .collect();
             let Some(d) = vars::effective(&cands) else {
                 continue;
             };
@@ -9818,6 +9821,203 @@ mod tests {
             )],
             "one include in the demo passes apply vars, and it is the fixture that documents them"
         );
+    }
+
+    // ---- T-236: params on a meta/main.yml dependency --------------------------------------
+
+    /// The same entry in both places ansible loads a `RoleInclude` from. Measured on 2.21.3:
+    /// through `roles: [app]`, `web` printed `app_dir=/etc/staging`, so `app_env` in the
+    /// dependency's own `app_dir:` reads the param beside it. `db_dir` is the scope control —
+    /// the same read one entry over, where no `app_env` is written.
+    fn t236_project(name: &str) -> std::path::PathBuf {
+        ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                (
+                    "play.yml",
+                    "- hosts: all\n  roles:\n    - role: web\n      app_env: staging\n      app_dir: \"/etc/{{ app_env }}\"\n",
+                ),
+                ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("roles/db/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("roles/app/tasks/main.yml", "- debug: {msg: hi}\n"),
+                (
+                    "roles/app/meta/main.yml",
+                    "dependencies:\n  - role: web\n    app_env: staging\n    app_dir: \"/etc/{{ app_env }}\"\n  - role: db\n    db_dir: \"/srv/{{ app_env }}\"\n",
+                ),
+            ],
+        )
+    }
+
+    /// The `ansible/references` paint for `rel`: the text of each variable use it colours.
+    async fn painted_vars(s: &T199Server, rel: &str) -> Vec<(usize, String)> {
+        let text = std::fs::read_to_string(s.root.join(rel)).unwrap();
+        let doc = super::Document::new(text.clone());
+        s.backend()
+            .resolved_references(super::ReferencesParams { uri: s.uri(rel) })
+            .await
+            .expect("references does not error")
+            .into_iter()
+            .filter(|r| r.kind == "variable")
+            .map(|r| {
+                let a = doc.lsp_to_byte(r.range.start.line, r.range.start.character);
+                let b = doc.lsp_to_byte(r.range.end.line, r.range.end.character);
+                (a, text[a..b].to_string())
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_dependency_param_hovers_and_jumps_within_its_own_entry() {
+        let s = T199Server::over(t236_project("t236-meta"));
+        s.scan().await;
+        let meta = "roles/app/meta/main.yml";
+        s.open_disk(meta).await;
+
+        let md = s.hover_in(meta, "/etc/{{ app_env }}", 8).await.expect("hover in the entry");
+        assert!(md.contains("role param"), "{md}");
+        assert!(md.contains("staging"), "{md}");
+        assert_eq!(
+            s.def_in(meta, "/etc/{{ app_env }}", 8).await,
+            vec![(meta.to_string(), "staging".to_string())],
+        );
+    }
+
+    /// Box 2: entry scope. ansible hands a param to its own entry's role, so `app_env` read
+    /// from the `db` entry is not that value — hover and definition must both decline, or
+    /// they contradict each other the way T-100 did.
+    #[tokio::test]
+    async fn a_dependency_param_is_not_offered_to_another_entry() {
+        let s = T199Server::over(t236_project("t236-scope"));
+        s.scan().await;
+        let meta = "roles/app/meta/main.yml";
+        s.open_disk(meta).await;
+
+        assert_eq!(s.hover_in(meta, "/srv/{{ app_env }}", 8).await, None);
+        assert!(s.def_in(meta, "/srv/{{ app_env }}", 8).await.is_empty());
+    }
+
+    /// Box 3, the paint: coloured inside its entry, plain one entry over — the same
+    /// `in_effect_for` answer the two tests above pin for hover and definition.
+    #[tokio::test]
+    async fn a_dependency_param_is_painted_only_within_its_own_entry() {
+        let s = T199Server::over(t236_project("t236-paint"));
+        s.scan().await;
+        let meta = "roles/app/meta/main.yml";
+        s.open_disk(meta).await;
+
+        let text = std::fs::read_to_string(s.root.join(meta)).unwrap();
+        let in_entry = text.find("/etc/{{ app_env }}").unwrap() + 8;
+        assert_eq!(painted_vars(&s, meta).await, vec![(in_entry, "app_env".to_string())]);
+    }
+
+    /// Box 3, the diagnostics: `var-undefined` and `var-uncovered-when` both run off the same
+    /// definitions, and a dependency entry must draw neither. The undefined rule is
+    /// playbooks-only, so it was silent before the fix too; pinned so it stays that way.
+    #[test]
+    fn a_dependency_param_draws_no_variable_diagnostic() {
+        let root = t236_project("t236-diag");
+        let path = root.join("roles/app/meta/main.yml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let codes: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+                .into_iter()
+                .filter_map(|d| match d.code {
+                    Some(tower_lsp::lsp_types::NumberOrString::String(c)) => Some(c),
+                    _ => None,
+                })
+                .collect();
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    /// Box 4: the `roles:` half of the ticket's table, unchanged.
+    #[tokio::test]
+    async fn a_play_roles_param_still_hovers_and_jumps() {
+        let s = T199Server::over(t236_project("t236-play"));
+        s.scan().await;
+        s.open_disk("play.yml").await;
+
+        let md = s.hover_in("play.yml", "/etc/{{ app_env }}", 8).await.expect("hover");
+        assert!(md.contains("role param"), "{md}");
+        assert!(md.contains("staging"), "{md}");
+        assert_eq!(
+            s.def_in("play.yml", "/etc/{{ app_env }}", 8).await,
+            vec![("play.yml".to_string(), "staging".to_string())],
+        );
+    }
+
+    /// The role name is the one part of an entry that its params and `vars:` do not reach:
+    /// it is rendered to pick the role, before either is bound. Measured on 2.21.3 for all
+    /// three files — "'flavor' is undefined". Before, hover claimed `flavor` = `web` in each,
+    /// the paint coloured it, and in `meta/main.yml` Cmd+click jumped to `flavor: web`.
+    #[tokio::test]
+    async fn a_role_name_does_not_read_its_own_entrys_params_or_vars() {
+        let root = ansible_core::testing::project(
+            "t236-name",
+            "[defaults]\n",
+            &[
+                ("param.yml", "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      flavor: web\n"),
+                ("entry_vars.yml", "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      vars: {flavor: web}\n"),
+                ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("roles/app/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("roles/app/meta/main.yml", "dependencies:\n  - role: \"{{ flavor }}\"\n    flavor: web\n"),
+            ],
+        );
+        let s = T199Server::over(root);
+        s.scan().await;
+        for rel in ["param.yml", "entry_vars.yml", "roles/app/meta/main.yml"] {
+            s.open_disk(rel).await;
+            let md = s.hover_in(rel, "{{ flavor }}", 3).await.unwrap_or_default();
+            assert!(!md.contains("Substituting"), "{rel}: {md}");
+            assert!(s.def_in(rel, "{{ flavor }}", 3).await.is_empty(), "{rel}");
+            assert_eq!(painted_vars(&s, rel).await, vec![], "{rel}");
+        }
+    }
+
+    /// The control for the test above: the same role name does read a play var — measured,
+    /// this loads `web` — so what was removed is the entry's own bindings, not the hover.
+    #[tokio::test]
+    async fn a_role_name_still_reads_a_play_var() {
+        let root = ansible_core::testing::project(
+            "t236-name-control",
+            "[defaults]\n",
+            &[
+                ("play.yml", "- hosts: all\n  vars:\n    flavor: web\n  roles:\n    - role: \"{{ flavor }}\"\n"),
+                ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+            ],
+        );
+        let s = T199Server::over(root);
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        let md = s.hover_in("play.yml", "{{ flavor }}", 3).await.expect("hover");
+        assert!(md.contains("Substituting"), "{md}");
+        assert!(md.contains("play var"), "{md}");
+    }
+
+    /// The substitution hover was the one reader of the index that never asked about scope,
+    /// so a play task's include was shown reading a param from the `roles:` entry above it.
+    /// Measured on 2.21.3: "'app_env' is undefined" — and with `app_env` in play `vars:`, the
+    /// include runs, which `a_substituted_path_hovers_the_value_and_where_it_came_from` pins.
+    #[tokio::test]
+    async fn a_play_task_include_does_not_substitute_an_entry_param() {
+        let root = ansible_core::testing::project(
+            "t236-include",
+            "[defaults]\n",
+            &[
+                (
+                    "play.yml",
+                    "- hosts: all\n  roles:\n    - role: web\n      app_env: staging\n  tasks:\n    - include_tasks: \"{{ app_env }}.yml\"\n",
+                ),
+                ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("staging.yml", "- debug: {msg: hi}\n"),
+            ],
+        );
+        let s = T199Server::over(root);
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        let md = s.hover_in("play.yml", "{{ app_env }}.yml", 3).await.unwrap_or_default();
+        assert!(!md.contains("Substituting"), "{md}");
     }
 
     // ---- T-020: the reverse index --------------------------------------------------------

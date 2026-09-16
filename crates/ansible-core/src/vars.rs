@@ -241,12 +241,30 @@ pub struct VarDef {
     /// variable reads as "defined only when …" (e.g. per-host via `inventory_hostname`),
     /// straight from the playbook, no inventory needed.
     pub condition: Option<String>,
-    /// Byte range in the defining file outside which this definition does not apply.
-    /// `None` for everything file-wide, which is nearly all of them. Set for a `roles:`
-    /// entry's params and `vars:`, which reach the rest of that entry and the role's own
-    /// files but *not* the play's tasks (measured) — so a use after the roles must not be
-    /// satisfied by one, in the diagnostic or in a hover.
-    pub scope: Option<Span>,
+    /// Where in the defining file this definition applies. `None` for everything file-wide,
+    /// which is nearly all of them. Set for a role entry's params and `vars:`, which reach
+    /// the rest of that entry and the role's own files but *not* the play's tasks (measured)
+    /// — so a use after the roles must not be satisfied by one, in the diagnostic or in a
+    /// hover.
+    pub scope: Option<EntryScope>,
+}
+
+/// A role entry, less its role name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryScope {
+    pub entry: Span,
+    /// The name is rendered to pick the role, before the entry's params and `vars:` are
+    /// bound — measured on 2.21.3, `role: "{{ flavor }}"` beside `flavor: web` is
+    /// "'flavor' is undefined" on a `roles:` and a `dependencies:` entry, whichever key is
+    /// written first, while the same name set in play `vars:` loads the role.
+    pub name: Span,
+}
+
+impl EntryScope {
+    fn covers(&self, pos: usize) -> bool {
+        let within = |s: Span| s.start <= pos && pos < s.end;
+        within(self.entry) && !within(self.name)
+    }
 }
 
 /// Every in-file variable definition, in document order.
@@ -279,7 +297,7 @@ impl VarIndex {
         self.defs.push(VarDef { name: name.into(), source, span, condition, scope: None });
     }
 
-    fn push_scoped(&mut self, name: impl Into<String>, source: VarSource, span: Span, scope: Span) {
+    fn push_scoped(&mut self, name: impl Into<String>, source: VarSource, span: Span, scope: EntryScope) {
         self.defs.push(VarDef {
             name: name.into(),
             source,
@@ -675,21 +693,7 @@ fn play(p: &Play, idx: &mut VarIndex) {
     // it can only make `undefined_uses` quieter, never produce a false "undefined". The
     // reverse direction — a role file seeing the params its callers pass — is the useful
     // one and needs the invocation chain (T-020).
-    // Params first, then the entry's `vars:` — the order ansible combines them in, so a
-    // name written both ways lands with the winner last.
-    for r in &p.roles {
-        for param in &r.params {
-            idx.push_scoped(
-                param.name.clone(),
-                VarSource::RoleParams,
-                param.value_span,
-                r.entry_span,
-            );
-        }
-        for v in &r.vars {
-            idx.push_scoped(v.name.clone(), VarSource::RoleEntryVars, v.span, r.entry_span);
-        }
-    }
+    role_entries(&p.roles, idx);
     for s in p
         .pre_tasks
         .iter()
@@ -698,6 +702,22 @@ fn play(p: &Play, idx: &mut VarIndex) {
         .chain(&p.handlers)
     {
         stmt(s, idx);
+    }
+}
+
+/// The variables a `RoleInclude` entry hands its role — from a play's `roles:` or a
+/// `meta/main.yml` `dependencies:`, which load the same way.
+fn role_entries(roles: &[ast::RoleUse], idx: &mut VarIndex) {
+    // Params first, then the entry's `vars:` — the order ansible combines them in, so a
+    // name written both ways lands with the winner last.
+    for r in roles {
+        let scope = EntryScope { entry: r.entry_span, name: r.span };
+        for param in &r.params {
+            idx.push_scoped(param.name.clone(), VarSource::RoleParams, param.value_span, scope);
+        }
+        for v in &r.vars {
+            idx.push_scoped(v.name.clone(), VarSource::RoleEntryVars, v.span, scope);
+        }
     }
 }
 
@@ -802,7 +822,7 @@ pub struct Located {
     /// (in-file, direct role, include). Mirrors Ansible's own `dep_chain`.
     pub via: Vec<(PathBuf, Span)>,
     /// See [`VarDef::scope`].
-    pub scope: Option<Span>,
+    pub scope: Option<EntryScope>,
     /// The point in the run this definition starts applying, as (file, byte offset) of the
     /// task that loads it — set for `include_vars` only (T-208).
     ///
@@ -869,7 +889,7 @@ impl Located {
     /// nothing reaches today and T-020 will answer; not something to rule out here.
     pub fn in_scope_at(&self, use_file: &Path, use_pos: usize) -> bool {
         match self.scope {
-            Some(s) if self.file == use_file => s.start <= use_pos && use_pos < s.end,
+            Some(s) if self.file == use_file => s.covers(use_pos),
             _ => true,
         }
     }
@@ -1393,8 +1413,16 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     let ctx = walk.cache.context(path);
     let tree = ast::build(nodes);
 
-    // In-file definitions (play/block/task vars, set_fact, register).
-    for d in index(&tree).defs() {
+    // In-file definitions (play/block/task vars, set_fact, register). A `meta/main.yml`
+    // builds to neither plays nor tasks, so its dependency entries are read here, where the
+    // path says what the file is (T-236).
+    let mut in_file = index(&tree);
+    if ctx.is_role_metadata(path) {
+        if let Some(meta) = nodes.first() {
+            role_entries(&ast::dependency_roles(meta), &mut in_file);
+        }
+    }
+    for d in in_file.defs() {
         out.defs.push(Located {
             name: d.name.clone(),
             source: d.source,

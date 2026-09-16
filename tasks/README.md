@@ -168,7 +168,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](open/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | S    | —    |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
-| T-236 | [Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them](open/T-236-params-on-a-meta-main-yml-dependency-are-not-indexed-so-hove.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -344,6 +343,7 @@ T-021 is now unblocked on that side.
 | T-232 | **bug** · [The server detects the Ansible install but never stores it, so the editor answers as if Ansible were absent](closed/T-232-the-server-detects-the-ansible-install-but-never-stores-it-s.md) | done     |
 | T-029 | [Hover showing the candidates tried](closed/T-029-hover-candidates.md) | done     |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](closed/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | done     |
+| T-236 | [Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them](closed/T-236-params-on-a-meta-main-yml-dependency-are-not-indexed-so-hove.md) | done     |
 
 ## Settled — don't re-derive these
 
