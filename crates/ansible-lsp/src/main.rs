@@ -1941,11 +1941,18 @@ impl Backend {
                          run, or extra-vars (-e).",
                         u.name
                     )
-                } else if let Some(source) = u.defined_out_of_scope.filter(|_| u.site.role_name) {
+                } else if let Some((source, at)) = u.defined_out_of_scope.zip(u.site.load_name) {
+                    let (what, exists) = match at {
+                        vars::LoadName::RoleEntry => ("a role name", "the play's `vars:` and `vars_files:`"),
+                        vars::LoadName::ImportRole => (
+                            "`import_role`'s name",
+                            "play, block and task `vars:`, `vars_files:`, and role defaults and vars",
+                        ),
+                    };
                     format!(
-                        "`{}` is defined ({}), but a role name cannot read it — the name is \
-                         rendered when the play loads, before any host or task, and only the \
-                         play's `vars:` and `vars_files:` exist then.",
+                        "`{}` is defined ({}), but {what} cannot read it — the name is rendered \
+                         when the play loads, before any host or task, and only {exists} exist \
+                         then.",
                         u.name,
                         source_label(source)
                     )
@@ -10235,6 +10242,210 @@ mod tests {
         assert!(diags.is_empty(), "{diags:#?}");
     }
 
+    /// What the server says about `{{ flavor` in `rel`: the `var-undefined` messages, the
+    /// hover there, and the variable uses the paint colours.
+    async fn flavor_answers(
+        name: &str,
+        files: &[(&str, &str)],
+        rel: &str,
+    ) -> (Vec<String>, String, Vec<(usize, String)>) {
+        let root = role_name_source_project(name, files);
+        let path = root.join(rel);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let undefined = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == "var-undefined"))
+            .map(|d| d.message)
+            .collect();
+        let s = T199Server::over(root);
+        s.scan().await;
+        s.open_disk(rel).await;
+        let md = s.hover_in(rel, "{{ flavor", 3).await.unwrap_or_default();
+        (undefined, md, painted_vars(&s, rel).await)
+    }
+
+    const PLAY_HEAD: &str = "- hosts: all\n  gather_facts: false\n";
+    const IMPORT_FLAVOR: &str = "    - import_role: {name: \"{{ flavor }}\"}\n";
+
+    /// `import_role`'s name is rendered when the play loads, so what is set per host or by a
+    /// task does not exist yet. Measured on 2.21.3, each "'flavor' is undefined", while the
+    /// same fixture with `include_role` ran `web` — which is the control that each source
+    /// loads.
+    #[tokio::test]
+    async fn an_import_role_name_cannot_read_host_or_task_set_variables() {
+        let tasks = |t: &str| format!("{PLAY_HEAD}  tasks:\n{t}{IMPORT_FLAVOR}");
+        let allvars = "[g]\nlocalhost ansible_connection=local\n\n[all:vars]\nflavor=web\n";
+        let register = format!(
+            "{PLAY_HEAD}  tasks:\n    - command: echo web\n      register: flavor\n    - import_role: {{name: \"{{{{ flavor.stdout }}}}\"}}\n"
+        );
+        let cases: Vec<(&str, &str, String, Vec<(&str, &str)>)> = vec![
+            ("group_vars/all", "t236-ir-gva-inv", tasks(""), vec![("inv/group_vars/all.yml", "flavor: web\n")]),
+            ("group_vars/all", "t236-ir-gva-pb", tasks(""), vec![("group_vars/all.yml", "flavor: web\n")]),
+            ("host_vars", "t236-ir-hv", tasks(""), vec![("inv/host_vars/localhost.yml", "flavor: web\n")]),
+            ("inventory", "t236-ir-inv", tasks(""), vec![("inv/hosts", allvars)]),
+            ("include_vars", "t236-ir-iv", tasks("    - include_vars: iv.yml\n"), vec![("iv.yml", "flavor: web\n")]),
+            ("add_host", "t236-ir-ah", tasks("    - add_host: {name: localhost, flavor: web}\n"), vec![]),
+            ("set_fact", "t236-ir-sf", tasks("    - set_fact: {flavor: web}\n"), vec![]),
+            ("register", "t236-ir-reg", register, vec![]),
+        ];
+        let mut wrong = Vec::new();
+        for (label, name, play, extra) in cases {
+            let mut files = extra.clone();
+            files.push(("play.yml", play.as_str()));
+            let (undefined, md, painted) = flavor_answers(name, &files, "play.yml").await;
+            if !(undefined.len() == 1
+                && undefined[0].contains("import_role")
+                && undefined[0].contains(&format!("({label})")))
+            {
+                wrong.push(format!("{name}: warning {undefined:?}"));
+            }
+            if md.contains("Substituting") {
+                wrong.push(format!("{name}: hover {md:?}"));
+            }
+            if !painted.is_empty() {
+                wrong.push(format!("{name}: painted {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The other half of the `import_role` table: loaded with the play, so these exist.
+    /// Measured on 2.21.3, each ran `web` — role defaults even with the import in `pre_tasks`
+    /// ahead of the `roles:` that defines them.
+    #[tokio::test]
+    async fn an_import_role_name_reads_play_block_task_and_role_variables() {
+        let cases: Vec<(&str, &str, String, Vec<(&str, &str)>)> = vec![
+            ("play var", "t236-ir-pv", format!("{PLAY_HEAD}  vars: {{flavor: web}}\n  tasks:\n{IMPORT_FLAVOR}"), vec![]),
+            ("vars_files", "t236-ir-vf", format!("{PLAY_HEAD}  vars_files: [vf.yml]\n  tasks:\n{IMPORT_FLAVOR}"), vec![("vf.yml", "flavor: web\n")]),
+            (
+                "block var",
+                "t236-ir-bv",
+                format!("{PLAY_HEAD}  tasks:\n    - block:\n        - import_role: {{name: \"{{{{ flavor }}}}\"}}\n      vars: {{flavor: web}}\n"),
+                vec![],
+            ),
+            (
+                "task var",
+                "t236-ir-tv",
+                format!("{PLAY_HEAD}  tasks:\n    - import_role: {{name: \"{{{{ flavor }}}}\"}}\n      vars: {{flavor: web}}\n"),
+                vec![],
+            ),
+            ("role default", "t236-ir-rd", format!("{PLAY_HEAD}  roles: [db]\n  tasks:\n{IMPORT_FLAVOR}"), vec![("roles/db/defaults/main.yml", "flavor: web\n")]),
+            ("role var", "t236-ir-rv", format!("{PLAY_HEAD}  roles: [db]\n  tasks:\n{IMPORT_FLAVOR}"), vec![("roles/db/vars/main.yml", "flavor: web\n")]),
+            (
+                "role default",
+                "t236-ir-rd-pre",
+                format!("{PLAY_HEAD}  pre_tasks:\n{IMPORT_FLAVOR}  roles: [db]\n"),
+                vec![("roles/db/defaults/main.yml", "flavor: web\n")],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (label, name, play, extra) in cases {
+            let mut files = extra.clone();
+            files.push(("play.yml", play.as_str()));
+            let (undefined, md, painted) = flavor_answers(name, &files, "play.yml").await;
+            if !undefined.is_empty() {
+                wrong.push(format!("{name}: warning {undefined:?}"));
+            }
+            if !(md.contains("Substituting") && md.contains(label)) {
+                wrong.push(format!("{name}: hover {md:?}"));
+            }
+            if !painted.iter().any(|(_, t)| t == "flavor") {
+                wrong.push(format!("{name}: painted {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// No `when:` guards a name rendered at load — not the task's own, not a block's. Measured
+    /// on 2.21.3: both "'flavor' is undefined" for `import_role`, both skipped for
+    /// `include_role`, whose name is rendered when the task runs, after its guard.
+    #[tokio::test]
+    async fn no_when_guards_an_import_role_name_and_both_guard_an_include_role_name() {
+        let own = |form: &str| format!("{PLAY_HEAD}  tasks:\n    - {form}: {{name: \"{{{{ flavor }}}}\"}}\n      when: flavor is defined\n");
+        let block = |form: &str| {
+            format!("{PLAY_HEAD}  tasks:\n    - block:\n        - {form}: {{name: \"{{{{ flavor }}}}\"}}\n      when: flavor is defined\n")
+        };
+        let mut wrong = Vec::new();
+        for (name, play, want) in [
+            ("t236-g-ir-own", own("import_role"), 1),
+            ("t236-g-ir-block", block("import_role"), 1),
+            ("t236-g-inc-own", own("include_role"), 0),
+            ("t236-g-inc-block", block("include_role"), 0),
+        ] {
+            let (undefined, _, _) = flavor_answers(name, &[("play.yml", play.as_str())], "play.yml").await;
+            if undefined.len() != want {
+                wrong.push(format!("{name}: want {want}, got {undefined:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// `include_role`'s name is an ordinary task argument, rendered per host when the task
+    /// runs: measured on 2.21.3, every source below ran `web`. Pinned so the `import_role`
+    /// rule cannot spread to it.
+    #[tokio::test]
+    async fn an_include_role_name_reads_every_source() {
+        let inc = "    - include_role: {name: \"{{ flavor }}\"}\n";
+        let tasks = |t: &str| format!("{PLAY_HEAD}  tasks:\n{t}{inc}");
+        let cases: Vec<(&str, String, Vec<(&str, &str)>)> = vec![
+            ("t236-inc-gva", tasks(""), vec![("inv/group_vars/all.yml", "flavor: web\n")]),
+            ("t236-inc-hv", tasks(""), vec![("inv/host_vars/localhost.yml", "flavor: web\n")]),
+            ("t236-inc-iv", tasks("    - include_vars: iv.yml\n"), vec![("iv.yml", "flavor: web\n")]),
+            ("t236-inc-ah", tasks("    - add_host: {name: localhost, flavor: web}\n"), vec![]),
+            ("t236-inc-sf", tasks("    - set_fact: {flavor: web}\n"), vec![]),
+        ];
+        let mut wrong = Vec::new();
+        for (name, play, extra) in cases {
+            let mut files = extra.clone();
+            files.push(("play.yml", play.as_str()));
+            let (undefined, _, painted) = flavor_answers(name, &files, "play.yml").await;
+            if !undefined.is_empty() {
+                wrong.push(format!("{name}: warning {undefined:?}"));
+            }
+            if !painted.iter().any(|(_, t)| t == "flavor") {
+                wrong.push(format!("{name}: painted {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A `meta/main.yml` dependency's name reads only the calling play's `vars:` and
+    /// `vars_files:` — measured on 2.21.3 with the role reached through `roles:`,
+    /// `import_role` and `include_role` alike. Its own role's defaults and vars, and inventory,
+    /// are "'flavor' is undefined" (each with a control: the role's task printed the value).
+    /// No warning here either way: the meta file cannot see its callers' plays. Before, the
+    /// hover showed `flavor` = `web` for all three.
+    #[tokio::test]
+    async fn a_dependency_name_does_not_read_its_roles_variables_or_inventory() {
+        let meta = "roles/app/meta/main.yml";
+        let common = [
+            ("roles/app/tasks/main.yml", "- debug: {msg: hi}\n"),
+            (meta, "dependencies:\n  - role: \"{{ flavor }}\"\n"),
+            ("play.yml", "- hosts: all\n  roles: [app]\n"),
+        ];
+        let mut wrong = Vec::new();
+        for (name, source) in [
+            ("t236-dep-rd", ("roles/app/defaults/main.yml", "flavor: web\n")),
+            ("t236-dep-rv", ("roles/app/vars/main.yml", "flavor: web\n")),
+            ("t236-dep-gva", ("inv/group_vars/all.yml", "flavor: web\n")),
+        ] {
+            let mut files = common.to_vec();
+            files.push(source);
+            let (undefined, md, painted) = flavor_answers(name, &files, meta).await;
+            if !undefined.is_empty() {
+                wrong.push(format!("{name}: warning {undefined:?}"));
+            }
+            if md.contains("Substituting") {
+                wrong.push(format!("{name}: hover {md:?}"));
+            }
+            if !painted.is_empty() {
+                wrong.push(format!("{name}: painted {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     // ---- T-020: the reverse index --------------------------------------------------------
 
     const T020_PLAY: &str = concat!(
@@ -12147,10 +12358,10 @@ mod tests {
         }
     }
 
-    /// The corpus gate for the role-name reach rule (`VarSource::reaches_role_name`): every
-    /// `var-undefined` it raises on a `roles:` entry name, to be read one by one, beside the
-    /// number of templated role names the sweep saw — zero hits over zero names is a sweep
-    /// that looked at nothing.
+    /// The corpus gate for the role-name reach rule (`VarSource::reaches_load_name`): every
+    /// `var-undefined` it raises on a name rendered at load — a `roles:` entry, a dependency,
+    /// `import_role` — to be read one by one, beside the number of such templated names the
+    /// sweep saw. Zero hits over zero names is a sweep that looked at nothing.
     ///
     /// `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp role_name_reach_corpus -- --ignored --nocapture`
     #[test]
@@ -12165,19 +12376,23 @@ mod tests {
         let (mut hits, mut names) = (Vec::new(), 0usize);
         for f in ansible_core::workspace::yaml_files(&root) {
             let Ok(t) = std::fs::read_to_string(&f) else { continue };
-            if !t.contains("roles") || !t.contains("{{") {
+            if !(t.contains("role") || t.contains("dependencies")) || !t.contains("{{") {
                 continue;
             }
             let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
             let at_names: Vec<ansible_core::parse::Span> = ansible_core::vars::any_uses(&a.nodes)
                 .into_iter()
-                .filter(|u| u.site.role_name)
+                .filter(|u| u.site.load_name.is_some())
                 .map(|u| u.span)
                 .collect();
             if at_names.is_empty() {
                 continue;
             }
             names += at_names.len();
+            for s in &at_names {
+                let (line, _) = a.doc.byte_to_lsp(s.start);
+                println!("  NAME {}:{}", f.strip_prefix(&root).unwrap_or(&f).display(), line + 1);
+            }
             for d in super::Backend::variable_coverage_diagnostics(&a, &f, &a.nodes, &[], &cache, None) {
                 let at = a.doc.lsp_to_byte(d.range.start.line, d.range.start.character);
                 if at_names.iter().any(|s| s.start == at) {

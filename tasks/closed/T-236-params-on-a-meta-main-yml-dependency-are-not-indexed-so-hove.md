@@ -156,5 +156,36 @@ Corpus gate `role_name_reach_corpus`: 0 hits, because no tree holds a templated 
 name (the one `- role: '{{ … }}'` is data in a defaults file). The same sweep over the fixtures
 above reports 12 of 12.
 
-Not covered: `meta/main.yml` dependency names and `import_role`/`include_role` names are not
-marked as role names, and nothing about them was measured.
+### `import_role`, `include_role`, and dependency names
+
+The other three places a role is named, measured on 2.21.3. Each "undefined" row has a
+control: for `import_role` it is the same fixture with `include_role`, which ran; for a
+dependency it is the role's own task, which printed the value.
+
+| source                                                          | `import_role` | `include_role` | dependency |
+| --------------------------------------------------------------- | ------------- | -------------- | ---------- |
+| play `vars:`, `vars_files:`                                      | runs          | runs           | runs       |
+| block `vars:`, task `vars:`                                      | runs          | runs           | —          |
+| the play's role defaults / vars (even from `pre_tasks`)          | runs          | runs           | —          |
+| its own role's defaults / vars                                   | —             | —              | undefined  |
+| inventory (`group_vars`, `host_vars`, `[all:vars]`)              | undefined     | runs           | undefined  |
+| `set_fact`, `register`, `include_vars`, `add_host`               | undefined     | runs           | undefined (`set_fact`) |
+| `when: flavor is defined` on the task, or on a block around it   | undefined     | skipped        | —          |
+
+A dependency's column is the same whether its role is reached through `roles:`, `import_role`
+or `include_role`. `include_role`'s name is an ordinary task argument and needed nothing.
+`Site::load_name` is now a `LoadName` (a role entry or dependency, or `import_role`), each with
+its own row in `VarSource::reaches_load_name`, and no `when:` is kept on such a use. No warning
+is raised in a `meta/main.yml`, since its callers' plays are out of sight. The hover and paint
+there stopped showing a role default, a role var or inventory as the name's value.
+
+Pinned by `an_import_role_name_cannot_read_host_or_task_set_variables`,
+`an_import_role_name_reads_play_block_task_and_role_variables`,
+`no_when_guards_an_import_role_name_and_both_guard_an_include_role_name`,
+`an_include_role_name_reads_every_source`,
+`a_dependency_name_does_not_read_its_roles_variables_or_inventory`, and
+`load_time_role_names_are_marked_by_form_and_guarded_by_nothing`. The corpus gate now counts
+these too: 3 names across the trees, all copies of one `import_role: name: '{{ role }}'`
+playbook. It draws no warning because of a colon-less `# noqa syntax-check[specific]` on the
+line, which reads as a bare `# noqa`. Without that comment it gets the existing "never defined"
+warning.

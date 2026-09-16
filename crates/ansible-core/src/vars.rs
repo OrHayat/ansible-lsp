@@ -230,17 +230,26 @@ impl VarSource {
         }
     }
 
-    /// Whether this source exists when a play's `roles:` entry name is rendered
-    /// ([`Site::role_name`]). That happens when the play loads, with no host and no task yet,
-    /// so only the play's own `vars:` and `vars_files:` are there.
-    ///
-    /// Measured on 2.21.3 for every other source a playbook can hold — `group_vars` (all,
-    /// a group, beside the playbook and beside the inventory), `host_vars`, `[all:vars]` in
-    /// the inventory, a `set_fact`/`register`/`include_vars`/`add_host`/block or task var in
-    /// `pre_tasks`, and an earlier role's defaults and vars: each is "'flavor' is undefined".
-    /// Each had a control playbook reading the same variable from a task, which printed it.
-    pub fn reaches_role_name(self) -> bool {
-        matches!(self, VarSource::PlayVars | VarSource::VarsFiles)
+    /// Whether this source exists when a role name is rendered at load ([`LoadName`]), with
+    /// no host picked and no task run. Measured on 2.21.3, each "undefined" row against a
+    /// control that read the same variable where it does exist.
+    pub fn reaches_load_name(self, at: LoadName) -> bool {
+        use VarSource::*;
+        match at {
+            // On a `roles:` entry, `group_vars` (all or a group, beside the playbook or the
+            // inventory), `host_vars`, `[all:vars]`, a `set_fact`/`register`/`include_vars`/
+            // `add_host`/block or task var in `pre_tasks`, and an earlier role's defaults and
+            // vars are each "'flavor' is undefined". A dependency's name reads the same two,
+            // whether its role came in through `roles:`, `import_role` or `include_role`; its
+            // own role's defaults and vars, and inventory, are undefined.
+            LoadName::RoleEntry => matches!(self, PlayVars | VarsFiles),
+            // `import_role` also sees block and task `vars:` and the play's role defaults and
+            // vars — even from `pre_tasks`, ahead of the `roles:` that defines them. Inventory,
+            // `set_fact`, `register`, `include_vars` and `add_host` are undefined.
+            LoadName::ImportRole => {
+                matches!(self, PlayVars | VarsFiles | BlockVars | TaskVars | RoleDefaults | RoleVars)
+            }
+        }
     }
 }
 
@@ -389,12 +398,21 @@ pub struct Site {
     /// Inside a `when:`. The condition rule owns `item` there (`when-item-without-loop`),
     /// so the undefined rule does not repeat it.
     pub in_when: bool,
-    /// The name of a play's `roles:` entry. It is rendered when the play loads, to pick the
-    /// role — before the entry's `when:` is checked (that runs on the role's tasks) and
-    /// before any entry's variables apply. Measured on 2.21.3: `role: "{{ flavor }}"` is
-    /// "'flavor' is undefined" beside `when: false`, beside its own `flavor: web`, and after
-    /// another entry's `flavor: web`.
-    pub role_name: bool,
+    /// A role name rendered at load ([`LoadName`]). No `when:` guards it: measured on 2.21.3,
+    /// `role: "{{ flavor }}"` beside `when: false`, and `import_role` under its own or a
+    /// block's `when: flavor is defined`, are each "'flavor' is undefined".
+    pub load_name: Option<LoadName>,
+}
+
+/// A role name rendered when the play loads, to pick which role to load — before any host or
+/// task exists. What it can read depends on the form: [`VarSource::reaches_load_name`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadName {
+    /// A play's `roles:` entry, or a `dependencies:` entry of a role's `meta/main.yml`.
+    RoleEntry,
+    /// `import_role`'s `name:`. `include_role`'s is rendered when its task runs, like any other
+    /// argument, and is not one of these.
+    ImportRole,
 }
 
 impl Site {
@@ -521,7 +539,7 @@ fn uses_with(
     // A top-level list is a task list unless its items are plays, and `walk_uses` tells a
     // play by its `hosts:` — so `tasks = true` here is right for both file kinds.
     for n in nodes {
-        walk_uses(n, false, &[], &mut out, extract, Keys::Literal, &Site::default(), true, false);
+        walk_uses(n, false, &[], &mut out, extract, Keys::Literal, &Site::default(), true, None);
     }
     out
 }
@@ -612,7 +630,7 @@ fn walk_uses(
     keys: Keys,
     site: &Site,
     tasks: bool,
-    roles: bool,
+    names: Option<LoadName>,
 ) {
     match node {
         Node::Scalar { value, span } => {
@@ -631,9 +649,9 @@ fn walk_uses(
         // Neither key-templating site is list-shaped, so items start over as literal.
         Node::Sequence { items, .. } => items.iter().for_each(|i| {
             // `- "{{ flavor }}"`: the bare-string entry is nothing but its name.
-            let bare_role = roles && matches!(i, Node::Scalar { .. });
-            let s = if bare_role { &Site { role_name: true, ..site.clone() } } else { site };
-            walk_uses(i, in_when, guard, out, ex, Keys::Literal, s, tasks, roles)
+            let bare = names == Some(LoadName::RoleEntry) && matches!(i, Node::Scalar { .. });
+            let s = if bare { &Site { load_name: names, ..site.clone() } } else { site };
+            walk_uses(i, in_when, guard, out, ex, Keys::Literal, s, tasks, names)
         }),
         Node::Mapping { entries, .. } => {
             // This task/block's own `when:` guards the values inside it (its module args),
@@ -653,16 +671,20 @@ fn walk_uses(
             } else {
                 site.clone()
             };
-            // Read the way `ast::build_roles` names the role: `role:`, else `name:`.
-            let role_name =
-                roles.then(|| node.get("role").or_else(|| node.get("name"))).flatten().map(Node::span);
+            // An entry is named the way `ast::build_roles` reads it — `role:`, else `name:`.
+            let role_name = match names {
+                Some(LoadName::RoleEntry) => node.get("role").or_else(|| node.get("name")),
+                Some(LoadName::ImportRole) => node.get("name"),
+                None => None,
+            }
+            .map(Node::span);
             for (k, v) in entries {
                 let key = k.as_str().map(crate::keywords::core_action);
                 let is_when = key == Some("when");
                 let names_role = role_name == Some(v.span());
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
-                // Nor is a role entry's name, which is rendered first ([`Site::role_name`]).
-                let g: &[String] = if is_when || names_role { guard } else { &inner };
+                // A name rendered at load is guarded by nothing ([`Site::load_name`]).
+                let g: &[String] = if names_role { &[] } else if is_when { guard } else { &inner };
                 if keys == Keys::Templated {
                     if let Node::Scalar { value, span } = k {
                         let before = out.len();
@@ -676,7 +698,7 @@ fn walk_uses(
                 // See [`Site`]: the loop value is rendered before there is an item, and a
                 // `vars:` value or a task `name:` is nobody's fixed site.
                 let child_site: Site = match key {
-                    _ if names_role => Site { role_name: true, ..own.clone() },
+                    _ if names_role => Site { load_name: names, ..own.clone() },
                     Some(k) if this_task && (k == "loop" || k.starts_with("with_")) => Site {
                         in_loop: false,
                         loop_var: None,
@@ -688,8 +710,15 @@ fn walk_uses(
                     _ => own.clone(),
                 };
                 let child_tasks = key.is_some_and(is_task_list_key);
-                let child_roles = is_play && key == Some("roles");
-                walk_uses(v, is_when, g, out, ex, keys_under(keys, k), &child_site, child_tasks, child_roles);
+                let child_names = match key {
+                    Some("roles") if is_play => Some(LoadName::RoleEntry),
+                    // A `meta/main.yml` root reads as a task here — the walk cannot tell file
+                    // kinds apart — and no task has a `dependencies:` key.
+                    Some("dependencies") if this_task => Some(LoadName::RoleEntry),
+                    Some("import_role") if this_task => Some(LoadName::ImportRole),
+                    _ => None,
+                };
+                walk_uses(v, is_when, g, out, ex, keys_under(keys, k), &child_site, child_tasks, child_names);
             }
         }
         // Null holds no text, so there is nothing to scan for variable uses.
@@ -895,7 +924,7 @@ impl Located {
 
     /// Can this definition satisfy `use_` at all? Scope (T-100), plus — for a read through
     /// `hostvars[...]` — whether the source survives into host storage (T-104), and — for a
-    /// role name — whether the source exists yet ([`VarSource::reaches_role_name`]).
+    /// role name rendered at load — whether the source exists yet ([`VarSource::reaches_load_name`]).
     ///
     /// These rules live here rather than in one caller, which is the T-100 lesson: the scope
     /// check once sat in `undefined_uses` alone, and hover went on pointing at a definition
@@ -904,7 +933,7 @@ impl Located {
     pub fn reaches(&self, use_: &VarUse, use_file: &Path) -> bool {
         self.in_scope_at(use_file, use_.span.start)
             && (!use_.through_hostvars || self.source.visible_to_hostvars())
-            && (!use_.site.role_name || self.source.reaches_role_name())
+            && use_.site.load_name.map_or(true, |at| self.source.reaches_load_name(at))
     }
 
     /// [`reaches`] plus run order — what hover and go-to-definition want, since they answer
@@ -3168,7 +3197,7 @@ mod tests {
         );
     }
 
-    /// See [`Site::role_name`]. The param beside the name keeps the guard: it is read inside
+    /// See [`Site::load_name`]. The param beside the name keeps the guard: it is read inside
     /// the role, on the tasks the `when:` is copied onto.
     #[test]
     fn a_role_entrys_when_guards_its_params_and_not_its_name() {
@@ -3183,10 +3212,37 @@ mod tests {
         };
         let name = at("{{ flavor }}");
         assert!(name.guard.is_empty(), "{:?}", name.guard);
-        assert!(name.site.role_name);
+        assert_eq!(name.site.load_name, Some(LoadName::RoleEntry));
         let param = at("{{ app_env }}");
         assert_eq!(param.guard, ["ready"]);
-        assert!(!param.site.role_name);
+        assert_eq!(param.site.load_name, None);
+    }
+
+    /// See [`LoadName`]. `include_role` is the control: its name is an ordinary task argument
+    /// and keeps its guards.
+    #[test]
+    fn load_time_role_names_are_marked_by_form_and_guarded_by_nothing() {
+        let play = concat!(
+            "- hosts: all\n  tasks:\n    - block:\n",
+            "        - import_role: {name: \"{{ imported }}\"}\n          when: own\n",
+            "        - include_role: {name: \"{{ included }}\"}\n          when: own\n",
+            "      when: outer\n",
+        );
+        let nodes = crate::parse::Document::new(play.to_string()).parse().unwrap();
+        let all = uses(&nodes);
+        let of = |n: &str| all.iter().find(|u| u.name == n).unwrap_or_else(|| panic!("{n}: {all:#?}"));
+        assert_eq!(of("imported").site.load_name, Some(LoadName::ImportRole));
+        assert!(of("imported").guard.is_empty(), "{:?}", of("imported").guard);
+        assert_eq!(of("included").site.load_name, None);
+        assert_eq!(of("included").guard, ["outer", "own"]);
+
+        let meta = "dependencies:\n  - role: \"{{ dep }}\"\n    param: \"{{ beside }}\"\n  - \"{{ bare }}\"\n";
+        let nodes = crate::parse::Document::new(meta.to_string()).parse().unwrap();
+        let all = uses(&nodes);
+        let of = |n: &str| all.iter().find(|u| u.name == n).unwrap_or_else(|| panic!("{n}: {all:#?}"));
+        assert_eq!(of("dep").site.load_name, Some(LoadName::RoleEntry));
+        assert_eq!(of("bare").site.load_name, Some(LoadName::RoleEntry));
+        assert_eq!(of("beside").site.load_name, None);
     }
 
     /// The two reasons a use is flagged are different advice, so they must not be mixed
