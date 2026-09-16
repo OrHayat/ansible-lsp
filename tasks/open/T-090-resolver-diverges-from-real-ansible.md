@@ -49,6 +49,7 @@ the same argument applied one layer up.
 - [x] T-145 — ansible.cfg %-interpolation: values read raw
 - [x] T-206 — include_vars searches its relative path in the wrong order, in two places
 - [x] T-218 — Role with no tasks/main.yml hovers as "not in this workspace"
+- [ ] T-235 — A role with no tasks/main.yml is reported missing, though Ansible loads it
 
 ## Done when
 

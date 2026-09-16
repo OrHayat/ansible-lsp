@@ -101,6 +101,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | T-227      |
+| T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](open/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -168,6 +169,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](open/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | S    | —    |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
+| T-236 | [Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them](open/T-236-params-on-a-meta-main-yml-dependency-are-not-indexed-so-hove.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -222,6 +224,7 @@ T-021 is now unblocked on that side.
 | T-209 | [Model meta/main.yml whole, not just its top-level key names](open/T-209-model-meta-main-yml-whole-not-just-its-top-level-key-names.md) | M    | —          |
 | T-210 | [meta/main.yml accepts 22 keys that do nothing, and we say nothing](open/T-210-meta-main-yml-accepts-22-keys-that-do-nothing-and-we-say-not.md) | M    | T-209      |
 | T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](open/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | S    | —          |
+| T-234 | [Find All References on a module name lists every task that uses it](open/T-234-find-all-references-on-a-module-name-lists-every-task-that-u.md) | M    | T-132      |
 
 ### Downstream — not this repo's code
 

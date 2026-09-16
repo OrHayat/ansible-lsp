@@ -43,6 +43,7 @@ protocol feature is adopted for data that does not fit its model.
 - [ ] T-132 — Go-to-definition on a module with an action-plugin twin offers only the module
 - [x] T-143 — Hover is silent on magic variables, including the two whose value we detect
 - [x] T-217 — A .j2 file has no syntax highlighting, because the extension contributes no language or grammar
+- [ ] T-234 — Find All References on a module name lists every task that uses it
 
 ## Done when
 
