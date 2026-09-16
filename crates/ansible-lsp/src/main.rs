@@ -6408,7 +6408,9 @@ mod tests {
         let files = ansible_core::workspace::yaml_files(&demo);
         assert!(files.len() > 10, "the demo walk found the demo");
         for path in files {
-            if path.file_name().is_some_and(|n| n == "role_params.yml") {
+            // Path suffixes, not file names: exempting `main.yml` would excuse every role.
+            const DEMOS: [&str; 2] = ["role_params.yml", "roles/dependency-params/meta/main.yml"];
+            if DEMOS.iter().any(|d| path.ends_with(d)) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -6446,6 +6448,60 @@ mod tests {
             .collect();
         let keys: Vec<&str> = msgs.iter().map(|m| m.split('\'').nth(1).unwrap()).collect();
         assert_eq!(keys, ["tasks_from", "becom_user", "register", "gather_facts"], "{msgs:?}");
+    }
+
+    /// T-164: the `dependencies:` twin of the demo above — three BAD rows, one of them the
+    /// galaxy form, and a SILENCED row that must not appear.
+    #[test]
+    fn the_dependency_params_demo_reports_exactly_its_bad_rows() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo")
+            .canonicalize()
+            .unwrap()
+            .join("roles/dependency-params/meta/main.yml");
+        let text = std::fs::read_to_string(&path).expect("demo fixture");
+        let a = super::Backend::analyze_text(text, &path).unwrap();
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| {
+                matches!(&d.code, Some(NumberOrString::String(s))
+                    if s == ansible_core::attributes::ROLE_PARAM_RULE_ID)
+            })
+            .collect();
+        let keys: Vec<&str> = got.iter().map(|d| d.message.split('\'').nth(1).unwrap()).collect();
+        assert_eq!(keys, ["tasks_from", "becom_user", "tasks_from"], "{got:?}");
+        assert!(got.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+        assert!(got.iter().all(|d| d.message.contains("on a dependencies: entry")), "{got:?}");
+    }
+
+    /// T-164: `dependencies:` means role dependencies only in a role's `meta/main.yml`.
+    /// Elsewhere it is data — a vars file may define a variable of that name — so the same
+    /// text under `vars/` is silent. The `meta/` copy is the control that it is not silent
+    /// everywhere.
+    #[test]
+    fn a_dependencies_key_outside_role_metadata_is_not_role_params() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let d = std::env::temp_dir().join("ansible-lsp-t164-dependencies-key");
+        let _ = std::fs::remove_dir_all(&d);
+        let text = "dependencies:\n  - role: web\n    tasks_from: alternate.yml\n";
+        let flagged = |rel: &str| {
+            let path = d.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s))
+                        if s == ansible_core::attributes::ROLE_PARAM_RULE_ID)
+                })
+                .count()
+        };
+        std::fs::create_dir_all(d.join("roles/app/tasks")).unwrap();
+        std::fs::write(d.join("roles/app/tasks/main.yml"), "- debug:\n").unwrap();
+        assert_eq!(flagged("roles/app/meta/main.yml"), 1, "the control");
+        assert_eq!(flagged("roles/app/vars/main.yml"), 0);
+        assert_eq!(flagged("group_vars/all.yml"), 0);
     }
 
     /// Go-to-definition inside a `.j2`, through the real handler, over the demo's own chain —

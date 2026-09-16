@@ -147,7 +147,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
-| T-164 | [Role params in meta/main.yml dependencies get no diagnostic](open/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | S    | ~~T-147~~ |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
@@ -344,6 +343,7 @@ T-021 is now unblocked on that side.
 | T-067 | [Role search order doesn't match Ansible's](closed/T-067-role-search-order.md) | done     |
 | T-232 | **bug** · [The server detects the Ansible install but never stores it, so the editor answers as if Ansible were absent](closed/T-232-the-server-detects-the-ansible-install-but-never-stores-it-s.md) | done     |
 | T-029 | [Hover showing the candidates tried](closed/T-029-hover-candidates.md) | done     |
+| T-164 | [Role params in meta/main.yml dependencies get no diagnostic](closed/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | done     |
 
 ## Settled — don't re-derive these
 

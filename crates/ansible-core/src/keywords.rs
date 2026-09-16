@@ -311,6 +311,13 @@ pub fn legal_key(ctx: KeyContext, key: &str) -> bool {
     escapes.contains(&key) || in_set(sets, key)
 }
 
+/// [`legal_key`] without the preprocess escapes: a real attribute of the context's class.
+/// The difference is `user`, which a play renames to `remote_user` before validation — so
+/// it is legal there without being a keyword anywhere a value could be confused for one.
+pub fn is_attribute(ctx: KeyContext, key: &str) -> bool {
+    in_set(sets_of(ctx).0, key)
+}
+
 /// Every key [`legal_key`] accepts in `ctx`, for near-miss suggestions. Unsorted and
 /// possibly with duplicates across mixins — callers scan, they don't display the list.
 pub fn legal_keys(ctx: KeyContext) -> impl Iterator<Item = &'static str> {

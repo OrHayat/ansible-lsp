@@ -594,7 +594,7 @@ fn build_play(node: &Node) -> Play {
         span: node.span(),
         name: name_of(node),
         hosts: node.get("hosts").map(|n| n.span()),
-        roles: node.get("roles").map(build_roles).unwrap_or_default(),
+        roles: node.get("roles").map(|r| build_roles(r, false)).unwrap_or_default(),
         pre_tasks: stmts("pre_tasks", false),
         tasks: stmts("tasks", false),
         post_tasks: stmts("post_tasks", false),
@@ -610,7 +610,14 @@ fn build_play(node: &Node) -> Play {
     }
 }
 
-fn build_roles(roles: &Node) -> Vec<RoleUse> {
+/// The `dependencies:` of a role's `meta/main.yml` — each entry loads as the same
+/// `RoleInclude` a play's `roles:` entry does (`metadata.py:59-62`). Callers gate by path:
+/// the key means nothing in any other file.
+pub fn dependency_roles(meta: &Node) -> Vec<RoleUse> {
+    meta.get("dependencies").map(|d| build_roles(d, true)).unwrap_or_default()
+}
+
+fn build_roles(roles: &Node, dependencies: bool) -> Vec<RoleUse> {
     roles
         .items()
         .iter()
@@ -632,9 +639,13 @@ fn build_roles(roles: &Node) -> Vec<RoleUse> {
             // the role either way and `role:` only wins when both are written. Reading
             // just `role:` produced no reference at all for the `name:` spelling.
             Node::Mapping { .. } => {
+                // Only a dependency has the galaxy form: with neither key, `src:` names it
+                // (`metadata.py:70-80`). Taken as written — upstream would cut a URL down to
+                // its last path segment, which only changes how the role is named in a message.
                 let named = item
                     .get("role")
                     .or_else(|| item.get("name"))
+                    .or_else(|| dependencies.then(|| item.get("src")).flatten())
                     .and_then(|n| match n {
                         Node::Scalar { value, span } if !value.is_empty() => {
                             Some((value.clone(), *span))

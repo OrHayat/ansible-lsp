@@ -41,7 +41,7 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [x] T-136 — A var an import_playbook needs is defined by a source that cannot reach it
 - [x] T-155 — loop_control with no loop is dead config, and ansible never says so
 - [x] T-157 — A block or import_tasks in handlers: makes the handler's name unnotifiable
-- [ ] T-164 — Role params in meta/main.yml dependencies get no diagnostic
+- [x] T-164 — Role params in meta/main.yml dependencies get no diagnostic
 - [x] T-165 — A loop on meta: is silently discarded
 - [ ] T-196 — missing-handler: warn where the handler set is provably closed
 - [ ] T-197 — A notify resolved only by a later dynamic include_role is fatal on order alone

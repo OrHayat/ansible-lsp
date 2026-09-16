@@ -1,0 +1,48 @@
+---
+# T-164: `demo/role_params.yml`, one file over. A `dependencies:` entry loads as the same
+# RoleInclude a play's `roles:` entry does (`metadata.py:59-62`), so a key it does not
+# recognise is a role param — a variable for that role — and ansible-core reports none of
+# the lines below, at load or at run time. Measured on 2.21.3.
+
+dependencies:
+  # GOOD: the bare name, and the mapping spelling.
+  - provisioner
+  - role: provisioner
+
+  # GOOD: keywords are settings, and a param that names no keyword is the documented way to
+  # pass a value in.
+  - role: provisioner
+    when: ansible_check_mode
+    tags: [setup]
+    vars: { greeting: hello }
+    port_count: 4
+
+  # GOOD: `user:` is a variable on a dependency, not the play's deprecated `remote_user:`
+  # spelling — measured, the role reads it and the SSH login is unchanged. kubespray passes
+  # its `adduser` role a `user:` exactly this way.
+  - role: provisioner
+    user: { name: etcd }
+
+  # GOOD: the galaxy form. With neither `role:` nor `name:`, the entry is named from `src:`
+  # (`metadata.py:70-80`). `src` and `version` do become variables — measured — but neither
+  # names a keyword.
+  - src: provisioner
+    version: "1.0"
+
+  # BAD: reads as "load tasks/alternate.yml" and does not. The role's tasks/main.yml runs,
+  # and `tasks_from` is a variable.
+  - role: provisioner
+    tasks_from: alternate.yml
+
+  # BAD: a one-character typo. Nobody becomes root — this defines `becom_user`.
+  - role: provisioner
+    becom_user: root
+
+  # BAD: the galaxy form splits its keys the same way — measured, `tasks_from` is a
+  # variable here too.
+  - src: provisioner
+    tasks_from: alternate.yml
+
+  # SILENCED: a role that genuinely takes a param named after a keyword.
+  - role: provisioner
+    public: true # noqa: role-param-not-keyword

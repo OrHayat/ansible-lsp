@@ -48,7 +48,7 @@ pub fn problems(ast: &Ast, invalid_task_attribute_failed: bool) -> Vec<Problem> 
                 if let PlayItem::Play(p) = item {
                     out.extend(p.unknown_keys.iter().map(|u| fatal(u, "Play")));
                     for r in &p.roles {
-                        role_param_problems(r, &mut out);
+                        role_param_problems(r, "roles:", &mut out);
                     }
                     for s in p.pre_tasks.iter().chain(&p.tasks).chain(&p.post_tasks) {
                         stmt(s, false, invalid_task_attribute_failed, &mut out);
@@ -81,8 +81,8 @@ pub fn problems(ast: &Ast, invalid_task_attribute_failed: bool) -> Vec<Problem> 
 ///
 /// Measured on core 2.21.3, one key at a time, `--syntax-check`: `when` `standalone` `tags`
 /// `author` `frobnicate` each fatal with the message below, `become` and `collections`
-/// clean. Top-level keys only — `dependencies:` entries are RoleInclude-shaped and
-/// `argument_specs:` has its own schema (T-149).
+/// clean. `argument_specs:` has its own schema (T-149). `dependencies:` entries are
+/// RoleInclude-shaped, so their keys get the `roles:` entry's param check instead (T-164).
 ///
 /// The caller decides *which* file this is; [`crate::workspace::FileContext::is_role_metadata`]
 /// owns that question.
@@ -90,8 +90,8 @@ pub fn role_metadata_problems(nodes: &[Node]) -> Vec<Problem> {
     // A non-mapping meta/main.yml is a different error entirely — "the 'meta/main.yml' for
     // role %s is not a dictionary" (`metadata.py:54`) — and reporting unknown keys for it
     // would name the wrong fault.
-    let Some(Node::Mapping { entries, .. }) = nodes.first() else { return Vec::new() };
-    entries
+    let Some(meta @ Node::Mapping { entries, .. }) = nodes.first() else { return Vec::new() };
+    let mut out: Vec<Problem> = entries
         .iter()
         .filter_map(|(k, _)| {
             let key = k.as_str()?;
@@ -107,7 +107,11 @@ pub fn role_metadata_problems(nodes: &[Node]) -> Vec<Problem> {
                 "RoleMetadata",
             ))
         })
-        .collect()
+        .collect();
+    for r in crate::ast::dependency_roles(meta) {
+        role_param_problems(&r, "dependencies:", &mut out);
+    }
+    out
 }
 
 fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
@@ -145,14 +149,14 @@ fn stmt(s: &Stmt, in_handlers: bool, failed: bool, out: &mut Vec<Problem>) {
 /// idiom and a bare `port_count: 4` is not a mistake. Only two shapes are reported, both
 /// on the same evidence: the author wrote something that *is* a keyword somewhere in a
 /// playbook, and here it is a variable instead.
-fn role_param_problems(r: &RoleUse, out: &mut Vec<Problem>) {
+fn role_param_problems(r: &RoleUse, site: &str, out: &mut Vec<Problem>) {
     for p in &r.params {
         let Some(why) = param_suspicion(&p.name) else { continue };
         out.push(Problem {
             span: p.key_span,
             tier: Tier::Warning,
             message: format!(
-                "'{}' is not a keyword on a roles: entry — it defines a variable for role \
+                "'{}' is not a keyword on a {site} entry — it defines a variable for role \
                  '{}' instead ({why})",
                 p.name, r.name
             ),
@@ -178,7 +182,10 @@ fn param_suspicion(key: &str) -> Option<String> {
     if keywords::ROLE_INCLUDE_KEYS.contains(&key) {
         return Some(format!("'{key}' selects this only on include_role:"));
     }
-    if keywords::legal_key(KeyContext::Task, key) || keywords::legal_key(KeyContext::Play, key) {
+    // Attributes, not `legal_key`: a play accepts `user:` only as a spelling of
+    // `remote_user:`, and on a role entry it is an ordinary param — kubespray passes one to
+    // its `adduser` role (T-164).
+    if keywords::is_attribute(KeyContext::Task, key) || keywords::is_attribute(KeyContext::Play, key) {
         return Some(format!("'{key}' is a keyword on a task or play, not here"));
     }
     None
@@ -408,6 +415,110 @@ mod tests {
     fn a_non_mapping_meta_reports_nothing_here() {
         assert!(meta("- when: x\n").is_empty());
         assert!(meta("").is_empty());
+    }
+
+    /// T-164, the ticket's own repro, re-measured on 2.21.3: the dependency's
+    /// `tasks/main.yml` ran, never `alternate.yml`, and it saw both keys as variables.
+    /// Same rule id as the `roles:` case — it is the same object, so one suppression covers
+    /// both.
+    #[test]
+    fn keyword_shaped_dependency_params_warn() {
+        let src = "dependencies:\n  - role: web\n    tasks_from: alternate.yml\n    \
+                   becom_user: root\n";
+        assert_eq!(
+            meta(src),
+            [
+                (
+                    Tier::Warning,
+                    "'tasks_from' is not a keyword on a dependencies: entry — it defines a \
+                     variable for role 'web' instead ('tasks_from' selects this only on \
+                     include_role:)"
+                        .into()
+                ),
+                (
+                    Tier::Warning,
+                    "'becom_user' is not a keyword on a dependencies: entry — it defines a \
+                     variable for role 'web' instead (did you mean 'become_user'?)"
+                        .into()
+                ),
+            ]
+        );
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        assert!(role_metadata_problems(&nodes).iter().all(|p| p.rule == ROLE_PARAM_RULE_ID));
+    }
+
+    /// The control: the same entry shape with an ordinary param and real keywords. A rule
+    /// that flagged every key on a dependency would pass the test above on its own.
+    #[test]
+    fn ordinary_dependency_params_and_keywords_stay_silent() {
+        let got = meta(
+            "dependencies:\n  - web\n  - role: web\n    when: x\n    tags: [t]\n    \
+             vars: {a: 1}\n    port_count: 4\n  - name: web\n    state: present\n",
+        );
+        assert!(got.is_empty(), "found: {got:?}");
+    }
+
+    /// The galaxy form has neither `role:` nor `name:` and is named from `src:`
+    /// (`metadata.py:70-80`). Measured on 2.21.3: `src` and `version` reach the role as
+    /// variables, and so does a `tasks_from:` written beside them — the split is the same,
+    /// so the first entry is silent and the second is not.
+    #[test]
+    fn the_galaxy_dependency_form_splits_the_same_way() {
+        assert!(meta("dependencies:\n  - src: web\n    version: '1.0'\n").is_empty());
+        let got = meta("dependencies:\n  - src: web\n    tasks_from: alternate.yml\n");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].1.starts_with("'tasks_from' is not a keyword on a dependencies: entry"));
+        assert!(got[0].1.contains("for role 'web'"), "{got:?}");
+        // A play's `roles:` has no galaxy form: measured, the same entry there dies with
+        // "role definitions must contain a role name", so it defines no variable to warn about.
+        let play = check("- hosts: web\n  roles:\n    - src: web\n      tasks_from: x.yml\n", true);
+        assert!(play.is_empty(), "{play:?}");
+    }
+
+    /// T-164: `user:` means three different things, and the rule must follow all three.
+    /// Measured on 2.21.3 — on a play it is the SSH login (`-vvv` connects as it), on a task
+    /// it is the `user` module, and on a role entry it is a variable the role reads while the
+    /// login stays unset. Found by kubespray, which passes `user:` to its `adduser` role
+    /// from `meta/main.yml` on purpose.
+    ///
+    /// Case 3, both entry kinds. `becom_user:` beside it is the control: it must still warn,
+    /// so silencing the whole entry cannot pass.
+    #[test]
+    fn user_on_a_role_entry_is_a_variable() {
+        let keys = |got: Vec<(Tier, String)>| -> Vec<String> {
+            got.iter().map(|(_, m)| m.split('\'').nth(1).unwrap().to_string()).collect()
+        };
+        let roles = check(
+            "- hosts: web\n  roles:\n    - role: adduser\n      user: {name: etcd}\n      \
+             becom_user: root\n",
+            true,
+        );
+        assert_eq!(keys(roles), ["becom_user"]);
+        let deps = meta(
+            "dependencies:\n  - role: adduser\n    user: \"{{ addusers.etcd }}\"\n    \
+             becom_user: root\n",
+        );
+        assert_eq!(keys(deps), ["becom_user"]);
+    }
+
+    /// Case 1: on a play, `user:` is the deprecated spelling of `remote_user:`, renamed before
+    /// validation (`play.py:166-174`) — legal, not an unknown key.
+    #[test]
+    fn user_on_a_play_is_legal() {
+        let got = check("- hosts: web\n  user: deploy\n  tasks:\n    - debug:\n", true);
+        assert!(got.is_empty(), "found: {got:?}");
+    }
+
+    /// Case 2: on a task, `user:` is the builtin module — not a directive, not an unknown key.
+    #[test]
+    fn user_on_a_task_is_the_user_module() {
+        let src = "- hosts: web\n  tasks:\n    - user: {name: alice, state: absent}\n";
+        assert!(check(src, true).is_empty());
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        let Ast::Playbook(items) = ast::build(&nodes) else { panic!("a playbook") };
+        let PlayItem::Play(p) = &items[0] else { panic!("a play") };
+        let Stmt::Task(t) = &p.tasks[0] else { panic!("a task") };
+        assert_eq!(t.action.as_ref().map(|a| a.name.as_str()), Some("user"));
     }
 
     #[test]

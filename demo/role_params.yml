@@ -6,6 +6,9 @@
 #
 # The rule only speaks when the key names a keyword *somewhere* — passing parameters this
 # way is the documented idiom, so a plain unknown name has to stay silent.
+#
+# A role's `meta/main.yml` `dependencies:` entries are the same object and get the same rule:
+# see `roles/dependency-params/meta/main.yml` (T-164).
 - name: role param demos
   hosts: localhost
   roles:
@@ -34,6 +37,12 @@
       port_count: 4
       lustre_mount: /mnt/lustre
       state: present
+
+    # GOOD: `user:` is an ordinary param here too. On a play it is the old spelling of
+    # `remote_user:`, and on a task it is the `user` module — but on a roles: entry it is a
+    # variable the role reads, and the SSH login is unchanged (live-verified, 2.21.3).
+    - role: provisioner
+      user: { name: etcd }
 
     # GOOD: one param can be built from another on the same entry. Templating is lazy —
     # the value is stored as written and resolved when the role reads it, by which point
