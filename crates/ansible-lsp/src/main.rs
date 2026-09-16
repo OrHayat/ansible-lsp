@@ -1941,6 +1941,13 @@ impl Backend {
                          run, or extra-vars (-e).",
                         u.name
                     )
+                } else if u.defined_out_of_scope && u.site.role_name {
+                    format!(
+                        "`{}` is set on a `roles:` entry, but a role name cannot read it — the \
+                         name is rendered when the play loads, before any entry's variables \
+                         apply. Set it in the play's `vars:` or `vars_files:`.",
+                        u.name
+                    )
                 } else if u.defined_out_of_scope {
                     // It IS defined in this file — pointing at "never defined" sends the
                     // reader off to add a definition that already exists a few lines up.
@@ -10018,6 +10025,84 @@ mod tests {
         s.open_disk("play.yml").await;
         let md = s.hover_in("play.yml", "{{ app_env }}.yml", 3).await.unwrap_or_default();
         assert!(!md.contains("Substituting"), "{md}");
+    }
+
+    /// `var-undefined` on `play.yml` in a fresh project with roles `web` and `db`, as
+    /// (the trimmed line it sits on, message).
+    fn undefined_in_play(name: &str, play: &str) -> Vec<(String, String)> {
+        let root = ansible_core::testing::project(
+            name,
+            "[defaults]\n",
+            &[
+                ("play.yml", play),
+                ("roles/web/tasks/main.yml", "- debug: {msg: hi}\n"),
+                ("roles/db/tasks/main.yml", "- debug: {msg: hi}\n"),
+            ],
+        );
+        let path = root.join("play.yml");
+        let a = super::Backend::analyze_text(play.to_string(), &path).unwrap();
+        super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == "var-undefined"))
+            .map(|d| (play.lines().nth(d.range.start.line as usize).unwrap().trim().to_string(), d.message))
+            .collect()
+    }
+
+    /// A role name never reads a variable set on a `roles:` entry — its own param, its own
+    /// `vars:`, or another entry's param. Measured on 2.21.3, all three are "'flavor' is
+    /// undefined" at load. The warning was right and its text was the play-tasks one, which
+    /// names the wrong place.
+    #[test]
+    fn a_role_name_reading_an_entry_variable_is_warned_about_as_a_role_name() {
+        for (name, play) in [
+            ("t236-rn-param", "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      flavor: web\n"),
+            ("t236-rn-vars", "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      vars: {flavor: web}\n"),
+            ("t236-rn-other", "- hosts: all\n  roles:\n    - role: db\n      flavor: web\n    - role: \"{{ flavor }}\"\n"),
+            ("t236-rn-bare", "- hosts: all\n  roles:\n    - role: db\n      flavor: web\n    - \"{{ flavor }}\"\n"),
+        ] {
+            let got = undefined_in_play(name, play);
+            assert_eq!(got.len(), 1, "{name}: {got:#?}");
+            let (line, msg) = &got[0];
+            assert!(line.starts_with("- ") && line.ends_with("\"{{ flavor }}\""), "{name}: {line}");
+            assert!(msg.contains("role name"), "{name}: {msg}");
+            assert!(!msg.contains("play's tasks"), "{name}: {msg}");
+        }
+    }
+
+    /// An entry's `when:` is checked on the role's tasks, after the role is loaded — so it
+    /// cannot guard the name that loads it. Measured on 2.21.3: `when: false` beside
+    /// `role: "{{ flavor }}"` is still "'flavor' is undefined".
+    #[test]
+    fn a_role_entrys_when_does_not_guard_its_role_name() {
+        let guarded = undefined_in_play(
+            "t236-when-param",
+            "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      flavor: web\n      when: flavor is defined\n",
+        );
+        assert_eq!(guarded.len(), 1, "{guarded:#?}");
+        assert!(guarded[0].1.contains("role name"), "{guarded:#?}");
+
+        let nothing_defines_it = undefined_in_play(
+            "t236-when-none",
+            "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      when: flavor is defined\n",
+        );
+        assert_eq!(nothing_defines_it.len(), 1, "{nothing_defines_it:#?}");
+
+        // Controls, both measured: a task's own `when:` is checked before its args are
+        // rendered, so it does guard them (skipping); and `default()` is still handled.
+        assert_eq!(
+            undefined_in_play(
+                "t236-when-task",
+                "- hosts: all\n  tasks:\n    - debug: {msg: \"{{ flavor }}\"}\n      when: flavor is defined\n",
+            ),
+            vec![]
+        );
+        assert_eq!(
+            undefined_in_play(
+                "t236-when-default",
+                "- hosts: all\n  roles:\n    - role: \"{{ flavor | default('web') }}\"\n      flavor: web\n",
+            ),
+            vec![]
+        );
     }
 
     // ---- T-020: the reverse index --------------------------------------------------------

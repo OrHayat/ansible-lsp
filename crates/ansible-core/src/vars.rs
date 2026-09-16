@@ -375,6 +375,12 @@ pub struct Site {
     /// Inside a `when:`. The condition rule owns `item` there (`when-item-without-loop`),
     /// so the undefined rule does not repeat it.
     pub in_when: bool,
+    /// The name of a play's `roles:` entry. It is rendered when the play loads, to pick the
+    /// role — before the entry's `when:` is checked (that runs on the role's tasks) and
+    /// before any entry's variables apply. Measured on 2.21.3: `role: "{{ flavor }}"` is
+    /// "'flavor' is undefined" beside `when: false`, beside its own `flavor: web`, and after
+    /// another entry's `flavor: web`.
+    pub role_name: bool,
 }
 
 impl Site {
@@ -501,7 +507,7 @@ fn uses_with(
     // A top-level list is a task list unless its items are plays, and `walk_uses` tells a
     // play by its `hosts:` — so `tasks = true` here is right for both file kinds.
     for n in nodes {
-        walk_uses(n, false, &[], &mut out, extract, Keys::Literal, &Site::default(), true);
+        walk_uses(n, false, &[], &mut out, extract, Keys::Literal, &Site::default(), true, false);
     }
     out
 }
@@ -592,6 +598,7 @@ fn walk_uses(
     keys: Keys,
     site: &Site,
     tasks: bool,
+    roles: bool,
 ) {
     match node {
         Node::Scalar { value, span } => {
@@ -608,9 +615,12 @@ fn walk_uses(
             }
         }
         // Neither key-templating site is list-shaped, so items start over as literal.
-        Node::Sequence { items, .. } => items
-            .iter()
-            .for_each(|i| walk_uses(i, in_when, guard, out, ex, Keys::Literal, site, tasks)),
+        Node::Sequence { items, .. } => items.iter().for_each(|i| {
+            // `- "{{ flavor }}"`: the bare-string entry is nothing but its name.
+            let bare_role = roles && matches!(i, Node::Scalar { .. });
+            let s = if bare_role { &Site { role_name: true, ..site.clone() } } else { site };
+            walk_uses(i, in_when, guard, out, ex, Keys::Literal, s, tasks, roles)
+        }),
         Node::Mapping { entries, .. } => {
             // This task/block's own `when:` guards the values inside it (its module args),
             // accumulated onto whatever guard we inherited.
@@ -629,11 +639,16 @@ fn walk_uses(
             } else {
                 site.clone()
             };
+            // Read the way `ast::build_roles` names the role: `role:`, else `name:`.
+            let role_name =
+                roles.then(|| node.get("role").or_else(|| node.get("name"))).flatten().map(Node::span);
             for (k, v) in entries {
                 let key = k.as_str().map(crate::keywords::core_action);
                 let is_when = key == Some("when");
+                let names_role = role_name == Some(v.span());
                 // The `when:` expression itself isn't guarded by itself — use the outer guard.
-                let g: &[String] = if is_when { guard } else { &inner };
+                // Nor is a role entry's name, which is rendered first ([`Site::role_name`]).
+                let g: &[String] = if is_when || names_role { guard } else { &inner };
                 if keys == Keys::Templated {
                     if let Node::Scalar { value, span } = k {
                         let before = out.len();
@@ -647,6 +662,7 @@ fn walk_uses(
                 // See [`Site`]: the loop value is rendered before there is an item, and a
                 // `vars:` value or a task `name:` is nobody's fixed site.
                 let child_site: Site = match key {
+                    _ if names_role => Site { role_name: true, ..own.clone() },
                     Some(k) if this_task && (k == "loop" || k.starts_with("with_")) => Site {
                         in_loop: false,
                         loop_var: None,
@@ -658,7 +674,8 @@ fn walk_uses(
                     _ => own.clone(),
                 };
                 let child_tasks = key.is_some_and(is_task_list_key);
-                walk_uses(v, is_when, g, out, ex, keys_under(keys, k), &child_site, child_tasks);
+                let child_roles = is_play && key == Some("roles");
+                walk_uses(v, is_when, g, out, ex, keys_under(keys, k), &child_site, child_tasks, child_roles);
             }
         }
         // Null holds no text, so there is nothing to scan for variable uses.
@@ -3129,6 +3146,27 @@ mod tests {
             ))
             .is_empty()
         );
+    }
+
+    /// See [`Site::role_name`]. The param beside the name keeps the guard: it is read inside
+    /// the role, on the tasks the `when:` is copied onto.
+    #[test]
+    fn a_role_entrys_when_guards_its_params_and_not_its_name() {
+        let src = "- hosts: all\n  roles:\n    - role: \"{{ flavor }}\"\n      app_dir: \"/etc/{{ app_env }}\"\n      when: ready\n";
+        let nodes = crate::parse::Document::new(src.to_string()).parse().unwrap();
+        let all = uses(&nodes);
+        let at = |needle: &str| {
+            let pos = src.find(needle).unwrap() + 3;
+            all.iter()
+                .find(|u| u.span.start <= pos && pos < u.span.end)
+                .unwrap_or_else(|| panic!("no use at {needle}: {all:#?}"))
+        };
+        let name = at("{{ flavor }}");
+        assert!(name.guard.is_empty(), "{:?}", name.guard);
+        assert!(name.site.role_name);
+        let param = at("{{ app_env }}");
+        assert_eq!(param.guard, ["ready"]);
+        assert!(!param.site.role_name);
     }
 
     /// The two reasons a use is flagged are different advice, so they must not be mixed

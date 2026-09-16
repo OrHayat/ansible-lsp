@@ -106,3 +106,28 @@ about scope, now does. Pinned by `a_role_name_does_not_read_its_own_entrys_param
 
 The resolver's `known_literals` also ignores scope, and was measured not to matter: the
 templated include above stays `Skipped` and unpainted.
+
+### The warning on that line
+
+The hole also made `var-undefined` fire on a role name that reads an entry variable, which is
+right, but with the play-tasks text ("not the play's tasks"). Two more gaps on the same line,
+measured on 2.21.3:
+
+| entry                                                         | ansible                  | we said        |
+| ------------------------------------------------------------- | ------------------------ | -------------- |
+| `role: "{{ flavor }}"` + `when: false`                         | `'flavor' is undefined`  | —              |
+| `role: "{{ flavor }}"` + `flavor: web` + `when: flavor is defined` | `'flavor' is undefined` | silent        |
+| `- "{{ flavor }}"` after another entry's `flavor: web`         | `'flavor' is undefined`  | play-tasks text |
+| control: `role: web` + `when: false`                           | skipping                 | —              |
+| control: task `debug: "{{ flavor }}"` + `when: flavor is defined` | skipping              | silent         |
+
+The entry's `when:` is checked on the role's tasks, after the name has loaded the role, so it
+guards nothing about the name. `Site::role_name` now marks the use, the entry's `when:` is left
+off its guard, and the warning names the role name. Pinned by
+`a_role_name_reading_an_entry_variable_is_warned_about_as_a_role_name`,
+`a_role_entrys_when_does_not_guard_its_role_name` and
+`a_role_entrys_when_guards_its_params_and_not_its_name`.
+
+Still wrong and not fixed here: inventory `group_vars`/`host_vars`/inline vars do not reach a
+role name (measured, all four spellings fail, with a task-read control proving each inventory
+loads), and we treat them as defining it — silent, and the hover shows the value.
