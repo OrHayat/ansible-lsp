@@ -271,23 +271,48 @@ impl FileContext {
         dirs
     }
 
+    /// Collection roots in Ansible's order. Only the first root holding `ns/coll` is ever read
+    /// (`_collection_finder.py:700-701`), so this order is which copy a hover or jump opens —
+    /// measured on 2.21.3 against a copy in every root (T-237):
+    ///
+    /// 1. the playbook's `collections/` — the project root stands in for the playbook dir, as
+    ///    it does everywhere (T-096);
+    /// 2. `COLLECTIONS_PATHS`: `collections_path` when set, which *replaces* the default
+    ///    `$ANSIBLE_HOME/collections:/usr/share/ansible/collections`;
+    /// 3. `sys.path`, unless `collections_scan_sys_path` is off — of which only the package's
+    ///    own `site-packages` is visible without running Python.
     pub fn collection_roots(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        for p in self.config.collections_path.iter().flatten() {
-            push_unique(&mut dirs, Some(p.join("ansible_collections")));
-        }
         push_unique(
             &mut dirs,
             self.project_root
                 .as_ref()
                 .map(|r| r.join("collections/ansible_collections")),
         );
-        // Collections you installed rather than wrote — still worth navigating into.
+        let configured = match &self.config.collections_path {
+            Some(list) => list.clone(),
+            None => self
+                .config
+                .ansible_home
+                .iter()
+                .map(|h| h.join("collections"))
+                .chain([PathBuf::from("/usr/share/ansible/collections")])
+                .collect(),
+        };
+        for p in configured {
+            // A root may be written with its `ansible_collections` already on
+            // (`_collection_finder.py:206-208`).
+            let root = match p.file_name().is_some_and(|n| n == "ansible_collections") {
+                true => p,
+                false => p.join("ansible_collections"),
+            };
+            push_unique(&mut dirs, Some(root));
+        }
         // `detected`, not a detection: this runs on every hover and jump, and starting the
-        // ~300 ms probe here is the freeze T-084 measured. Before startup has detected, an
-        // installed collection simply is not offered yet.
-        for r in self.install.iter().flat_map(|i| &i.collection_roots) {
-            push_unique(&mut dirs, Some(r.clone()));
+        // ~300 ms probe here is the freeze T-084 measured. Before startup has detected, the
+        // bundled collections simply are not offered yet.
+        if self.config.collections_scan_sys_path {
+            push_unique(&mut dirs, self.install.as_ref().and_then(|i| i.bundled_collections.clone()));
         }
         dirs
     }

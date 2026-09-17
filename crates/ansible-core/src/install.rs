@@ -8,8 +8,11 @@ use std::collections::HashMap;
 pub struct AnsibleInstall {
     /// `.../site-packages/ansible` — holds `modules/*.py` for `ansible.builtin.*`.
     pub package_dir: Option<PathBuf>,
-    /// Every `ansible_collections` root outside the workspace.
-    pub collection_roots: Vec<PathBuf>,
+    /// The `ansible_collections` beside the package in its `site-packages` — the collections
+    /// the `ansible` distribution bundles. Ansible reaches it through `sys.path`, the last
+    /// collection roots it searches; the configured ones are the project's config and are
+    /// ordered around this in `FileContext::collection_roots` (T-237).
+    pub bundled_collections: Option<PathBuf>,
     /// Which ansible-core this is. `None` when no install was found, and rules that gate on
     /// it must say at their own call site what they do with that — T-138.
     pub version: Option<Version>,
@@ -31,7 +34,7 @@ pub struct AnsibleInstall {
     /// **Not** "this table never changes": upgrading Ansible rewrites it. It is that
     /// `detect` runs exactly once, from `startup`, and nothing re-detects — so an upgrade
     /// mid-session is already invisible for every field of this struct (`version`,
-    /// `package_dir`, `collection_roots`), and this one now behaves the same way rather than
+    /// `package_dir`, `bundled_collections`), and this one now behaves the same way rather than
     /// differently. A changed install needs a server restart, the same answer box (5) gave
     /// for `ansiblePath`.
     ///
@@ -316,7 +319,7 @@ impl AnsibleInstall {
             if pkg.join("modules").is_dir() {
                 let bundled = pkg.with_file_name("ansible_collections");
                 if bundled.is_dir() {
-                    install.collection_roots.push(bundled);
+                    install.bundled_collections = Some(bundled);
                 }
                 install.package_dir = Some(pkg);
                 install.source = Source::Override;
@@ -336,7 +339,7 @@ impl AnsibleInstall {
                         if let Some(pkg) = find_site_packages(prefix) {
                             let bundled = pkg.with_file_name("ansible_collections");
                             if bundled.is_dir() {
-                                install.collection_roots.push(bundled);
+                                install.bundled_collections = Some(bundled);
                             }
                             install.package_dir = Some(pkg);
                             install.source = Source::PathWalkUp;
@@ -358,36 +361,10 @@ impl AnsibleInstall {
             if let Some(pkg) = find_tool_install() {
                 let bundled = pkg.with_file_name("ansible_collections");
                 if bundled.is_dir() {
-                    install.collection_roots.push(bundled);
+                    install.bundled_collections = Some(bundled);
                 }
                 install.package_dir = Some(pkg);
                 install.source = Source::ToolInstall;
-            }
-        }
-
-        let mut roots = Vec::new();
-        if let Some(env) = std::env::var_os("ANSIBLE_COLLECTIONS_PATH") {
-            roots.extend(std::env::split_paths(&env));
-        }
-        // `ANSIBLE_HOME` relocates `~/.ansible` (`base.yml:95-104`). The `home` ini key can
-        // too, but install discovery is project-independent — there is no ansible.cfg in
-        // scope here — so only the env half applies. `~` forms expand through the same
-        // helper config.rs uses, so the two halves of the tool agree on the directory.
-        let env = crate::config::EnvMap::from_process();
-        let ansible_home = env
-            .var("ANSIBLE_HOME")
-            .map(|v| {
-                crate::config::expand_path(v, &std::env::current_dir().unwrap_or_default(), &env)
-            })
-            .or_else(|| env.var("HOME").map(|h| PathBuf::from(h).join(".ansible")));
-        if let Some(h) = ansible_home {
-            roots.push(h.join("collections"));
-        }
-        roots.push(PathBuf::from("/usr/share/ansible/collections"));
-        for r in roots {
-            let root = r.join("ansible_collections");
-            if root.is_dir() && !install.collection_roots.contains(&root) {
-                install.collection_roots.push(root);
             }
         }
 
@@ -431,21 +408,13 @@ impl AnsibleInstall {
                     if let Some(parent) = pkg.parent() {
                         let bundled = parent.join("ansible_collections");
                         if bundled.is_dir() {
-                            install.collection_roots.push(bundled);
+                            install.bundled_collections = Some(bundled);
                         }
                     }
                     install.package_dir = Some(pkg);
                     install.source = Source::VersionCommand;
                 }
                 "python version" => install.python = interpreter_from_version_line(value),
-                "ansible collection location" => {
-                    for p in value.split(':').filter(|s| !s.is_empty()) {
-                        let root = PathBuf::from(p).join("ansible_collections");
-                        if root.is_dir() && !install.collection_roots.contains(&root) {
-                            install.collection_roots.push(root);
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -586,9 +555,9 @@ mod tests {
         assert_eq!(i.package_dir.as_ref(), Some(&pkg), "the override must be used as-is");
         assert_eq!(i.source, Source::Override, "and be labelled as the override, not a walk-up");
         assert!(
-            i.collection_roots.contains(&root.join("venv/ansible_collections")),
+            i.bundled_collections == Some(root.join("venv/ansible_collections")),
             "its sibling collections come with it: {:?}",
-            i.collection_roots
+            i.bundled_collections
         );
 
         // The control: a directory that is not a package must be refused, or "override" would
@@ -715,7 +684,6 @@ mod tests {
             i.builtin_module("systemd").is_some(),
             "ansible.builtin.systemd should have a source file"
         );
-        assert!(!i.collection_roots.is_empty());
         // Every install ships `release.py`; a package dir with no version means the read or
         // the parse broke, not that this Ansible is unversioned.
         assert!(i.version.is_some(), "a detected install must carry a version");

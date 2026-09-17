@@ -84,6 +84,11 @@ pub struct AnsibleConfig {
     /// (`[ERROR]`, exit 1); off, it is a `[WARNING]` and the run continues, exit 0. Decides
     /// the tier of T-157's dead-handler-name diagnostic when the play does notify the name.
     pub error_on_missing_handler: bool,
+    /// `COLLECTIONS_SCAN_SYS_PATH` — env `ANSIBLE_COLLECTIONS_SCAN_SYS_PATH`, ini
+    /// `collections_scan_sys_path`, default true (`base.yml:278-286`). Off, the Python
+    /// package's own `ansible_collections` is not a collection root: measured on 2.21.3, a
+    /// collection only there stopped resolving under either spelling (T-237).
+    pub collections_scan_sys_path: bool,
     /// `DEFAULT_JINJA2_EXTENSIONS` — ini `[defaults] jinja2_extensions`, env
     /// `ANSIBLE_JINJA2_EXTENSIONS`, `type: list`, default `[]`, deprecated as of 2.23. An
     /// extension registers tags, so with one loaded a tag outside jinja's fourteen is legal
@@ -134,6 +139,7 @@ impl Default for AnsibleConfig {
             duplicate_dict_key: DuplicateDictKey::default(),
             invalid_task_attribute_failed: true,
             error_on_missing_handler: true,
+            collections_scan_sys_path: true,
             jinja2_extensions: Vec::new(),
             fact_caching: None,
             inventory_unparsed_warning: true,
@@ -283,6 +289,11 @@ impl AnsibleConfig {
                         cfg.error_on_missing_handler = v;
                     }
                 }
+                "collections_scan_sys_path" => {
+                    if let Some(v) = parse_bool(&value) {
+                        cfg.collections_scan_sys_path = v;
+                    }
+                }
                 "fact_caching" => cfg.fact_caching = Some(value.trim().to_string()),
                 _ => {}
             }
@@ -328,6 +339,9 @@ impl AnsibleConfig {
         }
         if let Some(v) = env.var("ANSIBLE_ERROR_ON_MISSING_HANDLER").and_then(parse_bool) {
             cfg.error_on_missing_handler = v;
+        }
+        if let Some(v) = env.var("ANSIBLE_COLLECTIONS_SCAN_SYS_PATH").and_then(parse_bool) {
+            cfg.collections_scan_sys_path = v;
         }
         if let Some(v) = env.var("ANSIBLE_CACHE_PLUGIN") {
             cfg.fact_caching = Some(v.trim().to_string());
@@ -1091,6 +1105,25 @@ jinja2_extensions = jinja2.ext.debug
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
         assert_eq!(c.collections_path, Some(vec![PathBuf::from("/site/coll")]), "no ansible.cfg");
+    }
+
+    /// T-237: both spellings of `COLLECTIONS_SCAN_SYS_PATH` are read, and env beats ini.
+    #[test]
+    fn collections_scan_sys_path_reads_both_spellings() {
+        let none = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&EnvMap::empty()).load();
+        assert!(none.collections_scan_sys_path, "default on");
+
+        let ini = CfgFs::some("[defaults]\ncollections_scan_sys_path = False\n");
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
+        assert!(!c.collections_scan_sys_path, "ini");
+
+        let off = EnvMap::from_pairs(&[("ANSIBLE_COLLECTIONS_SCAN_SYS_PATH", "False")]);
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&off).load();
+        assert!(!c.collections_scan_sys_path, "env");
+
+        let on = EnvMap::from_pairs(&[("ANSIBLE_COLLECTIONS_SCAN_SYS_PATH", "true")]);
+        let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&on).load();
+        assert!(c.collections_scan_sys_path, "env beats ini");
     }
 
     /// T-098.

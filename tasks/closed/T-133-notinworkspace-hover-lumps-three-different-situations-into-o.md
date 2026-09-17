@@ -49,11 +49,11 @@ one; not this ticket's.
 | situation                                   | hover (after **Skipped** —)                                          |
 | ------------------------------------------- | -------------------------------------------------------------------- |
 | collection not installed, install found     | collection `ns.coll` is not installed here — fine if the machine that runs the playbook has it |
-| collection not found, no install            | … is not in this workspace, and no Ansible install was found to look for it elsewhere |
+| collection not found, no install            | … is not in any collections path, and no Ansible install was found to check the collections it bundles (reworded under T-237) |
 | collection found, module absent             | `ns.coll` is installed at `<path>` but has no module `X`              |
 | renamed by core's table, then one of above  | `ansible.builtin.ufw` is renamed to `community.general.ufw`, and …    |
 | bare / `ansible.legacy.X`, install found    | `X` is not in ansible-core 2.21.3, nor in any `library` dir this workspace sees |
-| bare / legacy / builtin, no install         | no Ansible install was found, so builtins and installed collections cannot be looked up |
+| bare / legacy / builtin, no install         | no Ansible install was found, so builtins and core's rename table cannot be looked up (reworded under T-237) |
 | `tasks_from:`, role not found               | role `R` was not found, so its `tasks_from` file cannot be checked    |
 
 ## Done when

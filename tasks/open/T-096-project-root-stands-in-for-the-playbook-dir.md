@@ -143,6 +143,14 @@ once tracing showed both original claims stood. We miss two real candidate locat
 `Missing`) and search one Ansible never uses (false `Resolved`). Wrong in both directions is
 what P1 is for.
 
+## Collections have the same stand-in
+
+Found under T-237, measured 2026-09-17 on 2.21.3 (its rows 10–11): the playbook-adjacent
+collections root is `<playbook dir>/collections`, not `<project root>/collections`. With
+`ansible.cfg` and `collections/` at the root and the playbook in `playbooks/`, the root
+`collections/` was not searched; `playbooks/collections/` was. `FileContext::collection_roots`
+still uses the project root — T-237 kept it, in the position Ansible gives the playbook's.
+
 ## Done when
 
 - [x] a reference in a playbook file no longer searches `project_root` — `task_bases`

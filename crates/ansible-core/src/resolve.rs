@@ -1717,10 +1717,20 @@ mod tests {
         fs: &dyn Fs,
         install: Option<AnsibleInstall>,
     ) -> Vec<(Reference, Resolution)> {
+        mem_src_env(file, src, fs, install, &crate::config::EnvMap::empty())
+    }
+
+    fn mem_src_env(
+        file: &str,
+        src: &str,
+        fs: &dyn Fs,
+        install: Option<AnsibleInstall>,
+        env: &crate::config::EnvMap,
+    ) -> Vec<(Reference, Resolution)> {
         let file = Path::new(file);
         let doc = Document::new(src.to_string());
         let ctx = FileContext::discover_with(file, fs, |root| {
-            crate::config::AnsibleConfig::builder(root).fs(fs).env(&crate::config::EnvMap::empty()).load()
+            crate::config::AnsibleConfig::builder(root).fs(fs).env(env).load()
         })
         .with_install(install.map(std::sync::Arc::new));
         let extracted = extract(&doc.parse().unwrap());
@@ -2239,6 +2249,104 @@ mod tests {
             let res = first(&out, ReferenceKind::Module);
             assert_ne!(res.status, Status::Missing, "{name} must not be reported");
         }
+    }
+
+    /// T-237: which copy of a collection a module resolves to, when several roots hold one.
+    /// `roots` names the roots that get a copy of `community.general.ufw`; the answer is the
+    /// root the target sits in. `HOME` is `/home`, so the default `COLLECTIONS_PATHS` root is
+    /// `/home/.ansible/collections`, and the install bundles `/venv/ansible_collections`.
+    fn t237_copy(roots: &[&str], cfg: &str, env: &[(&str, &str)]) -> String {
+        let ufw = "ansible_collections/community/general/plugins/modules/ufw.py";
+        let root_dir = |name: &str| match name {
+            "project" => "/p/collections",
+            "home" => "/home/.ansible/collections",
+            "cfg" => "/cfg",
+            "bundled" => "/venv",
+            other => panic!("unknown root {other}"),
+        };
+        let files: Vec<String> = roots.iter().map(|r| format!("{}/{ufw}", root_dir(r))).collect();
+        let mut fixture: Vec<(&str, &str)> = files.iter().map(|f| (f.as_str(), "")).collect();
+        fixture.extend([("/p/ansible.cfg", cfg), ("/p/site.yml", ""), ("/venv/ansible/modules/ping.py", "")]);
+        let fs = crate::testing::MemFs::new(&fixture);
+        let install = AnsibleInstall {
+            package_dir: Some(PathBuf::from("/venv/ansible")),
+            bundled_collections: Some(PathBuf::from("/venv/ansible_collections")),
+            ..Default::default()
+        };
+        let mut pairs = vec![("HOME", "/home")];
+        pairs.extend_from_slice(env);
+        let out = mem_src_env(
+            "/p/site.yml",
+            "- hosts: all\n  tasks:\n    - community.general.ufw:\n",
+            &fs,
+            Some(install),
+            &crate::config::EnvMap::from_pairs(&pairs),
+        );
+        let res = first(&out, ReferenceKind::Module);
+        match res.targets.first() {
+            None => "none".into(),
+            Some(t) => ["project", "home", "cfg", "bundled"]
+                .into_iter()
+                .find(|r| t.starts_with(root_dir(r)))
+                .unwrap_or("elsewhere")
+                .into(),
+        }
+    }
+
+    /// T-237, rows 1–2 and 7 of its measured table: the playbook's `collections/` (the project
+    /// root standing in, T-096) beats `COLLECTIONS_PATHS`, which beats the bundled copy. Row 2 is
+    /// the reported bug — the bundled 13.3.0 was chosen over `~/.ansible`'s 9.0.0.
+    #[test]
+    fn a_collection_in_several_roots_resolves_to_the_one_ansible_reads_first() {
+        let plain = "[defaults]\n";
+        assert_eq!(t237_copy(&["home", "bundled"], plain, &[]), "home", "row 2");
+        assert_eq!(t237_copy(&["project", "home", "bundled"], plain, &[]), "project", "row 1");
+        assert_eq!(
+            t237_copy(&["project", "cfg"], plain, &[("ANSIBLE_COLLECTIONS_PATH", "/cfg")]),
+            "project",
+            "row 7"
+        );
+        assert_eq!(t237_copy(&["bundled"], plain, &[]), "bundled", "control: the bundled copy is a root");
+    }
+
+    /// T-237, rows 3, 4 and 8: a set `collections_path` replaces the default roots rather than
+    /// adding to them, in either spelling.
+    #[test]
+    fn a_set_collections_path_replaces_the_default_roots() {
+        let plain = "[defaults]\n";
+        let ini_empty = "[defaults]\ncollections_path = /nowhere\n";
+        assert_eq!(t237_copy(&["home", "bundled"], ini_empty, &[]), "bundled", "row 8");
+        assert_eq!(
+            t237_copy(&["home", "bundled"], plain, &[("ANSIBLE_COLLECTIONS_PATH", "/nowhere")]),
+            "bundled",
+            "row 3"
+        );
+        assert_eq!(
+            t237_copy(&["cfg", "home", "bundled"], plain, &[("ANSIBLE_COLLECTIONS_PATH", "/cfg")]),
+            "cfg",
+            "row 4"
+        );
+        // Row 12, and 13 as its control: a root written with its `ansible_collections` is the
+        // same root, one level deeper is not a root at all.
+        let suffixed = "[defaults]\ncollections_path = /cfg/ansible_collections\n";
+        assert_eq!(t237_copy(&["cfg", "bundled"], suffixed, &[]), "cfg", "row 12");
+        let too_deep = "[defaults]\ncollections_path = /cfg/ansible_collections/community\n";
+        assert_eq!(t237_copy(&["cfg", "bundled"], too_deep, &[]), "bundled", "row 13");
+    }
+
+    /// T-237, rows 5, 6 and 9: `collections_scan_sys_path` off drops the bundled root.
+    #[test]
+    fn scan_sys_path_off_drops_the_bundled_collections() {
+        let plain = "[defaults]\n";
+        assert_eq!(t237_copy(&["bundled"], plain, &[]), "bundled", "row 5");
+        assert_eq!(
+            t237_copy(&["bundled"], plain, &[("ANSIBLE_COLLECTIONS_SCAN_SYS_PATH", "False")]),
+            "none",
+            "row 6"
+        );
+        let ini_off = "[defaults]\ncollections_scan_sys_path = False\n";
+        assert_eq!(t237_copy(&["bundled"], ini_off, &[]), "none", "row 9");
+        assert_eq!(t237_copy(&["home"], ini_off, &[]), "home", "control: only sys.path is dropped");
     }
 
     /// A fake core for T-083, built by hand rather than detected so no real `~/.ansible`
@@ -4316,11 +4424,13 @@ mod tests {
     /// install alone, for the reason given just above.
     #[test]
     fn installed_collection_modules_resolve() {
-        if AnsibleInstall::detect(None).collection_roots.is_empty() {
-            return;
-        }
         let root =
             crate::testing::project("installed-collections", "", &[("playbooks/site.yml", "")]);
+        let ctx = FileContext::discover(&root.join("playbooks/site.yml"))
+            .with_install(Some(std::sync::Arc::new(AnsibleInstall::detect(None))));
+        if !ctx.collection_roots().iter().any(|r| r.join("community/postgresql").is_dir()) {
+            return;
+        }
         let out = resolve_src(
             &root.join("playbooks/site.yml"),
             "- community.postgresql.postgresql_user:\n    name: x\n",

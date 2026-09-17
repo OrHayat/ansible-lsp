@@ -3659,17 +3659,18 @@ fn not_followed_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Md 
                         + " is not installed here — fine if the machine that runs the playbook \
                            has it"
                 }
+                // The configured roots were read (T-237); only the bundled ones need an install.
                 (None, None) => {
                     "collection ".md()
                         + md::code(&name)
-                        + " is not in this workspace, and no Ansible install was found to look \
-                           for it elsewhere"
+                        + " is not in any collections path, and no Ansible install was found \
+                           to check the collections it bundles"
                 }
             }
         }
         _ => match install.and_then(|i| i.version) {
             None if install.is_none() => {
-                "no Ansible install was found, so builtins and installed collections cannot be \
+                "no Ansible install was found, so builtins and core's rename table cannot be \
                  looked up — set `ansibleLsp.ansiblePath` if Ansible is installed"
                     .md()
             }
@@ -12007,8 +12008,15 @@ mod tests {
             .unwrap();
         let refs = ansible_core::references::extract(&nodes).refs;
         let hover = |value: &str, kind: ReferenceKind, install: Option<&ansible_core::install::AnsibleInstall>| {
-            let ctx = ansible_core::workspace::FileContext::discover(&path)
-                .with_install(install.cloned().map(std::sync::Arc::new));
+            // An empty environment: with the real `HOME`, `~/.ansible/collections` is a root
+            // (T-237), and what this machine has installed there would decide the hover.
+            let fs = ansible_core::fs::StdFs;
+            let ctx = ansible_core::workspace::FileContext::discover_with(&path, &fs, |root| {
+                ansible_core::config::AnsibleConfig::builder(root)
+                    .env(&ansible_core::config::EnvMap::empty())
+                    .load()
+            })
+            .with_install(install.cloned().map(std::sync::Arc::new));
             let r = refs.iter().find(|r| r.value == value && r.kind == kind).expect(value);
             let res = ansible_core::resolve::Resolver::default().resolve(r, &ctx);
             assert_eq!(
@@ -12050,7 +12058,7 @@ mod tests {
         let md = hover("nonsense_bare", module, None);
         assert!(md.contains("no Ansible install was found"), "{md}");
         let md = hover("community.general.nonsense_xyz", module, None);
-        assert!(md.contains("no Ansible install was found to look for it elsewhere"), "{md}");
+        assert!(md.contains("no Ansible install was found to check the collections it bundles"), "{md}");
     }
 
     /// A fake core with just what `demo/module_prefixes.yml` names, shaped like 2.21.3: `debug`
