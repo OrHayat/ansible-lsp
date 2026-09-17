@@ -50,6 +50,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [ ] T-133 — NotInWorkspace hover lumps three different situations into one vague message
 - [ ] T-227 — One loader-path model for every plugin-type dir and cfg path
 - [ ] T-231 — A short module name in an included task file cannot see the caller's collections: list
+- [ ] T-237 — The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run
 
 ## Done when
 

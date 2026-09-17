@@ -102,6 +102,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | T-227      |
 | T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](open/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | M    | —          |
+| T-237 | **bug** · [The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run](open/T-237-the-python-package-s-bundled-collections-are-searched-before.md) | M    | —          |
 
 ### P2 — coverage and usability
 
