@@ -86,7 +86,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | ~~T-062~~ |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | ~~T-020~~ |
-| T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](open/T-083-legacy-builtin-routing.md) | M | refs ~~T-042~~/1, T-064 |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
@@ -346,6 +345,7 @@ T-021 is now unblocked on that side.
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](closed/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | done     |
 | T-236 | [Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them](closed/T-236-params-on-a-meta-main-yml-dependency-are-not-indexed-so-hove.md) | done     |
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](closed/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | done     |
+| T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](closed/T-083-legacy-builtin-routing.md) | done     |
 
 ## Settled — don't re-derive these
 

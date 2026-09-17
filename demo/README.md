@@ -16,6 +16,7 @@ mic key on this Mac).
 | `add_host_vars.yml` | the other module whose argument keys are variables (T-177) — where they land, and the two documented aliases that leak a variable of their own name |
 | `mutated_conditions.yml` | every construct whose `when:` is copied onto the tasks it brings in, so a `set_fact` inside can flip it mid-run (T-166) — plus the two that look identical and must stay silent |
 | `tasks/role_include_params.yml` | the closed `include_role` arg set (T-063) — what resolves, what is a documented miss, and what `apply:` is for |
+| `module_prefixes.yml` | what a module name's prefix changes — bare and `ansible.legacy.` read `library/` first, `ansible.builtin.` never does, a rename inside core (`yum` → `dnf`), and a builtin name the installed core does not have (T-083) |
 | `tasks/role_entrypoints.yml` | which file a role entry point loads — `.yml`/`.yaml`/`.json`/no extension, and how `tasks_from:` flips the order (T-091) |
 | `tasks/lenient_scalar.yml` | valid to Ansible but rejected by strict YAML 1.2 — parses since the libyaml swap (T-036) |
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |

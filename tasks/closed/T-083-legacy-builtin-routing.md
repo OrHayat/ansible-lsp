@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on          |
 | ------ | -------- | ---- | ----- | ------------------- |
-| open   | P1       | M    | T-118 | refs T-042/1, T-064 |
+| done   | P1       | M    | T-118 | refs T-042/1, T-064 |
 
 Raised from an outside review, then checked against this repo's code. The review is quoted
 first and unedited, because the parts of it that turned out to be already-correct here matter
@@ -203,9 +203,34 @@ and the package's bundled `ansible_collections`, we pick the copy Ansible does n
       uninstalled redirect target, and for every other spelling
       (`an_ansible_builtin_name_core_does_not_have_is_missing`,
       `an_unknown_builtin_is_a_warning_naming_the_installed_core`)
-- [ ] a redirect that stays inside core shows the hop on hover, like a redirect into a collection
-      does
-- [ ] the hover distinguishes the namespace a name resolved *under* from the file it landed *on*,
-      so `debug:` and `ansible.builtin.debug:` do not read identically
-- [ ] each of the four is pinned by a fixture that does not need an Ansible install, or is marked
-      `#[ignore]` with the reason, consistent with T-077
+- [x] a redirect that stays inside core shows the hop on hover, like a redirect into a collection
+      does — read from `Resolution::redirects` (T-133) instead of guessed from the winning path,
+      which also stops a `collections:` list hit from reading as a redirect
+- [x] the hover distinguishes the namespace a name resolved *under* from the file it landed *on*,
+      so `debug:` and `ansible.builtin.debug:` do not read identically — see the note below on
+      what the distinction turned out to be
+- [x] each of the four is pinned by a fixture that does not need an Ansible install:
+      `demo/module_prefixes.yml` against a hand-built core
+      (`the_module_prefixes_demo_matches_its_annotations`), plus the in-memory resolver tests
+      above. The one guard that needs the real install is
+      `every_other_demo_file_is_free_of_unknown_builtin_module_diagnostics`, which skips
+      without one (T-203)
+
+## Closing notes
+
+**Box 4 is a lookup line, not a relabel.** Issue 4 argued a bare `debug:` should read as
+`ansible.legacy`. Measured on 2.21.3, Ansible's own `resolved_fqcn` for `debug` and
+`ansible.legacy.debug` is `ansible.builtin.debug` whenever the file comes from core (and `ping`
+when `library/ping.py` wins) — so the existing `ansible.builtin` label agrees with Ansible, and
+relabelling would contradict it. What differs is the search, so the hover adds: "looked up as
+`ansible.legacy`: `library/` dirs are searched before the Ansible install, and
+`ansible.builtin.debug` skips them".
+
+It claims the lookup and nothing more, because "a local file would replace it" is false for
+some modules. Measured: with `library/debug.py`, `debug:` still ran core's action plugin; with
+`library/copy.py`, core's `copy` action plugin ran and shipped the local `copy.py`.
+
+**A test that never ran.** `hover_marks_the_split_table_redirect` discovered its context
+without an install, so `docker_container` never resolved and it returned before its assertion
+on every machine. It attaches the detected install now, runs here, and was seen red with the
+redirect line removed. Without `community.docker` installed it still returns early (T-203).

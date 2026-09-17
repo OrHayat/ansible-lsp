@@ -44,7 +44,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [x] T-072 — Network modules: one platform action plugin handles the whole family
 - [x] T-073 — Legacy `action_plugins/` dirs are invisible to the action-plugin check
 - [ ] T-080 — Resolution-aware FQCN suggestion that exempts local (`ansible.legacy`) modules
-- [ ] T-083 — `ansible.legacy` is unmodelled and `ansible.builtin` skips the routing table
+- [x] T-083 — `ansible.legacy` is unmodelled and `ansible.builtin` skips the routing table
 - [ ] T-119 — meta/runtime.yml has no schema validation anywhere
 - [x] T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
 - [x] T-133 — NotInWorkspace hover lumps three different situations into one vague message

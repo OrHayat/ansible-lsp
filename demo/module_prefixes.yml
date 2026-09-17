@@ -1,0 +1,37 @@
+# T-083 — what a module name's prefix changes. Measured on ansible-core 2.21.3.
+#
+# A bare name and `ansible.legacy.` search `library/` dirs first, then the Ansible install,
+# then core's rename table (`ansible/config/ansible_builtin_runtime.yml`, core's own
+# `meta/runtime.yml`). `ansible.builtin.` skips `library/`. demo/library/ping.py exists, so
+# the first two rows open it and the third opens core's.
+#
+# Hover and Cmd+click need an Ansible install (`ansibleLsp.ansiblePath`, or `ansible` on PATH).
+
+- name: Module name prefixes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: bare name — library/ first
+      ping: # GOOD: opens demo/library/ping.py
+
+    - name: ansible.legacy — the same search as a bare name
+      ansible.legacy.ping: # GOOD: opens demo/library/ping.py
+
+    - name: ansible.builtin — the install only, library/ is never read
+      ansible.builtin.ping: # GOOD: opens the install's modules/ping.py
+
+    - name: a bare name that lands in core — the hover says library/ is searched first
+      debug: # GOOD: opens the install's modules/debug.py
+        msg: hello
+
+    - name: renamed inside core, in the rename table's action section
+      ansible.builtin.yum: # GOOD: opens the install's modules/dnf.py; hover shows the rename
+        name: tmux
+
+    - name: a name core has neither as a file nor in its rename table
+      ansible.builtin.nonsense_xyz: # BAD: warning — the play would not start on this core
+        msg: hello
+
+    - name: the same mistake, suppressed
+      ansible.builtin.nonsense_xyz: # noqa: unknown-builtin-module — SILENCED
+        msg: hello

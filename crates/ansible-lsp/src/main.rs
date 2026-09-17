@@ -3380,17 +3380,25 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
                 + " module in this collection",
         );
     }
-    // A winner whose final name differs from what the task wrote got there through a
-    // rename table (core's 2.10 split table, or a collection's own). Make the hop
-    // visible: it is otherwise an unmarked seam in the Tried list.
-    if s.contains("/ansible_collections/") {
-        let stem = won.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
-        let resolved_as = format!("{collection}.{stem}");
-        if resolved_as != r.value {
-            doc = doc.line(
-                md::code(&r.value) + " → redirected to " + md::code(&resolved_as),
-            );
-        }
+    // A rename table (core's, or a collection's own) moved the name. Read from the hops the
+    // resolver followed, not guessed from the winning path: that guess missed a rename that
+    // stays in core (`yum` → `dnf`) and called a `collections:` list hit a redirect (T-083).
+    if let Some(last) = res.redirects.last() {
+        doc = doc.line(md::code(&r.value) + " → redirected to " + md::code(last));
+    }
+    // Ansible calls a bare `debug` that lands in core `ansible.builtin.debug` too, so the label
+    // above is right; what differs from the FQCN is the lookup. Only the lookup is claimed:
+    // measured on 2.21.3, a `library/debug.py` does not replace core's action plugin, while a
+    // `library/copy.py` is what core's `copy` action ships.
+    let spelled_legacy = !r.value.contains('.') || r.value.starts_with("ansible.legacy.");
+    if collection == "ansible.builtin" && spelled_legacy && res.redirects.is_empty() {
+        doc = doc.line(
+            "looked up as ".md()
+                + md::code("ansible.legacy")
+                + ": `library/` dirs are searched before the Ansible install, and "
+                + md::code(&format!("ansible.builtin.{bare}"))
+                + " skips them",
+        );
     }
     // The file that runs is listed first.
     Some(match (is_action, &twin) {
@@ -9433,7 +9441,11 @@ mod tests {
             "- hosts: all\n  tasks:\n    - docker_container:\n        name: x\n".into(),
         );
         let nodes = doc.parse().unwrap();
-        let ctx = ansible_core::workspace::FileContext::discover(&path);
+        // T-083: without the install the split table is never read, so this returned early on
+        // every machine and asserted nothing.
+        let ctx = ansible_core::workspace::FileContext::discover(&path).with_install(Some(
+            std::sync::Arc::new(ansible_core::install::AnsibleInstall::detect(None)),
+        ));
         let refs = ansible_core::references::extract(&nodes).refs;
         let r = refs.iter().find(|r| r.value == "docker_container").expect("bare ref");
         let res = ansible_core::resolve::Resolver { literals: Some(&Default::default()), ..Default::default() }
@@ -12039,6 +12051,146 @@ mod tests {
         assert!(md.contains("no Ansible install was found"), "{md}");
         let md = hover("community.general.nonsense_xyz", module, None);
         assert!(md.contains("no Ansible install was found to look for it elsewhere"), "{md}");
+    }
+
+    /// A fake core with just what `demo/module_prefixes.yml` names, shaped like 2.21.3: `debug`
+    /// and `dnf` with action twins, and `yum` renamed in the table's `action:` section.
+    fn t083_demo_core() -> ansible_core::install::AnsibleInstall {
+        let pkg = ansible_core::testing::tree(
+            "t083-demo-core",
+            &[
+                ("ansible/modules/ping.py", ""),
+                ("ansible/modules/debug.py", ""),
+                ("ansible/modules/dnf.py", ""),
+                ("ansible/plugins/action/debug.py", ""),
+                ("ansible/plugins/action/dnf.py", ""),
+            ],
+        )
+        .join("ansible");
+        ansible_core::install::AnsibleInstall {
+            package_dir: Some(pkg),
+            version: ansible_core::install::Version::parse("2.21.3"),
+            builtin_routing: ansible_core::install::RoutingTable::parse(
+                "plugin_routing:\n  action:\n    yum:\n      redirect: ansible.builtin.dnf\n",
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// Rule 4 for T-083: every label in `demo/module_prefixes.yml` is a claim — the file each
+    /// GOOD row opens, what its hover adds, and that the BAD row is the only diagnostic.
+    #[test]
+    fn the_module_prefixes_demo_matches_its_annotations() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/module_prefixes.yml").canonicalize().unwrap();
+        let demo = path.parent().unwrap().to_path_buf();
+        let core = t083_demo_core();
+        let pkg = core.package_dir.clone().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let scan = ansible_core::cache::ScanCache::default()
+            .with_install(Some(std::sync::Arc::new(core)));
+        let a = super::Backend::analyze_text_measured(
+            text.clone(),
+            &path,
+            &mut super::ScanTimings::default(),
+            &scan,
+            &super::OpenDocs::default(),
+            &std::sync::Mutex::new(super::VarCache::default()),
+        )
+        .unwrap();
+
+        // Diagnostics: exactly the BAD lines, each this rule at WARNING.
+        let mut got: Vec<(u32, String, Option<DiagnosticSeverity>)> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .map(|d| {
+                let code = match d.code {
+                    Some(NumberOrString::String(s)) => s,
+                    other => format!("{other:?}"),
+                };
+                (d.range.start.line, code, d.severity)
+            })
+            .collect();
+        let mut expected: Vec<(u32, String, Option<DiagnosticSeverity>)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("# BAD"))
+            .map(|(i, _)| (i as u32, "unknown-builtin-module".into(), Some(DiagnosticSeverity::WARNING)))
+            .collect();
+        got.sort();
+        expected.sort();
+        assert_eq!(expected.len(), 1, "the fixture lost its BAD row");
+        assert!(text.contains("SILENCED"), "the fixture lost its SILENCED row");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+
+        // GOOD rows: the file each one opens, and what its hover adds.
+        let module = |value: &str| {
+            let (r, res) = a
+                .refs
+                .iter()
+                .find(|(r, _)| r.value == value && r.kind == ansible_core::references::ReferenceKind::Module)
+                .unwrap_or_else(|| panic!("{value} in the demo"));
+            let md = plain(&super::reference_hover(r, res, &a.ctx, false).expect("hover").render());
+            (res.targets.clone(), md)
+        };
+        let lookup = "looked up as ansible.legacy";
+        for (value, target) in [
+            ("ping", demo.join("library/ping.py")),
+            ("ansible.legacy.ping", demo.join("library/ping.py")),
+            ("ansible.builtin.ping", pkg.join("modules/ping.py")),
+        ] {
+            let (targets, md) = module(value);
+            assert_eq!(targets, vec![target], "{value}");
+            assert!(!md.contains(lookup), "{value} did not land in core: {md}");
+            assert!(!md.contains("redirected"), "{value}: {md}");
+        }
+        let (targets, md) = module("debug");
+        assert_eq!(targets, vec![pkg.join("modules/debug.py")]);
+        assert!(md.contains("looked up as ansible.legacy: library/ dirs are searched before the Ansible install, and ansible.builtin.debug skips them"), "{md}");
+        let (targets, md) = module("ansible.builtin.yum");
+        assert_eq!(targets, vec![pkg.join("modules/dnf.py")]);
+        assert!(md.contains("ansible.builtin.yum → redirected to ansible.builtin.dnf"), "{md}");
+        assert!(!md.contains(lookup), "an FQCN is not looked up as legacy: {md}");
+    }
+
+    /// T-083's false-positive gate, against the real install: the rule is only as good as the
+    /// core it reads, so a fake one cannot tell whether a real builtin name trips it. Skips
+    /// without Ansible on PATH — the install-gated gap T-203 tracks.
+    #[test]
+    fn every_other_demo_file_is_free_of_unknown_builtin_module_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let install = ansible_core::install::AnsibleInstall::detect(None);
+        if install.package_dir.is_none() {
+            return;
+        }
+        let install = std::sync::Arc::new(install);
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "module_prefixes.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let scan = ansible_core::cache::ScanCache::default().with_install(Some(install.clone()));
+            let Some(a) = super::Backend::analyze_text_measured(
+                text,
+                &path,
+                &mut super::ScanTimings::default(),
+                &scan,
+                &super::OpenDocs::default(),
+                &std::sync::Mutex::new(super::VarCache::default()),
+            ) else {
+                continue;
+            };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "unknown-builtin-module")
+                })
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
     }
 
     /// Catches: `startup` detects the install and never stores it (T-232).
