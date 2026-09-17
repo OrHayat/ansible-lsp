@@ -55,6 +55,9 @@ pub struct Resolution {
     /// a first-match group. Set only for [`ReferenceKind::VarsFiles`]; every other kind
     /// reaches its target by a different loader and is not measured here (T-087).
     pub directory: Option<PathBuf>,
+    /// The names a routing table renamed a module to, in the order they were followed; the
+    /// written name is not repeated. Empty for every other kind.
+    pub redirects: Vec<String>,
 }
 
 impl Resolution {
@@ -65,6 +68,7 @@ impl Resolution {
             candidates: Vec::new(),
             skip_reason: Some(reason),
             directory: None,
+            redirects: Vec::new(),
         }
     }
 
@@ -78,6 +82,7 @@ impl Resolution {
                 candidates,
                 skip_reason: None,
                 directory: None,
+                redirects: Vec::new(),
             },
             None => Self {
                 status: Status::Missing,
@@ -85,6 +90,7 @@ impl Resolution {
                 candidates,
                 skip_reason: None,
                 directory: None,
+                redirects: Vec::new(),
             },
         }
     }
@@ -489,6 +495,7 @@ impl<'a> Resolver<'a> {
                         candidates: Vec::new(),
                         skip_reason: None,
                         directory: None,
+                        redirects: Vec::new(),
                     }
                 }
                 _ => return Resolution::skipped(SkipReason::Templated),
@@ -504,6 +511,7 @@ impl<'a> Resolver<'a> {
                 candidates: Vec::new(),
                 skip_reason: Some(SkipReason::Templated),
                 directory: None,
+                redirects: Vec::new(),
             };
         }
 
@@ -613,6 +621,7 @@ impl<'a> Resolver<'a> {
                         status: Status::Skipped,
                         skip_reason: Some(SkipReason::GroupAlternative),
                         directory: None,
+                        redirects: Vec::new(),
                         ..res
                     },
                     _ => res,
@@ -642,6 +651,7 @@ impl<'a> Resolver<'a> {
                         candidates: l.dir.into_iter().collect(),
                         skip_reason: None,
                         directory: None,
+                        redirects: Vec::new(),
                     },
                     // Provably absent at the role path; at runtime the value decays to
                     // cwd-relative, which no static verdict can cover.
@@ -651,6 +661,7 @@ impl<'a> Resolver<'a> {
                         candidates: ctx.role_dir.iter().map(|d| d.join(&relative)).collect(),
                         skip_reason: None,
                         directory: None,
+                        redirects: Vec::new(),
                     },
                     include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
                         Resolution {
@@ -664,6 +675,7 @@ impl<'a> Resolver<'a> {
                                 .collect(),
                             skip_reason: None,
                             directory: None,
+                            redirects: Vec::new(),
                         }
                     }
                 }
@@ -702,6 +714,7 @@ impl<'a> Resolver<'a> {
                     candidates: ctx.roles_roots(self.in_playbook).iter().map(|d| d.join(&r.value)).collect(),
                     skip_reason: None,
                     directory: None,
+                    redirects: Vec::new(),
                 },
             },
 
@@ -959,13 +972,14 @@ fn resolve_module(
                     candidates: Vec::new(),
                     skip_reason: None,
                     directory: None,
+                    redirects: Vec::new(),
                 }
             }
             _ => return Resolution::skipped(SkipReason::NotInWorkspace),
         };
         trail.extend(res.candidates.clone());
         if res.status == Status::Resolved {
-            return Resolution { candidates: trail, ..res };
+            return Resolution { candidates: trail, redirects: visited[1..].to_vec(), ..res };
         }
         match redirect {
             Some(next) if !visited.contains(&next) => {
@@ -981,6 +995,7 @@ fn resolve_module(
                     candidates: trail,
                     skip_reason: None,
                     directory: None,
+                    redirects: Vec::new(),
                 }
             }
             _ => {
@@ -990,6 +1005,8 @@ fn resolve_module(
                     candidates: trail,
                     skip_reason: Some(SkipReason::NotInWorkspace),
                     directory: None,
+                    // Where the chain stopped is what the hover explains (T-133).
+                    redirects: visited[1..].to_vec(),
                 }
             }
         }
@@ -1083,6 +1100,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
                 candidates: unique(tried.into_iter()),
                 skip_reason: None,
                 directory: None,
+                redirects: Vec::new(),
             };
         }
     }
@@ -1095,6 +1113,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
         candidates: unique(tried.into_iter()),
         skip_reason: None,
         directory: None,
+        redirects: Vec::new(),
     }
 }
 
@@ -2321,6 +2340,7 @@ mod tests {
         for name in ["ufw", "ansible.legacy.ufw", "ansible.builtin.ufw"] {
             let res = t083_module(&task(name), &fs, Some(t083_core()));
             assert_eq!(res.targets, vec![PathBuf::from(ufw)], "{name}: {:#?}", res.candidates);
+            assert_eq!(res.redirects, ["community.general.ufw"], "{name}");
         }
         for name in ["yum", "ansible.legacy.yum", "ansible.builtin.yum"] {
             let res = t083_module(&task(name), &fs, Some(t083_core()));
@@ -2330,7 +2350,14 @@ mod tests {
                 "{name}: {:#?}",
                 res.candidates
             );
+            assert_eq!(res.redirects, ["ansible.builtin.dnf"], "{name}");
         }
+        // T-133: the hops survive a chain that dead-ends, since that is what the hover names.
+        let res = t083_module(&task("ansible.builtin.ufw"), &t083_fs(&[]), Some(t083_core()));
+        assert_eq!(res.status, Status::Skipped);
+        assert_eq!(res.redirects, ["community.general.ufw"]);
+        let res = t083_module(&task("ansible.builtin.ping"), &fs, Some(t083_core()));
+        assert!(res.redirects.is_empty(), "control: no table hop, none recorded");
 
         // A local file wins before the table for the legacy spellings, never for builtin.
         // Measured: with `library/ufw.py`, `ufw` and `ansible.legacy.ufw` ran it and

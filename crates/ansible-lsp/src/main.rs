@@ -3583,9 +3583,7 @@ fn reference_hover(
                     .line("Skipped".bold() + " — value only known at runtime; no file matches"),
             ),
             Some(SkipReason::Templated) => None,
-            Some(SkipReason::NotInWorkspace) => Some(Md::new().line(
-                "Skipped".bold() + " — not in this workspace (a builtin, or installed outside it)",
-            )),
+            Some(SkipReason::NotInWorkspace) => Some(not_followed_hover(r, res, ctx)),
             Some(SkipReason::GroupAlternative) => Some(Md::new().line(
                 "Absent".bold()
                     + " — a first-match `vars_files` alternative; the list warns only when \
@@ -3608,6 +3606,81 @@ fn reference_hover(
             None => None,
         },
     }
+}
+
+/// Why a module or `tasks_from:` we did not follow goes nowhere — one line per situation the
+/// resolver can be in (T-133). It replaces a single "a builtin, or installed outside it" that
+/// offered "a builtin" for names that provably are not one.
+fn not_followed_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Md {
+    let skipped = |why: md::Inline| Md::new().line("Skipped".bold() + " — " + why);
+    if r.kind == ReferenceKind::TasksFrom {
+        let unchecked = ", so its `tasks_from` file cannot be checked";
+        return skipped(match r.role.as_deref() {
+            Some(role) if !role.contains("{{") => {
+                "role ".md() + md::code(role) + " was not found" + unchecked
+            }
+            _ => "the role name is only known at runtime".md() + unchecked,
+        });
+    }
+    let install = ctx.install.as_deref().filter(|i| i.package_dir.is_some());
+    // Where the chain stopped, which is what is missing — not the name as written.
+    let last = res.redirects.last().unwrap_or(&r.value);
+    let renamed = match res.redirects.is_empty() {
+        true => md::empty(),
+        false => md::code(&r.value) + " is renamed to " + md::code(last) + ", and ",
+    };
+    let why = match last.split('.').collect::<Vec<_>>()[..] {
+        [ns, coll, module] if ns != "ansible" || !matches!(coll, "builtin" | "legacy") => {
+            let name = format!("{ns}.{coll}");
+            let dir = ctx
+                .collection_roots()
+                .iter()
+                .map(|root| root.join(ns).join(coll))
+                .find(|d| d.is_dir());
+            match (dir, install) {
+                (Some(d), _) => {
+                    md::code(&name)
+                        + " is installed at "
+                        + md::code(&short_plugin_path(&d, ctx))
+                        + " but has no module "
+                        + md::code(module)
+                }
+                (None, Some(_)) => {
+                    "collection ".md()
+                        + md::code(&name)
+                        + " is not installed here — fine if the machine that runs the playbook \
+                           has it"
+                }
+                (None, None) => {
+                    "collection ".md()
+                        + md::code(&name)
+                        + " is not in this workspace, and no Ansible install was found to look \
+                           for it elsewhere"
+                }
+            }
+        }
+        _ => match install.and_then(|i| i.version) {
+            None if install.is_none() => {
+                "no Ansible install was found, so builtins and installed collections cannot be \
+                 looked up — set `ansibleLsp.ansiblePath` if Ansible is installed"
+                    .md()
+            }
+            v => {
+                let core = v.map_or_else(
+                    || "the installed ansible-core".to_string(),
+                    |v| format!("ansible-core {v}"),
+                );
+                // `ansible.builtin` never reads a `library` dir (T-083), so only the others
+                // may claim to have looked in one.
+                let libraries = match last.starts_with("ansible.builtin.") {
+                    true => md::empty(),
+                    false => ", nor in any `library` dir this workspace sees".md(),
+                };
+                md::code(last) + " is not in " + md::text(&core) + libraries
+            }
+        },
+    };
+    skipped(renamed + why)
 }
 
 /// Hover for a variable Ansible injects, for the two whose value the detected install knows.
@@ -11889,6 +11962,85 @@ mod tests {
         );
     }
 
+    /// T-133: a reference we did not follow says which situation it is in, and never offers
+    /// "a builtin" — the old single line did, for names that provably are not one. Each case
+    /// comes out of the resolver, not a hand-made `Resolution`, so a case the resolver cannot
+    /// reach cannot be asserted here.
+    #[test]
+    fn a_reference_we_did_not_follow_says_why() {
+        use ansible_core::references::ReferenceKind;
+        let root = ansible_core::testing::project(
+            "t133-not-followed",
+            "[defaults]\n",
+            &[
+                (
+                    "play.yml",
+                    "- hosts: all\n  tasks:\n    - community.general.nonsense_xyz:\n    - demo.probe.nothere:\n    - ansible.builtin.ufw:\n    - nonsense_bare:\n    - include_role:\n        name: no_such_role\n        tasks_from: setup\n",
+                ),
+                ("collections/ansible_collections/demo/probe/plugins/modules/other.py", ""),
+                ("venv/ansible/modules/ping.py", ""),
+            ],
+        );
+        let core = ansible_core::install::AnsibleInstall {
+            package_dir: Some(root.join("venv/ansible")),
+            version: ansible_core::install::Version::parse("2.21.3"),
+            builtin_routing: ansible_core::install::RoutingTable::parse(
+                "plugin_routing:\n  modules:\n    ufw:\n      redirect: community.general.ufw\n",
+            ),
+            ..Default::default()
+        };
+        let path = root.join("play.yml");
+        let nodes = ansible_core::parse::Document::new(std::fs::read_to_string(&path).unwrap())
+            .parse()
+            .unwrap();
+        let refs = ansible_core::references::extract(&nodes).refs;
+        let hover = |value: &str, kind: ReferenceKind, install: Option<&ansible_core::install::AnsibleInstall>| {
+            let ctx = ansible_core::workspace::FileContext::discover(&path)
+                .with_install(install.cloned().map(std::sync::Arc::new));
+            let r = refs.iter().find(|r| r.value == value && r.kind == kind).expect(value);
+            let res = ansible_core::resolve::Resolver::default().resolve(r, &ctx);
+            assert_eq!(
+                res.skip_reason,
+                Some(ansible_core::resolve::SkipReason::NotInWorkspace),
+                "{value} must reach this hover at all: {res:?}"
+            );
+            let md = plain(&super::reference_hover(r, &res, &ctx, false).expect("hover").render());
+            assert!(!md.contains("a builtin"), "{value}: {md}");
+            md
+        };
+        let module = ReferenceKind::Module;
+
+        let md = hover("community.general.nonsense_xyz", module, Some(&core));
+        assert!(md.contains("collection community.general is not installed here"), "{md}");
+
+        let md = hover("demo.probe.nothere", module, Some(&core));
+        assert!(
+            md.contains("demo.probe is installed at collections/ansible_collections/demo/probe but has no module nothere"),
+            "{md}"
+        );
+
+        let md = hover("ansible.builtin.ufw", module, Some(&core));
+        assert!(
+            md.contains("ansible.builtin.ufw is renamed to community.general.ufw, and collection community.general is not installed here"),
+            "{md}"
+        );
+
+        let md = hover("nonsense_bare", module, Some(&core));
+        assert!(
+            md.contains("nonsense_bare is not in ansible-core 2.21.3, nor in any library dir"),
+            "{md}"
+        );
+
+        let md = hover("setup", ReferenceKind::TasksFrom, Some(&core));
+        assert!(md.contains("role no_such_role was not found"), "{md}");
+
+        // With no install, say that — for a builtin-shaped name and a collection alike.
+        let md = hover("nonsense_bare", module, None);
+        assert!(md.contains("no Ansible install was found"), "{md}");
+        let md = hover("community.general.nonsense_xyz", module, None);
+        assert!(md.contains("no Ansible install was found to look for it elsewhere"), "{md}");
+    }
+
     /// Catches: `startup` detects the install and never stores it (T-232).
     ///
     /// `867a217` moved the install off a process-wide `OnceLock` onto `State`, and the store
@@ -11947,7 +12099,7 @@ mod tests {
         // Control: before startup has run there is no install, and the hover says so.
         assert!(state.install().is_none(), "no install before startup");
         let md = hover(b, at.clone()).await;
-        assert!(md.contains("not in this workspace"), "control hover: {md}");
+        assert!(md.contains("no Ansible install was found"), "control hover: {md}");
 
         b.initialized(lsp::InitializedParams {}).await;
         let task = state.scan_task.lock().unwrap().take().expect("initialized starts startup");

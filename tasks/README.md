@@ -201,7 +201,6 @@ T-021 is now unblocked on that side.
 | T-089 | [Indexed access into static list vars: no element support, out-of-bounds unflagged](open/T-089-indexed-access-into-static-list-vars-no-element-support-out.md) | L    | —          |
 | T-130 | **epic** · [Ship it beyond the Extension Development Host](open/T-130-ship-it-beyond-the-extension-development-host.md) | L    | —          |
 | T-132 | [Go-to-definition on a module with an action-plugin twin offers only the module](open/T-132-go-to-definition-on-a-module-with-an-action-plugin-twin-offe.md) | S    | —          |
-| T-133 | [NotInWorkspace hover lumps three different situations into one vague message](open/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | S    | —          |
 | T-148 | [Audit how ansible-core validates meta/runtime.yml, then mirror it](open/T-148-audit-how-ansible-core-validates-meta-runtime-yml-then-mirro.md) | M    | —          |
 | T-149 | [Validate meta/argument_specs.yml itself, not just call sites](open/T-149-validate-meta-argument-specs-yml-itself-not-just-call-sites.md) | M    | —          |
 | T-151 | [Validate galaxy.yml and requirements.yml against the galaxy schemas](open/T-151-validate-galaxy-yml-and-requirements-yml-against-the-galaxy.md) | M    | —          |
@@ -345,6 +344,7 @@ T-021 is now unblocked on that side.
 | T-029 | [Hover showing the candidates tried](closed/T-029-hover-candidates.md) | done     |
 | T-164 | [Role params in meta/main.yml dependencies get no diagnostic](closed/T-164-role-params-in-meta-main-yml-dependencies-get-no-diagnostic.md) | done     |
 | T-236 | [Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them](closed/T-236-params-on-a-meta-main-yml-dependency-are-not-indexed-so-hove.md) | done     |
+| T-133 | [NotInWorkspace hover lumps three different situations into one vague message](closed/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -47,7 +47,7 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [ ] T-083 — `ansible.legacy` is unmodelled and `ansible.builtin` skips the routing table
 - [ ] T-119 — meta/runtime.yml has no schema validation anywhere
 - [x] T-086 — `plugin_twin` matches a POSIX substring, so it finds nothing on Windows
-- [ ] T-133 — NotInWorkspace hover lumps three different situations into one vague message
+- [x] T-133 — NotInWorkspace hover lumps three different situations into one vague message
 - [ ] T-227 — One loader-path model for every plugin-type dir and cfg path
 - [ ] T-231 — A short module name in an included task file cannot see the caller's collections: list
 - [ ] T-237 — The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run
