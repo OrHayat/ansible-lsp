@@ -51,37 +51,44 @@ pub struct AnsibleInstall {
 #[derive(Debug, Clone, Default)]
 pub struct RoutingTable {
     redirects: HashMap<String, String>,
+    action_redirects: HashMap<String, String>,
 }
 
 impl RoutingTable {
-    /// Parse `plugin_routing.modules.<name>.redirect` out of a table's text.
+    /// Parse `plugin_routing.{modules,action}.<name>.redirect` out of a table's text.
     ///
     /// Pure, so it is testable without a file: the I/O and the memo are the caller's.
     /// Anything unparseable is an empty table — a routing file we cannot read redirects
     /// nothing, which is the same answer as a file that redirects nothing.
     pub fn parse(text: &str) -> Self {
         let doc = crate::parse::Document::new(text.to_string());
-        let modules = doc.parse().and_then(|nodes| {
-            nodes
-                .first()
-                .and_then(|n| n.get("plugin_routing").and_then(|n| n.get("modules")).cloned())
-        });
-        let mut redirects = HashMap::new();
-        if let Some(modules) = modules {
-            for (k, v) in modules.entries() {
+        let routing = doc
+            .parse()
+            .and_then(|nodes| nodes.first().and_then(|n| n.get("plugin_routing")).cloned());
+        let section = |name: &str| {
+            let mut redirects = HashMap::new();
+            let entries = routing.as_ref().and_then(|r| r.get(name)).map_or(&[][..], |s| s.entries());
+            for (k, v) in entries {
                 if let (Some(name), Some(to)) =
                     (k.as_str(), v.get("redirect").and_then(|r| r.as_str()))
                 {
                     redirects.insert(name.to_string(), to.to_string());
                 }
             }
-        }
-        Self { redirects }
+            redirects
+        };
+        Self { redirects: section("modules"), action_redirects: section("action") }
     }
 
-    /// Where `name` was moved to, if this table says so.
+    /// Where module `name` was moved to, if this table says so.
     pub fn redirect(&self, name: &str) -> Option<&str> {
         self.redirects.get(name).map(String::as_str)
+    }
+
+    /// Where action plugin `name` was moved to — the `action:` section, a separate namespace
+    /// from `modules:`.
+    pub fn action_redirect(&self, name: &str) -> Option<&str> {
+        self.action_redirects.get(name).map(String::as_str)
     }
 }
 
@@ -456,8 +463,16 @@ impl AnsibleInstall {
     /// `community.docker.docker` with no file anywhere in core. Consulted as the loader's
     /// last-ditch step (`loader.py:956-959`) after every path is searched.
     /// Deprecations and tombstones stay T-064.
+    ///
+    /// Falls back to the `action:` section: a task name resolves if either the module or the
+    /// action loader does (`_get_action_context`, `mod_args.py:59-66`). `yum` is only there —
+    /// `yum: redirect: ansible.builtin.dnf` — and all three spellings of it ran on 2.21.3.
+    /// Core's table only: that is the one where the action half was measured.
     pub fn builtin_module_redirect(&self, name: &str) -> Option<String> {
-        self.builtin_routing.redirect(name).map(str::to_string)
+        self.builtin_routing
+            .redirect(name)
+            .or_else(|| self.builtin_routing.action_redirect(name))
+            .map(str::to_string)
     }
 }
 
@@ -601,6 +616,21 @@ mod tests {
         );
         assert_eq!(t.redirect("docker"), Some("community.docker.docker"));
         assert_eq!(t.redirect("absent"), None, "a name with no record redirects nowhere");
+
+        // `action:` is its own namespace: read, and never answered as a module rename (T-083).
+        let both = RoutingTable::parse(
+            "plugin_routing:
+  modules:
+    docker:
+      redirect: community.docker.docker
+  action:
+    yum:
+      redirect: ansible.builtin.dnf
+",
+        );
+        assert_eq!(both.action_redirect("yum"), Some("ansible.builtin.dnf"));
+        assert_eq!(both.redirect("yum"), None, "an action rename is not a module rename");
+        assert_eq!(both.action_redirect("docker"), None, "nor the other way round");
 
         // Records that are not redirects are ignored rather than misread. T-064 adds these;
         // until then a deprecation must not come back as a redirect target.

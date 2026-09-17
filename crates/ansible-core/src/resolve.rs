@@ -111,6 +111,27 @@ pub fn impossible_module_name(value: &str) -> bool {
     value.split('.').count() == 2 && !value.contains('{')
 }
 
+/// `# noqa` id for an `ansible.builtin.X` the installed ansible-core does not have.
+pub const UNKNOWN_BUILTIN_MODULE_RULE_ID: &str = "unknown-builtin-module";
+
+/// A literal `ansible.builtin.<name>`.
+pub fn is_builtin_fqcn(value: &str) -> bool {
+    !value.contains('{')
+        && matches!(value.split('.').collect::<Vec<_>>()[..], ["ansible", "builtin", m] if !m.is_empty())
+}
+
+/// An unresolved, unredirected `value` names a builtin this install lacks. Unlike a missing
+/// collection this depends on nothing but the package we read, so it is reportable (T-083) —
+/// but only once `modules/` is really there: without it we never looked.
+fn unknown_builtin_module(value: &str, ctx: &FileContext, fs: &dyn Fs) -> bool {
+    is_builtin_fqcn(value)
+        && ctx
+            .install
+            .as_ref()
+            .and_then(|i| i.package_dir.as_ref())
+            .is_some_and(|pkg| fs.is_dir(&pkg.join("modules")))
+}
+
 /// A `vars_files:` entry whose lookup stops at a directory (T-087). Its own id, not
 /// `missing-file`: that rule's whole message is that ansible silently skips and the play
 /// runs on, and here the play does not start at all. Two opposite claims must not share
@@ -131,6 +152,10 @@ pub fn rule_id_for(r: &Reference, res: &Resolution) -> &'static str {
 pub fn rule_id(r: &Reference) -> &'static str {
     if r.kind == ReferenceKind::Module && impossible_module_name(&r.value) {
         return INVALID_MODULE_NAME_RULE_ID;
+    }
+    // The only way a builtin FQCN is ever `Missing`, so the name alone decides the id.
+    if r.kind == ReferenceKind::Module && is_builtin_fqcn(&r.value) {
+        return UNKNOWN_BUILTIN_MODULE_RULE_ID;
     }
     match (r.kind, r.templated) {
         (ReferenceKind::ImportPlaybook, true) => "templated-import",
@@ -765,8 +790,8 @@ fn collections_in_scope(
 }
 
 /// Where `ns.coll.module` could be, in the loader's order: `plugins/modules/` then
-/// `plugins/action/` under every collection root, with `ansible.builtin` coming from the
-/// ansible package first because it is not a collection tree.
+/// `plugins/action/` under every collection root. `ansible.builtin` is not a collection tree
+/// and comes from the ansible package alone.
 ///
 /// Shared by the FQCN arm and the bare arm — a `collections:` entry is resolved by
 /// building exactly these candidates for `<entry>.<bare>`, which is what makes a listed
@@ -778,6 +803,9 @@ fn fqcn_module_candidates(
     ctx: &FileContext,
     fs: &dyn Fs,
 ) -> Vec<PathBuf> {
+    if (ns, coll) == ("ansible", "builtin") {
+        return builtin_package_candidates(module, ctx);
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     for root in ctx.collection_roots() {
         let base = root.join(ns).join(coll).join("plugins");
@@ -791,12 +819,38 @@ fn fqcn_module_candidates(
         // hard-requires `.py` (`loader.py:782-784`) — no glob here.
         candidates.push(base.join("action").join(format!("{module}.py")));
     }
-    // ansible.builtin lives in the ansible package, not a collection tree.
-    if (ns, coll) == ("ansible", "builtin") {
-        if let Some(p) = ctx.install.as_ref().and_then(|i| i.builtin_module(module)) {
-            candidates.insert(0, p);
+    candidates
+}
+
+/// `ansible.builtin.<name>` on disk: the package's `modules/` then `plugins/action/`. The
+/// action half is not redundant — `normal` has no module file and `ansible.builtin.normal:`
+/// passes `--syntax-check`.
+///
+/// Never a collection root: measured on 2.21.3, an `ansible_collections/ansible/builtin`
+/// tree on `COLLECTIONS_PATH` is ignored (`couldn't resolve module/action`) while the same
+/// layout under `demo/probe` ran.
+fn builtin_package_candidates(name: &str, ctx: &FileContext) -> Vec<PathBuf> {
+    let Some(pkg) = ctx.install.as_ref().and_then(|i| i.package_dir.as_ref()) else {
+        return Vec::new();
+    };
+    let file = format!("{name}.py");
+    vec![pkg.join("modules").join(&file), pkg.join("plugins/action").join(&file)]
+}
+
+/// The `ansible.legacy` search: legacy dirs, then the builtin package — "package path always
+/// gets added last …" (`loader.py:497`). Shared by a bare name and its spelled-out form.
+fn legacy_module_candidates(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for dir in ctx.legacy_module_dirs() {
+        let found = module_files_named(&dir, name, fs);
+        if found.is_empty() {
+            // Keep the dir in the trail so diagnostics still name it.
+            candidates.push(dir.join(format!("{name}.py")));
+        } else {
+            candidates.extend(found);
         }
     }
+    candidates.extend(builtin_package_candidates(name, ctx));
     candidates
 }
 
@@ -825,16 +879,23 @@ fn collection_entry(entry: &str) -> Option<(&str, &str)> {
 ///   ([`FileContext::legacy_module_dirs`] documents the split), then the builtin package —
 ///   "package path always gets added last …" (`loader.py:497`). Not found → core's 2.10
 ///   split table renames it (`loader.py:956-959`).
-/// - **FQCN** — `plugins/modules/` then `plugins/action/` under every collection root,
-///   builtin's package dir first for `ansible.builtin.*`. Not found → the collection's own
-///   `meta/runtime.yml` may rename it (how `community.general.docker_container` reaches
-///   `community.docker`, a table the collection ships after moving a module out).
+/// - **`ansible.legacy.X`** — the bare search *without* the `collections:` list. Measured on
+///   2.21.3 under `collections: [demo.probe]`, which ships a `ping`: bare `ping:` ran the
+///   collection's, `ansible.legacy.ping:` ran `library/ping.py`.
+/// - **`ansible.builtin.X`** — the package alone (`library/ping.py` present, `pong` ran),
+///   then core's table (`ansible.builtin.ufw` ran `community.general.ufw`) (T-083).
+/// - **FQCN** — `plugins/modules/` then `plugins/action/` under every collection root. Not
+///   found → the collection's own `meta/runtime.yml` may rename it (how
+///   `community.general.docker_container` reaches `community.docker`, a table the
+///   collection ships after moving a module out).
 /// - **2 parts** — never valid (module names can't contain dots, so only 1 or 3 are
 ///   possible shapes); Ansible dies with "Cannot resolve … to an action or module".
 ///   T-042 pins the future ERROR, skipped until then.
 ///
 /// A name that ends the chain unresolved is skipped, not warned — usually a collection
-/// that isn't installed here, not a typo. The one loader step deliberately not modelled:
+/// that isn't installed here, not a typo. The exception is an `ansible.builtin.X` that core
+/// has neither on disk nor in its table: that answer depends only on the install we read,
+/// so it is `Missing` ([`unknown_builtin_module`]). The one loader step deliberately not modelled:
 /// the `_<name>` deprecated-alias retry (`loader.py:940-953`) — hits are rare and Ansible
 /// deprecation-warns each one itself. Deprecations/tombstones in the tables are T-064.
 ///
@@ -863,20 +924,7 @@ fn resolve_module(
                     let Some((ns, coll)) = collection_entry(entry) else { continue };
                     candidates.extend(fqcn_module_candidates(ns, coll, bare, ctx, fs));
                 }
-                for dir in ctx.legacy_module_dirs() {
-                    let found = module_files_named(&dir, bare, fs);
-                    if found.is_empty() {
-                        // Keep the dir in the trail so diagnostics still name it.
-                        candidates.push(dir.join(format!("{bare}.py")));
-                    } else {
-                        candidates.extend(found);
-                    }
-                }
-                if let Some(pkg) = ctx.install.as_ref().and_then(|i| i.package_dir.as_ref()) {
-                    let file = format!("{bare}.py");
-                    candidates.push(pkg.join("modules").join(&file));
-                    candidates.push(pkg.join("plugins/action").join(&file));
-                }
+                candidates.extend(legacy_module_candidates(bare, ctx, fs));
                 let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
                     .then(|| {
@@ -886,10 +934,18 @@ fn resolve_module(
                 (res, redirect)
             }
             [ns, coll, module] => {
-                let candidates = fqcn_module_candidates(ns, coll, module, ctx, fs);
+                let candidates = match (ns, coll) {
+                    ("ansible", "legacy") => legacy_module_candidates(module, ctx, fs),
+                    _ => fqcn_module_candidates(ns, coll, module, ctx, fs),
+                };
                 let res = Resolution::from_candidates(candidates, fs);
                 let redirect = (res.status != Status::Resolved)
-                    .then(|| collection_module_redirect(ns, coll, module, ctx, fs))
+                    .then(|| match (ns, coll) {
+                        ("ansible", "builtin" | "legacy") => {
+                            ctx.install.as_ref().and_then(|i| i.builtin_module_redirect(module))
+                        }
+                        _ => collection_module_redirect(ns, coll, module, ctx, fs),
+                    })
                     .flatten();
                 (res, redirect)
             }
@@ -915,6 +971,17 @@ fn resolve_module(
             Some(next) if !visited.contains(&next) => {
                 visited.push(next.clone());
                 name = next;
+            }
+            // Only the name as written: a hop core's own table produced is not the author's
+            // mistake.
+            None if visited.len() == 1 && unknown_builtin_module(value, ctx, fs) => {
+                return Resolution {
+                    status: Status::Missing,
+                    targets: Vec::new(),
+                    candidates: trail,
+                    skip_reason: None,
+                    directory: None,
+                }
             }
             _ => {
                 return Resolution {
@@ -1622,11 +1689,21 @@ mod tests {
     }
 
     fn mem_src(file: &str, src: &str, fs: &dyn Fs) -> Vec<(Reference, Resolution)> {
+        mem_src_with(file, src, fs, None)
+    }
+
+    fn mem_src_with(
+        file: &str,
+        src: &str,
+        fs: &dyn Fs,
+        install: Option<AnsibleInstall>,
+    ) -> Vec<(Reference, Resolution)> {
         let file = Path::new(file);
         let doc = Document::new(src.to_string());
         let ctx = FileContext::discover_with(file, fs, |root| {
             crate::config::AnsibleConfig::builder(root).fs(fs).env(&crate::config::EnvMap::empty()).load()
-        });
+        })
+        .with_install(install.map(std::sync::Arc::new));
         let extracted = extract(&doc.parse().unwrap());
         let resolver =
             super::Resolver { fs, in_playbook: extracted.in_playbook, ..Default::default() };
@@ -2142,6 +2219,177 @@ mod tests {
             let out = mem_src("/p/site.yml", &format!("- hosts: all\n  tasks:\n    - {name}:\n"), &fs);
             let res = first(&out, ReferenceKind::Module);
             assert_ne!(res.status, Status::Missing, "{name} must not be reported");
+        }
+    }
+
+    /// A fake core for T-083, built by hand rather than detected so no real `~/.ansible`
+    /// leaks in. Its table carries one rename per section, as 2.21.3's does: `ufw` in
+    /// `modules:` into a collection, `yum` in `action:` onto core's own `dnf`.
+    fn t083_core() -> AnsibleInstall {
+        AnsibleInstall {
+            package_dir: Some(PathBuf::from("/venv/ansible")),
+            version: crate::install::Version::parse("2.21.3"),
+            builtin_routing: crate::install::RoutingTable::parse(
+                "plugin_routing:\n  modules:\n    ufw:\n      redirect: community.general.ufw\n  action:\n    yum:\n      redirect: ansible.builtin.dnf\n",
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn t083_fs(extra: &[(&str, &str)]) -> crate::testing::MemFs {
+        let mut files = vec![
+            ("/p/ansible.cfg", "[defaults]\n"),
+            ("/p/library/ping.py", ""),
+            ("/venv/ansible/modules/ping.py", ""),
+            ("/venv/ansible/modules/dnf.py", ""),
+            ("/venv/ansible/plugins/action/dnf.py", ""),
+            ("/venv/ansible/plugins/action/normal.py", ""),
+            ("/p/collections/ansible_collections/demo/probe/plugins/modules/ping.py", ""),
+        ];
+        files.extend_from_slice(extra);
+        crate::testing::MemFs::new(&files)
+    }
+
+    fn t083_module(src: &str, fs: &dyn Fs, install: Option<AnsibleInstall>) -> Resolution {
+        let out = mem_src_with("/p/site.yml", src, fs, install);
+        first(&out, ReferenceKind::Module).clone()
+    }
+
+    fn task(name: &str) -> String {
+        format!("- hosts: all\n  tasks:\n    - {name}:\n")
+    }
+
+    /// T-083 box 2. `ansible.legacy.X` is the bare search minus the `collections:` list —
+    /// not "exactly as bare", which the ticket assumed. Measured on 2.21.3 under
+    /// `collections: [demo.probe]`, which ships a `ping`: bare `ping:` ran the collection's,
+    /// `ansible.legacy.ping:` ran `library/ping.py`; without the list both ran `library/`.
+    #[test]
+    fn the_ansible_legacy_spelling_is_the_bare_search_without_the_collections_list() {
+        let fs = t083_fs(&[]);
+        let library = vec![PathBuf::from("/p/library/ping.py")];
+        let listed = "- hosts: all\n  collections: [demo.probe]\n  tasks:\n    - ";
+
+        let res = t083_module(&task("ansible.legacy.ping"), &fs, Some(t083_core()));
+        assert_eq!(res.targets, library, "tried {:#?}", res.candidates);
+
+        let res = t083_module(&format!("{listed}ansible.legacy.ping:\n"), &fs, Some(t083_core()));
+        assert_eq!(res.targets, library, "the list must not reach ansible.legacy");
+        // The control that makes the line above a collision: the same list does reach bare.
+        let res = t083_module(&format!("{listed}ping:\n"), &fs, Some(t083_core()));
+        assert_eq!(
+            res.targets,
+            vec![PathBuf::from("/p/collections/ansible_collections/demo/probe/plugins/modules/ping.py")]
+        );
+
+        // Nothing local: falls through to the package, like bare `dnf:`.
+        let res = t083_module(&task("ansible.legacy.dnf"), &fs, Some(t083_core()));
+        assert_eq!(res.targets, vec![PathBuf::from("/venv/ansible/modules/dnf.py")]);
+    }
+
+    /// T-083. `ansible.builtin.X` is the package and nothing else. Measured on 2.21.3:
+    /// `library/ping.py` present, `ansible.builtin.ping` returned `pong`; `normal` has only an
+    /// action plugin and passes `--syntax-check`; an `ansible/builtin` tree on a collection
+    /// root is ignored while the same layout under `demo/probe` runs.
+    #[test]
+    fn the_ansible_builtin_spelling_reads_only_the_package() {
+        let fs = t083_fs(&[
+            ("/p/collections/ansible_collections/ansible/builtin/plugins/modules/zzz_probe.py", ""),
+            ("/p/collections/ansible_collections/demo/probe/plugins/modules/zzz_probe.py", ""),
+        ]);
+
+        let res = t083_module(&task("ansible.builtin.ping"), &fs, Some(t083_core()));
+        assert_eq!(res.targets, vec![PathBuf::from("/venv/ansible/modules/ping.py")]);
+
+        let res = t083_module(&task("ansible.builtin.normal"), &fs, Some(t083_core()));
+        assert_eq!(res.targets, vec![PathBuf::from("/venv/ansible/plugins/action/normal.py")]);
+
+        let res = t083_module(&task("ansible.builtin.zzz_probe"), &fs, Some(t083_core()));
+        assert_ne!(res.status, Status::Resolved, "got {:?}", res.targets);
+        let res = t083_module(&task("demo.probe.zzz_probe"), &fs, Some(t083_core()));
+        assert_eq!(res.status, Status::Resolved, "control: the same layout elsewhere resolves");
+    }
+
+    /// T-083 box 1. Both spellings follow core's table, and so does the bare name through its
+    /// `action:` section. Measured on 2.21.3: `ufw`, `ansible.legacy.ufw` and
+    /// `ansible.builtin.ufw` all ran `community.general.ufw`; all three spellings of `yum`
+    /// passed `--syntax-check` with every collection hidden.
+    #[test]
+    fn builtin_and_legacy_spellings_follow_cores_rename_table() {
+        let ufw = "/p/collections/ansible_collections/community/general/plugins/modules/ufw.py";
+        let fs = t083_fs(&[(ufw, "")]);
+
+        for name in ["ufw", "ansible.legacy.ufw", "ansible.builtin.ufw"] {
+            let res = t083_module(&task(name), &fs, Some(t083_core()));
+            assert_eq!(res.targets, vec![PathBuf::from(ufw)], "{name}: {:#?}", res.candidates);
+        }
+        for name in ["yum", "ansible.legacy.yum", "ansible.builtin.yum"] {
+            let res = t083_module(&task(name), &fs, Some(t083_core()));
+            assert_eq!(
+                res.targets,
+                vec![PathBuf::from("/venv/ansible/modules/dnf.py")],
+                "{name}: {:#?}",
+                res.candidates
+            );
+        }
+
+        // A local file wins before the table for the legacy spellings, never for builtin.
+        // Measured: with `library/ufw.py`, `ufw` and `ansible.legacy.ufw` ran it and
+        // `ansible.builtin.ufw` still ran the collection's.
+        let local = t083_fs(&[(ufw, ""), ("/p/library/ufw.py", "")]);
+        for name in ["ufw", "ansible.legacy.ufw"] {
+            let res = t083_module(&task(name), &local, Some(t083_core()));
+            assert_eq!(res.targets, vec![PathBuf::from("/p/library/ufw.py")], "{name}");
+        }
+        let res = t083_module(&task("ansible.builtin.ufw"), &local, Some(t083_core()));
+        assert_eq!(res.targets, vec![PathBuf::from(ufw)]);
+
+        // The controls: it is the table doing this. With no `action:` section `yum` resolves
+        // nowhere, and with no install at all neither does `ufw`.
+        let modules_only = AnsibleInstall {
+            builtin_routing: crate::install::RoutingTable::parse(
+                "plugin_routing:\n  modules:\n    ufw:\n      redirect: community.general.ufw\n",
+            ),
+            ..t083_core()
+        };
+        let res = t083_module(&task("ansible.builtin.yum"), &fs, Some(modules_only));
+        assert_ne!(res.status, Status::Resolved, "got {:?}", res.targets);
+        let res = t083_module(&task("ansible.builtin.ufw"), &fs, None);
+        assert_ne!(res.status, Status::Resolved, "got {:?}", res.targets);
+    }
+
+    /// T-083. An `ansible.builtin.X` core has neither on disk nor in its table is `Missing`,
+    /// with its own rule. Measured on 2.21.3: `ansible.builtin.nonsense_xyz` fails with
+    /// `couldn't resolve module/action` with every collection visible. It depends only on the
+    /// package we read, which is what separates it from an uninstalled collection.
+    #[test]
+    fn an_ansible_builtin_name_core_does_not_have_is_missing() {
+        let fs = t083_fs(&[]);
+        let out = mem_src_with("/p/site.yml", &task("ansible.builtin.nonsense_xyz"), &fs, Some(t083_core()));
+        let (r, res) = out.iter().find(|(r, _)| r.kind == ReferenceKind::Module).expect("module ref");
+        assert_eq!(res.status, Status::Missing, "{res:?}");
+        assert_eq!(rule_id(r), UNKNOWN_BUILTIN_MODULE_RULE_ID);
+        assert_eq!(
+            res.candidates,
+            vec![
+                PathBuf::from("/venv/ansible/modules/nonsense_xyz.py"),
+                PathBuf::from("/venv/ansible/plugins/action/nonsense_xyz.py"),
+            ]
+        );
+
+        // The controls, each of which must stay quiet.
+        // No install, or one whose package we cannot see: we never looked.
+        let res = t083_module(&task("ansible.builtin.nonsense_xyz"), &fs, None);
+        assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace), "no install");
+        let unseen = AnsibleInstall { package_dir: Some(PathBuf::from("/elsewhere")), ..t083_core() };
+        let res = t083_module(&task("ansible.builtin.nonsense_xyz"), &fs, Some(unseen));
+        assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace), "package not readable");
+        // A rename into a collection that is not installed here is the machine, not the file.
+        let res = t083_module(&task("ansible.builtin.ufw"), &fs, Some(t083_core()));
+        assert_eq!(res.skip_reason, Some(SkipReason::NotInWorkspace), "uninstalled redirect target");
+        // Other spellings can be supplied by what we cannot see (library paths, collections).
+        for name in ["ansible.legacy.nonsense_xyz", "nonsense_xyz", "community.general.nonsense_xyz"] {
+            let res = t083_module(&task(name), &fs, Some(t083_core()));
+            assert_ne!(res.status, Status::Missing, "{name}");
         }
     }
 

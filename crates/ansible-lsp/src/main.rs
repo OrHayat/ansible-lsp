@@ -1532,6 +1532,8 @@ impl Backend {
                         // not the "ansible skips it and carries on" tier a miss gets.
                         DiagnosticSeverity::ERROR
                     } else {
+                        // An unknown builtin also stops the play, but only on the core we
+                        // read; a newer one on the machine that runs it may ship the name.
                         DiagnosticSeverity::WARNING
                     },
                 ),
@@ -3182,6 +3184,34 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
         };
         return format!(
             "`{}` can never name a module: a collection is always `namespace.name`, so a qualified module has three parts (`{ns}.<collection>.{rest}`) and a short one has one (`{rest}`). {when}.",
+            r.value
+        );
+    }
+
+    // T-083. Same two failure moments as above, measured on 2.21.3 for this shape too. The
+    // version is named because it is the whole claim: a newer core may ship the name.
+    if r.kind == ReferenceKind::Module
+        && res.status == Status::Missing
+        && ansible_core::resolve::is_builtin_fqcn(&r.value)
+    {
+        let name = r.value.rsplit('.').next().unwrap_or(&r.value);
+        let core = ctx.install.as_ref().and_then(|i| i.version).map_or_else(
+            || "the ansible-core installed here".to_string(),
+            |v| format!("ansible-core {v}, the version installed here"),
+        );
+        let when = if r.action_keyword {
+            format!(
+                "With it, Ansible fails this task at run time with `Cannot resolve '{}' to an action or module.`, after the tasks before it have run",
+                r.value
+            )
+        } else {
+            format!(
+                "With it, Ansible fails while parsing the file, with `couldn't resolve module/action '{}'`, so the play never starts",
+                r.value
+            )
+        };
+        return format!(
+            "`{}` is not in {core}: no `modules/{name}.py`, no `plugins/action/{name}.py`, and no rename in its `ansible_builtin_runtime.yml`. {when}.",
             r.value
         );
     }
@@ -7310,6 +7340,72 @@ mod tests {
         assert!(super::Backend::diagnostics_of(&a).iter().all(|d| {
             !matches!(&d.code, Some(NumberOrString::String(s)) if s == "invalid-module-name")
         }));
+    }
+
+    /// T-083: an `ansible.builtin.X` the installed core lacks is a WARNING naming that core, and
+    /// quotes the failure its spelling produces. Measured on 2.21.3 with a `debug:` task first:
+    /// the module key failed at parse and the `debug:` never ran; `action:` ran it and then
+    /// failed. A warning and not the two-part name's ERROR, because only this core was read.
+    #[test]
+    fn an_unknown_builtin_is_a_warning_naming_the_installed_core() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let root = ansible_core::testing::project(
+            "t083-unknown-builtin",
+            "[defaults]\n",
+            &[("venv/ansible/modules/ping.py", ""), ("play.yml", "")],
+        );
+        let install = ansible_core::install::AnsibleInstall {
+            package_dir: Some(root.join("venv/ansible")),
+            version: ansible_core::install::Version::parse("2.21.3"),
+            ..Default::default()
+        };
+        let path = root.join("play.yml");
+        let diags = |src: &str| {
+            let scan = ansible_core::cache::ScanCache::default()
+                .with_install(Some(std::sync::Arc::new(install.clone())));
+            let a = super::Backend::analyze_text_measured(
+                src.to_string(),
+                &path,
+                &mut super::ScanTimings::default(),
+                &scan,
+                &super::OpenDocs::default(),
+                &std::sync::Mutex::new(super::VarCache::default()),
+            )
+            .unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| {
+                    matches!(&d.code, Some(NumberOrString::String(s)) if s == "unknown-builtin-module")
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let key = diags("- hosts: all\n  tasks:\n    - ansible.builtin.nonsense_xyz:\n        msg: x\n");
+        assert_eq!(key.len(), 1, "{key:?}");
+        assert_eq!(key[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert!(
+            key[0].message.contains("ansible-core 2.21.3")
+                && key[0].message.contains("couldn't resolve module/action 'ansible.builtin.nonsense_xyz'")
+                && key[0].message.contains("the play never starts"),
+            "{}",
+            key[0].message
+        );
+
+        let act = diags("- hosts: all\n  tasks:\n    - action: ansible.builtin.nonsense_xyz msg=x\n");
+        assert_eq!(act.len(), 1, "{act:?}");
+        assert!(
+            act[0].message.contains("Cannot resolve 'ansible.builtin.nonsense_xyz' to an action or module.")
+                && act[0].message.contains("after the tasks before it have run"),
+            "{}",
+            act[0].message
+        );
+
+        // The controls: a builtin core has stays clear, and the id suppresses its own rule.
+        assert!(diags("- hosts: all\n  tasks:\n    - ansible.builtin.ping:\n").is_empty());
+        assert!(diags(
+            "- hosts: all\n  tasks:\n    - ansible.builtin.nonsense_xyz: # noqa: unknown-builtin-module\n        msg: x\n"
+        )
+        .is_empty());
     }
 
     /// Row 29. Its own id, because someone using a reserved name on purpose wants to silence

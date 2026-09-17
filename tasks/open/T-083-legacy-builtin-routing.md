@@ -82,7 +82,7 @@ And, on being asked whether legacy → builtin is itself a routing-table entry:
 
 Read against `resolve.rs` and `main.rs`. **Not run** — module resolution needs an Ansible install
 and the dev machine has none, so every item below is from the source and each names what would
-confirm it.
+confirm it. *Since run: see "Measured 2026-09-17" below, which corrects issues 1 and 2.*
 
 **The mechanism split is already modelled correctly, and that is worth recording.** `resolve_module`
 (`resolve.rs:435-447`) builds the legacy dirs and the core package into a *single candidate list*
@@ -112,6 +112,9 @@ special case at `:462` covers the *module lookup* for `ansible.builtin` but not 
 One module, two spellings, two answers — and the FQCN spelling, the one every linter pushes people
 toward, is the one that fails.
 
+*Wrong on its first row, measured below: bare `yum:` dead-ended too. Its rename lives in the
+table's `action:` section, and the parser read only `modules:`.*
+
 ### 2. `ansible.legacy.X` does not resolve at all — `resolve.rs:462`
 
 The special case is `if (ns, coll) == ("ansible", "builtin")`. Nothing handles `ansible.legacy`, so
@@ -119,6 +122,9 @@ a 3-part legacy name is treated as an ordinary collection, finds no
 `<root>/ansible/legacy/plugins/modules/debug.py`, and skips. Per the review's own table,
 `ansible.legacy.debug:` is identical to bare `debug:` and must resolve identically — legacy dirs
 first, then core.
+
+*Not identical, measured below: a bare name searches the `collections:` list first and
+`ansible.legacy.X` does not.*
 
 ### 3. Internal redirects resolve with no visible seam — `main.rs:1032`
 
@@ -140,11 +146,63 @@ This is not cosmetic. `ansible.builtin.debug` can never be shadowed; `debug:` ca
 file into `library/`. A hover that calls them both builtin hides the difference that decides
 whether a local override is possible.
 
+## Measured 2026-09-17
+
+ansible-core 2.21.3. "Ansible" is `ansible-playbook` output — a `library/` module returning a
+marker, `-vvv` "Using module file", or `--syntax-check` with every collection hidden
+(`ANSIBLE_COLLECTIONS_PATH` at an empty dir, `ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=False`). "Before"
+is our resolver against the same install via `AnsibleInstall::detect(None)`.
+
+| written                              | Ansible                                     | before     |
+| ------------------------------------ | ------------------------------------------- | ---------- |
+| `ansible.legacy.ping`, `library/ping.py` present | `library/ping.py`                | skipped    |
+| `ansible.builtin.ping`, same         | core `ping` (`library/` ignored)             | core, ok   |
+| `ansible.legacy.ufw` / `ansible.builtin.ufw` | `community.general.ufw` via core's table | skipped |
+| `ufw` / `ansible.legacy.ufw`, `library/ufw.py` present | `library/ufw.py`, before the table | bare ok, legacy skipped |
+| `yum`, `ansible.builtin.yum`, `ansible.legacy.yum` | resolve, collections hidden     | all skipped |
+| `ansible.builtin.normal`             | passes (action plugin only, no module file)  | —          |
+| `ansible.builtin.nonsense_xyz`       | `couldn't resolve module/action`, play never starts | skipped, silent |
+| `action: ansible.builtin.nonsense_xyz` | earlier task runs, then `Cannot resolve …` | skipped, silent |
+
+Three corrections to the issues above, each with its control:
+
+- **`yum` is an action rename.** `yum: redirect: ansible.builtin.dnf` sits under
+  `plugin_routing.action`; `_get_action_context` (`mod_args.py:59-66`) accepts a task name if the
+  module *or* the action loader resolves it. It is the only `action:` rename that stays in core.
+- **`ansible.legacy.X` skips the `collections:` list.** Under `collections: [demo.probe]`, which
+  ships a `ping`, bare `ping:` ran the collection's and `ansible.legacy.ping:` ran `library/`.
+  Control: without the list, bare `ping:` ran `library/` too.
+- **`ansible.builtin` never reads a collection root.** An `ansible_collections/ansible/builtin`
+  tree on `COLLECTIONS_PATH` is ignored; the same layout under `demo/probe` ran. The old 3-part arm
+  searched there.
+
+Added to scope on the way, since routing is what makes it safe: an `ansible.builtin.X` that core
+has on neither disk nor table is a WARNING (`unknown-builtin-module`) naming the installed
+version. Not the two-part name's ERROR — the answer is only as good as the core we read, and the
+machine that runs the play may have a newer one. `ansible.legacy.X` and bare names stay silent:
+library paths we cannot see can supply them.
+
+After the change, the same probe against the real install agrees with the Ansible column on every
+row.
+
+A side finding, filed separately as T-237: when a collection is in both `~/.ansible/collections`
+and the package's bundled `ansible_collections`, we pick the copy Ansible does not run.
+
 ## Done when
 
-- [ ] `ansible.builtin.yum:` resolves to `dnf` through the routing table, same as bare `yum:`
-- [ ] `ansible.legacy.debug:` resolves exactly as bare `debug:` does — legacy dirs first, core
-      second — pinned against `demo/library/ping.py`, which already proves the shadowing half
+- [x] `ansible.builtin.yum:` resolves to `dnf` through the routing table — and so do bare `yum:`
+      and `ansible.legacy.yum:`, which did not either; the table's `action:` section is read
+      (`builtin_and_legacy_spellings_follow_cores_rename_table`)
+- [x] `ansible.legacy.X` resolves as bare `X` does minus the `collections:` list — legacy dirs,
+      core, then core's table — pinned in memory with the list as the control
+      (`the_ansible_legacy_spelling_is_the_bare_search_without_the_collections_list`)
+- [x] `ansible.builtin.X` reads only the package (`modules/`, `plugins/action/`) and core's table
+      (`the_ansible_builtin_spelling_reads_only_the_package`)
+- [x] an `ansible.builtin.X` core does not have is `unknown-builtin-module`, a WARNING naming the
+      version and the failure its spelling produces; silent with no readable install, for an
+      uninstalled redirect target, and for every other spelling
+      (`an_ansible_builtin_name_core_does_not_have_is_missing`,
+      `an_unknown_builtin_is_a_warning_naming_the_installed_core`)
 - [ ] a redirect that stays inside core shows the hop on hover, like a redirect into a collection
       does
 - [ ] the hover distinguishes the namespace a name resolved *under* from the file it landed *on*,
