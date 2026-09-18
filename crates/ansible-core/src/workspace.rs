@@ -140,15 +140,11 @@ impl FileContext {
     /// One predicate rather than one per caller: both the dependency extractor and T-147's
     /// key check ask this question, and a file is either RoleMetadata or it isn't.
     ///
-    /// `_load_role_yaml` hard-codes `.yml .yaml .json` plus extensionless `main`
-    /// (`role/__init__.py:422-428`). Only the first two can reach us — [`yaml_files_in`]
-    /// collects no other extension — so widening this list buys nothing until the walker
-    /// changes too.
-    pub fn is_role_metadata(&self, path: &Path) -> bool {
+    /// Exactly the file [`role_meta_file`] picks, so a `meta/main.yaml` shadowed by a
+    /// `meta/main.yml` beside it is not metadata — Ansible never reads it.
+    pub fn is_role_metadata(&self, path: &Path, fs: &dyn Fs) -> bool {
         let Some(role) = &self.role_dir else { return false };
-        path.parent().is_some_and(|d| d == role.join("meta"))
-            && path.file_stem().is_some_and(|s| s == "main")
-            && matches!(path.extension().and_then(|e| e.to_str()), Some("yml" | "yaml"))
+        role_meta_file(role, fs).is_some_and(|m| m == path)
     }
 
     /// This file sits under the role's `handlers/` — a handler list, where a notified
@@ -378,6 +374,16 @@ fn is_include_anchor(dir: &Path, fs: &dyn Fs) -> bool {
         && dir.parent().is_some_and(|role| is_role_dir(role, fs))
 }
 
+/// The file Ansible loads as `role`'s metadata: `_load_role_yaml('meta')`, no `allow_dir`, so
+/// `main.yml`, `main.yaml`, `main.json`, then bare `main`, first *file* wins and a directory
+/// of one of those names is passed over for the next. All measured on 2.21.2 — including
+/// `meta/main.yml/` as a directory beside a `meta/main.yaml` that then loads, and a
+/// `meta/main.yaml` beside a `meta/main.yml` that is never read.
+pub fn role_meta_file(role: &Path, fs: &dyn Fs) -> Option<PathBuf> {
+    let meta = role.join("meta");
+    ["main.yml", "main.yaml", "main.json", "main"].iter().map(|n| meta.join(n)).find(|p| fs.is_file(p))
+}
+
 fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
     fs.is_dir(&d.join("tasks")) || fs.is_dir(&d.join("defaults")) || fs.is_dir(&d.join("meta"))
 }
@@ -385,6 +391,37 @@ fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every row measured on 2.21.2 with `dependencies: [dflt]` in the named file: the
+    /// dependency ran for each spelling, not for a `main/` directory, and not for a
+    /// `main.yaml` behind a `main.yml` that said `dependencies: []`.
+    #[test]
+    fn role_meta_file_follows_ansibles_lookup() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/r/yml/meta/main.yml", ""),
+            ("/r/yaml/meta/main.yaml", ""),
+            ("/r/json/meta/main.json", ""),
+            ("/r/bare/meta/main", ""),
+            ("/r/dirthenyaml/meta/main.yml/x.yml", ""),
+            ("/r/dirthenyaml/meta/main.yaml", ""),
+            ("/r/dironly/meta/main/x.yml", ""),
+            ("/r/both/meta/main.yml", ""),
+            ("/r/both/meta/main.yaml", ""),
+        ]);
+        let meta = |r: &str| role_meta_file(Path::new(&format!("/r/{r}")), &fs);
+        for (role, file) in [
+            ("yml", "main.yml"),
+            ("yaml", "main.yaml"),
+            ("json", "main.json"),
+            ("bare", "main"),
+            ("dirthenyaml", "main.yaml"),
+            ("both", "main.yml"),
+        ] {
+            assert_eq!(meta(role), Some(PathBuf::from(format!("/r/{role}/meta/{file}"))), "{role}");
+        }
+        assert_eq!(meta("dironly"), None);
+        assert_eq!(meta("absent"), None);
+    }
 
     /// T-098. The `.ansible` halves of the default search dirs follow `ansible_home`
     /// rather than hardcoding `$HOME/.ansible`.

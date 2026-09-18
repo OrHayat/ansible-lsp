@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+use crate::cache::ScanCache;
 use crate::parse::{Document, Node, Span};
 use crate::placement::{Problem, Tier};
 use crate::splitter;
@@ -411,9 +412,11 @@ pub const REDUNDANT_ROLE_VARS_RULE_ID: &str = "redundant-role-vars-include";
 /// The role's auto-loaded vars entry point, re-loaded by a task inside that same role.
 ///
 /// `target` is what the reference resolved to; `role_dir` is the role the *including file*
-/// belongs to. Both must be present and they must meet at `<role>/vars/main.yml`, which is the
-/// one file `vars.rs` auto-loads for a role — so this stays in step with what we actually
-/// model rather than with every spelling Ansible would auto-load.
+/// belongs to. Both must be present and `target` must be one of the files `vars.rs`
+/// auto-loads for that role — [`ScanCache::role_vars_files`], so `vars/main.yaml` or a file in
+/// `vars/main/` counts when that is what the role loads, and a `main.yaml` shadowed by a
+/// `main.yml` does not (T-239). Measured on 2.21.2: `include_vars: main.yaml` in a role whose
+/// `vars/main.yaml` is its entry point re-reads that file.
 ///
 /// A hint, never a warning: the code is legal, it runs, and an author may want the precedence
 /// lift or a `tags: always` placement deliberately. It is worth saying anyway because both of
@@ -425,11 +428,14 @@ pub fn redundant_self_reload(
     target: Option<&Path>,
     role_dir: Option<&Path>,
     span: Span,
+    fs: &ScanCache,
 ) -> Option<Problem> {
-    let own = role_dir?.join("vars").join("main.yml");
-    if target? != own {
+    let target = target?;
+    let vars = role_dir?.join("vars");
+    if !fs.role_vars_files(&vars, "main", false).iter().any(|f| f == target) {
         return None;
     }
+    let rel = target.strip_prefix(&vars).unwrap_or(target).to_string_lossy().replace('\\', "/");
     Some(Problem {
         span,
         tier: Tier::Hint,
@@ -437,11 +443,12 @@ pub fn redundant_self_reload(
         // Both costs, because either alone reads as a style nit. The per-host one is why this
         // fires without waiting for evidence that somebody overrides the value: measured at
         // ~5ms per host, it is paid on every run whether or not the lift ever bites.
-        message: "this role's `vars/main.yml` is already loaded automatically, so this \
-                  re-loads it: once per host, and at `include_vars` precedence, which \
-                  outranks the `vars:` of any task or block that would otherwise override \
-                  it. Drop the task unless the precedence lift is deliberate."
-            .to_string(),
+        message: format!(
+            "this role's `vars/{rel}` is already loaded automatically, so this \
+             re-loads it: once per host, and at `include_vars` precedence, which \
+             outranks the `vars:` of any task or block that would otherwise override \
+             it. Drop the task unless the precedence lift is deliberate."
+        ),
     })
 }
 
@@ -450,12 +457,26 @@ mod tests {
 
     use std::path::PathBuf;
 
-    fn hint(target: &str, role: Option<&str>) -> Option<super::Problem> {
+    /// Two roles, each with the ordinary `vars/main.yml` entry point and a second vars file.
+    fn roles_fs() -> ScanCache {
+        ScanCache::new(MemFs::new(&[
+            ("/p/roles/ad/vars/main.yml", "a: 1\n"),
+            ("/p/roles/ad/vars/extra.yml", "b: 1\n"),
+            ("/p/roles/other/vars/main.yml", "c: 1\n"),
+        ]))
+    }
+
+    fn hint_in(target: &str, role: Option<&str>, fs: &ScanCache) -> Option<super::Problem> {
         super::redundant_self_reload(
             Some(&PathBuf::from(target)),
             role.map(Path::new),
             crate::parse::Span { start: 0, end: 1 },
+            fs,
         )
+    }
+
+    fn hint(target: &str, role: Option<&str>) -> Option<super::Problem> {
+        hint_in(target, role, &roles_fs())
     }
 
     /// The shape found in the wild: a role's first task re-loading its own vars entry point.
@@ -492,16 +513,30 @@ mod tests {
         assert!(super::redundant_self_reload(
             None,
             Some(Path::new("/p/roles/ad")),
-            crate::parse::Span { start: 0, end: 1 }
+            crate::parse::Span { start: 0, end: 1 },
+            &roles_fs(),
         )
         .is_none());
     }
 
-    /// A near miss that shares every path component but the last: `vars/main.yaml` is not the
-    /// file we model as auto-loaded, so claiming it is redundant would be a guess.
+    /// The hint follows whichever file the role auto-loads (T-239). `vars/main.yaml` is that
+    /// file when it stands alone — measured, `include_vars: main.yaml` re-reads it — and is
+    /// not when a `vars/main.yml` beside it shadows it. A file inside a `vars/main/` directory
+    /// is auto-loaded too, and the message names it rather than `main.yml`.
     #[test]
-    fn the_yaml_spelling_of_the_entry_point_is_not_hinted() {
-        assert!(hint("/p/roles/ad/vars/main.yaml", Some("/p/roles/ad")).is_none());
+    fn the_hint_follows_the_file_the_role_actually_auto_loads() {
+        let fs = ScanCache::new(MemFs::new(&[
+            ("/p/roles/y/vars/main.yaml", "a: 1\n"),
+            ("/p/roles/s/vars/main.yml", "a: 1\n"),
+            ("/p/roles/s/vars/main.yaml", "a: 1\n"),
+            ("/p/roles/d/vars/main/a.yml", "a: 1\n"),
+        ]));
+        let p = hint_in("/p/roles/y/vars/main.yaml", Some("/p/roles/y"), &fs).expect("main.yaml alone");
+        assert!(p.message.contains("`vars/main.yaml`"), "{}", p.message);
+        assert!(hint_in("/p/roles/s/vars/main.yaml", Some("/p/roles/s"), &fs).is_none(), "shadowed");
+        assert!(hint_in("/p/roles/s/vars/main.yml", Some("/p/roles/s"), &fs).is_some(), "the shadowing one");
+        let p = hint_in("/p/roles/d/vars/main/a.yml", Some("/p/roles/d"), &fs).expect("dir form");
+        assert!(p.message.contains("`vars/main/a.yml`"), "{}", p.message);
     }
     use super::*;
     use crate::testing::MemFs;

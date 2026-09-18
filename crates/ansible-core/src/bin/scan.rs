@@ -77,7 +77,7 @@ fn main() {
         let extracted = extract(&nodes);
         let in_playbook = extracted.in_playbook;
         let mut refs = extracted.refs;
-        if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+        if ctx.is_role_metadata(path, &cache) {
             refs.extend(ansible_core::references::meta_dependencies(&nodes));
         }
         // Expressions that cannot work at all. Read from the tree, so all five

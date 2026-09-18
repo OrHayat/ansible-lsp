@@ -350,6 +350,7 @@ T-021 is now unblocked on that side.
 | T-105 | [delegate_to: empty template, and hosts not in inventory](closed/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | done     |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](closed/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | done     |
 | T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](closed/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | done     |
+| T-243 | **bug** · [Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml](closed/T-243-role-metadata-is-read-only-from-meta-main-yml-and-the-reload.md) | done     |
 
 ## Settled — don't re-derive these
 

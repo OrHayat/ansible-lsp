@@ -1500,7 +1500,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // builds to neither plays nor tasks, so its dependency entries are read here, where the
     // path says what the file is (T-236).
     let mut in_file = index(&tree);
-    if ctx.is_role_metadata(path) {
+    if ctx.is_role_metadata(path, walk.cache) {
         if let Some(meta) = nodes.first() {
             role_entries(&ast::dependency_roles(meta), &mut in_file);
         }
@@ -1805,7 +1805,7 @@ fn role_vars(role: &Path, out: &mut Contribution, walk: &mut Walk) {
     // meta/main.yml dependencies run before this role, so their defaults/vars and
     // set_facts are in scope here — and, transitively, for whoever calls this role
     // (entering a dependency's files rediscovers *its* role context and deps).
-    let meta = role.join("meta").join("main.yml");
+    let Some(meta) = crate::workspace::role_meta_file(role, walk.cache) else { return };
     let Some(mnodes) = walk.cache.source(&meta).and_then(|s| s.nodes.clone()) else { return };
     let mctx = walk.cache.context(&meta);
     for dep in references::meta_dependencies(&mnodes) {
@@ -2670,6 +2670,33 @@ mod tests {
         assert_eq!(of("only_in_yml").len(), 1);
         let both = of("both_v");
         assert!(both.len() == 1 && both[0].file.ends_with("defaults/main.yml"), "{both:?}");
+    }
+
+    /// Dependencies declared in any spelling of the role's metadata file reach the play —
+    /// measured on 2.21.2, `dflt_value=1` for `main.yaml`, `main.json` and bare `main`, and
+    /// `UNSET` for a `main.yaml` behind a `main.yml` that lists none.
+    #[test]
+    fn dependencies_load_from_every_meta_main_spelling() {
+        let d = std::env::temp_dir().join("ansible-lsp-meta-shapes");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/dflt/defaults/main.yml", "dflt_value: 1\n");
+        write(&d, "roles/m_yaml/meta/main.yaml", "dependencies: [dflt]\n");
+        write(&d, "roles/m_json/meta/main.json", "{\"dependencies\": [\"dflt\"]}\n");
+        write(&d, "roles/m_bare/meta/main", "dependencies: [dflt]\n");
+        write(&d, "roles/m_shadow/meta/main.yml", "dependencies: []\n");
+        write(&d, "roles/m_shadow/meta/main.yaml", "dependencies: [dflt]\n");
+        let reaches = |role: &str| {
+            let play = d.join(format!("{role}.yml"));
+            let text = format!("- hosts: all\n  roles: [{role}]\n");
+            std::fs::write(&play, &text).unwrap();
+            let nodes = Document::new(text).parse().unwrap();
+            definitions(&play, &nodes).iter().any(|x| x.name == "dflt_value")
+        };
+        for role in ["m_yaml", "m_json", "m_bare"] {
+            assert!(reaches(role), "{role}");
+        }
+        assert!(!reaches("m_shadow"), "main.yml shadows main.yaml");
     }
 
     /// A role with neither `defaults/` nor `vars/` contributes nothing and does not fail.

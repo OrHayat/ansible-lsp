@@ -1123,7 +1123,7 @@ impl Backend {
             in_playbook: extracted.in_playbook,
             ..Default::default()
         };
-        let is_role_metadata = ctx.is_role_metadata(path);
+        let is_role_metadata = ctx.is_role_metadata(path, scan);
         let mut extracted = extracted.refs;
         if is_role_metadata {
             extracted.extend(references::meta_dependencies(&nodes));
@@ -1619,6 +1619,7 @@ impl Backend {
         // T-184: a role re-loading its own `vars/main.yml`. Keyed on what the reference
         // resolved to, so every spelling that reaches that file is covered and no spelling has
         // to be enumerated here.
+        let fs = ScanCache::new(OverlayFs(a.open.clone()));
         let redundant_role_vars: Vec<Diagnostic> = a
             .refs
             .iter()
@@ -1628,6 +1629,7 @@ impl Backend {
                     res.targets.first().map(|p| p.as_path()),
                     a.ctx.role_dir.as_deref(),
                     r.span,
+                    &fs,
                 )
             })
             .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
@@ -4128,7 +4130,7 @@ fn hover_at(
     let extracted = references::extract(nodes);
     let in_playbook = extracted.in_playbook;
     let mut refs = extracted.refs;
-    if path.ends_with("meta/main.yml") && ctx.role_dir.is_some() {
+    if ctx.is_role_metadata(path, &OverlayFs(open.clone())) {
         refs.extend(references::meta_dependencies(nodes));
     }
 
@@ -8726,12 +8728,21 @@ mod tests {
         assert_eq!((got[0].range.start.character, got[0].range.end.character), (0, 4));
 
         // `_load_role_yaml` hard-codes `.yml .yaml .json`, in that order, so the `.yaml`
-        // spelling is the same file to Ansible and must be to us.
+        // spelling is the same file to Ansible and must be to us — when it stands alone.
+        std::fs::remove_file(d.join("roles/r/meta/main.yml")).unwrap();
         assert_eq!(
             flagged("roles/r/meta/main.yaml", bad).len(),
             1,
             "meta/main.yaml is role metadata too"
         );
+        // Beside a `main.yml` it is never read (measured on 2.21.2: its dependency did not
+        // run), so it is not RoleMetadata and its keys are nobody's business.
+        std::fs::write(d.join("roles/r/meta/main.yml"), "dependencies: []\n").unwrap();
+        assert!(
+            flagged("roles/r/meta/main.yaml", bad).is_empty(),
+            "a meta/main.yaml shadowed by meta/main.yml is not role metadata"
+        );
+        std::fs::remove_file(d.join("roles/r/meta/main.yaml")).unwrap();
         assert!(
             flagged("roles/r/meta/argument_specs.yml", bad).is_empty(),
             "argument_specs.yml is a different schema (T-149), not RoleMetadata"
@@ -9850,6 +9861,51 @@ mod tests {
             !with_main.contains("no `tasks/main.yml`"),
             "a role that has main.yml must not get the skipped hover: {with_main}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A dependency list in `meta/main.yaml` is read exactly as one in `meta/main.yml` is —
+    /// `missing-file` and the reference hover both answer there — and one in a `main.yaml`
+    /// shadowed by a `main.yml` is not read at all, so neither answers (measured on 2.21.2).
+    #[test]
+    fn dependencies_in_meta_main_yaml_reach_the_reference_consumers() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let root = std::env::temp_dir().join("meta-main-yaml-consumers");
+        let _ = std::fs::remove_dir_all(&root);
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, text).unwrap();
+            p.canonicalize().unwrap()
+        };
+        w("ansible.cfg", "[defaults]\nroles_path = ./roles\n");
+        w("roles/dflt/defaults/main.yml", "dflt_value: 1\n");
+        let text = "dependencies:\n  - dflt\n  - truly_absent\n";
+        let alone = w("roles/alone/meta/main.yaml", text);
+        w("roles/shadow/meta/main.yml", "dependencies: []\n");
+        let shadowed = w("roles/shadow/meta/main.yaml", text);
+
+        let missing = |p: &std::path::Path| {
+            let a = super::Backend::analyze_text(text.to_string(), p).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "missing-file"))
+                .count()
+        };
+        assert_eq!(missing(&alone), 1, "truly_absent, and only it");
+        assert_eq!(missing(&shadowed), 0, "a file Ansible never reads has no dependencies");
+
+        let hover = |p: &std::path::Path| {
+            let doc = ansible_core::parse::Document::new(text.to_string());
+            let nodes = doc.parse().unwrap();
+            let byte = text.find("dflt").unwrap() + 1;
+            super::hover_at(&doc, &nodes, p, byte, Default::default(), &no_buffers(), &[], &no_cache(), None, None)
+                .map(|h| h.0)
+                .unwrap_or_default()
+        };
+        assert!(hover(&alone).contains("runs no tasks"), "{}", hover(&alone));
+        assert!(!hover(&shadowed).contains("runs no tasks"), "{}", hover(&shadowed));
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

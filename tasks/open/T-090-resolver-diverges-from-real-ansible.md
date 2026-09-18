@@ -50,6 +50,7 @@ the same argument applied one layer up.
 - [x] T-206 — include_vars searches its relative path in the wrong order, in two places
 - [x] T-218 — Role with no tasks/main.yml hovers as "not in this workspace"
 - [x] T-235 — A role with no tasks/main.yml is reported missing, though Ansible loads it
+- [x] T-243 — Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml
 
 ## Done when
 
