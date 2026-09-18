@@ -39,7 +39,7 @@ we're leaving on the table.
 - Diagnostics: `deprecation` → WARNING quoting `warning_text` and `removal_version`;
   `tombstone` → ERROR (statically provable failure), quoting the replacement text.
 - **Code action**: on a redirected or deprecated name, offer "replace with `<fqcn>`" —
-  rewrite the task key span. First code action in the project; the span is the module key,
+  rewrite the task key span. T-158 added the first code action (`code_actions_of`); the span is the module key,
   which extraction already has.
 
 ## Traps

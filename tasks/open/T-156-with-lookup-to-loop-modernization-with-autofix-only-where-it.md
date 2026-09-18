@@ -50,8 +50,9 @@ Two things to settle before writing any of it:
 
 - **T-129 triages this first.** ansible-lint may already own the rule; if it does, this
   becomes a *covered* or *port* entry rather than an invention of ours.
-- **There is no autofix machinery.** The server registers zero `CodeAction` handlers today,
-  so the first real cost is that plumbing, not the rule. Splitting it into its own ticket is
+- **Autofix machinery exists since T-158**, but only for a fixed-text rename: a placement rule
+  maps to replacement text through `placement::replacement`, and `code_actions_of` writes it
+  over the problem's span. A `with_*` rewrite edits the value too, so it needs more than that. Splitting it into its own ticket is
   reasonable if the classification lands first.
 
 ## Done when

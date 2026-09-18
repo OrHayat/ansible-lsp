@@ -3982,6 +3982,12 @@ impl LanguageServer for Backend {
                 )),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        ..Default::default()
+                    },
+                )),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
                     work_done_progress_options: Default::default(),
@@ -4315,6 +4321,13 @@ impl LanguageServer for Backend {
             .unwrap_or_default();
         Ok(Some(Self::document_links_of(&a, &p.text_document.uri, &inv)))
     }
+
+    async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let Some(a) = self.state.analyze(&p.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(Self::code_actions_of(&a, &p.text_document.uri, p.range)))
+    }
 }
 
 /// The token types this server sends, in the order the protocol indexes them: a
@@ -4543,6 +4556,48 @@ impl Backend {
     /// `goto_definition`, its test called the helper directly, and the missing paint
     /// reached the editor. A test that cannot see the assembly does not cover the
     /// assembly, and this is the second time that gap let something through.
+    /// Quick fixes touching `range`: one per placement problem whose rule has a
+    /// [`placement::replacement`] (T-158's rename, today). Built from the same problems the
+    /// diagnostics are, `# noqa` included, so a silenced diagnostic offers no fix either.
+    fn code_actions_of(a: &Analysis, uri: &Url, range: Range) -> Vec<CodeActionOrCommand> {
+        placement::problems(&a.nodes, &a.doc.text, a.ctx.config.error_on_missing_handler)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .filter_map(|p| {
+                let new_text = placement::replacement(p.rule)?;
+                let (sl, sc) = a.doc.byte_to_lsp(p.span.start);
+                let (el, ec) = a.doc.byte_to_lsp(p.span.end);
+                let at = Range::new(Position::new(sl, sc), Position::new(el, ec));
+                if at.end < range.start || range.end < at.start {
+                    return None;
+                }
+                let edit = TextEdit { range: at, new_text: new_text.into() };
+                Some(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Rename to `{new_text}`"),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![Diagnostic {
+                        range: at,
+                        severity: Some(match p.tier {
+                            placement::Tier::Error => DiagnosticSeverity::ERROR,
+                            placement::Tier::Warning => DiagnosticSeverity::WARNING,
+                            placement::Tier::Hint => DiagnosticSeverity::HINT,
+                        }),
+                        source: Some("ansible-lsp".into()),
+                        code: Some(NumberOrString::String(p.rule.into())),
+                        message: p.message,
+                        ..Default::default()
+                    }]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(HashMap::from([(uri.clone(), vec![edit])])),
+                        ..Default::default()
+                    }),
+                    is_preferred: Some(true),
+                    ..Default::default()
+                }))
+            })
+            .collect()
+    }
+
     fn document_links_of(a: &Analysis, uri: &Url, inv: &[PathBuf]) -> Vec<DocumentLink> {
         let mut links: Vec<DocumentLink> = a
             .refs
@@ -5909,6 +5964,152 @@ mod tests {
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
+    }
+
+    fn is_deprecated_keyword(d: &tower_lsp::lsp_types::Diagnostic) -> bool {
+        use tower_lsp::lsp_types::NumberOrString;
+        matches!(&d.code, Some(NumberOrString::String(s)) if s == "deprecated-keyword")
+    }
+
+    /// T-158 on its demo: exactly one hint, on the HINT row's `user` key — so the GOOD rows
+    /// and the SILENCED row are asserted quiet by the same list. Then every other demo file,
+    /// where `placement.yml`'s row 13 (both keys set) is the case that must stay row 13's.
+    #[test]
+    fn deprecated_keyword_hints_on_its_demo_row_and_nowhere_else() {
+        use tower_lsp::lsp_types::DiagnosticSeverity;
+        let path = std::path::Path::new("../../demo/deprecated_keywords.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let got: Vec<_> =
+            super::Backend::diagnostics_of(&a).into_iter().filter(is_deprecated_keyword).collect();
+        let at: Vec<(&str, &str)> = got
+            .iter()
+            .map(|d| {
+                let line = text.lines().nth(d.range.start.line as usize).unwrap();
+                (line, &line[d.range.start.character as usize..d.range.end.character as usize])
+            })
+            .collect();
+        assert_eq!(at.len(), 1, "{got:?}");
+        assert!(at[0].0.contains("# HINT"), "{at:?}");
+        assert_eq!(at[0].1, "user");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::HINT));
+        assert!(got[0].message.contains("`remote_user`"), "names the replacement: {}", got[0].message);
+
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "deprecated_keywords.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let n = super::Backend::diagnostics_of(&a).iter().filter(|d| is_deprecated_keyword(d)).count();
+            assert_eq!(n, 0, "{}", path.display());
+        }
+    }
+
+    /// T-158: its own id. `# noqa: deprecated-keyword` silences it; the placement id beside
+    /// it does not.
+    #[test]
+    fn noqa_suppresses_deprecated_keyword_independently() {
+        let path = std::path::Path::new("../../demo/play.yml");
+        let count = |src: &str| {
+            let a = super::Backend::analyze_text(src.to_string(), path).unwrap();
+            super::Backend::diagnostics_of(&a).iter().filter(|d| is_deprecated_keyword(d)).count()
+        };
+        assert_eq!(count("- hosts: web\n  user: alice\n  tasks: []\n"), 1, "control");
+        assert_eq!(count("- hosts: web\n  user: alice # noqa: deprecated-keyword\n  tasks: []\n"), 0);
+        assert_eq!(count("- hosts: web\n  user: alice # noqa: invalid-placement\n  tasks: []\n"), 1);
+    }
+
+    /// T-158's quick fix, through the real handlers: `initialize` declares it, `didOpen` gives
+    /// the buffer, `textDocument/codeAction` answers. Applying the one edit renames the key
+    /// and changes nothing else on the page — value and comment kept — and the result is
+    /// clean. The silenced row, a position away from the key, and row 13's both-set case all
+    /// get no action.
+    #[tokio::test]
+    async fn the_rename_quick_fix_renames_only_the_key() {
+        use tower_lsp::lsp_types::*;
+        use tower_lsp::LanguageServer;
+        let (service, root) = handler_server("t158-quick-fix");
+        let b = service.inner();
+        let init = b.initialize(init_params(&root, serde_json::json!({}))).await.unwrap();
+        match init.capabilities.code_action_provider {
+            Some(CodeActionProviderCapability::Options(o)) => {
+                assert_eq!(o.code_action_kinds, Some(vec![CodeActionKind::QUICKFIX]))
+            }
+            other => panic!("code actions not declared: {other:?}"),
+        }
+
+        let rel = "deprecated_keywords.yml";
+        let text = std::fs::read_to_string("../../demo/deprecated_keywords.yml").unwrap();
+        let uri = Url::from_file_path(root.join(rel)).unwrap();
+        b.did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "ansible".into(),
+                version: 1,
+                text: text.clone(),
+            },
+        })
+        .await;
+        let doc = super::Document::new(text.clone());
+        let line_of = |needle: &str| text.lines().position(|l| l.contains(needle)).unwrap() as u32;
+        let actions = |range: Range| {
+            let p = CodeActionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                range,
+                context: Default::default(),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            };
+            async move { b.code_action(p).await.unwrap().unwrap_or_default() }
+        };
+        let cursor = |line: u32, col: u32| Range::new(Position::new(line, col), Position::new(line, col));
+
+        let hint = line_of("# HINT");
+        let got = actions(cursor(hint, 3)).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        let CodeActionOrCommand::CodeAction(fix) = &got[0] else { panic!("{got:?}") };
+        assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(fix.title, "Rename to `remote_user`");
+        let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        assert_eq!(edits.len(), 1);
+        let (s, e) = (
+            doc.lsp_to_byte(edits[0].range.start.line, edits[0].range.start.character),
+            doc.lsp_to_byte(edits[0].range.end.line, edits[0].range.end.character),
+        );
+        let fixed = format!("{}{}{}", &text[..s], edits[0].new_text, &text[e..]);
+        let want_line = text.lines().nth(hint as usize).unwrap().replacen("user:", "remote_user:", 1);
+        let want: Vec<String> = text
+            .lines()
+            .enumerate()
+            .map(|(i, l)| if i as u32 == hint { want_line.clone() } else { l.to_string() })
+            .collect();
+        assert_eq!(fixed.lines().collect::<Vec<_>>(), want);
+
+        let a = super::Backend::analyze_text(fixed, &root.join(rel)).unwrap();
+        let left: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| is_deprecated_keyword(d) || d.severity == Some(DiagnosticSeverity::ERROR))
+            .collect();
+        assert!(left.is_empty(), "the fixed play is clean: {left:?}");
+
+        assert!(actions(cursor(0, 0)).await.is_empty(), "nothing away from the key");
+        let silenced = line_of("# noqa: deprecated-keyword");
+        assert!(actions(cursor(silenced, 3)).await.is_empty(), "a silenced hint offers no fix");
+        let whole = Range::new(Position::new(0, 0), Position::new(text.lines().count() as u32, 0));
+        assert_eq!(actions(whole).await.len(), 1, "one fix in the whole file");
+
+        // Row 13: both keys set is ansible-core's error, and deleting `user:` is the fix
+        // there — not a rename, which would collide with the `remote_user:` beside it.
+        let path = std::path::Path::new("../../demo/placement.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let row13 = text.lines().position(|l| l.contains("user: alice # BAD")).unwrap() as u32;
+        let uri = Url::from_file_path(&path).unwrap();
+        assert!(super::Backend::code_actions_of(&a, &uri, cursor(row13, 3)).is_empty());
     }
 
     use ansible_core::cache::ScanCache;

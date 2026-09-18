@@ -206,7 +206,6 @@ T-021 is now unblocked on that side.
 | T-152 | [YAML inventory files: index them and check the all/hosts/children shape](open/T-152-yaml-inventory-files-index-them-and-check-the-all-hosts-chil.md) | M    | —          |
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
-| T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](open/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | S    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | ~~T-020~~      |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
@@ -346,6 +345,7 @@ T-021 is now unblocked on that side.
 | T-133 | [NotInWorkspace hover lumps three different situations into one vague message](closed/T-133-notinworkspace-hover-lumps-three-different-situations-into-o.md) | done     |
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](closed/T-083-legacy-builtin-routing.md) | done     |
 | T-237 | **bug** · [The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run](closed/T-237-the-python-package-s-bundled-collections-are-searched-before.md) | done     |
+| T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](closed/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | done     |
 
 ## Settled — don't re-derive these
 

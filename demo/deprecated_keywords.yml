@@ -1,0 +1,34 @@
+---
+# `user:` on a play is the pre-2013 spelling of `remote_user:` (T-158). ansible-core renames it
+# while loading the play and says nothing — `--syntax-check` exits 0 on this whole file, with
+# no warning. It became deprecated when `remote_user:` was added to tasks, where `user:` could
+# not be used because it names the user module (ansible/ansible#3932, commit d47c48e3).
+#
+# The quick fix renames the key and nothing else. That is exactly the rename the loader does
+# (`play.py:173-174`), so the edited play logs in as the same account — measured on 2.21.2.
+#
+#   ansible-playbook -i localhost, -c local --syntax-check deprecated_keywords.yml
+
+- name: the old spelling
+  hosts: localhost
+  gather_facts: false
+  user: alice # HINT: deprecated alias — the quick fix renames it to `remote_user`, value and comment kept
+  tasks:
+    - debug: { msg: ok }
+
+- name: the current spelling
+  hosts: localhost
+  gather_facts: false
+  remote_user: alice # GOOD: the spelling the hint asks for
+  tasks:
+    - name: the user module is a task, not the play keyword
+      user: { name: alice, state: present } # GOOD: `user:` in a task is the module
+      check_mode: true
+
+- name: quieted
+  hosts: localhost
+  gather_facts: false
+  # SILENCED: the same key, quieted on its own id — and the quick fix goes with the hint
+  user: alice # noqa: deprecated-keyword
+  tasks:
+    - debug: { msg: ok }

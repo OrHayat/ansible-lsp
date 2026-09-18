@@ -22,6 +22,7 @@ mic key on this Mac).
 | `tasks/unparseable.yml` | genuinely invalid YAML (broken for Ansible too) — the `unparseable` hint, not silence |
 | `tasks/unparseable_silenced.yml` | the same break, quieted with `# noqa: unparseable` |
 | `dead_handler_names.yml` | a `handlers:` entry whose `name:` is not a handler name — a `block:` flattens into its tasks and an `import_tasks:` is expanded away, so `notify:` of the written name fails, late and only when the notifier changes — an ERROR when this play notifies it and `error_on_missing_handler` is on, a WARNING otherwise (T-157) |
+| `deprecated_keywords.yml` | `user:` on a play, the deprecated spelling of `remote_user:` that ansible loads without a word — a HINT whose quick fix renames the key, and nothing else (T-158) |
 | `static_templates.yml` | a template in a field ansible never templates — `register`, `listen`, `collections`, `vars:`/`module_defaults:` keys — fatal or silently dead per field (T-103) |
 | `complex_keys.yml` | a mapping/sequence as a mapping key — parses clean, never loads in Ansible; usually an unquoted template that needed quotes (T-168) |
 | `duplicate_keys.yml` | duplicate mapping keys at play level, in `vars:` and in a task — valid YAML, first value silently discarded (T-102, not yet flagged) |

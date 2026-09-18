@@ -59,6 +59,10 @@ pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
 /// only at run time, from the notifying task, and only when that task reports `changed`.
 pub const DEAD_HANDLER_NAME_RULE_ID: &str = "dead-handler-name";
 
+/// T-158, and ours: `user:` on a play. ansible-core calls it deprecated in a comment and in
+/// row 13's error, but alone it loads silently — measured on 2.21.2, no warning at all.
+pub const DEPRECATED_KEYWORD_RULE_ID: &str = "deprecated-keyword";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Error,
@@ -93,6 +97,10 @@ const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
 const NO_MODULE: &str = "no module/action detected in task.";
 const USER_AND_REMOTE_USER: &str = "both 'user' and 'remote_user' are set for this play. The \
                                     use of 'user' is deprecated, and should be removed";
+const DEPRECATED_USER: &str = "`user` is a deprecated alias for `remote_user`. Ansible renames \
+                               it when it loads the play and says nothing, so both spellings \
+                               log in as the same account — but only `remote_user` is also \
+                               accepted on a task, where `user:` means the user module.";
 const ACTION_AND_LOCAL_ACTION: &str = "action and local_action are mutually exclusive";
 const DISCARDED_DELEGATE_TO: &str = "`local_action` already delegates to localhost, so this \
                                      `delegate_to` is discarded — the task runs locally, not \
@@ -764,6 +772,7 @@ fn play(node: &Node, src: &str, error_on_missing_handler: bool, out: &mut Vec<Pr
         return;
     }
     exclusions(node, On::Play, out);
+    deprecated_user(node, out);
     if let Some(hosts) = node.get("hosts") {
         self::hosts(hosts, src, out);
     }
@@ -795,6 +804,33 @@ fn play(node: &Node, src: &str, error_on_missing_handler: bool, out: &mut Vec<Pr
             }
         }
     }
+}
+
+/// T-158. `user:` alone on a play. With `remote_user:` beside it this is row 13's fatal error
+/// instead, so the two rules are exclusive by construction — the `remote_user` test here is
+/// row 13's trigger negated. Presence only, like row 13: a null `user:` is renamed too.
+fn deprecated_user(node: &Node, out: &mut Vec<Problem>) {
+    if node.get("remote_user").is_some() {
+        return;
+    }
+    if let Some(span) = key_span(node, "user") {
+        out.push(Problem {
+            span,
+            tier: Tier::Hint,
+            message: DEPRECATED_USER.into(),
+            rule: DEPRECATED_KEYWORD_RULE_ID,
+        });
+    }
+}
+
+/// The text a quick fix writes over a problem's span, for the rules that have one.
+///
+/// T-158's rename is safe by construction, and that is the whole reason it is offered:
+/// `play.py:173-174` does exactly this — `ds['remote_user'] = ds['user']; del ds['user']` —
+/// before the play is validated, so the edited document loads to the same Play. Measured on
+/// 2.21.2: `user: alice` and `remote_user: alice` both open the SSH connection as `alice`.
+pub fn replacement(rule: &str) -> Option<&'static str> {
+    (rule == DEPRECATED_KEYWORD_RULE_ID).then_some("remote_user")
 }
 
 /// T-157. Measured on 2.21.2, `notify: h` against each `handlers:` entry written `name: h`:
@@ -1677,9 +1713,56 @@ mod tests {
             ["both 'user' and 'remote_user' are set for this play. The use of 'user' is \
               deprecated, and should be removed"]
         );
-        // Either one alone is fine — `user:` is renamed, not rejected.
-        assert!(check("- hosts: web\n  user: alice\n  tasks: []\n").is_empty());
+        // Either one alone loads — `user:` is renamed, not rejected. Alone it is T-158's hint.
+        assert_eq!(check("- hosts: web\n  user: alice\n  tasks: []\n"), [DEPRECATED_USER]);
         assert!(check("- hosts: web\n  remote_user: bob\n  tasks: []\n").is_empty());
+    }
+
+    /// T-158: `user:` alone on a play is a HINT on its own id, anchored on the key, and it
+    /// is exclusive with row 13 from both sides — the exact lists above and here are what
+    /// stop either rule taking the other's case.
+    #[test]
+    fn a_lone_play_user_is_a_deprecation_hint() {
+        let src = "- hosts: web\n  user: alice # who logs in\n  tasks: []\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got = problems(&nodes, src, true);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].rule, DEPRECATED_KEYWORD_RULE_ID);
+        assert_eq!(got[0].tier, Tier::Hint);
+        assert_eq!(&src[got[0].span.start..got[0].span.end], "user");
+        assert_eq!(replacement(got[0].rule), Some("remote_user"));
+
+        // Presence only, as in row 13: a null `user:` is renamed too — measured, it loads.
+        assert_eq!(check("- hosts: web\n  user:\n  tasks: []\n"), [DEPRECATED_USER]);
+        // Both set: row 13's error and nothing else, null or not.
+        for both in [
+            "- hosts: web\n  user: alice\n  remote_user: bob\n  tasks: []\n",
+            "- hosts: web\n  remote_user: bob\n  user: alice\n  tasks: []\n",
+            "- hosts: web\n  user:\n  remote_user:\n  tasks: []\n",
+        ] {
+            assert_eq!(check(both), [USER_AND_REMOTE_USER], "{both:?}");
+        }
+        // Every other rule has no fix: the rename is offered only where it is proven safe.
+        assert_eq!(replacement(RULE_ID), None);
+        assert_eq!(replacement(SHADOWED_LOOP_RULE_ID), None);
+    }
+
+    /// T-158 does not leak into the two other places `user:` can sit. On a task it is read as
+    /// the user module (row 12's `conflicting action statements: debug, user`); on a block it
+    /// is T-107's invalid attribute. Measured on 2.21.2, both fatal — neither is a rename.
+    #[test]
+    fn user_on_a_task_or_block_is_not_the_deprecation() {
+        let task = "- hosts: web\n  tasks:\n    - debug: {msg: x}\n      user: alice\n";
+        assert_eq!(check(task), ["conflicting action statements: debug, user"]);
+        let alone = "- hosts: web\n  tasks:\n    - user: {name: alice}\n";
+        assert!(check(alone).is_empty(), "the user module, in a task, is a task");
+        let block = "- hosts: web\n  tasks:\n    - block: [{debug: {msg: x}}]\n      user: alice\n";
+        let nodes = Document::new(block.to_string()).parse().unwrap();
+        assert!(problems(&nodes, block, true).iter().all(|p| p.rule != DEPRECATED_KEYWORD_RULE_ID));
+        // Nor into a role's task file, where no play exists at all.
+        let role = "- user: {name: alice}\n- debug: {msg: x}\n  user: alice\n";
+        let nodes = Document::new(role.to_string()).parse().unwrap();
+        assert!(problems(&nodes, role, true).iter().all(|p| p.rule != DEPRECATED_KEYWORD_RULE_ID));
     }
 
     /// Row 11. The raise sits in `ModuleArgsParser`, which `load_list_of_tasks` calls *before*
