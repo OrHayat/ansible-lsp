@@ -65,6 +65,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [ ] T-228 — A variable from an active vars plugin is reported undefined
 - [ ] T-229 — vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway
 - [x] T-236 — Params on a meta/main.yml dependency are not indexed, so hover and go-to-definition go silent on them
+- [ ] T-239 — Role defaults and vars outside main.yml never reach the variable index
 
 ## Done when
 

@@ -100,7 +100,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | T-227      |
-| T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](open/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | M    | —          |
+| T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](open/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -346,6 +346,7 @@ T-021 is now unblocked on that side.
 | T-083 | [`ansible.legacy` unmodelled; `ansible.builtin` skips routing](closed/T-083-legacy-builtin-routing.md) | done     |
 | T-237 | **bug** · [The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run](closed/T-237-the-python-package-s-bundled-collections-are-searched-before.md) | done     |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](closed/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | done     |
+| T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](closed/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | done     |
 
 ## Settled — don't re-derive these
 

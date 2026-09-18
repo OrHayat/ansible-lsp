@@ -3602,10 +3602,17 @@ fn reference_hover(
             // was found; naming it is the whole correction, so the probed `tasks/main.*`
             // paths are carried through to be shortened back into it here.
             Some(SkipReason::RoleWithoutMainTasks) => {
-                let dir = res.candidates.first().and_then(|c| c.parent()?.parent());
+                let dir = res.found_role_dir();
+                // T-235: without `tasks_from:` the role still loads — defaults, vars and
+                // dependencies — and simply runs no tasks of its own.
                 let line = "Skipped".bold()
-                    + " — this role has no `tasks/main.yml`, and needs none: the include's \
-                       `tasks_from:` names the file that runs";
+                    + if r.has_tasks_from {
+                        " — this role has no `tasks/main.yml`, and needs none: the include's \
+                         `tasks_from:` names the file that runs"
+                    } else {
+                        " — this role has no `tasks/main.yml`, so it runs no tasks here; its \
+                         defaults, vars and dependencies still load"
+                    };
                 Some(match dir {
                     Some(d) => Md::new().line(line).line(md::text("Role: ") + path_span(d, ctx)),
                     None => Md::new().line(line),
@@ -9075,6 +9082,122 @@ mod tests {
             !with_main.contains("no `tasks/main.yml`"),
             "a role that has main.yml must not get the skipped hover: {with_main}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// T-235, kubespray's `etcd_defaults` shape: a role with only `defaults/` and `vars/`.
+    /// Measured on 2.21.3, it loads from `roles:`, `dependencies:`, `import_role` and
+    /// `include_role` and runs clean; only a name found nowhere fails. Every consumer of the
+    /// role reference and of its variables, one assertion each (working rule 3).
+    #[test]
+    fn a_role_with_no_tasks_main_is_found_by_every_consumer() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let root = std::env::temp_dir().join("t235-taskless");
+        let _ = std::fs::remove_dir_all(&root);
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, text).unwrap();
+            p.canonicalize().unwrap()
+        };
+        w("ansible.cfg", "[defaults]\nroles_path = ./roles\n");
+        w("roles/etcd_defaults/defaults/main.yml", "etcd_port: 2379\n");
+        w("roles/etcd_defaults/vars/main.yml", "etcd_vars_key: 1\n");
+        let meta = w("roles/etcd/meta/main.yml", "dependencies:\n  - etcd_defaults\n");
+        let tasks = w(
+            "roles/etcd/tasks/main.yml",
+            "- debug: { msg: \"{{ etcd_port }} {{ etcd_vars_key }} {{ nope_missing }}\" }\n",
+        );
+        let site = w(
+            "site.yml",
+            "- hosts: all\n  roles: [etcd_defaults]\n  tasks:\n\
+             \x20   - import_role: { name: etcd_defaults }\n\
+             \x20   - include_role: { name: etcd_defaults }\n",
+        );
+        let absent = w("absent.yml", "- hosts: all\n  roles: [truly_absent]\n");
+        let via_dep = w(
+            "via_dep.yml",
+            "- hosts: all\n  roles: [etcd]\n  tasks:\n\
+             \x20   - debug: { msg: \"{{ etcd_port }} {{ etcd_vars_key }} {{ nope_missing }}\" }\n",
+        );
+
+        let analyze = |p: &std::path::Path| {
+            super::Backend::analyze_text(std::fs::read_to_string(p).unwrap(), p).unwrap()
+        };
+        let codes = |p: &std::path::Path, code: &str| -> Vec<String> {
+            super::Backend::diagnostics_of(&analyze(p))
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == code))
+                .map(|d| d.message)
+                .collect()
+        };
+
+        // missing-file: none from `roles:`, `import_role`, `include_role` or `dependencies:`.
+        assert_eq!(codes(&site, "missing-file"), Vec::<String>::new(), "roles:/import_role/include_role");
+        assert_eq!(codes(&meta, "missing-file"), Vec::<String>::new(), "dependencies:");
+        // The control: a role that exists nowhere is still reported.
+        assert_eq!(codes(&absent, "missing-file").len(), 1, "truly_absent");
+
+        // var-undefined (a playbook-only rule): a play whose role depends on the taskless one
+        // sees its defaults and vars — measured, `app sees 1`; the control beside them is not.
+        let a = analyze(&via_dep);
+        let undefined: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &via_dep, &a.nodes, &[], &no_cache(), None)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect();
+        assert_eq!(undefined.len(), 1, "{undefined:?}");
+        assert!(undefined[0].contains("nope_missing"), "{undefined:?}");
+
+        // Hover and go-to-definition on the variable land in the dependency's defaults.
+        let text = std::fs::read_to_string(&tasks).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let byte = text.find("{{ etcd_port }}").unwrap() + 3;
+        let (md, _) = super::Backend::variable_hover_at(&doc, &nodes, byte, &tasks, &no_buffers(), &[], &no_cache(), None, None)
+            .expect("hover on a variable from a taskless dependency");
+        assert!(md.contains("etcd_defaults"), "names the defining role: {md}");
+        let (line, character) = doc.byte_to_lsp(byte);
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&tasks).unwrap();
+        let locs = super::Backend::definition_at(
+            &doc,
+            &nodes,
+            tower_lsp::lsp_types::Position { line, character },
+            &uri,
+            &tasks,
+            &no_buffers(),
+            &[],
+            &no_cache(),
+            None,
+            None,
+        )
+        .expect("jump from a variable of a taskless dependency");
+        assert_eq!(locs.len(), 1, "{locs:?}");
+        assert!(
+            locs[0].uri.path().ends_with("roles/etcd_defaults/defaults/main.yml"),
+            "{:?}",
+            locs[0].uri
+        );
+
+        // The role-name hover says the role runs nothing; it must not invent a `tasks_from:`.
+        let a = analyze(&site);
+        let (r, res) = a
+            .refs
+            .iter()
+            .find(|(r, _)| r.kind == ansible_core::references::ReferenceKind::Role)
+            .expect("role ref");
+        let md = super::reference_hover(r, res, &a.ctx, false).map(crate::Md::render).expect("hover");
+        assert!(md.contains("runs no tasks"), "{md}");
+        assert!(!md.contains("tasks_from"), "no tasks_from was written: {md}");
+        assert!(md.contains("etcd_defaults"), "names where the role is: {md}");
+
+        // Go-to-definition on the role name and the resolved-reference paint stay silent: a
+        // taskless role has no entry file to target (T-063 decides what the name should jump
+        // to). Both read only a Resolved status, so the skip is what keeps them quiet.
+        assert_eq!(res.status, ansible_core::resolve::Status::Skipped);
+        assert!(res.targets.is_empty());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -24,8 +24,9 @@ pub enum SkipReason {
     /// A missing alternative in a first-match `vars_files` list — absence is the
     /// construct working as designed, so the group reference owns the verdict.
     GroupAlternative,
-    /// The role directory **is** here; it just has no `tasks/main.yml`, because every
-    /// caller reaches it through `tasks_from`. Distinct from [`Self::NotInWorkspace`]
+    /// The role directory **is** here; it just has no `tasks/main.yml` — either every
+    /// caller reaches it through `tasks_from`, or it has no tasks at all and exists to carry
+    /// defaults and vars (T-235). Distinct from [`Self::NotInWorkspace`]
     /// precisely because the role is in the workspace — sharing that variant made the
     /// hover say "not in this workspace (a builtin, or installed outside it)" about a
     /// directory sitting in `roles/`, which is the wrong-hover failure this repo exists
@@ -36,7 +37,8 @@ pub enum SkipReason {
     /// `vars_from`/`defaults_from`/`handlers_from` move the entry the same way for their
     /// own subdirs. Once the entry resolves as `tasks/<tasks_from or main>` this case
     /// resolves outright and nothing reaches this variant; delete it then rather than
-    /// keeping it alive.
+    /// keeping it alive. (The no-tasks-at-all case still needs a home then: a role that is
+    /// found but has no entry file to target.)
     RoleWithoutMainTasks,
 }
 
@@ -61,6 +63,15 @@ pub struct Resolution {
 }
 
 impl Resolution {
+    /// The directory of a role that was found but has no `tasks/main.*` — recovered from the
+    /// probed `<role>/tasks/main.*` paths, which is why they are kept.
+    pub fn found_role_dir(&self) -> Option<&Path> {
+        if self.skip_reason != Some(SkipReason::RoleWithoutMainTasks) {
+            return None;
+        }
+        self.candidates.first().and_then(|c| c.parent()?.parent())
+    }
+
     fn skipped(reason: SkipReason) -> Self {
         Self {
             status: Status::Skipped,
@@ -691,15 +702,16 @@ impl<'a> Resolver<'a> {
                 Some(dir) => {
                     let probe = self.exts.candidates(&dir.join("tasks"), "main", false);
                     let res = Resolution::from_candidates(probe, fs);
-                    // `roles/cib-batch` has only begin/commit/abort.yml and no main.yml —
-                    // legal, because every caller passes tasks_from. Warning here would
-                    // fire on 16 working references in this repo alone.
-                    match (res.status, r.has_tasks_from) {
+                    // No `tasks/main.*` is legal with or without `tasks_from` (T-235):
+                    // `_load_role_yaml` returns None for a missing default `main` and the role
+                    // loads with no tasks. Kubespray's `etcd_defaults` exists only to carry
+                    // defaults. The directory existing is what makes the role found.
+                    match res.status {
                         // Keep the probed paths: `role_dir` already found the directory, so
                         // every reader can say where the role is rather than guessing it is
                         // elsewhere. `directory` is not the field for it — that one is
                         // documented as `VarsFiles`-only (T-087).
-                        (Status::Missing, true) => Resolution {
+                        Status::Missing => Resolution {
                             status: Status::Skipped,
                             skip_reason: Some(SkipReason::RoleWithoutMainTasks),
                             ..res
@@ -4065,14 +4077,38 @@ mod tests {
         );
     }
 
-    /// Same role, no tasks_from: now main.yml really is required, so it's an error.
+    /// Same role, no tasks_from: still found. Measured on 2.21.3 (T-235): `include_role`,
+    /// `import_role` and `roles:` on a role whose `tasks/` holds only `begin.yml` run clean and
+    /// run nothing; a role with no `tasks/` at all loads its defaults. Only a role name found
+    /// nowhere fails.
     #[test]
-    fn role_without_main_and_without_tasks_from_is_missing() {
-        let out = mem_src(
-            "/p/playbooks/site.yml",
-            "- include_role:\n    name: cib-batch\n",
-            &roles_fs(),
-        );
+    fn role_without_main_and_without_tasks_from_is_found() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\nroles_path = ./roles\n"),
+            ("/p/playbooks/site.yml", ""),
+            ("/p/roles/cib-batch/tasks/begin.yml", ""),
+            ("/p/roles/dflt/defaults/main.yml", "dflt_value: 1\n"),
+        ]);
+        for (src, role) in [
+            ("- include_role:\n    name: cib-batch\n", "cib-batch"),
+            ("- import_role:\n    name: cib-batch\n", "cib-batch"),
+            ("- hosts: all\n  roles: [cib-batch]\n", "cib-batch"),
+            ("- include_role:\n    name: dflt\n", "dflt"),
+            ("- import_role:\n    name: dflt\n", "dflt"),
+            ("- hosts: all\n  roles: [dflt]\n", "dflt"),
+        ] {
+            let out = mem_src("/p/playbooks/site.yml", src, &fs);
+            let res = first(&out, ReferenceKind::Role);
+            assert_eq!(res.status, Status::Skipped, "{src}");
+            assert_eq!(res.skip_reason, Some(SkipReason::RoleWithoutMainTasks), "{src}");
+            assert!(
+                res.candidates.iter().all(|c| c.starts_with(format!("/p/roles/{role}/tasks"))),
+                "the probed paths locate the role: {:?}",
+                res.candidates
+            );
+        }
+        // The control: a name that exists nowhere is still missing.
+        let out = mem_src("/p/playbooks/site.yml", "- hosts: all\n  roles: [truly_absent]\n", &fs);
         assert_eq!(first(&out, ReferenceKind::Role).status, Status::Missing);
     }
 

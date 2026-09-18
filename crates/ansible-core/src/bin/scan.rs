@@ -297,7 +297,7 @@ fn main() {
 
     if !roles_without_main.is_empty() {
         println!(
-            "\nROLES WITH NO tasks/main.yml ({}) — reached via tasks_from, not a problem:",
+            "\nROLES WITH NO tasks/main.yml ({}) — legal, they load and run no tasks of their own:",
             roles_without_main.len()
         );
         for r in &roles_without_main {

@@ -1501,49 +1501,8 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
         });
     }
 
-    // The enclosing role's defaults/ and vars/ — fixed locations, no search.
     if let Some(role) = &ctx.role_dir {
-        read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out, walk);
-        read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out, walk);
-
-        // meta/main.yml dependencies run before this role, so their defaults/vars and
-        // set_facts are in scope here — and, transitively, for whoever calls this role
-        // (entering a dependency's files rediscovers *its* role context and deps).
-        {
-            let meta = role.join("meta").join("main.yml");
-            if let Some(mnodes) = walk.cache.source(&meta).and_then(|s| s.nodes.clone()) {
-                {
-                    let mctx = walk.cache.context(&meta);
-                    for dep in references::meta_dependencies(&mnodes) {
-                        let start = out.defs.len();
-                        let resolver = resolve::Resolver { fs: walk.cache, ..Default::default() };
-                        for target in resolver.resolve(&dep, &mctx).targets {
-                            let files = role_task_files(&target, walk);
-                            for f in files.iter() {
-                                collect_disk(f, out, walk);
-                            }
-                        }
-                        // Provenance chain (T-066): everything this dependency's walk added
-                        // arrived through an edge invisible from the hovered file. Deeper
-                        // recursion has already stamped its own edges, so prepending here
-                        // builds each def's chain outermost-first — the order a reader
-                        // follows the links from where they're hovering.
-                        //
-                        // When a role is reachable both here and directly, both routes now
-                        // contribute (the memo has no per-walk `visited` to swallow the
-                        // second) and the final dedup keeps whichever came first —
-                        // deliberately: Ansible compiles both copies and skips the second at
-                        // runtime per host (play_iterator.py "role has already run",
-                        // allow_duplicates false by default for roles:/deps), so the first
-                        // route IS the one that executes, and its breadcrumb is the one to
-                        // keep.
-                        for d in &mut out.defs[start..] {
-                            d.via.insert(0, (meta.clone(), dep.span));
-                        }
-                    }
-                }
-            }
-        }
+        role_vars(role, out, walk);
     }
 
     // Play-level vars_files — explicit paths written in the play. A nested entry is
@@ -1750,14 +1709,11 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             if resolved.skip_reason == Some(resolve::SkipReason::Templated) {
                 out.hosts_unknowable = true;
             }
-            for target in resolved.targets {
-                if r.kind == ReferenceKind::Role {
-                    let files = role_task_files(&target, walk);
-                    for f in files.iter() {
-                        collect_disk(f, out, walk);
-                    }
-                } else {
-                    collect_disk(&target, out, walk);
+            if r.kind == ReferenceKind::Role {
+                follow_role(&resolved, out, walk);
+            } else {
+                for target in &resolved.targets {
+                    collect_disk(target, out, walk);
                 }
             }
         }
@@ -1819,6 +1775,65 @@ fn merge(out: &mut Contribution, from: &Contribution) {
     // One unknowable subtree makes the whole set unknowable: the files that *did* resolve
     // cannot vouch for the hosts the one that didn't would have contributed.
     out.hosts_unknowable |= from.hosts_unknowable;
+}
+
+/// The defaults/ and vars/ of `role`, and what its `meta/main.yml` dependencies contribute —
+/// fixed locations, no search.
+fn role_vars(role: &Path, out: &mut Contribution, walk: &mut Walk) {
+    read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out, walk);
+    read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out, walk);
+
+    // meta/main.yml dependencies run before this role, so their defaults/vars and
+    // set_facts are in scope here — and, transitively, for whoever calls this role
+    // (entering a dependency's files rediscovers *its* role context and deps).
+    let meta = role.join("meta").join("main.yml");
+    let Some(mnodes) = walk.cache.source(&meta).and_then(|s| s.nodes.clone()) else { return };
+    let mctx = walk.cache.context(&meta);
+    for dep in references::meta_dependencies(&mnodes) {
+        let start = out.defs.len();
+        let resolver = resolve::Resolver { fs: walk.cache, ..Default::default() };
+        follow_role(&resolver.resolve(&dep, &mctx), out, walk);
+        // Provenance chain (T-066): everything this dependency's walk added
+        // arrived through an edge invisible from the hovered file. Deeper
+        // recursion has already stamped its own edges, so prepending here
+        // builds each def's chain outermost-first — the order a reader
+        // follows the links from where they're hovering.
+        //
+        // When a role is reachable both here and directly, both routes now
+        // contribute (the memo has no per-walk `visited` to swallow the
+        // second) and the final dedup keeps whichever came first —
+        // deliberately: Ansible compiles both copies and skips the second at
+        // runtime per host (play_iterator.py "role has already run",
+        // allow_duplicates false by default for roles:/deps), so the first
+        // route IS the one that executes, and its breadcrumb is the one to
+        // keep.
+        for d in &mut out.defs[start..] {
+            d.via.insert(0, (meta.clone(), dep.span));
+        }
+    }
+}
+
+/// Everything a role reference brings in. A role with a `tasks/main.*` is entered through its
+/// task files, whose walk reads the role's defaults/vars as their enclosing role. One found
+/// without it (T-235) has no task file to enter by — a defaults-only role has none at all —
+/// yet Ansible still loads its defaults, vars and dependencies, so they are read directly.
+fn follow_role(res: &resolve::Resolution, out: &mut Contribution, walk: &mut Walk) {
+    for target in &res.targets {
+        let files = role_task_files(target, walk);
+        for f in files.iter() {
+            collect_disk(f, out, walk);
+        }
+    }
+    let Some(role) = res.found_role_dir() else { return };
+    // No file frame guards this recursion, so the role itself goes on the stack: two
+    // taskless roles depending on each other would otherwise never stop.
+    let Some(canon) = walk.cache.canonical(role) else { return };
+    if !walk.stack.insert(canon.clone()) {
+        walk.truncated = true;
+        return;
+    }
+    role_vars(role, out, walk);
+    walk.stack.remove(&canon);
 }
 
 /// A role contributes every task file it has (`tasks_from` reaches beyond `main.yml`).
@@ -2525,6 +2540,72 @@ mod tests {
         let mtu = defs.iter().find(|x| x.name == "base_mtu").unwrap();
         assert_eq!(mtu.via.len(), 1);
         assert!(mtu.via[0].0.ends_with("roles/app/meta/main.yml"));
+    }
+
+    /// T-235: a role with no `tasks/main.yml` still loads its defaults and vars — measured on
+    /// 2.21.3 from `roles:`, `dependencies:` and `import_role`. Kubespray's `etcd_defaults` is
+    /// this shape: only `defaults/` and `vars/`, reached as a dependency.
+    #[test]
+    fn a_role_without_tasks_main_contributes_its_defaults_and_vars() {
+        let d = std::env::temp_dir().join("ansible-lsp-t235-taskless");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/dflt/defaults/main.yml", "dflt_value: 1\n");
+        write(&d, "roles/dflt/vars/main.yml", "dflt_var: 2\n");
+        write(&d, "roles/onlybegin/defaults/main.yml", "begin_value: 3\n");
+        write(&d, "roles/onlybegin/tasks/begin.yml", "- set_fact:\n    begin_fact: 4\n");
+        write(&d, "roles/app/meta/main.yml", "dependencies:\n  - dflt\n");
+        write(&d, "roles/app/tasks/main.yml", "- debug: { msg: \"{{ dflt_value }}\" }\n");
+
+        let defs_of = |rel: &str, text: &str| {
+            let p = d.join(rel);
+            std::fs::write(&p, text).unwrap();
+            let nodes = Document::new(text.to_string()).parse().unwrap();
+            definitions(&p, &nodes)
+        };
+        let has = |defs: &[Located], name: &str| defs.iter().any(|x| x.name == name);
+
+        let defs = defs_of("roles.yml", "- hosts: all\n  roles: [dflt]\n");
+        assert!(has(&defs, "dflt_value") && has(&defs, "dflt_var"), "roles:");
+        let defs = defs_of("import.yml", "- hosts: all\n  tasks:\n    - import_role: { name: dflt }\n");
+        assert!(has(&defs, "dflt_value") && has(&defs, "dflt_var"), "import_role");
+
+        // As a dependency: from the depending role's own tasks, and two hops out, with the
+        // meta edge as provenance like any other dependency.
+        let tasks = d.join("roles/app/tasks/main.yml");
+        let nodes = Document::new(std::fs::read_to_string(&tasks).unwrap()).parse().unwrap();
+        assert!(has(&definitions(&tasks, &nodes), "dflt_value"), "dependencies:, from the role");
+        let defs = defs_of("dep.yml", "- hosts: all\n  roles: [app]\n");
+        let v = defs.iter().find(|x| x.name == "dflt_value").expect("dependencies:, from the play");
+        assert!(v.via.len() == 1 && v.via[0].0.ends_with("roles/app/meta/main.yml"), "{:?}", v.via);
+
+        // A `tasks/` holding only an entry point Ansible does not run here: the role's
+        // defaults load, the set_fact in `begin.yml` never happens.
+        let defs = defs_of("begin.yml", "- hosts: all\n  roles: [onlybegin]\n");
+        assert!(has(&defs, "begin_value"));
+        assert!(!has(&defs, "begin_fact"), "begin.yml does not run without tasks_from");
+
+        // The control: a role found nowhere brings nothing.
+        let defs = defs_of("absent.yml", "- hosts: all\n  roles: [truly_absent]\n");
+        assert!(!has(&defs, "dflt_value"));
+    }
+
+    /// Two taskless roles depending on each other: the walk must stop. What it returns is
+    /// not asserted — Ansible fails the play ("A recursion loop was detected with the roles
+    /// specified", measured 2.21.2), so no set of definitions here is the true one.
+    #[test]
+    fn taskless_roles_depending_on_each_other_terminate() {
+        let d = std::env::temp_dir().join("ansible-lsp-t235-cycle");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/a/defaults/main.yml", "a_value: 1\n");
+        write(&d, "roles/a/meta/main.yml", "dependencies: [b]\n");
+        write(&d, "roles/b/defaults/main.yml", "b_value: 2\n");
+        write(&d, "roles/b/meta/main.yml", "dependencies: [a]\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  roles: [a]\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        definitions(&play, &nodes);
     }
 
     /// T-066: a role the playbook names directly needs no breadcrumb — the route is the

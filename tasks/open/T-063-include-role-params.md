@@ -41,7 +41,8 @@ One function decides for all four, and it is not "append .yml":
   (`['', .yml, .yaml, .json]`); the implicit `main` default tries bare **last**.
 - `vars/` and `defaults/` pass `allow_dir=True`: the target may be a **directory**, all
   files under it combined (also true for the plain `main` — `defaults/main/` as a dir is
-  legal and currently invisible to us). `tasks/` and `handlers/`: first match wins.
+  legal and currently invisible to us — the plain-`main` half is T-239, which builds the
+  lookup this ticket reuses). `tasks/` and `handlers/`: first match wins.
 - An explicit `X_from` that matches nothing is a **hard error** ("Could not find specified
   file in role: <subdir>/<name>") — so missing-file warnings here are exact, unlike the
   default `main` which is legal to omit.
@@ -71,6 +72,15 @@ corrections and one addition.
 - **`vars_from`/`defaults_from` confirmed costly.** `vars_from: prod` loads
   `roles/db/vars/prod.yml` and the value is usable inside the role — measured. We index
   none of it, so every key in that file is a false-positive path for `var-undefined`.
+
+- **Every `*_from` failure is a hard error, measured 2.21.2**, `import_role` and `include_role`
+  alike: a missing file is `Could not find specified file in role: defaults/nope`; a missing
+  subdir is `…its 'vars/' is not usable.` (`handlers_from` the same); `vars_from:
+  ../../../outside` is `…as it is not inside the expected role path`; `vars_from: [a]` is
+  `Expected a string for vars_from`. `vars_from: altdir` naming a directory loads it, and it
+  **replaces** `main` — `vars/main.yml`'s keys are unset after it. `defaults_from: bare`
+  with both `bare` and `bare.yml` present reads `bare`. Our `scan` today reports only the
+  `tasks_from` case.
 
 Current state is pinned from both sides:
 `demo_role_include_params_resolve_or_are_documented_misses` asserts `role:`, `vars_from:`,
@@ -127,7 +137,8 @@ half of.
       name works when `tasks_from` names a file and `tasks/main.yml` does not exist; with
       that, `SkipReason::RoleWithoutMainTasks` and `scan`'s no-main section are deleted
       (T-218 was the stopgap)
-- [ ] `vars_from`/`defaults_from`/`defaults/main/`-dir keys land in the var index
+- [ ] `vars_from`/`defaults_from` keys land in the var index, dir form included, through
+      T-239's lookup with the bare name tried first
 - [ ] unknown option, missing name, `apply`/`rescuable` on import, non-string `*_from` —
       each a pinned provable-failure diagnostic
 - [ ] corpus gate: zero new warnings on `~/app/ansible`
