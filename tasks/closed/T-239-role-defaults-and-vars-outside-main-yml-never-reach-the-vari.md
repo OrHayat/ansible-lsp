@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-112 | —          |
+| done   | bug  | P1       | M    | T-112 | —          |
 
 ## Symptom
 
@@ -55,13 +55,42 @@ go-to-definition on a use (they should land in the file that won, not `main.yml`
 role-scoped reads through `meta/main.yml` dependencies (`vars.rs:1513`), and the
 `scan` undefined block.
 
+## Outcome
+
+`ScanCache::role_vars_files(subdir, name, bare_first)` ports `find_vars_files` for a role's
+`defaults/` and `vars/`. It uses the extension order for the default `main`, and for an explicit
+`*_from` when `bare_first` is set. For a directory hit it reuses `collect_vars_dir`, which
+already ported `_get_dir_vars_files` for `group_vars/` (sorted, only extension-less subdirs
+descended, hidden and `~` entries skipped). `vars::role_vars` reads whatever it returns. The
+`*_from` half is T-063's; it calls the same function with `bare_first`.
+
+No precedence change was needed for the directory form. `vars::effective` already breaks
+same-precedence ties by file path, and path order is the sorted load order, so `b.yml` beats
+`a.yml` and hover and go-to-definition follow.
+
+Every new test was seen red: with `role_vars` back to the fixed `main.yml` path, with `.yaml`
+tried before `.yml`, and with the directory branch disabled (and the `var-undefined` asserts
+masked so that the hover and jump assertions were the ones to fail).
+
+Corpus: kubespray `7198b21` uses both shapes in its central role. `kubespray_defaults` has
+`defaults/main/` and `vars/main/` directories, `kubernetes/control-plane` has
+`defaults/main/` and `vars/main.yaml`, and `kata_containers` has `defaults/main.yaml`.
+`scan` goes from **96 `var-undefined` to 6**, with no new ones. The 6 left are a molecule
+test file, a `scripts/` playbook and one `tests/` playbook, none of them in this shape.
+
+Left alone: `include_vars::redundant_self_reload` matches only `<role>/vars/main.yml`, on
+purpose ("stays in step with what we actually model"). It is now silent for a role whose
+auto-loaded file is `vars/main.yaml`. That is a missed hint, not a false one.
+
 ## Done when
 
-- [ ] each row of the Symptom table has a test asserting the Ansible column, the `main.yml`
-      row as the control
-- [ ] the `main/` directory form: every key defined, the later sorted file's value is the
+- [x] each row of the Symptom table has a test asserting the Ansible column, the `main.yml`
+      row as the control — `role_defaults_and_vars_load_from_every_main_shape`
+- [x] the `main/` directory form: every key defined, the later sorted file's value is the
       one hover and go-to-definition point at, and a nested subdirectory is read
-- [ ] `main.yml` and `main.yaml` side by side: only `main.yml`'s keys are defined
-- [ ] a role with neither `defaults/` nor `vars/` stays silent, not an error
-- [ ] hover and go-to-definition on a use of a `defaults/main.yaml` key land on that file —
-      one test per consumer, each seen red without the fix
+- [x] `main.yml` and `main.yaml` side by side: only `main.yml`'s keys are defined
+- [x] a role with neither `defaults/` nor `vars/` stays silent, not an error —
+      `a_role_with_no_defaults_or_vars_dir_is_silent`
+- [x] hover and go-to-definition on a use of a `defaults/main.yaml` key land on that file —
+      one test per consumer, each seen red without the fix —
+      `role_defaults_outside_main_yml_reach_every_consumer`

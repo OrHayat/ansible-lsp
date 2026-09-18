@@ -9853,6 +9853,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// T-239's editor consumers: a role default in `defaults/main.yaml`, and one defined twice
+    /// in a `defaults/main/` directory, where the later sorted file wins (measured on 2.21.2).
+    #[test]
+    fn role_defaults_outside_main_yml_reach_every_consumer() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let root = std::env::temp_dir().join("t239-consumers");
+        let _ = std::fs::remove_dir_all(&root);
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, text).unwrap();
+            p.canonicalize().unwrap()
+        };
+        w("ansible.cfg", "[defaults]\nroles_path = ./roles\n");
+        w("roles/web/tasks/main.yml", "- meta: noop\n");
+        w("roles/web/defaults/main.yaml", "web_port: 8080\n");
+        w("roles/web/vars/main/a.yml", "web_mode: from_a\n");
+        w("roles/web/vars/main/b.yml", "web_mode: from_b\n");
+        let play = w(
+            "site.yml",
+            "- hosts: all\n  roles: [web]\n  tasks:\n\
+             \x20   - debug: { msg: \"{{ web_port }} {{ web_mode }} {{ nope_missing }}\" }\n",
+        );
+        let text = std::fs::read_to_string(&play).unwrap();
+
+        let a = super::Backend::analyze_text(text.clone(), &play).unwrap();
+        let undefined: Vec<String> =
+            super::Backend::variable_coverage_diagnostics(&a, &play, &a.nodes, &[], &no_cache(), None)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+                .map(|d| d.message)
+                .collect();
+        assert_eq!(undefined.len(), 1, "{undefined:?}");
+        assert!(undefined[0].contains("nope_missing"), "the control: {undefined:?}");
+
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&play).unwrap();
+        let jump = |byte: usize| {
+            let (line, character) = doc.byte_to_lsp(byte);
+            super::Backend::definition_at(
+                &doc,
+                &nodes,
+                tower_lsp::lsp_types::Position { line, character },
+                &uri,
+                &play,
+                &no_buffers(),
+                &[],
+                &no_cache(),
+                None,
+                None,
+            )
+            .unwrap_or_default()
+        };
+        let hover = |byte: usize| {
+            super::Backend::variable_hover_at(&doc, &nodes, byte, &play, &no_buffers(), &[], &no_cache(), None, None)
+                .map(|h| h.0)
+                .unwrap_or_default()
+        };
+
+        let port = text.find("{{ web_port }}").unwrap() + 3;
+        let locs = jump(port);
+        assert_eq!(locs.len(), 1, "{locs:?}");
+        assert!(locs[0].uri.path().ends_with("roles/web/defaults/main.yaml"), "{:?}", locs[0].uri);
+        let md = hover(port);
+        assert!(md.contains("8080"), "{md}");
+
+        let mode = text.find("{{ web_mode }}").unwrap() + 3;
+        let md = hover(mode);
+        assert!(md.contains("from_b"), "the later sorted file's value: {md}");
+        let locs = jump(mode);
+        assert!(
+            locs.first().is_some_and(|l| l.uri.path().ends_with("roles/web/vars/main/b.yml")),
+            "{locs:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// T-235, kubespray's `etcd_defaults` shape: a role with only `defaults/` and `vars/`.
     /// Measured on 2.21.3, it loads from `roles:`, `dependencies:`, `import_role` and
     /// `include_role` and runs clean; only a name found nowhere fails. Every consumer of the

@@ -41,9 +41,10 @@ pub enum VarSource {
     Register,
     /// A key in a `vars_files:` target.
     VarsFiles,
-    /// A key in the enclosing role's `defaults/main.yml`.
+    /// A key in the enclosing role's `defaults/main.yml` — or whichever of `main.yaml`,
+    /// `main.json`, bare `main` or a `main/` directory Ansible loads instead (T-239).
     RoleDefaults,
-    /// A key in the enclosing role's `vars/main.yml`.
+    /// A key in the enclosing role's `vars/main.yml`, found the same way.
     RoleVars,
     /// A key in a playbook-adjacent `group_vars/all` file — applies to every host.
     GroupVarsAll,
@@ -1793,11 +1794,13 @@ fn merge(out: &mut Contribution, from: &Contribution) {
     out.hosts_unknowable |= from.hosts_unknowable;
 }
 
-/// The defaults/ and vars/ of `role`, and what its `meta/main.yml` dependencies contribute —
-/// fixed locations, no search.
+/// The defaults/ and vars/ of `role`, and what its `meta/main.yml` dependencies contribute.
 fn role_vars(role: &Path, out: &mut Contribution, walk: &mut Walk) {
-    read_var_file(&role.join("defaults").join("main.yml"), VarSource::RoleDefaults, None, out, walk);
-    read_var_file(&role.join("vars").join("main.yml"), VarSource::RoleVars, None, out, walk);
+    for (subdir, source) in [("defaults", VarSource::RoleDefaults), ("vars", VarSource::RoleVars)] {
+        for f in walk.cache.role_vars_files(&role.join(subdir), "main", false) {
+            read_var_file(&f, source, None, out, walk);
+        }
+    }
 
     // meta/main.yml dependencies run before this role, so their defaults/vars and
     // set_facts are in scope here — and, transitively, for whoever calls this role
@@ -2604,6 +2607,86 @@ mod tests {
         // The control: a role found nowhere brings nothing.
         let defs = defs_of("absent.yml", "- hosts: all\n  roles: [truly_absent]\n");
         assert!(!has(&defs, "dflt_value"));
+    }
+
+    /// T-239: every file shape Ansible loads for a role's `defaults/` and `vars/`, each row
+    /// measured on 2.21.2 with the role in a play's `roles:`. `main.yml` is the control that
+    /// already worked.
+    #[test]
+    fn role_defaults_and_vars_load_from_every_main_shape() {
+        let d = std::env::temp_dir().join("ansible-lsp-t239-shapes");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let roles = ["d_yml", "d_yaml", "d_json", "d_bare", "d_dir", "v_yaml", "v_dir", "both", "bare_role"];
+        for r in &roles[..8] {
+            write(&d, &format!("roles/{r}/tasks/main.yml"), "- meta: noop\n");
+        }
+        write(&d, "roles/d_yml/defaults/main.yml", "d_yml_v: 1\n");
+        write(&d, "roles/d_yaml/defaults/main.yaml", "d_yaml_v: 1\n");
+        write(&d, "roles/d_json/defaults/main.json", "{\"d_json_v\": 1}\n");
+        write(&d, "roles/d_bare/defaults/main", "d_bare_v: 1\n");
+        write(&d, "roles/d_dir/defaults/main/a.yml", "d_dir_v: from_a\nd_dir_a_only: a\n");
+        write(&d, "roles/d_dir/defaults/main/b.yml", "d_dir_v: from_b\nd_dir_b_only: b\n");
+        write(&d, "roles/d_dir/defaults/main/sub/c.yml", "d_dir_c_only: c\n");
+        write(&d, "roles/v_yaml/vars/main.yaml", "v_yaml_v: 1\n");
+        write(&d, "roles/v_dir/vars/main/x.yml", "v_dir_v: 1\n");
+        write(&d, "roles/both/defaults/main.yml", "both_v: yml\nonly_in_yml: 1\n");
+        write(&d, "roles/both/defaults/main.yaml", "both_v: yaml\nonly_in_yaml: 1\n");
+        // No tasks at all (T-235), so the direct read is covered as well as the one a task
+        // file's walk makes for its enclosing role.
+        write(&d, "roles/bare_role/defaults/main.yaml", "bare_role_v: 1\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, format!("- hosts: all\n  roles: [{}]\n", roles.join(", "))).unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        let of = |name: &str| defs.iter().filter(|x| x.name == name).collect::<Vec<_>>();
+
+        for (name, source) in [
+            ("d_yml_v", VarSource::RoleDefaults),
+            ("d_yaml_v", VarSource::RoleDefaults),
+            ("d_json_v", VarSource::RoleDefaults),
+            ("d_bare_v", VarSource::RoleDefaults),
+            ("d_dir_a_only", VarSource::RoleDefaults),
+            ("d_dir_b_only", VarSource::RoleDefaults),
+            ("d_dir_c_only", VarSource::RoleDefaults),
+            ("v_yaml_v", VarSource::RoleVars),
+            ("v_dir_v", VarSource::RoleVars),
+            ("bare_role_v", VarSource::RoleDefaults),
+        ] {
+            let found = of(name);
+            assert_eq!(found.len(), 1, "{name}: {found:?}");
+            assert_eq!(found[0].source, source, "{name}");
+        }
+
+        // The directory form: both files define `d_dir_v`, and the later sorted one wins —
+        // measured `d_dir_v=from_b`.
+        let dir_v = of("d_dir_v");
+        assert_eq!(dir_v.len(), 2, "{dir_v:?}");
+        let live = effective(&dir_v.into_iter().cloned().collect::<Vec<_>>()).cloned().unwrap();
+        assert!(live.file.ends_with("defaults/main/b.yml"), "{:?}", live.file);
+
+        // First hit wins: with `main.yml` present, `main.yaml` is never read.
+        assert!(of("only_in_yaml").is_empty());
+        assert_eq!(of("only_in_yml").len(), 1);
+        let both = of("both_v");
+        assert!(both.len() == 1 && both[0].file.ends_with("defaults/main.yml"), "{both:?}");
+    }
+
+    /// A role with neither `defaults/` nor `vars/` contributes nothing and does not fail.
+    #[test]
+    fn a_role_with_no_defaults_or_vars_dir_is_silent() {
+        let d = std::env::temp_dir().join("ansible-lsp-t239-empty");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d, "roles/plain/tasks/main.yml", "- meta: noop\n");
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  roles: [plain]\n").unwrap();
+        let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(
+            !defs.iter().any(|x| matches!(x.source, VarSource::RoleDefaults | VarSource::RoleVars)),
+            "{defs:?}"
+        );
     }
 
     /// Two taskless roles depending on each other: the walk must stop. What it returns is

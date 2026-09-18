@@ -561,6 +561,30 @@ impl ScanCache {
         files
     }
 
+    /// The files a role's `defaults/` or `vars/` loads for entry `name`, in load order —
+    /// `Role._load_role_yaml(subdir, main, allow_dir=True)` through `find_vars_files` (T-239).
+    ///
+    /// The default `main` tries `.yml`, `.yaml`, `.json`, then bare; an explicit
+    /// `defaults_from`/`vars_from` (`bare_first`) tries bare first. The first that exists
+    /// wins, and if it is a directory, every file under it loads in sorted order. Measured
+    /// on 2.21.2: `main.yaml`, `main.json`, bare `main` and `main/{a,b,sub/c}.yml` all load,
+    /// `b.yml` beats `a.yml`, and with `main.yml` beside `main.yaml` only `main.yml` is read.
+    pub fn role_vars_files(&self, subdir: &Path, name: &str, bare_first: bool) -> Vec<PathBuf> {
+        let exts: [&str; 4] =
+            if bare_first { ["", ".yml", ".yaml", ".json"] } else { [".yml", ".yaml", ".json", ""] };
+        let mut out = Vec::new();
+        for ext in exts {
+            let p = subdir.join(format!("{name}{ext}"));
+            match Fs::kind(self, &p) {
+                Some(crate::fs::Kind::Dir) => self.collect_vars_dir(&p, 0, &mut out),
+                Some(_) => out.push(p),
+                None => continue,
+            }
+            break;
+        }
+        out
+    }
+
     /// One entity directory's files, in the order `_get_dir_vars_files` yields them.
     ///
     /// Subdirectories are descended, but only extension-less ones — `group_vars/web/sub.yml/`

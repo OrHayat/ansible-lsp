@@ -100,7 +100,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
-| T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](open/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -350,6 +349,7 @@ T-021 is now unblocked on that side.
 | T-227 | [One loader-path model for every plugin-type dir and cfg path](closed/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | done     |
 | T-105 | [delegate_to: empty template, and hosts not in inventory](closed/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | done     |
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](closed/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | done     |
+| T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](closed/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | done     |
 
 ## Settled — don't re-derive these
 
