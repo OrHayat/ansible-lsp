@@ -1,0 +1,26 @@
+---
+# T-185 — a role file whose include resolves outside its own role directory. It runs, but the
+# role now depends on the layout around it: moving it, vendoring it or packaging it into a
+# collection breaks the include at run time. HINT rows reach out; GOOD rows stay inside, or
+# reach another role, which is how roles compose.
+
+- ansible.builtin.include_tasks: inner.yml # GOOD
+
+- ansible.builtin.include_tasks: ../tasks/inner.yml # GOOD: normalises back inside the role
+
+- ansible.builtin.include_tasks: ../../../tasks/sibling.yml # HINT: the repo's tasks/, outside the role
+
+- ansible.builtin.import_tasks: ../../../tasks/sibling.yml # HINT: an import reaches out the same way
+
+- ansible.builtin.include_vars: ../../../vars/shared.yml # HINT: a vars include counts too
+
+- ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/sibling.yml" # NO HINT: from a role, playbook_dir is only guessed (T-137)
+
+- ansible.builtin.include_tasks: ../../reporting/tasks/main.yml # GOOD: another role's file
+
+- ansible.builtin.include_role:
+    name: reporting # GOOD: include_role is how roles compose
+
+- ansible.builtin.include_tasks: "{{ role_path }}/../../tasks/sibling.yml" # NO HINT: role_path is not expanded yet (T-068)
+
+- ansible.builtin.include_tasks: ../../../tasks/sibling.yml # noqa: role-include-escapes-role

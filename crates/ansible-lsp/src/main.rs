@@ -30,6 +30,7 @@ use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id_for, Resolution, SkipReason, Status};
 use ansible_core::reverse;
+use ansible_core::role_escape;
 use ansible_core::static_fields;
 use ansible_core::vars;
 use ansible_core::workspace::{yaml_files, FileContext};
@@ -1774,6 +1775,25 @@ impl Backend {
             })
             .collect();
 
+        // A role file's include that resolves outside the role — works, but ties the role to
+        // this repo's layout (T-185). A faint hint, not a fault.
+        let escaping_includes: Vec<Diagnostic> = role_escape::problems(
+            &a.refs,
+            a.ctx.role_dir.as_deref(),
+            references::extract(&a.nodes).in_playbook,
+        )
+        .into_iter()
+        .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+        .map(|p| Diagnostic {
+            range: range_of(p.span),
+            severity: Some(DiagnosticSeverity::HINT),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String(p.rule.into())),
+            message: p.message,
+            ..Default::default()
+        })
+        .collect();
+
         // A non-scalar mapping key: valid YAML our libyaml parses, fatal to Ansible's
         // loader in every spelling and every document kind (T-168). Always an error.
         let unloadable: Vec<Diagnostic> = complex_key::problems(&a.nodes, &a.doc.text)
@@ -1816,6 +1836,7 @@ impl Backend {
             .chain(bad_values)
             .chain(untagged_includes)
             .chain(looped_register_reads)
+            .chain(escaping_includes)
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
@@ -7755,6 +7776,56 @@ mod tests {
             let bad: Vec<String> = super::Backend::diagnostics_of(&a)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "looped-register-key"))
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-185's fixture, both directions: every HINT row in the demo role carries exactly one
+    /// `role-include-escapes-role` hint on that line, and nothing else in the file fires it.
+    /// GOOD, NO HINT and SILENCED rows are pinned by staying out of the set.
+    #[test]
+    fn the_role_escape_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/roles/escapee/tasks/main.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let mut got: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "role-include-escapes-role"))
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+        let mut expected: Vec<(u32, DiagnosticSeverity)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# HINT"))
+            .map(|(i, _)| (i as u32, DiagnosticSeverity::HINT))
+            .collect();
+        got.sort_unstable();
+        expected.sort_unstable();
+        assert!(expected.len() >= 3, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-185's false-positive gate: every other demo file, including playbooks that include
+    /// into roles and roles that include each other.
+    #[test]
+    fn every_other_demo_file_is_free_of_role_escape_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let skip = demo.join("roles/escapee/tasks/main.yml");
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path == skip {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "role-include-escapes-role"))
                 .map(|d| d.message)
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());

@@ -1,0 +1,4 @@
+---
+- name: a file inside the role
+  ansible.builtin.debug:
+    msg: inside escapee

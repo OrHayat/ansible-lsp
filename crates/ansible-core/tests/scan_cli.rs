@@ -550,8 +550,9 @@ fn the_demo_s_knowable_include_vars_path_resolves_for_the_scan_too() {
          one file away:\n{text}"
     );
     // Four for `include_vars_demo.yml` — three literal paths plus the knowable templated one
-    // — and a fifth for chain-c's re-include of its own `vars/main.yml`, the T-207 fixture.
-    assert_eq!(resolved, 5, "so the knowable one joins the four literal paths:\n{text}");
+    // — a fifth for chain-c's re-include of its own `vars/main.yml`, the T-207 fixture, and a
+    // sixth for the escapee role reaching out to `vars/shared.yml`, the T-185 fixture.
+    assert_eq!(resolved, 6, "so the knowable one joins the four literal paths:\n{text}");
 }
 
 /// `--reverse` prints the reverse index (T-020): every target, then each reference reaching
