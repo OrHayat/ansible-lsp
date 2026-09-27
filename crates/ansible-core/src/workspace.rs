@@ -151,6 +151,13 @@ impl FileContext {
             && matches!(path.extension().and_then(|e| e.to_str()), Some("yml" | "yaml"))
     }
 
+    /// This file sits under the role's `handlers/` — a handler list, where a notified
+    /// include runs its tasks whatever `--tags` selected (T-230). A handler file a play pulls
+    /// in by path from outside a role cannot be recognised from the path and reads as tasks.
+    pub fn is_role_handlers(&self, path: &Path) -> bool {
+        self.role_dir.as_ref().is_some_and(|role| path.starts_with(role.join("handlers")))
+    }
+
     /// Directories that contain roles, in Ansible's search order —
     /// `definition.py:_load_role_path`, measured on 2.21.2 (T-067,
     /// `scratchpad/t067_search_order_probe.sh`):

@@ -1,0 +1,85 @@
+# T-230 — `tags:` on a dynamic include tags the include line, not the tasks it brings in.
+#
+# Measured on core 2.21.3 with `--tags web`: every WARN row runs the include and skips
+# every task inside it. `apply: {tags: [...]}` inside the include's arguments is what
+# carries a tag through — or the tasks inside carrying it themselves. Each GOOD row is the same
+# shape measured running the inner tasks.
+
+- name: tags on dynamic includes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - include_tasks: tasks/sibling.yml
+      tags: [web] # WARN: --tags web runs this line and skips everything in the file
+
+    - ansible.builtin.include_role:
+        name: reporting
+      tags: web # WARN: the FQCN spelling and a scalar tag behave the same
+
+    - include_tasks:
+        file: tasks/sibling.yml
+        apply:
+          tags: [web]
+      tags: [web] # GOOD: apply carries the tag to the included tasks
+
+    - include_tasks:
+        file: tasks/sibling.yml
+        apply:
+          tags: [other]
+      tags: [web] # WARN: apply tags `other`, so --tags web still skips the inner tasks
+
+    - include_tasks:
+        file: tasks/sibling.yml
+        apply:
+          when: true
+      tags: [web] # WARN: an apply with no tags carries none
+
+    - include_tasks: tasks/tagged_web.yml
+      tags: [web] # GOOD: every task in the file is tagged web itself, so all of them run
+
+    - include_tasks: tasks/partly_tagged_web.yml
+      tags: [web] # WARN: 1 of the 2 tasks inside is untagged and skipped
+
+    - include_tasks: tasks/missing_file.yml
+      tags: [web] # GOOD: the target cannot be read, so what it skips is unknown
+
+    - include_tasks: tasks/sibling.yml
+      tags: [always] # WARN: the include always runs; its tasks do not
+
+    - include_tasks: tasks/sibling.yml
+      tags: [never] # GOOD: `never` alone switches the include off; nothing to carry
+
+    - include_tasks: tasks/sibling.yml
+      tags: [never, web] # WARN: --tags web still skips the inner tasks
+
+    - include_tasks: tasks/sibling.yml
+      tags: "{{ tag_list }}" # GOOD: templated, the set is unknown here
+
+    - include_tasks: tasks/sibling.yml
+      tags: [web] # noqa: include-tags-not-applied
+
+    - import_tasks: tasks/sibling.yml
+      tags: [web] # GOOD: an import copies its tags onto every task it brings in
+
+    - import_role:
+        name: reporting
+      tags: [web] # GOOD
+
+    - block:
+        - include_tasks: tasks/sibling.yml # GOOD: a block's tags do reach the included tasks
+      tags: [web]
+
+  handlers:
+    - name: included handler
+      include_tasks: tasks/sibling.yml
+      tags: [web] # GOOD: a notified handler's include runs its tasks under --tags
+
+- name: play-level tags reach included tasks
+  hosts: localhost
+  gather_facts: false
+  tags: [web]
+  roles:
+    - role: reporting
+      tags: [web] # GOOD: a roles: entry is static
+  tasks:
+    - include_tasks: tasks/sibling.yml # GOOD

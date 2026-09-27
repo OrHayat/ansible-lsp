@@ -163,7 +163,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-227 | [One loader-path model for every plugin-type dir and cfg path](open/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | S    | —    |
 | T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | T-227 |
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
-| T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](open/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | S    | —    |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](open/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | M    | —    |
@@ -347,6 +346,7 @@ T-021 is now unblocked on that side.
 | T-237 | **bug** · [The Python package's bundled collections are searched before ~/.ansible/collections, so hover and jump show a copy Ansible does not run](closed/T-237-the-python-package-s-bundled-collections-are-searched-before.md) | done     |
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](closed/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | done     |
 | T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](closed/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | done     |
+| T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](closed/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | done     |
 
 ## Settled — don't re-derive these
 

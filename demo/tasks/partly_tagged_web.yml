@@ -1,0 +1,11 @@
+---
+# T-230: only the first task carries `web`. Under `--tags web` through an include that does
+# not `apply` the tag, the second is skipped.
+- name: tagged
+  ansible.builtin.debug:
+    msg: runs under --tags web
+  tags: [web]
+
+- name: untagged
+  ansible.builtin.debug:
+    msg: skipped under --tags web

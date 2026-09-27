@@ -1,0 +1,14 @@
+---
+# T-230: every task here carries `web` itself, so `--tags web` runs all of them even
+# through an include whose own tag stops at the include line.
+- name: tagged on its own
+  ansible.builtin.debug:
+    msg: runs under --tags web
+  tags: [web]
+
+- name: a tagged block covers its tasks
+  tags: [web]
+  block:
+    - name: inside the block
+      ansible.builtin.debug:
+        msg: runs under --tags web

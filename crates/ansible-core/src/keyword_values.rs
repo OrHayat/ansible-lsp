@@ -17,7 +17,7 @@
 
 use crate::ast::{Ast, Directive, PlayItem, Stmt};
 use crate::keywords;
-use crate::parse::{Node, Span};
+use crate::parse::{node_with_span, Node, Span};
 
 /// Rule id for the two values Ansible refuses.
 pub const RULE_ID: &str = "invalid-keyword-value";
@@ -88,7 +88,7 @@ fn directives(ds: &[Directive], scope: Scope, nodes: &[Node], out: &mut Vec<Prob
     for key in ["debugger", "order", "serial"] {
         // On a duplicate key Ansible loads only the last, so only the last is judged.
         let Some(d) = ds.iter().rev().find(|d| d.key == key) else { continue };
-        let Some(value) = node_at(nodes, d.value) else { continue };
+        let Some(value) = node_with_span(nodes, d.value) else { continue };
         match key {
             "debugger" => enum_value(value, keywords::DEBUGGER_VALUES, |v| debugger_message(v, scope), out),
             "order" => enum_value(value, keywords::ORDER_VALUES, order_message, out),
@@ -163,26 +163,6 @@ fn serial_item(item: &Node, in_list: bool, out: &mut Vec<Problem>) {
 fn literal(n: &Node) -> Option<&str> {
     let v = n.as_str()?.trim();
     (!v.contains("{{") && !v.contains("{%")).then_some(v)
-}
-
-/// The node whose span is exactly `span`. Directives carry only the value's span.
-fn node_at(nodes: &[Node], span: Span) -> Option<&Node> {
-    nodes.iter().find_map(|n| {
-        let s = n.span();
-        if s == span {
-            return Some(n);
-        }
-        if s.start > span.start || s.end < span.end {
-            return None;
-        }
-        match n {
-            Node::Sequence { items, .. } => node_at(items, span),
-            Node::Mapping { entries, .. } => {
-                entries.iter().find_map(|(k, v)| node_at(std::slice::from_ref(k), span).or_else(|| node_at(std::slice::from_ref(v), span)))
-            }
-            _ => None,
-        }
-    })
 }
 
 #[cfg(test)]

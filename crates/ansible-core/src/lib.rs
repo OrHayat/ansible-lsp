@@ -9,6 +9,7 @@ pub mod fs;
 pub mod glob;
 pub mod guard;
 pub mod include_target;
+pub mod include_tags;
 pub mod include_vars;
 pub mod injected;
 pub mod install;

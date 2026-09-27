@@ -23,6 +23,7 @@ use ansible_core::condition;
 use ansible_core::mutation;
 use ansible_core::vars_files;
 use ansible_core::parse::{Document, Loader, Node, Span};
+use ansible_core::include_tags;
 use ansible_core::keyword_values;
 use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
@@ -566,6 +567,9 @@ struct Analysis {
     /// This file is a role's `meta/main.yml` (T-147). Carried rather than recomputed because
     /// `Analysis` has no path and the answer is `ctx` + path, which only the analyze call has.
     is_role_metadata: bool,
+    /// T-230, computed during analysis for the same reason as `include_targets`: whether an
+    /// include's tags lose anything depends on the tags written in the file it brings in.
+    untagged_includes: Vec<include_tags::Problem>,
 }
 
 /// Per-phase time accumulated across a workspace scan (T-074). Sums, not per-file — the
@@ -1144,7 +1148,29 @@ impl Backend {
             })
             .collect();
 
-        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets, is_role_metadata })
+        // The include's own reference picks the file: `tasks_from` when written, else the role's
+        // `tasks/main`, else the `include_tasks` path. Unresolved answers None, which the rule
+        // reads as "cannot tell" and stays silent on.
+        let inner = |t: &ansible_core::ast::Task| {
+            let within = |r: &Reference| t.span.start <= r.span.start && r.span.end <= t.span.end;
+            let pick = |kind: ReferenceKind| refs.iter().find(|(r, _)| r.kind == kind && within(r));
+            let (_, res) = pick(ReferenceKind::TasksFrom)
+                .or_else(|| pick(ReferenceKind::Role))
+                .or_else(|| pick(ReferenceKind::IncludeTasks))?;
+            if res.status != Status::Resolved {
+                return None;
+            }
+            let src = scan.source(res.targets.first()?)?;
+            include_tags::leaf_tags(src.nodes.as_ref()?)
+        };
+        let untagged_includes = include_tags::problems(
+            &ansible_core::ast::build(&nodes),
+            &nodes,
+            ctx.is_role_handlers(path),
+            &inner,
+        );
+
+        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets, is_role_metadata, untagged_includes })
     }
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
@@ -1716,6 +1742,22 @@ impl Backend {
             })
             .collect();
 
+        // `tags:` on a dynamic include stops at the include line (T-230).
+        let untagged_includes: Vec<Diagnostic> = a
+        .untagged_includes
+        .iter()
+        .cloned()
+        .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+        .map(|p| Diagnostic {
+            range: range_of(p.span),
+            severity: Some(DiagnosticSeverity::WARNING),
+            source: Some("ansible-lsp".into()),
+            code: Some(NumberOrString::String(p.rule.into())),
+            message: p.message,
+            ..Default::default()
+        })
+        .collect();
+
         // A non-scalar mapping key: valid YAML our libyaml parses, fatal to Ansible's
         // loader in every spelling and every document kind (T-168). Always an error.
         let unloadable: Vec<Diagnostic> = complex_key::problems(&a.nodes, &a.doc.text)
@@ -1756,6 +1798,7 @@ impl Backend {
             .chain(misplaced)
             .chain(literal)
             .chain(bad_values)
+            .chain(untagged_includes)
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
@@ -7586,6 +7629,72 @@ mod tests {
         expected.sort_unstable();
         assert!(expected.len() >= 7, "the fixture lost rows: {expected:?}");
         assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-230's fixture, both directions: every WARN row carries exactly one
+    /// `include-tags-not-applied` warning on that line, and nothing else in the file fires
+    /// it. GOOD and SILENCED rows are pinned by staying out of the set.
+    #[test]
+    fn the_include_tags_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/include_tags.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let mut got: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "include-tags-not-applied"))
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+        let mut expected: Vec<(u32, DiagnosticSeverity)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
+            .map(|(i, _)| (i as u32, DiagnosticSeverity::WARNING))
+            .collect();
+        got.sort_unstable();
+        expected.sort_unstable();
+        assert!(expected.len() >= 6, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-230: the handlers exemption is decided from the file's path, which only the analyze
+    /// call has. The same text warns in a role's `tasks/` and not in its `handlers/`.
+    #[test]
+    fn an_include_in_a_role_handlers_file_is_not_flagged() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let text = "- name: h\n  include_tasks: restart.yml\n  tags: [web]\n";
+        let fired = |rel: &str| {
+            let path = std::path::Path::new("../../demo/roles/notifier").join(rel).canonicalize().unwrap();
+            let a = super::Backend::analyze_text(text.into(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "include-tags-not-applied"))
+                .count()
+        };
+        assert_eq!(fired("tasks/main.yml"), 1, "control: a tasks file warns");
+        assert_eq!(fired("handlers/main.yml"), 0);
+    }
+
+    /// T-230's false-positive gate.
+    #[test]
+    fn every_other_demo_file_is_free_of_include_tags_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "include_tags.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "include-tags-not-applied"))
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
     }
 
     /// T-109's false-positive gate.

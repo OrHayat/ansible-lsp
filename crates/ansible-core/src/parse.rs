@@ -255,6 +255,28 @@ impl Document {
     }
 }
 
+/// The node whose span is exactly `span`, anywhere under `nodes`. For callers holding a
+/// span from the AST (a [`crate::ast::Directive`] carries only its value's span) that need
+/// the value itself.
+pub fn node_with_span<'a>(nodes: &'a [Node], span: Span) -> Option<&'a Node> {
+    nodes.iter().find_map(|n| {
+        let s = n.span();
+        if s == span {
+            return Some(n);
+        }
+        if s.start > span.start || s.end < span.end {
+            return None;
+        }
+        match n {
+            Node::Sequence { items, .. } => node_with_span(items, span),
+            Node::Mapping { entries, .. } => {
+                entries.iter().find_map(|(k, v)| node_with_span(std::slice::from_ref(k), span).or_else(|| node_with_span(std::slice::from_ref(v), span)))
+            }
+            _ => None,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
