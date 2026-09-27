@@ -218,6 +218,12 @@ pub const VARS_PROMPT_KEYS: &[&str] = &[
     "unsafe",
 ];
 
+/// Legal `debugger:` values (`base.py:206-209`). Case-sensitive: `Always` fails.
+pub const DEBUGGER_VALUES: &[&str] = &["always", "never", "on_failed", "on_unreachable", "on_skipped"];
+
+/// Legal play `order:` values (`inventory/manager.py:438-439`). Case-sensitive.
+pub const ORDER_VALUES: &[&str] = &["inventory", "reverse_inventory", "sorted", "reverse_sorted", "shuffle"];
+
 /// Keywords declared `static=True` upstream — the flag that means "never templated":
 /// `vars` (`base.py:696`), `collections` (`collectionsearch.py:34`), `listen`
 /// (`handler.py:27`), `register` (`task.py:89`). Grepping the installed 2.21.2 package for

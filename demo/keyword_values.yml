@@ -1,0 +1,68 @@
+# T-109 — keyword values outside their closed set.
+#
+# Measured on core 2.21.3. Every BAD row passes `ansible-playbook --syntax-check`: a bad
+# `debugger:` fails each task it applies to when that task runs, and a bad `order:` kills
+# the play before its first task. The HINT rows run clean but batch the opposite way to
+# how they read. GOOD rows are the same shape measured working.
+
+- name: debugger values
+  hosts: localhost
+  gather_facts: false
+  debugger: never # GOOD
+  vars:
+    mode: on_failed
+  tasks:
+    - name: a made-up value
+      debug: msg=x
+      debugger: sometimes # BAD: the task fails when it runs
+    - name: values are case-sensitive
+      debug: msg=x
+      debugger: Always # BAD: `always` would be fine
+    - name: templated values render first
+      debug: msg=x
+      debugger: "{{ mode }}" # GOOD
+    - name: suppressed
+      debug: msg=x
+      debugger: sometimes # noqa: invalid-keyword-value
+    - block:
+        - debug: msg=x
+      debugger: on_error # BAD: every task in the block fails when it runs
+
+- name: a bad order
+  hosts: localhost
+  gather_facts: false
+  order: random # BAD: the play fails before its first task
+  tasks:
+    - debug: msg=x
+
+- name: a good order
+  hosts: localhost
+  gather_facts: false
+  order: reverse_sorted # GOOD
+  serial: 2 # GOOD
+  tasks:
+    - debug: msg=x
+
+- name: serial of zero is no batching
+  hosts: localhost
+  gather_facts: false
+  serial: 0 # HINT: every host in one batch
+  tasks:
+    - debug: msg=x
+
+- name: a zero percentage is one host at a time
+  hosts: localhost
+  gather_facts: false
+  serial: "0%" # HINT: batches of one host
+  tasks:
+    - debug: msg=x
+
+- name: zero inside a list takes the rest
+  hosts: localhost
+  gather_facts: false
+  serial:
+    - 1 # GOOD
+    - 0 # HINT: all remaining hosts at once
+    - "25%" # GOOD
+  tasks:
+    - debug: msg=x

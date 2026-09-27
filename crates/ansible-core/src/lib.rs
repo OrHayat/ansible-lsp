@@ -14,6 +14,7 @@ pub mod injected;
 pub mod install;
 pub mod inventory;
 pub mod jinja;
+pub mod keyword_values;
 pub mod keywords;
 pub mod mutation;
 pub mod parse;

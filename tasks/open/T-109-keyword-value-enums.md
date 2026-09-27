@@ -11,7 +11,7 @@ about *when* it fires — which is what makes two of them worth diagnosing.
 
 | Keyword    | Legal values | Enforced |
 | ---------- | ------------ | -------- |
-| `debugger` | `always on_failed on_unreachable on_skipped never` | load time, fatal (`base.py:206-209`) |
+| `debugger` | `always on_failed on_unreachable on_skipped never` | **run** time, per task (`base.py:206-209`) — see Landed |
 | `order`    | `inventory sorted reverse_sorted reverse_inventory shuffle` | **run** time (`inventory/manager.py:438-439`) |
 | `strategy` | any loaded strategy plugin | **run** time (`task_queue_manager.py:380`) |
 | `connection` | any loaded connection plugin | **run** time — `connection: locl` → "the connection plugin 'locl' was not found" |
@@ -38,11 +38,29 @@ module rules already make.
 
 ## Done when
 
-- [ ] `debugger:` and `order:` outside their sets are ERRORs
+- [x] `debugger:` and `order:` outside their sets are ERRORs
 - [ ] an unknown `strategy:` warns when the plugin index is available, and is silent otherwise
 - [ ] an unknown `connection:` warns under the same gate
 - [ ] an unknown `become_method:` warns, worded "fails once become is in effect" — it is inert
       without `become`, and `become` can arrive from cfg, `-b` or inventory, so the name check
       does not wait for it
-- [ ] `serial: 0` gets a HINT saying it means all hosts
+- [x] `serial: 0` gets a HINT saying it means all hosts
 - [ ] the enums live with the keyword tables, not in a second place
+
+## Landed: debugger, order, serial
+
+`keyword_values.rs`, enums in `keywords.rs` beside the tables; `demo/keyword_values.yml` is
+pinned exactly with a guard over the rest of the demo. The plugin-backed three are still open.
+
+Measured on 2.21.3, which corrected the table above. `debugger:` is **not** a load-time
+fatal: `--syntax-check` passes and each task it applies to fails when it runs ("Error
+processing keyword 'debugger'"). Under `when: false` the task skips clean; `ignore_errors:
+true` swallows it. Still ERROR — the value is broken on every run that reaches it — worded
+"fails whenever it runs". Both enums are case-sensitive (`Always`, `Sorted` fail) and both
+template, so `{{ }}` values are skipped.
+
+`serial:` on 3 hosts, counting batches: `0`, `"0"`, `-1`, `[0]` → 1 (no batching);
+`"0%"`, `"-10%"`, `["0%"]` → 3 (one host at a time — a percentage never yields a batch
+under one); `[1, 0]` → 2 (the `0` takes all remaining). All of those hint. `"10%"` also gives
+3 here, but that depends on inventory size, so it does not. `serial: "0.0"` crashes Ansible
+with an unhandled `int()` error — not handled here.
