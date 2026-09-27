@@ -25,6 +25,7 @@ use ansible_core::vars_files;
 use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::include_tags;
 use ansible_core::keyword_values;
+use ansible_core::looped_register;
 use ansible_core::placement;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id_for, Resolution, SkipReason, Status};
@@ -1758,6 +1759,21 @@ impl Backend {
         })
         .collect();
 
+        // A module key read off a looped task's register, which holds only `results` (T-193).
+        let looped_register_reads: Vec<Diagnostic> =
+            looped_register::problems(&ansible_core::ast::build(&a.nodes), &a.nodes, &a.doc.text)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
         // A non-scalar mapping key: valid YAML our libyaml parses, fatal to Ansible's
         // loader in every spelling and every document kind (T-168). Always an error.
         let unloadable: Vec<Diagnostic> = complex_key::problems(&a.nodes, &a.doc.text)
@@ -1799,6 +1815,7 @@ impl Backend {
             .chain(literal)
             .chain(bad_values)
             .chain(untagged_includes)
+            .chain(looped_register_reads)
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
@@ -7691,6 +7708,53 @@ mod tests {
             let bad: Vec<String> = super::Backend::diagnostics_of(&a)
                 .into_iter()
                 .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "include-tags-not-applied"))
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// T-193's fixture, both directions: every WARN row carries exactly one
+    /// `looped-register-key` warning on that line, and nothing else in the file fires it.
+    #[test]
+    fn the_looped_register_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/looped_register.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let mut got: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "looped-register-key"))
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+        let mut expected: Vec<(u32, DiagnosticSeverity)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
+            .map(|(i, _)| (i as u32, DiagnosticSeverity::WARNING))
+            .collect();
+        got.sort_unstable();
+        expected.sort_unstable();
+        assert!(expected.len() >= 3, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-193's false-positive gate: registers all over the demo tree, looped and not.
+    #[test]
+    fn every_other_demo_file_is_free_of_looped_register_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "looped_register.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "looped-register-key"))
                 .map(|d| d.message)
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());

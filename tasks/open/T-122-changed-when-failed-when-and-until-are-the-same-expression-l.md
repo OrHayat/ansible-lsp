@@ -43,3 +43,10 @@ of them. The work is scope plus the two exceptions above, not new analysis.
 - [ ] a `register`ed variable is in scope for that task's `until:` and not its `when:`
 - [ ] `changed_when: false` / `failed_when: false` never warn
 - [ ] the corpus reports a count per keyword, so the added surface is measured
+
+## Waiting on this
+
+T-193's `a_later_tasks_failed_when_fires` (`looped_register.rs`) is `#[ignore]`d against this
+ticket: `vars::any_uses` does not read these three keywords, so a later task's
+`failed_when: r.rc != 0` on a looped register is not flagged. Landing this should make it pass —
+delete the attribute, and re-run T-193's corpus gate (it must stay 0).

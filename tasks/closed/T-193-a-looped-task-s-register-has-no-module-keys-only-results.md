@@ -2,15 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P3       | S    | —          |
-
-## Problem
-
-## Approach
-
-## Done when
-
-- [ ]
+| done   | task | P3       | S    | —          |
 
 ## Problem
 
@@ -63,11 +55,41 @@ If it is built, the 0 above is the acceptance bar: it must still be 0 on this co
 
 ## Done when
 
-- [ ] `{{ r.stdout }}` on a looped register fires; `{{ r.results[0].stdout }}` and
+- [x] `{{ r.stdout }}` on a looped register fires; `{{ r.results[0].stdout }}` and
       `r.results | map(attribute='stdout')` are silent
-- [ ] the per-item exclusion holds for all six keywords, one assertion each — this is the whole
+- [x] the per-item exclusion holds for all six keywords, one assertion each — this is the whole
       rule, and a single combined test would let five of them regress unnoticed
-- [ ] `changed`, `failed`, `msg`, `results`, `skipped` never fire
-- [ ] `with_items` and friends behave as `loop:` does, asserted on at least one `with_*`
-- [ ] corpus gate: still 0 hits
-- [ ] `# noqa` works, rule id matched exactly
+- [x] `changed`, `failed`, `msg`, `results`, `skipped` never fire
+- [x] `with_items` and friends behave as `loop:` does, asserted on at least one `with_*`
+- [x] corpus gate: still 0 hits
+- [x] `# noqa` works, rule id matched exactly
+
+## Landed
+
+`looped_register.rs`, rule `looped-register-key`, a WARNING on the key. `demo/looped_register.yml`
+is pinned exactly with a guard over the rest of the demo; each guard in the rule was broken
+once and its test seen red.
+
+Re-measured on 2.21.3, which corrected two things above:
+
+- The aggregate keys are `changed, failed, msg, results, warnings`, plus `skipped` when every
+  item skipped. `warnings` is new; it never fires either.
+- **Only three of the six keywords see the per-item result.** `failed_when`, `changed_when`
+  and `until` on the registering task do (`failed=0`). Its `when`, `retries` and `delay` are
+  rendered *before* each item: the first item fails with "'r' is undefined", later ones with
+  "has no attribute 'rc'". Those reads are real crashes but not this rule's story, so the
+  rule stays silent on anything inside the registering task — one assertion per keyword.
+
+Also silent, each measured working: `is defined` / `is not defined`, `| default` / `| d`,
+`r.get(...)`. `r['stdout']` fails like `r.stdout` and fires. A name registered or defined
+twice in the file is skipped.
+
+**Known gap, T-122.** The variable walk does not read `failed_when` / `changed_when` / `until`
+yet, so a *later* task's `failed_when: r.rc != 0` — measured fatal — is not flagged.
+`a_later_tasks_failed_when_fires` holds the correct assertion, ignored against T-122. It also
+means the own-task exemption for those three keywords is untested on real input until T-122
+lands; re-run the corpus gate then.
+
+**Corpus gate: 0 hits.** The control: with every key allowed through, the rule sees 111 reads
+of looped registers there — 104 `.results`, 7 `.changed` — all correct, so the 0 is a result
+and not blindness.

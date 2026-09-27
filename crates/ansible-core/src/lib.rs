@@ -17,6 +17,7 @@ pub mod inventory;
 pub mod jinja;
 pub mod keyword_values;
 pub mod keywords;
+pub mod looped_register;
 pub mod mutation;
 pub mod parse;
 pub mod parse_libyaml;

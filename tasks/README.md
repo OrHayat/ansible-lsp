@@ -212,7 +212,6 @@ T-021 is now unblocked on that side.
 | T-185 | [A role include that escapes the role directory is not portable](open/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | S    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
-| T-193 | [A looped task's register has no module keys, only results](open/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | S    | —          |
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
 | T-204 | [An Ansible upgrade mid-session is invisible until restart](open/T-204-an-ansible-upgrade-mid-session-is-invisible-until-restart.md) | M    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
@@ -347,6 +346,7 @@ T-021 is now unblocked on that side.
 | T-158 | [Deprecated play keyword: user: should be remote_user:, with a safe autofix](closed/T-158-deprecated-play-keyword-user-should-be-remote-user-with-a-sa.md) | done     |
 | T-235 | **bug** · [A role with no tasks/main.yml is reported missing, though Ansible loads it](closed/T-235-a-role-with-no-tasks-main-yml-is-reported-missing-though-ans.md) | done     |
 | T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](closed/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | done     |
+| T-193 | [A looped task's register has no module keys, only results](closed/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | done     |
 
 ## Settled — don't re-derive these
 

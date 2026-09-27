@@ -1,0 +1,40 @@
+# T-193 — a looped task's register holds `results` (one entry per item), not the module's keys.
+#
+# Measured on core 2.21.3: every WARN row fails its task with "object of type 'dict' has no
+# attribute …". Each GOOD row is the same register read in a way measured to work.
+
+- name: reading a looped register
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: echo each item
+      ansible.builtin.command: echo {{ item }}
+      loop: [a, b]
+      register: echoed
+      changed_when: "'a' in echoed.stdout" # GOOD: inside the looped task it is this item's result
+      failed_when: echoed.rc != 0 # GOOD
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.stdout }}" # WARN: no stdout on a looped register
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed['rc'] }}" # WARN: the bracket spelling reads the same missing key
+
+    - ansible.builtin.debug:
+        msg: done
+      when: echoed.rc == 0 # WARN: a later task's condition reads the aggregate too
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.results | map(attribute='stdout') | list }}" # GOOD
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.results[0].stdout }}" # GOOD
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.changed }}" # GOOD: changed, failed, msg, results, skipped, warnings exist
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.stdout | default('none') }}" # GOOD: a default absorbs the missing key
+
+    - ansible.builtin.debug:
+        msg: "{{ echoed.stdout }}" # noqa: looped-register-key
