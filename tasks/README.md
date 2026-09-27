@@ -99,7 +99,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | ~~T-020~~      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
-| T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | T-227      |
+| T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
 | T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](open/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | M    | —          |
 
 ### P2 — coverage and usability
@@ -160,8 +160,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
 | T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
-| T-227 | [One loader-path model for every plugin-type dir and cfg path](open/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | S    | —    |
-| T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | T-227 |
+| T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | ~~T-227~~ |
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
@@ -347,6 +346,7 @@ T-021 is now unblocked on that side.
 | T-193 | [A looped task's register has no module keys, only results](closed/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | done     |
 | T-185 | [A role include that escapes the role directory is not portable](closed/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | done     |
 | T-109 | [Keyword value enums](closed/T-109-keyword-value-enums.md)     | done     |
+| T-227 | [One loader-path model for every plugin-type dir and cfg path](closed/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | done     |
 
 ## Settled — don't re-derive these
 

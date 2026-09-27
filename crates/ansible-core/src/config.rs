@@ -44,15 +44,9 @@ pub struct AnsibleConfig {
     /// default like any other value, so the two cases must not collapse.
     pub roles_path: Option<Vec<PathBuf>>,
     pub collections_path: Option<Vec<PathBuf>>,
-    /// The `library` key — `DEFAULT_MODULE_PATH`'s ini name (`config/base.yml:945-951`).
-    /// When set it *replaces* the default legacy module dirs, not appends.
-    pub library: Option<Vec<PathBuf>>,
-    /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
-    /// controller-side plugin dirs; a plugin here overrides a same-named module.
-    pub action_plugins: Option<Vec<PathBuf>>,
-    /// The `*_plugins` path settings read through [`PLUGIN_PATH_SETTINGS`], keyed by plugin
-    /// type. Absent = never set, so the `~/.ansible/plugins/<type>` default applies. Measured
-    /// for strategy on 2.21.3 (T-109): env beats ini, and either one *replaces* the default.
+    /// The plugin path settings read through [`PLUGIN_PATH_SETTINGS`], keyed by plugin type.
+    /// Absent = never set, so the `~/.ansible/plugins/<type>` default applies. Measured for
+    /// strategy on 2.21.3 (T-109): env beats ini, and either one *replaces* the default.
     pub plugin_paths: HashMap<&'static str, Vec<PathBuf>>,
     /// The `inventory` key — `DEFAULT_HOST_LIST` (`config/base.yml:797-808`), the inventory
     /// sources to read when no `-i` is given. Alone among these lists it is `type: pathlist`
@@ -127,25 +121,32 @@ pub struct AnsibleConfig {
     pub inventory_any_unparsed_is_failed: bool,
 }
 
-/// Hand-written for the fields that default *true* — `invalid_task_attribute_failed` and
-/// `inventory_unparsed_warning` — which `#[derive(Default)]` cannot express.
-/// Plugin types whose path setting is read generically: `(type, ini key, env var)`. Every
-/// `DEFAULT_<TYPE>_PLUGIN_PATH` in `config/base.yml` has this shape (`pathspec`, `[defaults]`,
-/// `ANSIBLE_<TYPE>_PLUGINS`), so adding a type is adding a row. `library` and `action_plugins`
-/// predate this and keep their own fields (T-227).
+/// The plugin types whose loader dirs other modules read, by name.
+pub const MODULES: &str = "modules";
+pub const ACTION: &str = "action";
+
+/// Plugin types whose files we locate: `(type, dir, env var)`. The dir is both the ini key
+/// (`DEFAULT_<TYPE>_PLUGIN_PATH`, `pathspec` under `[defaults]`) and the loader's `subdir`
+/// joined onto playbook and role dirs (`plugins/loader.py:1754-1904`); the type is the dir
+/// under `plugins/` — in a collection, and in `~/.ansible` and `/usr/share/ansible`.
+/// Modules are the odd one out only in spelling: `library`, `ANSIBLE_LIBRARY`.
+///
+/// A new plugin type lands in T-227's type table first, with a decision, then here.
 pub const PLUGIN_PATH_SETTINGS: &[(&str, &str, &str)] = &[
+    (MODULES, "library", "ANSIBLE_LIBRARY"),
+    (ACTION, "action_plugins", "ANSIBLE_ACTION_PLUGINS"),
     ("strategy", "strategy_plugins", "ANSIBLE_STRATEGY_PLUGINS"),
     ("connection", "connection_plugins", "ANSIBLE_CONNECTION_PLUGINS"),
     ("become", "become_plugins", "ANSIBLE_BECOME_PLUGINS"),
 ];
 
+/// Hand-written for the fields that default *true* — `invalid_task_attribute_failed` and
+/// `inventory_unparsed_warning` — which `#[derive(Default)]` cannot express.
 impl Default for AnsibleConfig {
     fn default() -> Self {
         Self {
             roles_path: None,
             collections_path: None,
-            library: None,
-            action_plugins: None,
             plugin_paths: HashMap::new(),
             inventory: None,
             config_file: None,
@@ -281,8 +282,6 @@ impl AnsibleConfig {
                 "home" => home_key = Some(value.clone()),
                 "roles_path" => cfg.roles_path = Some(paths()),
                 "collections_path" | "collections_paths" => cfg.collections_path = Some(paths()),
-                "library" => cfg.library = Some(paths()),
-                "action_plugins" => cfg.action_plugins = Some(paths()),
                 k if PLUGIN_PATH_SETTINGS.iter().any(|(_, ini, _)| *ini == k) => {
                     let (kind, _, _) = PLUGIN_PATH_SETTINGS.iter().find(|(_, ini, _)| *ini == k).unwrap();
                     cfg.plugin_paths.insert(kind, paths());
@@ -325,8 +324,6 @@ impl AnsibleConfig {
         for (var, slot) in [
             ("ANSIBLE_ROLES_PATH", &mut cfg.roles_path),
             ("ANSIBLE_COLLECTIONS_PATH", &mut cfg.collections_path),
-            ("ANSIBLE_LIBRARY", &mut cfg.library),
-            ("ANSIBLE_ACTION_PLUGINS", &mut cfg.action_plugins),
         ] {
             if let Some(v) = env.var(var) {
                 *slot = Some(expand_list(v, project_root, env));
@@ -766,6 +763,29 @@ mod tests {
         assert_eq!(c.plugin_paths.get("strategy"), Some(&vec![PathBuf::from("/from_env")]), "env beats ini");
     }
 
+    /// Every row, by its literal spellings — not by iterating the table, which would pass for a
+    /// misspelt key. `library` is the one ini key that is not `<type>_plugins`.
+    #[test]
+    fn every_plugin_type_reads_its_ini_key_and_env_var() {
+        let rows = [
+            (MODULES, "library", "ANSIBLE_LIBRARY"),
+            (ACTION, "action_plugins", "ANSIBLE_ACTION_PLUGINS"),
+            ("strategy", "strategy_plugins", "ANSIBLE_STRATEGY_PLUGINS"),
+            ("connection", "connection_plugins", "ANSIBLE_CONNECTION_PLUGINS"),
+            ("become", "become_plugins", "ANSIBLE_BECOME_PLUGINS"),
+        ];
+        assert_eq!(rows.len(), PLUGIN_PATH_SETTINGS.len(), "a new row needs a line here");
+        for (kind, ini, env) in rows {
+            let c = cfg(&format!("[defaults]\n{ini} = /from_cfg\n"));
+            assert_eq!(c.plugin_paths.get(kind), Some(&vec![PathBuf::from("/from_cfg")]), "{ini}");
+            let c = AnsibleConfig::builder(Path::new("/p"))
+                .fs(&CfgFs::some(&format!("[defaults]\n{ini} = /from_cfg\n")))
+                .env(&EnvMap::from_pairs(&[(env, "/from_env")]))
+                .load();
+            assert_eq!(c.plugin_paths.get(kind), Some(&vec![PathBuf::from("/from_env")]), "{env} beats {ini}");
+        }
+    }
+
     /// The env var is the same pathlist type, and beats the file — measured on 2.21.2,
     /// where `ANSIBLE_INVENTORY` overrode `ansible.cfg` outright.
     #[test]
@@ -908,7 +928,7 @@ jinja2_extensions = jinja2.ext.debug
             .env(&EnvMap::from_pairs(&[("ANSIBLE_CONFIG", &team)]))
             .load();
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from(abs("/elsewhere/mods"))]),
             "the env file's relative entries anchor to its own directory, not the project"
         );
@@ -954,7 +974,7 @@ jinja2_extensions = jinja2.ext.debug
         );
 
         let c = cfg("[defaults]\nlibrary = /x/50%%pct\n");
-        assert_eq!(c.library, Some(vec![PathBuf::from("/x/50%pct")]), "%% is a literal %");
+        assert_eq!(c.plugin_paths.get(MODULES).cloned(), Some(vec![PathBuf::from("/x/50%pct")]), "%% is a literal %");
 
         let c = cfg("[defaults]\nRoles_Path = ./r\n");
         assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/r")]), "keys are case-folded");
@@ -967,21 +987,21 @@ jinja2_extensions = jinja2.ext.debug
     fn broken_interpolation_keeps_the_raw_value() {
         let c = cfg("[defaults]\nlibrary = /x/%(missing)s\n");
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from("/x/%(missing)s")]),
             "unknown key: InterpolationMissingOptionError in Ansible"
         );
 
         let c = cfg("[defaults]\nlibrary = /x/50%\n");
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from("/x/50%")]),
             "bare %: InterpolationSyntaxError in Ansible"
         );
 
         let c = cfg("[defaults]\nlibrary = %(a)s\na = %(library)s\n");
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from("/p/%(a)s")]),
             "cycle: InterpolationDepthError in Ansible; raw value, base-anchored"
         );
@@ -995,10 +1015,10 @@ jinja2_extensions = jinja2.ext.debug
         assert_eq!(c.roles_path, Some(vec![PathBuf::from("/p/roles")]));
 
         let c = cfg("[defaults]\nlibrary = /a;b\n");
-        assert_eq!(c.library, Some(vec![PathBuf::from("/a;b")]), "no preceding whitespace");
+        assert_eq!(c.plugin_paths.get(MODULES).cloned(), Some(vec![PathBuf::from("/a;b")]), "no preceding whitespace");
 
         let c = cfg("[defaults]\nlibrary = /a #x\n");
-        assert_eq!(c.library, Some(vec![PathBuf::from("/a #x")]), "# is not an inline prefix");
+        assert_eq!(c.plugin_paths.get(MODULES).cloned(), Some(vec![PathBuf::from("/a #x")]), "# is not an inline prefix");
     }
 
     /// T-098. The file discovery settled on is recorded — the scan report and
@@ -1032,7 +1052,7 @@ jinja2_extensions = jinja2.ext.debug
             .env(&EnvMap::from_pairs(&[("ANSIBLE_ROLES_PATH", "")]))
             .load();
         assert_eq!(c.roles_path, Some(Vec::new()), "explicitly emptied");
-        assert!(c.library.is_none(), "the untouched lists stay unset");
+        assert!(c.plugin_paths.get(MODULES).cloned().is_none(), "the untouched lists stay unset");
     }
 
     /// Env path values anchor to the project root (our stand-in for Ansible's CWD) even
@@ -1055,7 +1075,7 @@ jinja2_extensions = jinja2.ext.debug
             "the env value means the project's roles, not /shared/roles"
         );
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from(abs("/shared/mods"))]),
             "the ini's own entries keep anchoring to their config file"
         );
@@ -1174,7 +1194,7 @@ jinja2_extensions = jinja2.ext.debug
         let ini = CfgFs::some("[defaults]\nlibrary = ./from_ini\n");
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
@@ -1182,13 +1202,13 @@ jinja2_extensions = jinja2.ext.debug
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
-            c.library,
+            c.plugin_paths.get(MODULES).cloned(),
             Some(vec![PathBuf::from("/site/modules")]),
             "env replaces the cfg key wholesale"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
-        assert_eq!(c.library, Some(vec![PathBuf::from("/site/modules")]), "no ansible.cfg");
+        assert_eq!(c.plugin_paths.get(MODULES).cloned(), Some(vec![PathBuf::from("/site/modules")]), "no ansible.cfg");
     }
 
     /// T-098. The last of the four path overrides — with it, every ini key `load_resolved`
@@ -1200,7 +1220,7 @@ jinja2_extensions = jinja2.ext.debug
         let ini = CfgFs::some("[defaults]\naction_plugins = ./from_ini\n");
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&EnvMap::empty()).load();
         assert_eq!(
-            c.action_plugins,
+            c.plugin_paths.get(ACTION).cloned(),
             Some(vec![PathBuf::from("/p/from_ini")]),
             "baseline: the ini key is in force — without this, `env wins` could pass with the\
              \n ini layer silently broken"
@@ -1208,13 +1228,13 @@ jinja2_extensions = jinja2.ext.debug
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&ini).env(&env).load();
         assert_eq!(
-            c.action_plugins,
+            c.plugin_paths.get(ACTION).cloned(),
             Some(vec![PathBuf::from("/site/action")]),
             "env replaces the cfg key wholesale"
         );
 
         let c = AnsibleConfig::builder(Path::new("/p")).fs(&CfgFs::none()).env(&env).load();
-        assert_eq!(c.action_plugins, Some(vec![PathBuf::from("/site/action")]), "no ansible.cfg");
+        assert_eq!(c.plugin_paths.get(ACTION).cloned(), Some(vec![PathBuf::from("/site/action")]), "no ansible.cfg");
     }
 
     #[test]

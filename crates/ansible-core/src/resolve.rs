@@ -1,5 +1,6 @@
 //! Reference -> file on disk, following Ansible's own search order.
 
+use crate::config::{ACTION, MODULES};
 use crate::fs::{Fs, StdFs};
 use crate::include_vars;
 use crate::references::{Reference, ReferenceKind};
@@ -834,15 +835,15 @@ fn fqcn_module_candidates(
     let mut candidates: Vec<PathBuf> = Vec::new();
     for root in ctx.collection_roots() {
         let base = root.join(ns).join(coll).join("plugins");
-        let found = module_files_named(&base.join("modules"), module, fs);
+        let found = module_files_named(&base.join(MODULES), module, fs);
         if found.is_empty() {
-            candidates.push(base.join("modules").join(format!("{module}.py")));
+            candidates.push(base.join(MODULES).join(format!("{module}.py")));
         } else {
             candidates.extend(found);
         }
         // Action plugins are controller-side Python classes, so their loader
         // hard-requires `.py` (`loader.py:782-784`) — no glob here.
-        candidates.push(base.join("action").join(format!("{module}.py")));
+        candidates.push(base.join(ACTION).join(format!("{module}.py")));
     }
     candidates
 }
@@ -859,14 +860,14 @@ fn builtin_package_candidates(name: &str, ctx: &FileContext) -> Vec<PathBuf> {
         return Vec::new();
     };
     let file = format!("{name}.py");
-    vec![pkg.join("modules").join(&file), pkg.join("plugins/action").join(&file)]
+    vec![pkg.join(MODULES).join(&file), pkg.join("plugins").join(ACTION).join(&file)]
 }
 
 /// The `ansible.legacy` search: legacy dirs, then the builtin package — "package path always
 /// gets added last …" (`loader.py:497`). Shared by a bare name and its spelled-out form.
 fn legacy_module_candidates(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    for dir in ctx.legacy_module_dirs() {
+    for dir in ctx.plugin_dirs(MODULES) {
         let found = module_files_named(&dir, name, fs);
         if found.is_empty() {
             // Keep the dir in the trail so diagnostics still name it.
@@ -901,7 +902,7 @@ fn collection_entry(entry: &str) -> Option<(&str, &str)> {
 /// - **bare** (`debug:`) — implicitly `ansible.legacy.<name>`, the pre-collections search,
 ///   candidate order transcribed from the loader (first hit wins at both ends,
 ///   `loader.py:817-819,930-934`): legacy dirs, local-overrides-shipped
-///   ([`FileContext::legacy_module_dirs`] documents the split), then the builtin package —
+///   ([`FileContext::plugin_dirs`] documents the split), then the builtin package —
 ///   "package path always gets added last …" (`loader.py:497`). Not found → core's 2.10
 ///   split table renames it (`loader.py:956-959`).
 /// - **`ansible.legacy.X`** — the bare search *without* the `collections:` list. Measured on

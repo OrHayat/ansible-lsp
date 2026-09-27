@@ -3632,7 +3632,7 @@ fn short_plugin_path(p: &Path, ctx: &FileContext) -> String {
 /// pre-collections dirs predate namespacing. First hit in Ansible's search order wins.
 fn legacy_action_twin(name: &str, ctx: &FileContext) -> Option<PathBuf> {
     let file = format!("{name}.py");
-    ctx.legacy_action_plugin_dirs()
+    ctx.plugin_dirs(ansible_core::config::ACTION)
         .into_iter()
         .map(|d| d.join(&file))
         .find(|p| p.is_file())

@@ -211,89 +211,30 @@ impl FileContext {
         dirs
     }
 
-    /// Legacy module search dirs for a bare module name, in the loader's order
-    /// (`loader.py:470-521`, `_get_paths_with_context`):
+    /// Legacy plugin dirs for `kind` (a [`crate::config::PLUGIN_PATH_SETTINGS`] type), in the
+    /// loader's order (`loader.py:470-521`, `_get_paths_with_context`):
     ///
-    /// 1. `extra_dirs` — `library/` dirs harvested while loading plays and roles
-    ///    (`module_loader`'s subdir name, `loader.py:1799-1804`). Approximated here with
-    ///    the file's own role, its directory, and the project root: the real set is
-    ///    per-execution state (whatever loaded before the task) we can't replay.
-    /// 2. the `library` cfg key when set, else `DEFAULT_MODULE_PATH`'s defaults
-    ///    `~/.ansible/plugins/modules` and `/usr/share/ansible/plugins/modules`
-    ///    (`config/base.yml:945-951` — the key *replaces* the defaults).
+    /// 1. the type's dir (`library/`, `action_plugins/`, `strategy_plugins/` …) beside the
+    ///    file's role, the file and the project root — `add_all_plugin_dirs`
+    ///    (`loader.py:86-96`) harvests these from each playbook and role as it loads. The real
+    ///    set is per-execution state we can't replay; T-228 owns which ones a file can see.
+    /// 2. the configured path — env, else ini — which *replaces* the default
+    ///    `~/.ansible/plugins/<type>:/usr/share/ansible/plugins/<type>` (`config/base.yml`;
+    ///    measured for strategy, T-109).
     ///
-    /// The builtin package tree comes after all of these — "package path always gets
-    /// added last so that every other type of path is searched before it" — and is
-    /// appended by the caller, which also owns the routing-table last-ditch step.
-    pub fn legacy_module_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-        if let Some(role) = &self.role_dir {
-            push_unique(&mut dirs, Some(role.join("library")));
-        }
-        push_unique(&mut dirs, Some(self.file_dir.join("library")));
-        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("library")));
-        match &self.config.library {
-            None => {
-                push_unique(
-                    &mut dirs,
-                    self.config.ansible_home.as_ref().map(|h| h.join("plugins/modules")),
-                );
-                push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/modules")));
-            }
-            Some(list) => {
-                for p in list {
-                    push_unique(&mut dirs, Some(p.clone()));
-                }
-            }
-        }
-        dirs
-    }
-
-    /// Where a controller-side action plugin can legacy-override a same-named module — the
-    /// pre-collections search Ansible still honors (`DEFAULT_ACTION_PLUGIN_PATH`): a role's
-    /// own `action_plugins/`, dirs adjacent to the file and project, then the
-    /// `action_plugins` cfg key (or its `~/.ansible` + `/usr/share` defaults). Mirrors
-    /// [`legacy_module_dirs`] with the `action_plugins` subdir. (T-073)
-    pub fn legacy_action_plugin_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-        if let Some(role) = &self.role_dir {
-            push_unique(&mut dirs, Some(role.join("action_plugins")));
-        }
-        push_unique(&mut dirs, Some(self.file_dir.join("action_plugins")));
-        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("action_plugins")));
-        match &self.config.action_plugins {
-            None => {
-                push_unique(
-                    &mut dirs,
-                    self.config.ansible_home.as_ref().map(|h| h.join("plugins/action")),
-                );
-                push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins/action")));
-            }
-            Some(list) => {
-                for p in list {
-                    push_unique(&mut dirs, Some(p.clone()));
-                }
-            }
-        }
-        dirs
-    }
-
-    /// Legacy plugin dirs for `kind` (`"strategy"`, `"connection"`, `"become"` — a
-    /// [`crate::config::PLUGIN_PATH_SETTINGS`] type), in Ansible's order: the `<kind>_plugins`
-    /// dirs beside the file, its role and the project root (`loader.py:86-96`
-    /// `add_all_plugin_dirs`), then the configured path — env or ini, which *replaces* the
-    /// `~/.ansible/plugins/<kind>:/usr/share/ansible/plugins/<kind>` default (measured, T-109).
-    /// The package's own plugins are not here; they are always searched, last.
-    ///
-    /// The same shape as [`Self::legacy_action_plugin_dirs`], which predates it (T-227).
+    /// The package's own plugins come after all of these — "package path always gets added
+    /// last so that every other type of path is searched before it" — and are the caller's.
     pub fn plugin_dirs(&self, kind: &str) -> Vec<PathBuf> {
-        let sub = format!("{kind}_plugins");
+        let (_, sub, _) = crate::config::PLUGIN_PATH_SETTINGS
+            .iter()
+            .find(|(k, _, _)| *k == kind)
+            .unwrap_or_else(|| panic!("`{kind}` is not a PLUGIN_PATH_SETTINGS type"));
         let mut dirs = Vec::new();
         if let Some(role) = &self.role_dir {
-            push_unique(&mut dirs, Some(role.join(&sub)));
+            push_unique(&mut dirs, Some(role.join(sub)));
         }
-        push_unique(&mut dirs, Some(self.file_dir.join(&sub)));
-        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join(&sub)));
+        push_unique(&mut dirs, Some(self.file_dir.join(sub)));
+        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join(sub)));
         match self.config.plugin_paths.get(kind) {
             Some(list) => list.iter().for_each(|p| push_unique(&mut dirs, Some(p.clone()))),
             None => {
@@ -460,15 +401,15 @@ mod tests {
         });
 
         assert!(ctx.roles_roots(true).contains(&PathBuf::from("/opt/ans/roles")));
-        assert!(ctx.legacy_module_dirs().contains(&PathBuf::from("/opt/ans/plugins/modules")));
+        assert!(ctx.plugin_dirs(crate::config::MODULES).contains(&PathBuf::from("/opt/ans/plugins/modules")));
         assert!(ctx
-            .legacy_action_plugin_dirs()
+            .plugin_dirs(crate::config::ACTION)
             .contains(&PathBuf::from("/opt/ans/plugins/action")));
         let all: Vec<_> = ctx
             .roles_roots(true)
             .into_iter()
-            .chain(ctx.legacy_module_dirs())
-            .chain(ctx.legacy_action_plugin_dirs())
+            .chain(ctx.plugin_dirs(crate::config::MODULES))
+            .chain(ctx.plugin_dirs(crate::config::ACTION))
             .collect();
         assert!(
             !all.iter().any(|p| p.starts_with("/home/t")),
@@ -489,7 +430,7 @@ mod tests {
         assert!(ctx.project_root.is_none(), "fixture really is rootless");
         assert!(ctx.roles_roots(true).contains(&PathBuf::from("/home/t/.ansible/roles")));
         assert!(ctx
-            .legacy_module_dirs()
+            .plugin_dirs(crate::config::MODULES)
             .contains(&PathBuf::from("/home/t/.ansible/plugins/modules")));
     }
 

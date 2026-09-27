@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-118 | —          |
+| done   | task | P2       | S    | T-118 | —          |
 
 ## Problem
 
@@ -31,11 +31,11 @@ The full picture, surveyed 2026-09-07 against 2.21.3 (`ansible-doc -t <type> -l`
 
 | Type | Ships | We locate files | Cfg path read | Decision |
 | ---- | ----- | --------------- | ------------- | -------- |
-| modules | — | yes (`resolve.rs:724-810`) | `library` | modelled |
-| action | — | yes (`resolve.rs:746-768`, `workspace.rs:221-241`) | `action_plugins` | modelled |
+| modules | — | yes (`resolve.rs:724-810`) | `library` — `PLUGIN_PATH_SETTINGS` | modelled |
+| action | — | yes (`resolve.rs:746-768`) | `action_plugins` — `PLUGIN_PATH_SETTINGS` | modelled |
 | vars | 3 | no — only `host_group_vars`' behaviour is ported (`vars.rs:1803-1854`) | no | T-228 |
 | filter / test / lookup | 250 / 114 / 117 | no | no | T-115 (names), T-038, T-156 |
-| strategy / connection / become | 4 / 34 / 15 | no | no | T-109 — keyword values that must name a plugin |
+| strategy / connection / become | 4 / 34 / 15 | yes (`plugin_names.rs`) | `PLUGIN_PATH_SETTINGS` | done in T-109 — keyword values that must name a plugin |
 | inventory | 59 | sources, not plugins (`inventory.rs:301-340`) | no; `enable_plugins` unread | T-152, T-176; T-144 records the key |
 | cache | 8 | no | `fact_caching` (`config.rs:286`) | done — gates `facts_persist` |
 | callback / shell / terminal / cliconf / httpapi / netconf | 44 / 5 / — | no | no | runtime-only: they change how a play runs, never what it means; recorded in T-144 |
@@ -57,13 +57,13 @@ regression gate.
 
 ## Done when
 
-- [ ] `legacy_module_dirs` and `legacy_action_plugin_dirs` are two calls to one per-kind
+- [x] `legacy_module_dirs` and `legacy_action_plugin_dirs` are two calls to one per-kind
       function, and the T-073 hover tests still pass
-- [ ] every `<type>_plugins` ini key and `ANSIBLE_<TYPE>_PLUGINS` env var in the table is read,
+- [x] every `<type>_plugins` ini key and `ANSIBLE_<TYPE>_PLUGINS` env var in the table is read,
       env → ini → default per T-098, pinned by a config test per kind
-- [ ] the collection `plugins/<type>/` join uses the same kind table
-- [ ] the corpus scan's module line is unchanged (3665 resolved, 0 missing)
-- [ ] the type table above is the register: a new plugin type lands here first, with a decision
+- [x] the collection `plugins/<type>/` join uses the same kind table
+- [x] the corpus scan's module line is unchanged (3665 resolved, 0 missing)
+- [x] the type table above is the register: a new plugin type lands here first, with a decision
 
 
 ## Progress (from T-109)
@@ -73,3 +73,13 @@ regression gate.
 precedence measured (env > ini > default; either replaces the default; `<type>_plugins/`
 beside the playbook and the package always searched). Still open here: `library` and
 `action_plugins` keep their own fields and walk; moving them onto the table is this ticket.
+
+## Landed
+
+`FileContext::plugin_dirs(kind)` is the one walk; `legacy_module_dirs` and
+`legacy_action_plugin_dirs` are gone, and `AnsibleConfig.library` / `.action_plugins` are now
+`plugin_paths` rows. The table's type string is also the collection `plugins/<type>/` and
+package join (`config::MODULES`, `config::ACTION`). `every_plugin_type_reads_its_ini_key_and_env_var`
+pins each row by its literal spellings. The corpus has grown since the 3665 figure, so the gate
+was a same-day before/after scan: byte-identical output. The `PLUGIN_PATH_SETTINGS` doc comment
+points a new type at this table.
