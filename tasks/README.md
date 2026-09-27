@@ -166,7 +166,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](open/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | M    | —    |
-| T-109 | [Keyword value enums](open/T-109-keyword-value-enums.md) | M    | ~~T-107~~ |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -347,6 +346,7 @@ T-021 is now unblocked on that side.
 | T-230 | [tags: on a dynamic include without apply: tags: reaches none of the included tasks](closed/T-230-tags-on-a-dynamic-include-without-apply-tags-reaches-none-of.md) | done     |
 | T-193 | [A looped task's register has no module keys, only results](closed/T-193-a-looped-task-s-register-has-no-module-keys-only-results.md) | done     |
 | T-185 | [A role include that escapes the role directory is not portable](closed/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | done     |
+| T-109 | [Keyword value enums](closed/T-109-keyword-value-enums.md)     | done     |
 
 ## Settled — don't re-derive these
 

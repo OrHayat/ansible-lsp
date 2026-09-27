@@ -1,0 +1,85 @@
+# T-109 — `strategy:`, `connection:` and `become_method:` must name a plugin that exists.
+#
+# Measured on core 2.21.3, each row as its own play beside the local plugins in
+# strategy_plugins/ and connection_plugins/. Every WARN row passes `--syntax-check` and fails
+# at run time with the message quoted. GOOD rows run. A plugin in a local folder answers to its
+# bare name and to `ansible.legacy.*`, never to `ansible.builtin.*`.
+
+- name: strategy
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks: []
+
+- hosts: localhost
+  strategy: linear # GOOD: builtin
+  tasks: []
+
+- hosts: localhost
+  strategy: random # WARN: "Invalid play strategy specified: random"
+  tasks: []
+
+- hosts: localhost
+  strategy: ansible.builtin.free # GOOD
+  tasks: []
+
+- hosts: localhost
+  strategy: demo_steps # GOOD: strategy_plugins/demo_steps.py
+  tasks: []
+
+- hosts: localhost
+  strategy: ansible.legacy.demo_steps # GOOD: a local folder is part of ansible.legacy
+  tasks: []
+
+- hosts: localhost
+  strategy: ansible.builtin.demo_steps # WARN: a local folder is not part of ansible.builtin
+  tasks: []
+
+- hosts: localhost
+  vars:
+    chosen: free
+  strategy: "{{ chosen }}" # GOOD: templated, rendered before it is looked up
+  tasks: []
+
+- hosts: localhost
+  strategy: nosuch.coll.thing # NO HINT: another collection's plugins are not judged yet
+  tasks: []
+
+- hosts: localhost
+  connection: locl # WARN: "the connection plugin 'locl' was not found"
+  tasks: []
+
+- hosts: localhost
+  connection: demo_pipe # GOOD: connection_plugins/demo_pipe.py
+  tasks: []
+
+- hosts: localhost
+  connection: ansible.builtin.demo_pipe # WARN: not part of ansible.builtin
+  tasks: []
+
+- hosts: localhost
+  connection: podman # GOOD: core redirects the bare name to containers.podman.podman
+  tasks: []
+
+- hosts: localhost
+  become: true
+  become_method: sude # WARN: "Invalid become method specified, could not find matching plugin"
+  tasks: []
+
+- hosts: localhost
+  become_method: sude # WARN: inert without become, fails once become is in effect
+  tasks: []
+
+- hosts: localhost
+  become: true
+  become_method: doas # GOOD: core redirects the bare name to community.general.doas
+  tasks: []
+
+- hosts: localhost
+  tasks:
+    - name: the keywords apply to tasks too
+      ansible.builtin.command: "true"
+      connection: locl # WARN
+    - name: suppressed
+      ansible.builtin.command: "true"
+      connection: locl # noqa: unknown-plugin

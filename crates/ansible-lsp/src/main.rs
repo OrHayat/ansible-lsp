@@ -27,6 +27,7 @@ use ansible_core::include_tags;
 use ansible_core::keyword_values;
 use ansible_core::looped_register;
 use ansible_core::placement;
+use ansible_core::plugin_names;
 use ansible_core::references::{self, Reference, ReferenceKind};
 use ansible_core::resolve::{self, rule_id_for, Resolution, SkipReason, Status};
 use ansible_core::reverse;
@@ -1794,6 +1795,35 @@ impl Backend {
         })
         .collect();
 
+        // `strategy:`, `connection:` and `become_method:` naming no plugin (T-109). Needs the
+        // install for the package's own plugins; without one the rule stays silent.
+        let plugin_lookup = |kind: plugin_names::PluginKind, name: &str| {
+            let install = a.ctx.install.as_ref()?;
+            let pkg = install.package_dir.as_ref()?;
+            Some(plugin_names::find(
+                kind,
+                name,
+                pkg,
+                &install.builtin_routing,
+                &a.ctx.plugin_dirs(kind.type_name()),
+                a.ctx.project_root.as_deref(),
+                &ansible_core::fs::StdFs,
+            ))
+        };
+        let unknown_plugins: Vec<Diagnostic> =
+            plugin_names::problems(&ansible_core::ast::build(&a.nodes), &a.nodes, &plugin_lookup)
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
         // A non-scalar mapping key: valid YAML our libyaml parses, fatal to Ansible's
         // loader in every spelling and every document kind (T-168). Always an error.
         let unloadable: Vec<Diagnostic> = complex_key::problems(&a.nodes, &a.doc.text)
@@ -1837,6 +1867,7 @@ impl Backend {
             .chain(untagged_includes)
             .chain(looped_register_reads)
             .chain(escaping_includes)
+            .chain(unknown_plugins)
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
@@ -7829,6 +7860,62 @@ mod tests {
                 .map(|d| d.message)
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
+    }
+
+    /// Diagnostics of `rule` for the demo file at `rel`, analysed with the real install.
+    /// `None` without Ansible on PATH — the install-gated gap T-203 tracks.
+    fn demo_rule_lines_with_install(rel: &str, rule: &str) -> Option<(String, Vec<u32>)> {
+        use tower_lsp::lsp_types::NumberOrString;
+        let install = ansible_core::install::AnsibleInstall::detect(None);
+        install.package_dir.as_ref()?;
+        let path = std::path::Path::new("../../demo").join(rel).canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let scan = ansible_core::cache::ScanCache::default().with_install(Some(std::sync::Arc::new(install)));
+        let a = super::Backend::analyze_text_measured(
+            text.clone(),
+            &path,
+            &mut super::ScanTimings::default(),
+            &scan,
+            &super::OpenDocs::default(),
+            &std::sync::Mutex::new(super::VarCache::default()),
+        )?;
+        let mut lines: Vec<u32> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == rule))
+            .map(|d| d.range.start.line)
+            .collect();
+        lines.sort_unstable();
+        Some((text, lines))
+    }
+
+    /// T-109's plugin fixture, both directions, against the real install and the demo's own
+    /// `strategy_plugins/` and `connection_plugins/`: every WARN row carries exactly one
+    /// `unknown-plugin` warning, and GOOD, NO HINT and SILENCED rows carry none.
+    #[test]
+    fn the_plugin_values_demo_matches_its_annotations_exactly() {
+        let Some((text, got)) = demo_rule_lines_with_install("plugin_values.yml", "unknown-plugin") else { return };
+        let expected: Vec<u32> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
+            .map(|(i, _)| i as u32)
+            .collect();
+        assert!(expected.len() >= 6, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-109's plugin false-positive gate, against the real install.
+    #[test]
+    fn every_other_demo_file_is_free_of_unknown_plugin_diagnostics() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        for path in ansible_core::workspace::yaml_files(&demo) {
+            let rel = path.strip_prefix(&demo).unwrap().to_string_lossy().to_string();
+            if rel == "plugin_values.yml" {
+                continue;
+            }
+            let Some((_, got)) = demo_rule_lines_with_install(&rel, "unknown-plugin") else { return };
+            assert!(got.is_empty(), "{rel}: lines {got:?}");
         }
     }
 

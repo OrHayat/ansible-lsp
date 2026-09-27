@@ -22,6 +22,7 @@ pub mod mutation;
 pub mod parse;
 pub mod parse_libyaml;
 pub mod placement;
+pub mod plugin_names;
 pub mod references;
 pub mod resolve;
 pub mod reverse;

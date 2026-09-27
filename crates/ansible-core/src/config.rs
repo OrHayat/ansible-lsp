@@ -50,6 +50,10 @@ pub struct AnsibleConfig {
     /// The `action_plugins` key — `DEFAULT_ACTION_PLUGIN_PATH`'s ini name. Legacy
     /// controller-side plugin dirs; a plugin here overrides a same-named module.
     pub action_plugins: Option<Vec<PathBuf>>,
+    /// The `*_plugins` path settings read through [`PLUGIN_PATH_SETTINGS`], keyed by plugin
+    /// type. Absent = never set, so the `~/.ansible/plugins/<type>` default applies. Measured
+    /// for strategy on 2.21.3 (T-109): env beats ini, and either one *replaces* the default.
+    pub plugin_paths: HashMap<&'static str, Vec<PathBuf>>,
     /// The `inventory` key — `DEFAULT_HOST_LIST` (`config/base.yml:797-808`), the inventory
     /// sources to read when no `-i` is given. Alone among these lists it is `type: pathlist`
     /// and so splits on **comma**, not `os.pathsep` (`config/manager.py:197-199`); the
@@ -125,6 +129,16 @@ pub struct AnsibleConfig {
 
 /// Hand-written for the fields that default *true* — `invalid_task_attribute_failed` and
 /// `inventory_unparsed_warning` — which `#[derive(Default)]` cannot express.
+/// Plugin types whose path setting is read generically: `(type, ini key, env var)`. Every
+/// `DEFAULT_<TYPE>_PLUGIN_PATH` in `config/base.yml` has this shape (`pathspec`, `[defaults]`,
+/// `ANSIBLE_<TYPE>_PLUGINS`), so adding a type is adding a row. `library` and `action_plugins`
+/// predate this and keep their own fields (T-227).
+pub const PLUGIN_PATH_SETTINGS: &[(&str, &str, &str)] = &[
+    ("strategy", "strategy_plugins", "ANSIBLE_STRATEGY_PLUGINS"),
+    ("connection", "connection_plugins", "ANSIBLE_CONNECTION_PLUGINS"),
+    ("become", "become_plugins", "ANSIBLE_BECOME_PLUGINS"),
+];
+
 impl Default for AnsibleConfig {
     fn default() -> Self {
         Self {
@@ -132,6 +146,7 @@ impl Default for AnsibleConfig {
             collections_path: None,
             library: None,
             action_plugins: None,
+            plugin_paths: HashMap::new(),
             inventory: None,
             config_file: None,
             ansible_home: None,
@@ -268,6 +283,10 @@ impl AnsibleConfig {
                 "collections_path" | "collections_paths" => cfg.collections_path = Some(paths()),
                 "library" => cfg.library = Some(paths()),
                 "action_plugins" => cfg.action_plugins = Some(paths()),
+                k if PLUGIN_PATH_SETTINGS.iter().any(|(_, ini, _)| *ini == k) => {
+                    let (kind, _, _) = PLUGIN_PATH_SETTINGS.iter().find(|(_, ini, _)| *ini == k).unwrap();
+                    cfg.plugin_paths.insert(kind, paths());
+                }
                 // `pathlist`, not `pathspec`: comma-separated (`config/manager.py:197`).
                 "inventory" => cfg.inventory = Some(expand_comma_list(&value, base, env)),
                 "network_group_modules" => {
@@ -311,6 +330,11 @@ impl AnsibleConfig {
         ] {
             if let Some(v) = env.var(var) {
                 *slot = Some(expand_list(v, project_root, env));
+            }
+        }
+        for (kind, _, var) in PLUGIN_PATH_SETTINGS {
+            if let Some(v) = env.var(var) {
+                cfg.plugin_paths.insert(kind, expand_list(v, project_root, env));
             }
         }
         // Separate from the loop above: `ANSIBLE_INVENTORY` is the one pathlist here, so it
@@ -724,6 +748,22 @@ mod tests {
         // explicit empty is a deliberate "no inventory" and must not collapse into it.
         assert!(cfg("[defaults]\nroles_path = r\n").inventory.is_none());
         assert_eq!(cfg("[defaults]\ninventory =\n").inventory, Some(Vec::new()));
+    }
+
+    /// T-109. Measured on 2.21.3 with a plugin in each place: the ini key sets the path, the env
+    /// var beats it, and a type nobody set stays absent so the `~/.ansible` default applies.
+    #[test]
+    fn plugin_path_settings_read_ini_and_env_per_type() {
+        let c = cfg("[defaults]\nstrategy_plugins = /s1:/s2\nconnection_plugins = /c\n");
+        assert_eq!(c.plugin_paths.get("strategy"), Some(&vec![PathBuf::from("/s1"), PathBuf::from("/s2")]));
+        assert_eq!(c.plugin_paths.get("connection"), Some(&vec![PathBuf::from("/c")]));
+        assert_eq!(c.plugin_paths.get("become"), None, "never set: the default applies");
+
+        let c = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[defaults]\nstrategy_plugins = /from_cfg\n"))
+            .env(&EnvMap::from_pairs(&[("ANSIBLE_STRATEGY_PLUGINS", "/from_env")]))
+            .load();
+        assert_eq!(c.plugin_paths.get("strategy"), Some(&vec![PathBuf::from("/from_env")]), "env beats ini");
     }
 
     /// The env var is the same pathlist type, and beats the file — measured on 2.21.2,

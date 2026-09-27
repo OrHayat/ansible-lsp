@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | M    | T-106 | T-107      |
+| done   | task | P2       | M    | T-106 | T-107      |
 
 ## Problem
 
@@ -39,13 +39,13 @@ module rules already make.
 ## Done when
 
 - [x] `debugger:` and `order:` outside their sets are ERRORs
-- [ ] an unknown `strategy:` warns when the plugin index is available, and is silent otherwise
-- [ ] an unknown `connection:` warns under the same gate
-- [ ] an unknown `become_method:` warns, worded "fails once become is in effect" — it is inert
+- [x] an unknown `strategy:` warns when the plugin index is available, and is silent otherwise
+- [x] an unknown `connection:` warns under the same gate
+- [x] an unknown `become_method:` warns, worded "fails once become is in effect" — it is inert
       without `become`, and `become` can arrive from cfg, `-b` or inventory, so the name check
       does not wait for it
 - [x] `serial: 0` gets a HINT saying it means all hosts
-- [ ] the enums live with the keyword tables, not in a second place
+- [x] the enums live with the keyword tables, not in a second place
 
 ## Progress
 
@@ -54,15 +54,9 @@ module rules already make.
 | `debugger:`      | **done**     | ERROR, `keyword_values.rs`                                    |
 | `order:`         | **done**     | ERROR, `keyword_values.rs`                                    |
 | `serial:`        | **done**     | HINT, `keyword_values.rs`                                     |
-| `strategy:`      | not started  | needs the plugin index                                        |
-| `connection:`    | not started  | needs the plugin index                                        |
-| `become_method:` | not started  | needs the plugin index                                        |
-
-**What is left is the larger half.** The three open keywords have no fixed value set — the
-legal values are whatever plugins of that type are installed, and a collection can add any
-of them — so each needs a per-type plugin index (core's shipped set, T-227's per-type dirs,
-collection `plugins/<type>/`) before the check can be written. That is M, not S. The last
-done-when box stays open until those enums exist too.
+| `strategy:`      | **done**     | WARNING, `plugin_names.rs`                                    |
+| `connection:`    | **done**     | WARNING, `plugin_names.rs`                                    |
+| `become_method:` | **done**     | WARNING, `plugin_names.rs`                                    |
 
 Tests: `keyword_values::tests` (10 — task file, duplicate keys, every legal value, case,
 templated, per-level wording, `serial` boundaries and messages, keys off their node) and
@@ -84,3 +78,34 @@ template, so `{{ }}` values are skipped.
 under one); `[1, 0]` → 2 (the `0` takes all remaining). All of those hint. `"10%"` also gives
 3 here, but that depends on inventory size, so it does not. `serial: "0.0"` crashes Ansible
 with an unhandled `int()` error — not handled here.
+
+
+## Landed: the plugin half
+
+`plugin_names.rs`, rule `unknown-plugin`; `demo/plugin_values.yml` with the demo's own
+`strategy_plugins/demo_steps.py` and `connection_plugins/demo_pipe.py` (subclasses of the
+builtins, not copies), pinned exactly against the real install.
+
+Measured on 2.21.3, one play per row beside those local plugins:
+
+| value                                   | result                                                        |
+| --------------------------------------- | ------------------------------------------------------------- |
+| `strategy: random`                      | fails: "Invalid play strategy specified: random"              |
+| `connection: locl` (play or task)       | fails: "the connection plugin 'locl' was not found"           |
+| `become_method: sude` + `become: true`  | fails: "Invalid become method specified, could not find …"    |
+| `become_method: sude`, no `become`      | runs — inert; the warning says "once become is in effect"     |
+| local plugin, bare / `ansible.legacy.x` | runs                                                          |
+| local plugin as `ansible.builtin.x`     | **fails** — a local folder is not `ansible.builtin`           |
+| `connection: podman`, `become_method: doas` | found through core's routing table (then fails for want of podman / a doas password) |
+| `nosuch.coll.thing`, `community.docker.nosuchconn` | fails — but not judged: may be installed where the play runs |
+
+Where plugin folders come from, measured with a plugin in each place: the `<type>_plugins/`
+folder beside the playbook always, the builtins always, then env `ANSIBLE_<TYPE>_PLUGINS`
+over ini `<type>_plugins` over the `~/.ansible/plugins/<type>:/usr/share/ansible/plugins/<type>`
+default — and setting either *replaces* the default. `ansible-playbook` has no flag for these.
+`config::PLUGIN_PATH_SETTINGS` is that as a table, one row per type, and
+`FileContext::plugin_dirs` the walk (T-227's shape, for these three types). A role's folder
+reaches every play in the run, so a name missed everywhere cheap is looked for in any
+`<type>_plugins/` under the project root before it is reported.
+
+Corpus: 23 uses of the three keywords, 0 hits. Silent without an install (T-203's gap).

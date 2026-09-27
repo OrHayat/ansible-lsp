@@ -55,7 +55,14 @@ pub struct AnsibleInstall {
 pub struct RoutingTable {
     redirects: HashMap<String, String>,
     action_redirects: HashMap<String, String>,
+    /// Every name listed under `plugin_routing.<type>` for the [`LISTED_TYPES`], redirected or
+    /// not (T-109). A listed name is one core knows about — `connection: podman` loads
+    /// `containers.podman.podman` (measured) — so it must never read as unknown.
+    listed: HashMap<String, std::collections::HashSet<String>>,
 }
+
+/// The routing sections whose names are recorded in [`RoutingTable::lists`].
+const LISTED_TYPES: &[&str] = &["strategy", "connection", "become"];
 
 impl RoutingTable {
     /// Parse `plugin_routing.{modules,action}.<name>.redirect` out of a table's text.
@@ -80,7 +87,26 @@ impl RoutingTable {
             }
             redirects
         };
-        Self { redirects: section("modules"), action_redirects: section("action") }
+        let listed = LISTED_TYPES
+            .iter()
+            .map(|t| {
+                let names = routing
+                    .as_ref()
+                    .and_then(|r| r.get(t))
+                    .map_or(&[][..], |s| s.entries())
+                    .iter()
+                    .filter_map(|(k, _)| k.as_str().map(str::to_string))
+                    .collect();
+                (t.to_string(), names)
+            })
+            .collect();
+        Self { redirects: section("modules"), action_redirects: section("action"), listed }
+    }
+
+    /// `name` has an entry under `plugin_routing.<plugin_type>` — a redirect, a deprecation or
+    /// a tombstone. Only the [`LISTED_TYPES`] are recorded; any other type answers false.
+    pub fn lists(&self, plugin_type: &str, name: &str) -> bool {
+        self.listed.get(plugin_type).is_some_and(|names| names.contains(name))
     }
 
     /// Where module `name` was moved to, if this table says so.
@@ -532,6 +558,18 @@ fn find_site_packages(prefix: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// T-109: plugin-type sections are recorded by name, whatever the entry holds.
+    #[test]
+    fn routing_lists_plugin_names_per_type() {
+        let t = super::RoutingTable::parse(
+            "plugin_routing:\n  connection:\n    podman:\n      redirect: containers.podman.podman\n    old:\n      tombstone: {removal_version: '2.0'}\n  become:\n    doas:\n      redirect: community.general.doas\n",
+        );
+        assert!(t.lists("connection", "podman") && t.lists("connection", "old"));
+        assert!(t.lists("become", "doas"));
+        assert!(!t.lists("become", "podman"), "per type");
+        assert!(!t.lists("strategy", "podman"));
+    }
+
     use super::*;
 
     /// The `ansibleLsp.ansiblePath` override is honoured, and says so in `source`.

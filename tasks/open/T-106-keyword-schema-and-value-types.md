@@ -40,7 +40,7 @@ sibling epic).
 - [x] T-045 — Keyword schema from Ansible's FieldAttributes
 - [x] T-107 — Per-class keyword sets from FieldAttribute
 - [ ] T-108 — Keyword value types: isa coercion and listof
-- [ ] T-109 — Keyword value enums
+- [x] T-109 — Keyword value enums
 - [ ] T-110 — Placement and mutual-exclusion rules
 - [ ] T-111 — module_defaults: shape, the 3-segment rule, and action groups
 - [x] T-147 — Validate role meta/main.yml against the RoleMetadata set

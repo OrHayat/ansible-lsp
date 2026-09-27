@@ -64,3 +64,12 @@ regression gate.
 - [ ] the collection `plugins/<type>/` join uses the same kind table
 - [ ] the corpus scan's module line is unchanged (3665 resolved, 0 missing)
 - [ ] the type table above is the register: a new plugin type lands here first, with a decision
+
+
+## Progress (from T-109)
+
+`config::PLUGIN_PATH_SETTINGS` — `(type, ini key, env var)` rows — and
+`FileContext::plugin_dirs(type)` now exist for strategy, connection and become, with the
+precedence measured (env > ini > default; either replaces the default; `<type>_plugins/`
+beside the playbook and the package always searched). Still open here: `library` and
+`action_plugins` keep their own fields and walk; moving them onto the table is this ticket.

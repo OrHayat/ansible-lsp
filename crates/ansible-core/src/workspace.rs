@@ -278,6 +278,32 @@ impl FileContext {
         dirs
     }
 
+    /// Legacy plugin dirs for `kind` (`"strategy"`, `"connection"`, `"become"` — a
+    /// [`crate::config::PLUGIN_PATH_SETTINGS`] type), in Ansible's order: the `<kind>_plugins`
+    /// dirs beside the file, its role and the project root (`loader.py:86-96`
+    /// `add_all_plugin_dirs`), then the configured path — env or ini, which *replaces* the
+    /// `~/.ansible/plugins/<kind>:/usr/share/ansible/plugins/<kind>` default (measured, T-109).
+    /// The package's own plugins are not here; they are always searched, last.
+    ///
+    /// The same shape as [`Self::legacy_action_plugin_dirs`], which predates it (T-227).
+    pub fn plugin_dirs(&self, kind: &str) -> Vec<PathBuf> {
+        let sub = format!("{kind}_plugins");
+        let mut dirs = Vec::new();
+        if let Some(role) = &self.role_dir {
+            push_unique(&mut dirs, Some(role.join(&sub)));
+        }
+        push_unique(&mut dirs, Some(self.file_dir.join(&sub)));
+        push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join(&sub)));
+        match self.config.plugin_paths.get(kind) {
+            Some(list) => list.iter().for_each(|p| push_unique(&mut dirs, Some(p.clone()))),
+            None => {
+                push_unique(&mut dirs, self.config.ansible_home.as_ref().map(|h| h.join("plugins").join(kind)));
+                push_unique(&mut dirs, Some(PathBuf::from("/usr/share/ansible/plugins").join(kind)));
+            }
+        }
+        dirs
+    }
+
     /// Collection roots in Ansible's order. Only the first root holding `ns/coll` is ever read
     /// (`_collection_finder.py:700-701`), so this order is which copy a hover or jump opens —
     /// measured on 2.21.3 against a copy in every root (T-237):
