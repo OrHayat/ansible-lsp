@@ -232,4 +232,71 @@ mod tests {
         assert_eq!(play("\"1%\""), vec![]);
         assert_eq!(play("\"{{ n }}\""), vec![]);
     }
+
+    fn messages(src: &str) -> Vec<String> {
+        let nodes = Document::new(src.into()).parse().unwrap();
+        problems(&crate::ast::build(&nodes), &nodes).into_iter().map(|p| p.message).collect()
+    }
+
+    /// Every legal value passes, so the tables cannot drift from Ansible's by a typo.
+    #[test]
+    fn every_legal_value_passes() {
+        for v in keywords::DEBUGGER_VALUES {
+            assert_eq!(run(&format!("- debug: msg=x\n  debugger: {v}\n")), vec![], "debugger: {v}");
+        }
+        for v in keywords::ORDER_VALUES {
+            assert_eq!(run(&format!("- hosts: all\n  order: {v}\n  tasks: []\n")), vec![], "order: {v}");
+        }
+    }
+
+    /// Measured: `Always` and `Sorted` both fail on 2.21.3.
+    #[test]
+    fn values_are_case_sensitive() {
+        assert_eq!(run("- debug: msg=x\n  debugger: Always\n"), vec![("Always".into(), Tier::Error)]);
+        assert_eq!(
+            run("- hosts: all\n  order: Sorted\n  tasks: []\n"),
+            vec![("Sorted".into(), Tier::Error)]
+        );
+    }
+
+    /// Measured: both keys render before they are checked.
+    #[test]
+    fn templated_values_are_skipped() {
+        assert_eq!(run("- debug: msg=x\n  debugger: \"{{ d }}\"\n"), vec![]);
+        assert_eq!(run("- hosts: all\n  order: \"{{ o }}\"\n  tasks: []\n"), vec![]);
+    }
+
+    /// Each level is checked, and the message says what fails: one task, or every task
+    /// under a play or block.
+    #[test]
+    fn debugger_is_checked_at_every_level_with_the_right_scope() {
+        let src = "- hosts: all\n  debugger: bad1\n  tasks:\n    - block:\n        - debug: msg=x\n          debugger: bad3\n      debugger: bad2\n";
+        let got = run(src);
+        assert_eq!(
+            got,
+            vec![("bad1".into(), Tier::Error), ("bad2".into(), Tier::Error), ("bad3".into(), Tier::Error)]
+        );
+        let m = messages(src);
+        assert!(m[0].contains("every task it applies to fails"), "play: {}", m[0]);
+        assert!(m[1].contains("every task it applies to fails"), "block: {}", m[1]);
+        assert!(m[2].contains("this task fails"), "task: {}", m[2]);
+        assert!(m[2].contains("on_unreachable"), "legal values listed: {}", m[2]);
+    }
+
+    /// `order` is a play keyword only; on a task it is an invalid attribute, not this rule.
+    #[test]
+    fn order_off_a_play_is_not_judged() {
+        assert_eq!(run("- debug: msg=x\n  order: random\n"), vec![]);
+    }
+
+    /// The three `serial` hints say three different things; a list item says "remaining".
+    #[test]
+    fn serial_messages_name_what_actually_happens() {
+        let play = |v: &str| messages(&format!("- hosts: all\n  serial: {v}\n  tasks: []\n"));
+        assert!(play("0")[0].contains("every host in one batch"), "{:?}", play("0"));
+        assert!(play("\"0%\"")[0].contains("batch of one host"), "{:?}", play("\"0%\""));
+        let list = play("[1, 0]");
+        assert_eq!(list.len(), 1, "only the 0 item: {list:?}");
+        assert!(list[0].contains("all remaining hosts"), "{list:?}");
+    }
 }

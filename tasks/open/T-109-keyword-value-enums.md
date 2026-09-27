@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-106 | T-107      |
+| open   | task | P2       | M    | T-106 | T-107      |
 
 ## Problem
 
@@ -47,15 +47,35 @@ module rules already make.
 - [x] `serial: 0` gets a HINT saying it means all hosts
 - [ ] the enums live with the keyword tables, not in a second place
 
-## Landed: debugger, order, serial
+## Progress
 
-`keyword_values.rs`, enums in `keywords.rs` beside the tables; `demo/keyword_values.yml` is
-pinned exactly with a guard over the rest of the demo. The plugin-backed three are still open.
+| Keyword          | State        | Where                                                         |
+| ---------------- | ------------ | ------------------------------------------------------------- |
+| `debugger:`      | **done**     | ERROR, `keyword_values.rs`                                    |
+| `order:`         | **done**     | ERROR, `keyword_values.rs`                                    |
+| `serial:`        | **done**     | HINT, `keyword_values.rs`                                     |
+| `strategy:`      | not started  | needs the plugin index                                        |
+| `connection:`    | not started  | needs the plugin index                                        |
+| `become_method:` | not started  | needs the plugin index                                        |
 
-Measured on 2.21.3, which corrected the table above. `debugger:` is **not** a load-time
-fatal: `--syntax-check` passes and each task it applies to fails when it runs ("Error
-processing keyword 'debugger'"). Under `when: false` the task skips clean; `ignore_errors:
-true` swallows it. Still ERROR — the value is broken on every run that reaches it — worded
+**What is left is the larger half.** The three open keywords have no fixed value set — the
+legal values are whatever plugins of that type are installed, and a collection can add any
+of them — so each needs a per-type plugin index (core's shipped set, T-227's per-type dirs,
+collection `plugins/<type>/`) before the check can be written. That is M, not S. The last
+done-when box stays open until those enums exist too.
+
+Tests: `keyword_values::tests` (10 — task file, duplicate keys, every legal value, case,
+templated, per-level wording, `serial` boundaries and messages, keys off their node) and
+`the_keyword_values_demo_matches_its_annotations_exactly` /
+`every_other_demo_file_is_free_of_keyword_value_diagnostics` over `demo/keyword_values.yml`.
+Each was seen red with the code broken.
+
+## Measured on 2.21.3
+
+This corrected the table in Problem. `debugger:` is **not** a load-time fatal:
+`--syntax-check` passes and each task it applies to fails when it runs ("Error processing
+keyword 'debugger'"). Under `when: false` the task skips clean; `ignore_errors: true`
+swallows it. Still ERROR — the value is broken on every run that reaches it — worded
 "fails whenever it runs". Both enums are case-sensitive (`Always`, `Sorted` fail) and both
 template, so `{{ }}` values are skipped.
 
