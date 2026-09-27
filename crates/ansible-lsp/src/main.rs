@@ -2646,6 +2646,32 @@ impl Backend {
         (!locations.is_empty()).then_some(locations)
     }
 
+    /// Go to Implementation: the file a module task is dispatched to, which for a module with
+    /// an action-plugin twin is not the file definition opens (T-132). Definition keeps
+    /// meaning "what the loader resolves"; this answers "what runs". One location, so the
+    /// editor jumps rather than opening a picker. Anything but a module answers nothing —
+    /// definition already covers include paths and roles.
+    fn implementation_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+        path: &Path,
+        install: Option<&Arc<AnsibleInstall>>,
+    ) -> Option<Location> {
+        let (reference, in_playbook) = Self::reference_at(doc, nodes, pos)?;
+        if reference.kind != ReferenceKind::Module {
+            return None;
+        }
+        let ctx = FileContext::discover(path).with_install(install.cloned());
+        let res = resolve::Resolver { in_playbook, ..Default::default() }
+            .resolve(&reference, &ctx);
+        if res.status != Status::Resolved {
+            return None;
+        }
+        let won = res.targets.first()?;
+        location_at(module_files(&reference, won, &ctx).runs(won))
+    }
+
     /// The reference under the cursor, and whether its file is a playbook — the resolver
     /// needs the second to know what `{{ playbook_dir }}` means, and it is a fact about the
     /// file that no single reference carries any more (T-135).
@@ -3324,23 +3350,8 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
             }
         }
     };
-    let is_action = s.contains("/plugins/action/");
-    // A same-name action plugin means the task actually runs on the controller. Look in the
-    // winner's own tree (install/collection, via the path swap) AND the legacy dirs a role
-    // or ansible.cfg can add — the legacy ones take precedence, since a local plugin
-    // overrides the module (T-073). Bare name only: those dirs predate namespacing.
+    let ModuleFiles { is_action, twin, platform } = module_files(r, won, ctx);
     let bare = r.value.rsplit('.').next().unwrap_or(r.value.as_str());
-    let twin = if is_action {
-        plugin_twin(won, is_action).filter(|p| p.is_file())
-    } else {
-        legacy_action_twin(bare, ctx).or_else(|| plugin_twin(won, is_action).filter(|p| p.is_file()))
-    };
-    // Ansible's order is same-name twin, then the platform plugin, then ship it to the
-    // host — so this is only consulted once the twin search has come up empty.
-    let platform = match (is_action, &twin) {
-        (false, None) => network_platform_twin(won, bare, ctx),
-        _ => None,
-    };
     // One line per file, label first, the path as the link text — which file each link
     // opens must be readable without clicking.
     let entry = |label: &'static str, p: &Path| {
@@ -3410,6 +3421,50 @@ fn module_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Option<Md
             None => doc.item(entry("module", won)),
         },
     })
+}
+
+/// The files behind a resolved module. Hover lists them; Go to Implementation opens the
+/// one that runs. One lookup for both, so the two cannot disagree (T-132).
+struct ModuleFiles {
+    /// The winner itself is an action plugin (`plugins/action/`).
+    is_action: bool,
+    /// The same-name sibling: the action plugin for a module winner, the module for an
+    /// action winner.
+    twin: Option<PathBuf>,
+    /// The network platform plugin, only when there is no same-name twin.
+    platform: Option<PathBuf>,
+}
+
+impl ModuleFiles {
+    /// The file the task is dispatched to, in Ansible's order: a same-name action plugin,
+    /// then the platform plugin, then the module itself shipped to the host.
+    fn runs<'a>(&'a self, won: &'a Path) -> &'a Path {
+        if self.is_action {
+            return won;
+        }
+        self.twin.as_deref().or(self.platform.as_deref()).unwrap_or(won)
+    }
+}
+
+fn module_files(r: &Reference, won: &Path, ctx: &FileContext) -> ModuleFiles {
+    let is_action = won.to_string_lossy().replace('\\', "/").contains("/plugins/action/");
+    // A same-name action plugin means the task actually runs on the controller. Look in the
+    // winner's own tree (install/collection, via the path swap) AND the legacy dirs a role
+    // or ansible.cfg can add — the legacy ones take precedence, since a local plugin
+    // overrides the module (T-073). Bare name only: those dirs predate namespacing.
+    let bare = r.value.rsplit('.').next().unwrap_or(r.value.as_str());
+    let twin = if is_action {
+        plugin_twin(won, is_action).filter(|p| p.is_file())
+    } else {
+        legacy_action_twin(bare, ctx).or_else(|| plugin_twin(won, is_action).filter(|p| p.is_file()))
+    };
+    // Ansible's order is same-name twin, then the platform plugin, then ship it to the
+    // host — so this is only consulted once the twin search has come up empty.
+    let platform = match (is_action, &twin) {
+        (false, None) => network_platform_twin(won, bare, ctx),
+        _ => None,
+    };
+    ModuleFiles { is_action, twin, platform }
 }
 
 /// A module path cut to its meaningful tail: project-relative inside the workspace,
@@ -3988,6 +4043,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
@@ -4255,6 +4311,27 @@ impl LanguageServer for Backend {
             )
                 .map(GotoDefinitionResponse::Array),
         )
+    }
+
+    async fn goto_implementation(
+        &self,
+        p: request::GotoImplementationParams,
+    ) -> Result<Option<request::GotoImplementationResponse>> {
+        let uri = p.text_document_position_params.text_document.uri;
+        let pos = p.text_document_position_params.position;
+        let (Some(text), Ok(path)) = (self.state.text_of(&uri), uri.to_file_path()) else {
+            return Ok(None);
+        };
+        // A template has no module references.
+        if Self::is_template_file(&path) {
+            return Ok(None);
+        }
+        let doc = Document::new(text);
+        let Some(nodes) = doc.parse() else {
+            return Ok(None);
+        };
+        Ok(Self::implementation_at(&doc, &nodes, pos, &path, self.state.install().as_ref())
+            .map(GotoDefinitionResponse::Scalar))
     }
 
     /// Jinja syntax colouring, decided by the parser rather than by the client's grammar.
@@ -9731,6 +9808,96 @@ mod tests {
         let norm = md.replace('\\', "/");
         assert!(norm.contains("runs on the controller (action plugin)"), "controller label in: {md}");
         assert!(norm.contains("action_plugins/deploy_report.py"), "role-local plugin linked in: {md}");
+    }
+
+    /// Go to Implementation and Go to Definition on `needle` in `text`, as if `text` were
+    /// the buffer of the file at `rel` (demo-relative).
+    fn impl_and_def(
+        rel: &str,
+        text: &str,
+        needle: &str,
+        install: Option<&std::sync::Arc<ansible_core::install::AnsibleInstall>>,
+    ) -> (Option<String>, Vec<String>) {
+        let path = std::path::Path::new("../../demo").join(rel).canonicalize().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.into());
+        let nodes = doc.parse().unwrap();
+        let (line, character) = doc.byte_to_lsp(text.find(needle).expect("needle") + 1);
+        let pos = tower_lsp::lsp_types::Position { line, character };
+        let shown = |l: &tower_lsp::lsp_types::Location| {
+            ansible_core::posix_display(&l.uri.to_file_path().unwrap())
+        };
+        let imp = super::Backend::implementation_at(&doc, &nodes, pos, &path, install);
+        let def = super::Backend::definition_at(&doc, &nodes, pos, &uri, &path, &no_buffers(), &[], &no_cache(), install, None)
+            .unwrap_or_default();
+        (imp.as_ref().map(shown), def.iter().map(shown).collect())
+    }
+
+    /// T-132: a module with a same-name action plugin is dispatched to the plugin, so that
+    /// is what Go to Implementation opens — for each place a twin can live. Definition on
+    /// the collection fixture still opens the module and nothing else.
+    #[test]
+    fn implementation_opens_the_action_plugin_twin() {
+        let task = |m: &str| format!("- hosts: all\n  tasks:\n    - {m}:\n        x: 1\n");
+        let cases = [
+            ("tasks/action_plugins.yml", task("demo.charlie.beacon"), "demo.charlie.beacon", "charlie/plugins/action/beacon.py"),
+            ("tasks/action_plugins.yml", task("stage_files"), "stage_files", "plugins/action/stage_files.py"),
+            ("roles/reporting/tasks/main.yml", "- deploy_report:\n    summary: x\n".into(), "deploy_report", "action_plugins/deploy_report.py"),
+        ];
+        for (rel, text, needle, want) in cases {
+            let (imp, _) = impl_and_def(rel, &text, needle, None);
+            let imp = imp.unwrap_or_else(|| panic!("implementation for {needle}"));
+            assert!(imp.ends_with(want), "{needle} opened {imp}, want …{want}");
+        }
+
+        let (imp, def) = impl_and_def("tasks/action_plugins.yml", &task("demo.charlie.beacon"), "demo.charlie.beacon", None);
+        assert_eq!(def.len(), 1, "definition is one file: {def:?}");
+        assert!(def[0].ends_with("charlie/plugins/modules/beacon.py"), "definition still the module: {def:?}");
+        assert_ne!(imp.as_deref(), Some(def[0].as_str()), "the two requests answer differently");
+    }
+
+    /// T-132, core layout: `debug`'s module file is documentation only; the code that runs
+    /// is `ansible/plugins/action/debug.py`.
+    #[test]
+    fn implementation_on_a_core_module_opens_its_action_plugin() {
+        let install = ansible_core::install::AnsibleInstall::detect(None);
+        if install.package_dir.is_none() {
+            return; // ansible not on PATH
+        }
+        let install = std::sync::Arc::new(install);
+        let text = "- hosts: all\n  tasks:\n    - ansible.builtin.debug:\n        msg: x\n";
+        let (imp, def) = impl_and_def("tasks/modules.yml", text, "ansible.builtin.debug", Some(&install));
+        let imp = imp.expect("implementation for debug");
+        assert!(imp.ends_with("ansible/plugins/action/debug.py"), "opened {imp}");
+        assert!(def.iter().all(|d| d.ends_with("ansible/modules/debug.py")) && !def.is_empty(), "definition: {def:?}");
+    }
+
+    /// T-132: with no same-name twin, a network module runs through its platform plugin;
+    /// with neither, the module itself is what runs. The `link_status` decoy has a
+    /// `link.py` beside it that is not a platform plugin (T-072), so it must not be opened.
+    #[test]
+    fn implementation_falls_back_to_platform_then_module() {
+        let task = |m: &str| format!("- hosts: all\n  tasks:\n    - {m}:\n        x: 1\n");
+        let (imp, _) = impl_and_def("tasks/network_modules.yml", &task("cisco.ios.ios_config"), "cisco.ios.ios_config", None);
+        let imp = imp.expect("implementation for ios_config");
+        assert!(imp.ends_with("cisco/ios/plugins/action/ios.py"), "opened {imp}");
+
+        let (imp, _) = impl_and_def("tasks/network_modules.yml", &task("demo.charlie.link_status"), "demo.charlie.link_status", None);
+        let imp = imp.expect("implementation for link_status");
+        assert!(imp.ends_with("charlie/plugins/modules/link_status.py"), "opened {imp}");
+
+        let (imp, def) = impl_and_def("tasks/action_plugins.yml", &task("purge_cache"), "purge_cache", None);
+        let imp = imp.expect("implementation for purge_cache");
+        assert_eq!(def, vec![imp.clone()], "with no twin, implementation is the definition");
+    }
+
+    /// T-132: only modules have an implementation distinct from their definition.
+    #[test]
+    fn implementation_on_a_non_module_reference_is_nothing() {
+        let text = "- hosts: all\n  tasks:\n    - include_tasks: variables.yml\n";
+        let (imp, def) = impl_and_def("tasks/action_plugins.yml", text, "variables.yml", None);
+        assert!(!def.is_empty(), "control: definition resolves the include");
+        assert_eq!(imp, None);
     }
 
     /// A bare name that wins from a workspace `library/` dir is labelled `ansible.legacy`

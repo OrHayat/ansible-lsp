@@ -52,15 +52,28 @@ No setting: the user picks the file by picking the command. `tower-lsp` 0.20 has
 
 ## Done when
 
-- [ ] Go to Implementation on a module with a same-name twin returns the action plugin only:
+- [x] Go to Implementation on a module with a same-name twin returns the action plugin only:
       collection (`demo.charlie.beacon`), core layout, and a cfg/role `action_plugins/` dir,
       one assertion each
-- [ ] a network module with no twin returns its platform plugin
-- [ ] a module with neither returns the module itself
-- [ ] go-to-definition is unchanged — still the module only, asserted on the twin fixture
-- [ ] hover and implementation read one helper; the existing hover twin/platform tests pass
+- [x] a network module with no twin returns its platform plugin
+- [x] a module with neither returns the module itself
+- [x] go-to-definition is unchanged — still the module only, asserted on the twin fixture
+- [x] hover and implementation read one helper; the existing hover twin/platform tests pass
       unchanged
-- [ ] `implementation_provider` is declared in `ServerCapabilities`
-- [ ] a non-module reference returns nothing
+- [x] `implementation_provider` is declared in `ServerCapabilities`
+- [x] a non-module reference returns nothing
 - [ ] run once in VS Code: `Cmd+F12` on `debug:` opens `plugins/action/debug.py` — the editor
       behaviour above is read from source, so record the result here
+
+## Landed
+
+`module_files` returns the twin/platform lookup `module_hover` used to do inline, and
+`ModuleFiles::runs` picks the dispatched file; hover and `Backend::implementation_at` both
+read it. Tests: `implementation_opens_the_action_plugin_twin` (collection, cfg dir, role
+dir, plus the definition-unchanged control), `implementation_on_a_core_module_opens_its_action_plugin`,
+`implementation_falls_back_to_platform_then_module` (with the `link_status` decoy),
+`implementation_on_a_non_module_reference_is_nothing`. Each was seen red with the fix broken.
+
+Over stdio against the release binary: `implementationProvider: true`; on `ansible.builtin.debug`
+implementation returns `…/ansible/plugins/action/debug.py` as a single `Location` while
+definition returns `…/ansible/modules/debug.py`. The editor run in the last box is still owed.
