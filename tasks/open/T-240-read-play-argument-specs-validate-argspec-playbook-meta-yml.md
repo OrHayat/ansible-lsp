@@ -47,8 +47,22 @@ that came out different):
   "'share_name' is undefined".
 - Types are enforced: `type: int` rejects `abc` ("unable to convert to int"). `choices` is
   enforced. `type: str` accepts anything by converting it.
-- Validation checks the value **but does not convert the variable**: `port=80` passes as int,
-  and `port | type_debug` in the play prints `str`.
+- Validation checks the value **but does not convert the variable**. The declared type says
+  nothing reliable about what the play receives, in either direction:
+
+  | spec        | passed                  | check | `type_debug` in the play |
+  | ----------- | ----------------------- | ----- | ------------------------ |
+  | `type: int` | `-e port=80`            | pass  | `str`                    |
+  | `type: int` | `-e port=abc`           | fail  | —                        |
+  | `type: str` | `-e version=1`          | pass  | `str`                    |
+  | `type: str` | `-e '{"version": 1}'`   | pass  | `int`                    |
+  | `type: str` | `-e '{"version": 1.5}'` | pass  | `float`                  |
+  | `type: str` | `-e '{"version": [1]}'` | pass  | `list`                   |
+
+  `key=value` extra vars are always strings; JSON extra vars keep their JSON type. A
+  `type: str` option can therefore hold an int, a float or a list, and a `type: int` option can
+  hold a string. So no reader may treat the declared type as the value's type: not hover, not
+  a future type-aware diagnostic, not T-182's value domain.
 - It checks every var in scope, not just the caller's: a required option set in play `vars:`
   passes.
 - **Spec defaults are not injected.** Reading `squash` unsupplied is undefined at runtime.
@@ -176,5 +190,6 @@ Docs: https://docs.ansible.com/projects/ansible-core/devel/playbook_guide/playbo
 - [ ] a declared option never read gets a hint
 - [ ] missing meta file, missing spec name, and nameless `true` each get a diagnostic
 - [ ] a templated `validate_argspec` or play name that does not resolve produces nothing
-- [ ] hover never states a converted type or an injected default
+- [ ] hover never states a converted type or an injected default; the declared type feeds no
+      inference about the value (a test with `type: str` holding an int pins it)
 - [ ] a demo fixture pins each label, with an `every_other_demo_file_is_free_of_<rule>` guard
