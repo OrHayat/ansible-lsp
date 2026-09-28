@@ -154,6 +154,9 @@ statically, we cannot know which spec applies.
 `validate_argspec` as an invalid play keyword until ansible-lint#5187 (merged 2026-09-20,
 fixing #5168).
 
+Related: T-061 infers a playbook's required inputs from unguarded uses. For a play with a spec,
+the spec is the declared answer, and the two should agree.
+
 ## Approach
 
 Treat the spec as the play author's declared contract. A play that opts in has said what its

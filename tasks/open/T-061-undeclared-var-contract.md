@@ -18,6 +18,9 @@ T-051's `var-undefined` already warns on this class *inside playbooks*; what's l
 contract angle: uses in role/tasks files (where per-file warning is undecidable — T-059
 covers call sites), aggregated and presented as documentation rather than as defects.
 
+Related: T-240. A play with `validate_argspec` declares its inputs in `<playbook>.meta.yml`, so for
+that play the input list is written down and does not need inferring.
+
 ## Approach
 
 INFORMATION severity, not warning — these are inputs, not errors. The main deliverable is
