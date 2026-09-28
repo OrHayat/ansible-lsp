@@ -80,6 +80,17 @@ play-level fact gathering. Its action (`plugins/action/validate_argument_spec.py
 task vars — every source, not only the caller's. It never enumerates the task vars, so a name
 the spec does not declare is never looked at. That is the whole reason the set is open.
 
+**It is a runtime task, and it is not free.** Measured with two hosts and `gather_facts: true`:
+"Gathering Facts" runs on both, *then* "Validating arguments against arg spec" runs **once per
+host** and fails on each. So a missing input is caught before any change is made, but only after
+connecting to every host and gathering facts. The spec is re-checked per host, for a question
+(what did the caller pass?) whose answer is the same for all of them. The closed form below makes
+that task heavier still: a Jinja loop over every host var, per host.
+
+This is the case for doing it statically. The same file, read at edit time, costs nothing at run
+time. And because the editor can hold the author to the declared inputs, it can give the
+closed-set check that Ansible itself only offers through a hack.
+
 **Extra variables are allowed on purpose.** The feature PR, ansible/ansible#85763, says:
 "Undocumented variables are ignored by default. module_defaults can define the optional
 argument `provided_arguments` to ensure there's documentation for arbitrary options." A play
