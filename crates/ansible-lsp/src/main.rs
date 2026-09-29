@@ -1797,12 +1797,13 @@ impl Backend {
 
         // `strategy:`, `connection:` and `become_method:` naming no plugin (T-109). Needs the
         // install for the package's own plugins; without one the rule stays silent.
-        let plugin_lookup = |kind: plugin_names::PluginKind, name: &str| {
+        let plugin_lookup = |kind: plugin_names::PluginKind, name: &str, builtin_only: bool| {
             let install = a.ctx.install.as_ref()?;
             let pkg = install.package_dir.as_ref()?;
             Some(plugin_names::find(
                 kind,
                 name,
+                builtin_only,
                 pkg,
                 &install.builtin_routing,
                 &a.ctx.plugin_dirs(kind.type_name()),

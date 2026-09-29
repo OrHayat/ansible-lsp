@@ -50,3 +50,15 @@ class derives from `StrategyBase` means resolving its bases through imports.
 - [ ] the demo gains a broken local plugin and a row for it, pinned by the exact-set test
 - [ ] measured again for `connection:` (a `connection_plugins/` file without `Connection`)
       before its row lands
+
+## Which file to read (measured 2.21.3)
+
+`plugin_names::find` returns the path in the loader's order: for a bare or `ansible.legacy`
+name, a local copy beats the package (`strategy_plugins/linear.py` loads for `strategy:
+linear`); `ansible.builtin.linear` loads the package's. Connection differs: with a working
+`connection_plugins/local.py`, even `connection: ansible.builtin.local` ran the local copy —
+connection plugins are all imported at startup, under the package's own module name. `find`
+still answers the package's file there; `a_local_connection_copy_shadows_even_ansible_builtin`
+is the ignored test for it. Become is unmeasured. A crashing `connection_plugins/local.py` is
+skipped with "Skipping plugin … cannot load" and the shipped one runs, so there a broken shadow
+of a shipped name is only a warning in Ansible too; the same for strategy is unmeasured.

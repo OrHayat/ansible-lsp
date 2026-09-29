@@ -52,15 +52,27 @@ impl PluginKind {
     }
 }
 
-/// Where a name was found, as far as the rule needs to know. `Local` is a plugin folder —
-/// reachable bare or as `ansible.legacy.*`, never as `ansible.builtin.*` (measured).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a name was found, and the file. `Local` is a plugin folder — reachable bare or as
+/// `ansible.legacy.*`, never as `ansible.builtin.*` (measured).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
-    /// Shipped in the ansible-core package, or listed in its routing table.
-    Builtin,
+    /// Shipped in the ansible-core package.
+    Builtin(PathBuf),
+    /// Listed in core's routing table: a name core knows, loaded from a collection.
+    Routed,
     /// In a `*_plugins` folder or a configured plugin path.
-    Local,
+    Local(PathBuf),
     Nowhere,
+}
+
+impl Found {
+    /// The file this name loads, when it is one on disk.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Found::Builtin(p) | Found::Local(p) => Some(p),
+            Found::Routed | Found::Nowhere => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,12 +92,12 @@ pub struct Problem {
     pub rule: &'static str,
 }
 
-/// `lookup(kind, bare_name)` answers where a plugin is, or `None` when it cannot tell (no
-/// Ansible install detected), which silences the rule.
+/// `lookup(kind, bare_name, builtin_only)` answers where a plugin is — see [`find`] — or `None`
+/// when it cannot tell (no Ansible install detected), which silences the rule.
 pub fn problems(
     ast: &Ast,
     nodes: &[Node],
-    lookup: &dyn Fn(PluginKind, &str) -> Option<Found>,
+    lookup: &dyn Fn(PluginKind, &str, bool) -> Option<Found>,
 ) -> Vec<Problem> {
     let mut out = Vec::new();
     let mut check = |ds: &[Directive], kinds: &[PluginKind]| {
@@ -130,7 +142,7 @@ pub fn problems(
 }
 
 /// The message for a value no plugin answers to, or `None` when it is fine or not judged.
-fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Option<Found>) -> Option<(Tier, String)> {
+fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str, bool) -> Option<Found>) -> Option<(Tier, String)> {
     if value.is_empty() || value.contains("{{") || value.contains("{%") {
         return None;
     }
@@ -143,9 +155,9 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Opt
     } else {
         (value, false)
     };
-    let found = lookup(kind, name)?;
-    let local_as_builtin = builtin_only && found == Found::Local;
-    if found == Found::Builtin || (found == Found::Local && !builtin_only) {
+    let found = lookup(kind, name, builtin_only)?;
+    let local_as_builtin = builtin_only && matches!(found, Found::Local(_));
+    if matches!(found, Found::Builtin(_) | Found::Routed) || (matches!(found, Found::Local(_)) && !builtin_only) {
         return None;
     }
     let fails = match kind {
@@ -176,14 +188,20 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Opt
     }))
 }
 
-/// Where plugin `name` of `kind` is, for a real install: the package's `plugins/<type>/`, then
-/// core's routing table, then `dirs` (from [`crate::workspace::FileContext::plugin_dirs`]), then
-/// any `<type>_plugins/` folder anywhere under `root` — a role's folder reaches every play in
-/// the run, and which roles run is not known here. The walk only happens for a name every
-/// cheaper place missed, which is the rare case.
+/// Which file plugin `name` of `kind` loads, in the loader's order. A bare or `ansible.legacy`
+/// name takes the first hit in `dirs` (from [`crate::workspace::FileContext::plugin_dirs`])
+/// before the package, which comes last (`loader.py:479`) — a local `linear.py` shadows the
+/// shipped one (measured). `ansible.builtin` (`builtin_only`) is the package alone
+/// (`loader.py:807`); the local search then only tells the message what the name is.
+///
+/// Last of all, any `<type>_plugins/` folder under `root`: a role's folder reaches every play in
+/// the run, and which roles run is not known here. It is walked only on a miss — so a role
+/// folder elsewhere that shadows a shipped name reads as the shipped one. Found either way.
+#[allow(clippy::too_many_arguments)]
 pub fn find(
     kind: PluginKind,
     name: &str,
+    builtin_only: bool,
     package_dir: &Path,
     routing: &crate::install::RoutingTable,
     dirs: &[PathBuf],
@@ -192,20 +210,27 @@ pub fn find(
 ) -> Found {
     let t = kind.type_name();
     let file = format!("{name}.py");
-    if fs.is_file(&package_dir.join("plugins").join(t).join(&file)) || routing.lists(t, name) {
-        return Found::Builtin;
+    let local = || dirs.iter().map(|d| d.join(&file)).find(|p| fs.is_file(p));
+    if !builtin_only {
+        if let Some(p) = local() {
+            return Found::Local(p);
+        }
     }
-    if dirs.iter().any(|d| fs.is_file(&d.join(&file))) {
-        return Found::Local;
+    let shipped = package_dir.join("plugins").join(t).join(&file);
+    if fs.is_file(&shipped) {
+        return Found::Builtin(shipped);
     }
-    if root.is_some_and(|r| anywhere_under(r, &format!("{t}_plugins"), &file, fs)) {
-        return Found::Local;
+    if routing.lists(t, name) {
+        return Found::Routed;
+    }
+    if let Some(p) = local().or_else(|| root.and_then(|r| anywhere_under(r, &format!("{t}_plugins"), &file, fs))) {
+        return Found::Local(p);
     }
     Found::Nowhere
 }
 
 /// A `<sub>/<file>` somewhere under `root`, skipping hidden and build directories.
-fn anywhere_under(root: &Path, sub: &str, file: &str, fs: &dyn Fs) -> bool {
+fn anywhere_under(root: &Path, sub: &str, file: &str, fs: &dyn Fs) -> Option<PathBuf> {
     let mut stack = vec![(root.to_path_buf(), 0)];
     while let Some((dir, depth)) = stack.pop() {
         for (p, kind) in fs.read_dir(&dir) {
@@ -217,14 +242,14 @@ fn anywhere_under(root: &Path, sub: &str, file: &str, fs: &dyn Fs) -> bool {
                 continue;
             }
             if n == sub && fs.is_file(&p.join(file)) {
-                return true;
+                return Some(p.join(file));
             }
             if depth < 12 {
                 stack.push((p, depth + 1));
             }
         }
     }
-    false
+    None
 }
 
 #[cfg(test)]
@@ -234,10 +259,11 @@ mod tests {
 
     /// A fake install: builtins `linear free ssh local sudo`, routed `podman doas`, and a local
     /// folder holding `demo_steps demo_pipe`.
-    fn lookup(_: PluginKind, name: &str) -> Option<Found> {
+    fn lookup(_: PluginKind, name: &str, _builtin_only: bool) -> Option<Found> {
         Some(match name {
-            "linear" | "free" | "ssh" | "local" | "sudo" | "podman" | "doas" => Found::Builtin,
-            "demo_steps" | "demo_pipe" => Found::Local,
+            "linear" | "free" | "ssh" | "local" | "sudo" => Found::Builtin(PathBuf::from("pkg")),
+            "podman" | "doas" => Found::Routed,
+            "demo_steps" | "demo_pipe" => Found::Local(PathBuf::from("local")),
             _ => Found::Nowhere,
         })
     }
@@ -363,7 +389,7 @@ mod tests {
     fn no_install_means_no_answer() {
         let src = play("strategy: random");
         let nodes = Document::new(src.clone()).parse().unwrap();
-        assert!(problems(&crate::ast::build(&nodes), &nodes, &|_, _| None).is_empty());
+        assert!(problems(&crate::ast::build(&nodes), &nodes, &|_, _, _| None).is_empty());
     }
 
     /// `strategy` is a play keyword; on a task it is an invalid attribute, reported elsewhere.
@@ -399,18 +425,63 @@ mod tests {
         let pkg = base.join("pkg");
         let dirs = vec![base.join("cfgdir")];
         let root = base.join("proj");
-        let f = |n: &str| find(PluginKind::Strategy, n, &pkg, &routing, &dirs, Some(&root), &crate::fs::StdFs);
-        assert_eq!(f("linear"), Found::Builtin);
-        assert_eq!(f("moved"), Found::Builtin);
-        assert_eq!(f("mine"), Found::Local);
-        assert_eq!(f("deep"), Found::Local, "a role's folder anywhere in the tree");
+        let f = |n: &str| find(PluginKind::Strategy, n, false, &pkg, &routing, &dirs, Some(&root), &crate::fs::StdFs);
+        assert_eq!(f("linear"), Found::Builtin(base.join("pkg/plugins/strategy/linear.py")));
+        assert_eq!(f("moved"), Found::Routed);
+        assert_eq!(f("mine"), Found::Local(base.join("cfgdir/mine.py")));
+        assert_eq!(f("deep"), Found::Local(base.join("proj/roles/r/strategy_plugins/deep.py")), "a role's folder anywhere in the tree");
         assert_eq!(f("secret"), Found::Nowhere, "hidden dirs are not walked");
         assert_eq!(f("random"), Found::Nowhere);
         assert_eq!(
-            find(PluginKind::Connection, "linear", &pkg, &routing, &dirs, Some(&root), &crate::fs::StdFs),
+            find(PluginKind::Connection, "linear", false, &pkg, &routing, &dirs, Some(&root), &crate::fs::StdFs),
             Found::Nowhere,
             "per type"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Measured on 2.21.3 with a local `strategy_plugins/linear.py` that marks when it loads:
+    /// `linear` and `ansible.legacy.linear` load the local copy, `ansible.builtin.linear` the
+    /// package's. The loader searches local folders first and the package last
+    /// (`loader.py:479`), and `ansible.builtin` is the package alone (`loader.py:807`).
+    #[test]
+    fn a_local_copy_shadows_the_package_except_under_ansible_builtin() {
+        let base = std::env::temp_dir().join(format!("t227_shadow_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for rel in ["pkg/plugins/strategy/linear.py", "proj/strategy_plugins/linear.py"] {
+            let f = base.join(rel);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, "").unwrap();
+        }
+        let routing = crate::install::RoutingTable::parse("");
+        let (pkg, local) = (base.join("pkg"), base.join("proj/strategy_plugins"));
+        let f = |builtin_only| {
+            find(PluginKind::Strategy, "linear", builtin_only, &pkg, &routing, &[local.clone()], None, &crate::fs::StdFs)
+        };
+        assert_eq!(f(false), Found::Local(local.join("linear.py")), "bare and ansible.legacy");
+        assert_eq!(f(true), Found::Builtin(pkg.join("plugins/strategy/linear.py")), "ansible.builtin");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Measured on 2.21.3: with a working `connection_plugins/local.py` beside the playbook,
+    /// `connection: ansible.builtin.local` runs the LOCAL copy (a marker in `_connect` fired),
+    /// unlike strategy. Connection plugins are all imported at startup, and a legacy copy is
+    /// imported under the package's own module name (`ansible.plugins.connection.local`),
+    /// taking its place (`loader.py:285-286`). The rule must still stay silent — the line runs.
+    #[test]
+    #[ignore = "the file ansible.builtin.<connection> really loads when shadowed — T-242 reads it"]
+    fn a_local_connection_copy_shadows_even_ansible_builtin() {
+        let base = std::env::temp_dir().join(format!("t227_conn_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for rel in ["pkg/plugins/connection/local.py", "proj/connection_plugins/local.py"] {
+            let f = base.join(rel);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, "").unwrap();
+        }
+        let routing = crate::install::RoutingTable::parse("");
+        let (pkg, local) = (base.join("pkg"), base.join("proj/connection_plugins"));
+        let found = find(PluginKind::Connection, "local", true, &pkg, &routing, &[local.clone()], None, &crate::fs::StdFs);
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(found.path(), Some(local.join("local.py").as_path()));
     }
 }
