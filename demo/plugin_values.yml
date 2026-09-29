@@ -1,9 +1,11 @@
 # T-109 — `strategy:`, `connection:` and `become_method:` must name a plugin that exists.
 #
 # Measured on core 2.21.3, each row as its own play beside the local plugins in
-# strategy_plugins/ and connection_plugins/. Every WARN row passes `--syntax-check` and fails
-# at run time with the message quoted. GOOD rows run. A plugin in a local folder answers to its
-# bare name and to `ansible.legacy.*`, never to `ansible.builtin.*`.
+# strategy_plugins/ and connection_plugins/. Every flagged row passes `--syntax-check`. ERROR
+# rows fail every run: `ansible.builtin.*` is the package's own folder, a closed set. WARN rows
+# fail with the message quoted, as far as the folders we can see go (a become_method only once
+# become is in effect). GOOD rows run. A plugin in a local folder answers to its bare name and to
+# `ansible.legacy.*`, never to `ansible.builtin.*`.
 
 - name: strategy
   hosts: localhost
@@ -32,7 +34,7 @@
   tasks: []
 
 - hosts: localhost
-  strategy: ansible.builtin.demo_steps # WARN: a local folder is not part of ansible.builtin
+  strategy: ansible.builtin.demo_steps # ERROR: a local folder is not part of ansible.builtin
   tasks: []
 
 - hosts: localhost
@@ -54,7 +56,7 @@
   tasks: []
 
 - hosts: localhost
-  connection: ansible.builtin.demo_pipe # WARN: not part of ansible.builtin
+  connection: ansible.builtin.demo_pipe # ERROR: not part of ansible.builtin
   tasks: []
 
 - hosts: localhost
@@ -68,6 +70,10 @@
 
 - hosts: localhost
   become_method: sude # WARN: inert without become, fails once become is in effect
+  tasks: []
+
+- hosts: localhost
+  become_method: ansible.builtin.sude # WARN: not ERROR — inert until become is on, which may come from elsewhere
   tasks: []
 
 - hosts: localhost

@@ -63,10 +63,19 @@ pub enum Found {
     Nowhere,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Fails every run: `ansible.builtin.<name>` the package does not have.
+    Error,
+    /// Not found in the folders we can see, which may not be all of them.
+    Warning,
+}
+
 #[derive(Debug, Clone)]
 pub struct Problem {
     /// The keyword's value.
     pub span: Span,
+    pub tier: Tier,
     pub message: String,
     pub rule: &'static str,
 }
@@ -84,8 +93,8 @@ pub fn problems(
             // The last occurrence is the one Ansible loads.
             let Some(d) = ds.iter().rev().find(|d| d.key == kind.keyword()) else { continue };
             let Some(value) = node_with_span(nodes, d.value).and_then(Node::as_str).map(str::trim) else { continue };
-            if let Some(message) = judge(*kind, value, lookup) {
-                out.push(Problem { span: d.value, message, rule: RULE_ID });
+            if let Some((tier, message)) = judge(*kind, value, lookup) {
+                out.push(Problem { span: d.value, tier, message, rule: RULE_ID });
             }
         }
     };
@@ -121,7 +130,7 @@ pub fn problems(
 }
 
 /// The message for a value no plugin answers to, or `None` when it is fine or not judged.
-fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Option<Found>) -> Option<String> {
+fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Option<Found>) -> Option<(Tier, String)> {
     if value.is_empty() || value.contains("{{") || value.contains("{%") {
         return None;
     }
@@ -148,7 +157,11 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Opt
         ),
     };
     let t = kind.type_name();
-    Some(if local_as_builtin {
+    // `ansible.builtin` is the package folder alone (`loader.py:807`), a closed set: missing
+    // there fails every run. `become_method` only fails once become is on, which can be set
+    // anywhere, so it stays a warning like any name looked up in folders we may not all see.
+    let tier = if builtin_only && kind != PluginKind::Become { Tier::Error } else { Tier::Warning };
+    Some((tier, if local_as_builtin {
         format!(
             "`{name}` is a local {t} plugin, which is `ansible.legacy`, never `ansible.builtin` — \
              {fails}. Write `{name}` or `ansible.legacy.{name}`."
@@ -160,7 +173,7 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str) -> Opt
              or `ANSIBLE_{}_PLUGINS`.",
             t.to_uppercase()
         )
-    })
+    }))
 }
 
 /// Where plugin `name` of `kind` is, for a real install: the package's `plugins/<type>/`, then
@@ -244,6 +257,40 @@ mod tests {
 
     fn play(kw: &str) -> String {
         format!("- hosts: all\n  {kw}\n  tasks: []\n")
+    }
+
+    fn tiers(src: &str) -> Vec<Tier> {
+        let nodes = Document::new(src.into()).parse().unwrap();
+        problems(&crate::ast::build(&nodes), &nodes, &lookup).into_iter().map(|p| p.tier).collect()
+    }
+
+    /// `ansible.builtin` is the package's folder and nothing else, so a name missing from it
+    /// fails every run — measured for strategy and connection, local plugin or none at all.
+    #[test]
+    fn a_builtin_spelling_the_package_lacks_is_an_error() {
+        for kw in [
+            "strategy: ansible.builtin.random",
+            "strategy: ansible.builtin.demo_steps",
+            "connection: ansible.builtin.nothere",
+            "connection: ansible.builtin.demo_pipe",
+        ] {
+            assert_eq!(tiers(&play(kw)), vec![Tier::Error], "{kw}");
+        }
+    }
+
+    /// A bare name is looked up in folders we may not see all of (an env path the editor never
+    /// got), so not finding it is a warning.
+    #[test]
+    fn a_bare_or_legacy_name_found_nowhere_is_a_warning() {
+        assert_eq!(tiers(&play("strategy: random")), vec![Tier::Warning]);
+        assert_eq!(tiers(&play("connection: ansible.legacy.locl")), vec![Tier::Warning]);
+    }
+
+    /// Measured: `become_method: ansible.builtin.nothere` runs clean until become is on, and
+    /// become can come from anywhere — inventory, a parent play, the command line.
+    #[test]
+    fn a_builtin_become_method_the_package_lacks_stays_a_warning() {
+        assert_eq!(tiers(&play("become_method: ansible.builtin.sude")), vec![Tier::Warning]);
     }
 
     #[test]

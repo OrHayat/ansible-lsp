@@ -1816,7 +1816,10 @@ impl Backend {
             .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
             .map(|p| Diagnostic {
                 range: range_of(p.span),
-                severity: Some(DiagnosticSeverity::WARNING),
+                severity: Some(match p.tier {
+                    plugin_names::Tier::Error => DiagnosticSeverity::ERROR,
+                    plugin_names::Tier::Warning => DiagnosticSeverity::WARNING,
+                }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule.into())),
                 message: p.message,
@@ -7865,7 +7868,7 @@ mod tests {
 
     /// Diagnostics of `rule` for the demo file at `rel`, analysed with the real install.
     /// `None` without Ansible on PATH — the install-gated gap T-203 tracks.
-    fn demo_rule_lines_with_install(rel: &str, rule: &str) -> Option<(String, Vec<u32>)> {
+    fn demo_rule_lines_with_install(rel: &str, rule: &str) -> Option<(String, Vec<(u32, tower_lsp::lsp_types::DiagnosticSeverity)>)> {
         use tower_lsp::lsp_types::NumberOrString;
         let install = ansible_core::install::AnsibleInstall::detect(None);
         install.package_dir.as_ref()?;
@@ -7880,27 +7883,38 @@ mod tests {
             &super::OpenDocs::default(),
             &std::sync::Mutex::new(super::VarCache::default()),
         )?;
-        let mut lines: Vec<u32> = super::Backend::diagnostics_of(&a)
+        let mut lines: Vec<_> = super::Backend::diagnostics_of(&a)
             .iter()
             .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == rule))
-            .map(|d| d.range.start.line)
+            .map(|d| (d.range.start.line, d.severity.unwrap_or(tower_lsp::lsp_types::DiagnosticSeverity::WARNING)))
             .collect();
-        lines.sort_unstable();
+        lines.sort_unstable_by_key(|(l, _)| *l);
         Some((text, lines))
     }
 
     /// T-109's plugin fixture, both directions, against the real install and the demo's own
-    /// `strategy_plugins/` and `connection_plugins/`: every WARN row carries exactly one
-    /// `unknown-plugin` warning, and GOOD, NO HINT and SILENCED rows carry none.
+    /// `strategy_plugins/` and `connection_plugins/`: every ERROR row carries exactly one
+    /// `unknown-plugin` error, every WARN row one warning, and GOOD rows none.
     #[test]
     fn the_plugin_values_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::DiagnosticSeverity;
         let Some((text, got)) = demo_rule_lines_with_install("plugin_values.yml", "unknown-plugin") else { return };
-        let expected: Vec<u32> = text
+        let expected: Vec<(u32, DiagnosticSeverity)> = text
             .lines()
             .enumerate()
-            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
-            .map(|(i, _)| i as u32)
+            .filter(|(_, l)| !l.trim_start().starts_with('#'))
+            .filter_map(|(i, l)| {
+                let tier = if l.contains("# ERROR") {
+                    DiagnosticSeverity::ERROR
+                } else if l.contains("# WARN") {
+                    DiagnosticSeverity::WARNING
+                } else {
+                    return None;
+                };
+                Some((i as u32, tier))
+            })
             .collect();
+        assert!(expected.iter().filter(|(_, t)| *t == DiagnosticSeverity::ERROR).count() >= 2, "{expected:?}");
         assert!(expected.len() >= 6, "the fixture lost rows: {expected:?}");
         assert_eq!(got, expected, "diagnostics and annotations disagree");
     }
