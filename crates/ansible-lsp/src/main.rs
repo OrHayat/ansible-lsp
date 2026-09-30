@@ -1820,9 +1820,11 @@ impl Backend {
                 severity: Some(match p.tier {
                     plugin_names::Tier::Error => DiagnosticSeverity::ERROR,
                     plugin_names::Tier::Warning => DiagnosticSeverity::WARNING,
+                    plugin_names::Tier::Hint => DiagnosticSeverity::HINT,
                 }),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String(p.rule.into())),
+                tags: (p.rule == plugin_names::THIRD_PARTY_STRATEGY_RULE_ID).then(|| vec![DiagnosticTag::DEPRECATED]),
                 message: p.message,
                 ..Default::default()
             })
@@ -7918,6 +7920,57 @@ mod tests {
         assert!(expected.iter().filter(|(_, t)| *t == DiagnosticSeverity::ERROR).count() >= 2, "{expected:?}");
         assert!(expected.len() >= 6, "the fixture lost rows: {expected:?}");
         assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// The `# HINT` rows of the same fixture are exactly the `third-party-strategy` hints, each
+    /// tagged deprecated.
+    #[test]
+    fn the_plugin_values_demo_hints_every_third_party_strategy_and_nothing_else() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, DiagnosticTag, NumberOrString};
+        let install = ansible_core::install::AnsibleInstall::detect(None);
+        if install.package_dir.is_none() {
+            return;
+        }
+        let path = std::path::Path::new("../../demo/plugin_values.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let scan = ansible_core::cache::ScanCache::default().with_install(Some(std::sync::Arc::new(install)));
+        let a = super::Backend::analyze_text_measured(
+            text.clone(),
+            &path,
+            &mut super::ScanTimings::default(),
+            &scan,
+            &super::OpenDocs::default(),
+            &std::sync::Mutex::new(super::VarCache::default()),
+        )
+        .unwrap();
+        let rule = ansible_core::plugin_names::THIRD_PARTY_STRATEGY_RULE_ID;
+        let got: Vec<_> = super::Backend::diagnostics_of(&a)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == rule))
+            .map(|d| (d.range.start.line, d.severity, d.tags))
+            .collect();
+        let expected: Vec<_> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# HINT"))
+            .map(|(i, _)| (i as u32, Some(DiagnosticSeverity::HINT), Some(vec![DiagnosticTag::DEPRECATED])))
+            .collect();
+        assert!(expected.len() >= 3, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn every_other_demo_file_is_free_of_third_party_strategy_hints() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        for path in ansible_core::workspace::yaml_files(&demo) {
+            let rel = path.strip_prefix(&demo).unwrap().to_string_lossy().to_string();
+            if rel == "plugin_values.yml" {
+                continue;
+            }
+            let rule = ansible_core::plugin_names::THIRD_PARTY_STRATEGY_RULE_ID;
+            let Some((_, got)) = demo_rule_lines_with_install(&rel, rule) else { return };
+            assert!(got.is_empty(), "{rel}: lines {got:?}");
+        }
     }
 
     /// T-109's plugin false-positive gate, against the real install.

@@ -5,7 +5,8 @@
 # rows fail every run: `ansible.builtin.*` is the package's own folder, a closed set. WARN rows
 # fail with the message quoted, as far as the folders we can see go (a become_method only once
 # become is in effect). GOOD rows run. A plugin in a local folder answers to its bare name and to
-# `ansible.legacy.*`, never to `ansible.builtin.*`.
+# `ansible.legacy.*`, never to `ansible.builtin.*`. HINT rows run, and Ansible prints a
+# deprecation for them: a strategy loaded from anywhere but ansible.builtin (third-party-strategy).
 
 - name: strategy
   hosts: localhost
@@ -26,11 +27,11 @@
   tasks: []
 
 - hosts: localhost
-  strategy: demo_steps # GOOD: strategy_plugins/demo_steps.py
+  strategy: demo_steps # HINT: runs from strategy_plugins/demo_steps.py, which Ansible deprecates
   tasks: []
 
 - hosts: localhost
-  strategy: ansible.legacy.demo_steps # GOOD: a local folder is part of ansible.legacy
+  strategy: ansible.legacy.demo_steps # HINT: runs, a local folder is part of ansible.legacy; deprecated the same
   tasks: []
 
 - hosts: localhost
@@ -44,7 +45,7 @@
   tasks: []
 
 - hosts: localhost
-  strategy: nosuch.coll.thing # NO HINT: another collection's plugins are not judged yet
+  strategy: nosuch.coll.thing # HINT: deprecated, like every collection's strategy; whether it exists is not judged
   tasks: []
 
 - hosts: localhost

@@ -16,6 +16,9 @@
 //!
 //! Any other collection's plugin is not judged: the collection may be installed where the play
 //! runs and not here, and a collection's own routing can add names. No install → no answer.
+//!
+//! Separately, `third-party-strategy`: a strategy that loads from anywhere but the package is
+//! deprecated since 2.19 with no removal version (measured 2.21.3, see [`third_party_strategy`]).
 
 use crate::ast::{Ast, Directive, PlayItem, Stmt};
 use crate::fs::{Fs, Kind};
@@ -24,6 +27,9 @@ use std::path::{Path, PathBuf};
 
 /// Rule id, for `# noqa: unknown-plugin` and for display.
 pub const RULE_ID: &str = "unknown-plugin";
+
+/// A `strategy:` that loads from outside `ansible.builtin` — deprecated since 2.19.
+pub const THIRD_PARTY_STRATEGY_RULE_ID: &str = "third-party-strategy";
 
 /// The three plugin types a keyword value has to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,6 +87,8 @@ pub enum Tier {
     Error,
     /// Not found in the folders we can see, which may not be all of them.
     Warning,
+    /// Runs today; Ansible prints a deprecation.
+    Hint,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +115,11 @@ pub fn problems(
             let Some(value) = node_with_span(nodes, d.value).and_then(Node::as_str).map(str::trim) else { continue };
             if let Some((tier, message)) = judge(*kind, value, lookup) {
                 out.push(Problem { span: d.value, tier, message, rule: RULE_ID });
+            }
+            if *kind == PluginKind::Strategy {
+                if let Some(message) = third_party_strategy(value, lookup) {
+                    out.push(Problem { span: d.value, tier: Tier::Hint, message, rule: THIRD_PARTY_STRATEGY_RULE_ID });
+                }
             }
         }
     };
@@ -186,6 +199,29 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str, bool) 
             t.to_uppercase()
         )
     }))
+}
+
+/// The deprecation `loader.py:1032` prints for a strategy whose resolved collection is not
+/// `ansible.builtin`: a local file (bare or `ansible.legacy`), or any other collection's
+/// (installed or not — measured, it prints before the missing plugin fails). Skipped when the
+/// name is found nowhere, which `unknown-plugin` already reports.
+fn third_party_strategy(value: &str, lookup: &dyn Fn(PluginKind, &str, bool) -> Option<Found>) -> Option<String> {
+    if value.is_empty() || value.contains("{{") || value.contains("{%") || value.starts_with("ansible.builtin.") {
+        return None;
+    }
+    let from = match value.strip_prefix("ansible.legacy.") {
+        None if value.contains('.') => "a collection".to_string(),
+        n => match lookup(PluginKind::Strategy, n.unwrap_or(value), false)? {
+            Found::Local(p) => format!("`{}`", p.display()),
+            _ => return None,
+        },
+    };
+    Some(format!(
+        "`{value}` loads from {from}, not `ansible.builtin` — Ansible warns on every run: \"Use of \
+         strategy plugins not included in ansible.builtin are deprecated and do not carry any \
+         backwards compatibility guarantees. No alternative for third party strategy plugins is \
+         currently planned.\" It runs today; there is no removal version yet."
+    ))
 }
 
 /// Which file plugin `name` of `kind` loads, in the loader's order. A bare or `ansible.legacy`
@@ -272,13 +308,14 @@ mod tests {
         let nodes = Document::new(src.into()).parse().unwrap();
         problems(&crate::ast::build(&nodes), &nodes, &lookup)
             .into_iter()
+            .filter(|p| p.rule == RULE_ID)
             .map(|p| p.span.slice(src).to_string())
             .collect()
     }
 
     fn messages(src: &str) -> Vec<String> {
         let nodes = Document::new(src.into()).parse().unwrap();
-        problems(&crate::ast::build(&nodes), &nodes, &lookup).into_iter().map(|p| p.message).collect()
+        problems(&crate::ast::build(&nodes), &nodes, &lookup).into_iter().filter(|p| p.rule == RULE_ID).map(|p| p.message).collect()
     }
 
     fn play(kw: &str) -> String {
@@ -287,7 +324,7 @@ mod tests {
 
     fn tiers(src: &str) -> Vec<Tier> {
         let nodes = Document::new(src.into()).parse().unwrap();
-        problems(&crate::ast::build(&nodes), &nodes, &lookup).into_iter().map(|p| p.tier).collect()
+        problems(&crate::ast::build(&nodes), &nodes, &lookup).into_iter().filter(|p| p.rule == RULE_ID).map(|p| p.tier).collect()
     }
 
     /// `ansible.builtin` is the package's folder and nothing else, so a name missing from it
@@ -396,6 +433,53 @@ mod tests {
     #[test]
     fn strategy_off_a_play_is_not_judged() {
         assert_eq!(flagged("- command: x\n  strategy: random\n"), Vec::<String>::new());
+    }
+
+    fn third_party(src: &str) -> Vec<(String, Tier)> {
+        let nodes = Document::new(src.into()).parse().unwrap();
+        problems(&crate::ast::build(&nodes), &nodes, &lookup)
+            .into_iter()
+            .filter(|p| p.rule == THIRD_PARTY_STRATEGY_RULE_ID)
+            .map(|p| (p.span.slice(src).to_string(), p.tier))
+            .collect()
+    }
+
+    /// Measured on 2.21.3: the deprecation keys on the file that loaded (`loader.py:1032`,
+    /// `plugin_resolved_collection == 'ansible.builtin'`), so a local copy of `linear` read as
+    /// `linear` warns while `ansible.builtin.linear` does not, and any collection's strategy
+    /// warns — `acme.tools.nothere` too, just before its "Invalid play strategy".
+    #[test]
+    fn a_strategy_outside_ansible_builtin_is_a_deprecation_hint() {
+        for v in ["demo_steps", "ansible.legacy.demo_steps", "acme.tools.fast"] {
+            assert_eq!(third_party(&play(&format!("strategy: {v}"))), vec![(v.to_string(), Tier::Hint)], "{v}");
+        }
+    }
+
+    #[test]
+    fn a_builtin_strategy_is_not_a_deprecation() {
+        for v in ["linear", "ansible.legacy.free", "ansible.builtin.linear", "ansible.builtin.demo_steps", "random", "\"{{ s }}\""] {
+            assert_eq!(third_party(&play(&format!("strategy: {v}"))), vec![], "{v}");
+        }
+    }
+
+    /// The deprecation is about strategies only; a local connection or become plugin is fine.
+    #[test]
+    fn a_local_connection_is_not_a_deprecation() {
+        assert_eq!(third_party(&play("connection: demo_pipe")), vec![]);
+    }
+
+    #[test]
+    fn the_deprecation_quotes_ansible_and_says_nothing_removes_it_yet() {
+        let src = play("strategy: mitogen_linear");
+        let nodes = Document::new(src.clone()).parse().unwrap();
+        let local = |_: PluginKind, _: &str, _: bool| Some(Found::Local(PathBuf::from("x")));
+        let m = problems(&crate::ast::build(&nodes), &nodes, &local)
+            .into_iter()
+            .find(|p| p.rule == THIRD_PARTY_STRATEGY_RULE_ID)
+            .unwrap()
+            .message;
+        assert!(m.contains("do not carry any backwards compatibility guarantees"), "{m}");
+        assert!(m.contains("no removal version"), "{m}");
     }
 
     #[test]
