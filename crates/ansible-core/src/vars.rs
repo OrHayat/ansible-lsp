@@ -348,6 +348,9 @@ pub struct VarUse {
     /// Read through `hostvars[...]`, which is assembled with no play and no task — so only
     /// the sources [`VarSource::visible_to_hostvars`] admits can satisfy it (T-104).
     pub through_hostvars: bool,
+    /// For a `through_hostvars` read reported undefined: the play-scoped definition it cannot
+    /// see, carried so the message can link to it (T-172).
+    pub hidden_from_hostvars: Option<Located>,
     /// Absolute span of the Jinja expression this use sits in: the inside of its `{{ }}`,
     /// or the whole `when:` clause. What [`undefined_uses`] hands to
     /// [`condition::guard_at`] (T-223).
@@ -495,6 +498,7 @@ fn push_uses(
             defined_out_of_scope: None,
             through_hostvars,
             expr: Span { start: base, end: base + expr.len() },
+            hidden_from_hostvars: None,
             site: Site::default(),
             scope_gap: None,
             no_facts_here: false,
@@ -1106,26 +1110,34 @@ pub fn undefined_uses_in(
             .find(|(span, _)| span.start <= at && at < span.end)
             .map_or(true, |(_, possible)| *possible)
     };
+    // Computed on the first hostvars read only: most files have none.
+    let host_storage_known = std::cell::OnceCell::new();
+    let hostvars_blind_to = |name: &str| {
+        let mut defs = all.iter().filter(|d| d.name == name).peekable();
+        defs.peek().is_some()
+            && defs.all(|d| !d.source.visible_to_hostvars())
+            && *host_storage_known.get_or_init(|| {
+                inventory_hosts(path, cache).is_some() && created_hosts_in(path, nodes, cache).is_some()
+            })
+    };
     // The full view: a provided name is exempt by its scope at the use, not by its spelling,
     // so the rule has to see it to judge it (T-224).
     any_uses(nodes)
         .into_iter()
         .filter(|u| {
             !all.iter().any(|d| d.name == u.name && d.reaches(u, path))
-                // A `hostvars[...]` read is answered mostly by inventory, which we do not
-                // parse (T-062) — so this check has nothing to say about one, in either
-                // direction. Measured, both ways round:
-                //
-                // - found nothing: 37 corpus warnings, all 37 inventory host vars.
-                // - found only play-scoped definitions: still not provably undefined. A
-                //   name set in play `vars:` *and* in inventory reads fine through
-                //   hostvars — measured, it returns the inventory value — so "always
-                //   undefined" is a false claim on working code.
-                //
-                // Hover and go-to-definition still apply `visible_to_hostvars`, which is
-                // sound for them: the play var is definitely not what this read returns,
-                // whatever inventory holds. Claiming the read is *broken* needs T-062.
-                && !u.through_hostvars
+                // A `hostvars[...]` read is judged only when every definition of the name is
+                // one `hostvars` cannot see (T-172) — never on a name defined nowhere, which
+                // is the inventory-host-var shape (37 corpus false positives in T-104) — and
+                // only with the whole host storage readable: a name also on an inventory
+                // host line reads back fine, measured.
+                // `hostvars[h].x | default(..)` prints the default, measured (T-172). The
+                // guard sits on this read's `hostvars` root, the nearest one before the name.
+                && (!u.through_hostvars
+                    || (hostvars_blind_to(&u.name)
+                        && !text[..u.span.start].rfind("hostvars").is_some_and(|r| {
+                            condition::expression_swallows_undefined(text, r, r + "hostvars".len())
+                        })))
                 && !provided_here(u, facts_at(u.span.start), core)
                 && !declared.contains(&u.name)
                 // A `when: x is defined` on the task (or a block around it) keeps the read
@@ -1139,6 +1151,10 @@ pub fn undefined_uses_in(
                 })
         })
         .map(|mut u| {
+            u.hidden_from_hostvars = u
+                .through_hostvars
+                .then(|| all.iter().filter(|d| d.name == u.name).min_by_key(|d| (d.file != path, d.span.start)).cloned())
+                .flatten();
             u.defined_out_of_scope = all
                 .iter()
                 .filter(|d| d.name == u.name)
@@ -3014,56 +3030,77 @@ mod tests {
         assert!(!VarsFiles.visible_to_hostvars());
     }
 
-    /// T-104: `undefined_uses` says **nothing** about a `hostvars[...]` read, in either
-    /// direction. Not a gap — a retraction, because the claim was not sound.
-    ///
-    /// The obvious rule is "every definition I can see is play-scoped, so this is always
-    /// undefined". It is wrong: `hostvars` is answered mostly by inventory, which we do
-    /// not parse (T-062). Measured both ways round —
-    ///
-    /// - found nothing: 37 corpus warnings, all 37 inventory host vars.
-    /// - found only play-scoped: a name in play `vars:` *and* in inventory reads fine
-    ///   through hostvars (measured: returns the inventory value), so the warning fires
-    ///   on working code.
-    ///
-    /// The navigation half is unaffected and still applies `visible_to_hostvars`, which
-    /// is sound for it: whatever inventory holds, the play var is not what this read
-    /// returns, so hover must not offer it.
+    /// T-104's two silent shapes, which stay silent: a name defined nowhere we can see (the
+    /// 37-false-positive shape — inventory host vars, before T-062), and a fact, which is host
+    /// storage and genuinely visible.
     #[test]
-    fn a_hostvars_read_is_never_reported_undefined() {
-        // Defined only in play vars — the case that looks provable and is not.
-        assert!(undef(concat!(
-            "- hosts: all\n  vars:\n    play_scoped: 8080\n  tasks:\n",
-            "    - debug: { msg: \"{{ hostvars['web01'].play_scoped }}\" }\n",
-        ))
-        .is_empty());
-        // Defined nowhere we can see — the 37-false-positive shape. (The loop is for
-        // `item`, which is its own rule since T-224 and not what this test is about.)
+    fn a_hostvars_read_of_a_name_defined_nowhere_or_as_a_fact_is_not_reported() {
+        // (The loop is for `item`, which is its own rule since T-224.)
         assert!(undef(concat!(
             "- hosts: all\n  tasks:\n",
             "    - debug: { msg: \"{{ hostvars[item].infiniband_ip }}\" }\n      loop: [web01]\n",
         ))
         .is_empty());
-        // A fact is host storage, so hostvars genuinely sees it.
         assert!(undef(concat!(
             "- hosts: all\n  tasks:\n",
             "    - set_fact: { gathered: 1 }\n",
             "    - debug: { msg: \"{{ hostvars['web01'].gathered }}\" }\n",
         ))
         .is_empty());
-        // THE CONTROL, and the reason this test is not vacuous: the ordinary read of the
-        // very same undefined name still warns. Silence above is the hostvars rule, not
-        // the check being asleep.
+        // THE CONTROL: the ordinary read of an undefined name still warns, so the silence
+        // above is the hostvars rule, not the check being asleep.
         assert_eq!(
             undef("- hosts: all\n  tasks:\n    - debug: { msg: \"{{ nowhere_at_all }}\" }\n"),
             ["nowhere_at_all"]
         );
-        // The use is still extracted and still marked — hover and go-to-definition need
-        // both, and T-062 will need them to make the diagnostic sound.
         let src = "- hosts: all\n  vars:\n    play_scoped: 8080\n  tasks:\n    - debug: { msg: \"{{ hostvars['w'].play_scoped }}\" }\n";
         let nodes = Document::new(src.to_string()).parse().unwrap();
         let u = uses(&nodes).into_iter().find(|u| u.through_hostvars).expect("still a use");
         assert_eq!(u.name, "play_scoped");
+    }
+
+    /// T-172: a `hostvars` read whose every definition is play-scoped is undefined on every
+    /// host — measured on 2.21.3, `'HostVarsVars' has no attribute 'play_scoped'` beside a
+    /// direct read of the same name printing 8080. Only with the whole inventory read: the
+    /// same name also on an inventory host line returns `FROM_INVENTORY` (measured in the same
+    /// run), and a dynamic inventory could hold it unseen.
+    #[test]
+    fn a_hostvars_read_of_a_play_only_name_is_reported_once_inventory_is_known() {
+        let d = std::env::temp_dir().join("ansible-core-t172");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("plain.ini"), "[web]\nweb01\n").unwrap();
+        std::fs::write(d.join("both.ini"), "[web]\nweb01 both_places=FROM_INVENTORY\n").unwrap();
+        std::fs::write(d.join("dyn.yml"), "plugin: amazon.aws.aws_ec2\nregions: [us-east-1]\n").unwrap();
+        let play = d.join("play.yml");
+        let run = |src: &str, inv: &str| -> Vec<VarUse> {
+            std::fs::write(&play, src).unwrap();
+            let nodes = Document::new(src.to_string()).parse().unwrap();
+            let inventory = if inv.is_empty() { vec![] } else { vec![d.join(inv)] };
+            let cache = ScanCache::default().with_inventory(inventory);
+            undefined_uses_in(&play, &nodes, src, &cache)
+        };
+        let read = |name: &str| {
+            format!(
+                "- hosts: all\n  vars:\n    play_scoped: 8080\n    both_places: FROM_PLAY_VARS\n  tasks:\n    - debug: {{ msg: \"{{{{ hostvars['web01'].{name} }}}}\" }}\n"
+            )
+        };
+
+        let got = run(&read("play_scoped"), "plain.ini");
+        assert_eq!(got.iter().map(|u| u.name.as_str()).collect::<Vec<_>>(), ["play_scoped"]);
+        let hidden = got[0].hidden_from_hostvars.as_ref().expect("the definition, for the link");
+        assert_eq!(hidden.source, VarSource::PlayVars);
+        assert_eq!(hidden.span.slice(&read("play_scoped")), "8080");
+
+        assert!(run(&read("both_places"), "both.ini").is_empty(), "also an inventory var: works");
+        // T-104's 37 false positives, with the inventory read: defined nowhere is not play-only.
+        assert!(run(&read("infiniband_ip"), "plain.ini").is_empty(), "defined nowhere");
+        assert!(run(&read("play_scoped"), "dyn.yml").is_empty(), "a dynamic inventory could hold it");
+        assert!(run(&read("play_scoped"), "").is_empty(), "no inventory resolved");
+        let rescued = read("play_scoped").replace(".play_scoped }}", ".play_scoped | default('D') }}");
+        assert!(run(&rescued, "plain.ini").is_empty(), "| default rescues it, measured");
+        let added = format!("{}    - add_host: {{ name: \"{{{{ inventory_hostname }}}}-b\" }}\n", read("play_scoped"));
+        assert!(run(&added, "plain.ini").is_empty(), "a templated add_host may carry anything");
     }
 
     /// `set_stats` renders its keys exactly like `set_fact` (T-169) and is otherwise

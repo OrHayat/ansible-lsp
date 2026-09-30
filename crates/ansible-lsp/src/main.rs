@@ -2109,7 +2109,37 @@ impl Backend {
                 severity: Some(DiagnosticSeverity::WARNING),
                 source: Some("ansible-lsp".into()),
                 code: Some(NumberOrString::String("var-undefined".into())),
-                message: if let Some(scope) = u.scope_gap {
+                related_information: u.hidden_from_hostvars.as_ref().and_then(|d| {
+                    let target = if d.file == path {
+                        Document::new(a.doc.text.clone())
+                    } else {
+                        Document::new(std::fs::read_to_string(&d.file).ok()?)
+                    };
+                    let (sl, sc) = target.byte_to_lsp(d.span.start);
+                    let (el, ec) = target.byte_to_lsp(d.span.end);
+                    Some(vec![DiagnosticRelatedInformation {
+                        location: Location {
+                            uri: Url::from_file_path(&d.file).ok()?,
+                            range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                        },
+                        message: format!(
+                            "`{}` is defined here, as a {} — out of reach from `hostvars`",
+                            u.name,
+                            source_label(d.source)
+                        ),
+                    }])
+                }),
+                message: if let Some(d) = &u.hidden_from_hostvars {
+                    // T-172: every definition is one `hostvars` cannot see, and the whole
+                    // inventory was read — `undefined_uses_in` checked both.
+                    format!(
+                        "always undefined: `{}` is a {}, and `hostvars` cannot see those — it is \
+                         built without the play. Move the value to `host_vars/`, `group_vars/`, \
+                         or a `set_fact`.",
+                        u.name,
+                        source_label(d.source)
+                    )
+                } else if let Some(scope) = u.scope_gap {
                     scope_gap_message(&u, scope)
                 } else if let Some(gone) = u.removed_in {
                     format!(
@@ -6384,6 +6414,38 @@ mod tests {
         ds.iter().map(|d| d.message.clone()).collect()
     }
 
+    /// T-172 on `demo/hostvars.yml`: the two reads of a play var through `hostvars` warn, each
+    /// linking to the play var; `infiniband_ip` and `not_exists`, defined nowhere, stay silent.
+    #[test]
+    fn the_hostvars_demo_reports_each_play_var_read_through_hostvars_with_a_link() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo/hostvars.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let ds: Vec<_> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| d.code == Some(NumberOrString::String("var-undefined".into())))
+            .collect();
+        let lines: Vec<&str> = ds.iter().map(|d| text.lines().nth(d.range.start.line as usize).unwrap().trim()).collect();
+        assert_eq!(
+            lines,
+            [
+                "msg: \"{{ hostvars['web01'].play_scoped }}\"",
+                "- \"through hostvars = {{ hostvars[inventory_hostname].play_scoped }}\"",
+            ],
+            "{:?}",
+            msgs(&ds)
+        );
+        let play_var_line = text.lines().position(|l| l.trim() == "play_scoped: 8080").unwrap() as u32;
+        for d in &ds {
+            assert!(d.message.starts_with("always undefined: `play_scoped` is a play var"), "{}", d.message);
+            let rel = d.related_information.as_ref().expect("the link");
+            assert_eq!(rel.len(), 1);
+            assert_eq!(rel[0].location.range.start.line, play_var_line);
+            assert_eq!(rel[0].location.uri.to_file_path().unwrap(), path);
+        }
+    }
+
     /// T-105 on its demo: every `# WARN` row carries exactly one `unknown-delegate-host`
     /// warning, and nothing else in the file does — the add_host, implicit-localhost,
     /// templated and noqa rows included.
@@ -9148,14 +9210,13 @@ mod tests {
         // ...and the warning takes over on exactly the two BAD rows, naming the source it
         // found rather than claiming the variable was never defined.
         let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
-        // NOTHING is reported on a hostvars read — the retraction. The obvious rule
-        // ("every definition I can see is play-scoped, so this is always undefined") is
-        // unsound while inventory is unparsed: a name in play `vars:` AND in inventory
-        // reads fine through hostvars, measured. So the demo's BAD rows are BAD about
-        // *Ansible*, and we stay quiet about them until T-062.
+        // Exactly the two BAD rows, now that the inventory is read (T-172) — naming the source
+        // it found rather than claiming the variable was never defined. `infiniband_ip` and
+        // `not_exists`, defined nowhere, stay silent.
         let ds = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None);
         let msgs: Vec<String> = ds.into_iter().map(|d| d.message).collect();
-        assert!(msgs.is_empty(), "no claim about a hostvars read: {msgs:?}");
+        assert_eq!(msgs.len(), 2, "{msgs:?}");
+        assert!(msgs.iter().all(|m| m.starts_with("always undefined: `play_scoped` is a play var")), "{msgs:?}");
         // The control that keeps that silence meaningful: the same check is alive in this
         // file for an ordinary read, so the quiet above is the rule and not a dead pass.
         let live = super::Backend::analyze_text(

@@ -145,7 +145,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
-| T-172 | [Diagnose a hostvars read of a play-scoped variable](open/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | S    | ~~T-062~~ |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
@@ -350,6 +349,7 @@ T-021 is now unblocked on that side.
 | T-109 | [Keyword value enums](closed/T-109-keyword-value-enums.md)     | done     |
 | T-227 | [One loader-path model for every plugin-type dir and cfg path](closed/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | done     |
 | T-105 | [delegate_to: empty template, and hosts not in inventory](closed/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | done     |
+| T-172 | [Diagnose a hostvars read of a play-scoped variable](closed/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -669,7 +669,7 @@ pub const IMPLICIT_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 /// expression and rescues nothing. Within that unit the question goes to [`guard_at`]: the
 /// `hostvars[...]` read this key sits on must itself be defaulted or tested — a `default`
 /// on some other name in the same expression rescues nothing either (T-223).
-fn expression_swallows_undefined(text: &str, s: usize, e: usize) -> bool {
+pub(crate) fn expression_swallows_undefined(text: &str, s: usize, e: usize) -> bool {
     let open = text[..s].rfind("{{").or_else(|| text[..s].rfind("{%"));
     let close = text[e..].find("}}").or_else(|| text[e..].find("%}")).map(|i| e + i);
     let (Some(open), Some(close)) = (open, close) else {

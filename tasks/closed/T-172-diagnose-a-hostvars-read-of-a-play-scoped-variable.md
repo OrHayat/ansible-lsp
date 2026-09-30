@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P2       | S    | T-062      |
+| done   | task | P2       | S    | T-062      |
 
 ## Problem
 
@@ -58,9 +58,23 @@ built without the play. Move the value to `host_vars/`, `group_vars/`, or a `set
 
 ## Done when
 
-- [ ] a read whose every definition is play-scoped warns, with the link
-- [ ] a name also defined in the inventory stays silent — the case that retracted it,
+- [x] a read whose every definition is play-scoped warns, with the link
+- [x] a name also defined in the inventory stays silent — the case that retracted it,
       asserted with a real inventory fixture
-- [ ] a name defined nowhere stays silent
-- [ ] corpus gate: `var-undefined` count unchanged at the then-current baseline
-- [ ] `demo/hostvars.yml`'s two BAD rows lose their "NOT FLAGGED" notes
+- [x] a name defined nowhere stays silent
+- [x] corpus gate: `var-undefined` count unchanged at the then-current baseline
+- [x] `demo/hostvars.yml`'s two BAD rows lose their "NOT FLAGGED" notes
+
+## Landed
+
+`undefined_uses_in` judges a `hostvars` read when every definition of the name is invisible to
+`hostvars`, at least one exists, and the inventory and `add_host` sets are both knowable. The
+read's own `hostvars` root is checked for `| default` / `is defined`. Re-measured on 2.21.3 in
+one run: the play var through `hostvars` fails with `'HostVarsVars' has no attribute
+'play_scoped'`, a direct read of it prints 8080, the same name also on an inventory host line
+returns `FROM_INVENTORY`, and `| default('D')` prints `D`. The message links the definition
+through `related_information`. A vars plugin supplying the name is T-228's gap, which this rule
+shares with every `var-undefined`.
+
+Corpus gate: `var-undefined` is 315 with and without the rule; control on `demo/` is 14 → 16,
+the two BAD rows.

@@ -31,18 +31,13 @@
       ansible.builtin.debug:
         msg: "{{ hostvars['web01'].web01_ib_ip }}"
 
-    # BAD (in Ansible — NOT FLAGGED here): `play_scoped` is six lines up, and this is
-    # undefined anyway, because it belongs to the play and hostvars has no play. The fix is
-    # to move the value somewhere the host owns — host_vars/, group_vars/, or a set_fact.
+    # BAD: `play_scoped` is six lines up, and this is undefined anyway, because it belongs to
+    # the play and hostvars has no play. The fix is to move the value somewhere the host owns
+    # — host_vars/, group_vars/, or a set_fact. The warning links to the play var.
     #
-    # We deliberately say nothing. The obvious rule — "every definition I can see is
-    # play-scoped, so this is always undefined" — is a false claim while inventory is
-    # unparsed (T-062): a name written in play `vars:` AND in the inventory reads fine
-    # through hostvars, returning the inventory value. Measured. Warning here would fire on
-    # working code, which costs more than staying quiet.
-    #
-    # Hover still declines on this token, and that part IS sound: whatever the inventory
-    # holds, the play var is not what this read returns, so offering it would be a lie.
+    # Only because the inventory is read (T-062): a name in play `vars:` AND on an inventory
+    # host line reads fine through hostvars, returning the inventory value — measured. With a
+    # dynamic inventory, or none, this row is silent.
     - name: BAD a play var read through hostvars
       ansible.builtin.debug:
         msg: "{{ hostvars['web01'].play_scoped }}"
@@ -57,12 +52,9 @@
           - "through hostvars = {{ hostvars[inventory_hostname].play_scoped }}" 
           - "not exists = {{ hostvars[inventory_hostname].not_exists }}"
 
-    # NO HINT: the same silence, arrived at the other way. This name is defined nowhere we
-    # can see, and it is the shape a real inventory uses. Warning on it cost 37 false
-    # positives across the corpus, every one an inventory host var.
-    #
-    # So both rows above and this one are quiet, for one reason: until T-062 parses
-    # inventories, we cannot tell "undefined" from "defined somewhere we cannot read".
+    # NO HINT: a name defined nowhere we can see. It is the shape a real inventory uses, and
+    # warning on it cost 37 false positives across the corpus, every one an inventory host var
+    # — so a hostvars read is only judged when a definition exists and none is visible.
     - name: NO HINT a name only the inventory could define
       ansible.builtin.debug:
         msg: "{{ hostvars['web01'].infiniband_ip }}"
