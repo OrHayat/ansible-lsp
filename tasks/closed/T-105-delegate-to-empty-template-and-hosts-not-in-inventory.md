@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-099 | T-062      |
+| done   | task | P2       | S    | T-099 | T-062      |
 
 ## Problem
 
@@ -31,7 +31,18 @@ rare enough not to justify shipping alone.
 
 ## Done when
 
-- [ ] `delegate_to:` naming a host absent from file-based inventory warns
-- [ ] no warning when any inventory source is dynamic, or the value is templated
-- [ ] the message says Ansible will fabricate the host rather than fail
-- [ ] `delegate_to: localhost` and `127.0.0.1` never warn
+- [x] `delegate_to:` naming a host absent from file-based inventory warns
+- [x] no warning when any inventory source is dynamic, or the value is templated
+- [x] the message says Ansible will fabricate the host rather than fail
+- [x] `delegate_to: localhost` and `127.0.0.1` never warn
+
+## Landed
+
+`unknown-delegate-host`, a WARNING (`delegate_to.rs`, `unknown_delegate_host_diagnostics`),
+sharing `unknown-host`'s host set and escapes. Measured on 2.21.3: `delegate_to: wbe1` ends
+`UNREACHABLE … Could not resolve hostname wbe1`, and nothing names the host as unknown; a literal
+`""` is no delegation at all. A task with `local_action` is skipped, since that key overwrites
+the value with `localhost`.
+
+Corpus gate (`unknown_delegate_host_corpus`): 0 hits over 161 literal values, 125 of them judged
+against a resolved inventory. The empty-template half stays out, as this ticket already argued.

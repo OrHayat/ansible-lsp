@@ -121,7 +121,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-064 | [Plugin routing: redirects, deprecations, tombstones](open/T-064-plugin-routing.md) | M | — |
 | T-085 | [The var walk is syscall-bound, 4× repeats](open/T-085-walk-is-syscall-bound.md) | M | ~~T-076~~ |
 | T-081 | [The board is hand-edited, and it has drifted](open/T-081-board-generated-not-hand-edited.md) | S | — |
-| T-105 | [delegate_to: empty template, and hosts not in inventory](open/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | S    | ~~T-062~~ |
 | T-111 | [module_defaults: shape, the 3-segment rule, and action groups](open/T-111-module-defaults-shape-the-3-segment-rule-and-action-groups.md) | M    | T-064 |
 | T-113 | **epic** · [Workspace graph: the reverse index and what it unblocks](open/T-113-workspace-graph-the-reverse-index-and-what-it-unblocks.md) | L    | —    |
 | T-114 | **epic** · [Jinja and templating model](open/T-114-jinja-and-templating-model.md) | L    | —    |
@@ -350,6 +349,7 @@ T-021 is now unblocked on that side.
 | T-185 | [A role include that escapes the role directory is not portable](closed/T-185-a-role-include-that-escapes-the-role-directory-is-not-portab.md) | done     |
 | T-109 | [Keyword value enums](closed/T-109-keyword-value-enums.md)     | done     |
 | T-227 | [One loader-path model for every plugin-type dir and cfg path](closed/T-227-one-loader-path-model-for-every-plugin-type-dir-and-cfg-path.md) | done     |
+| T-105 | [delegate_to: empty template, and hosts not in inventory](closed/T-105-delegate-to-empty-template-and-hosts-not-in-inventory.md) | done     |
 
 ## Settled — don't re-derive these
 

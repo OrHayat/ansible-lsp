@@ -3,6 +3,7 @@ pub mod attributes;
 pub mod cache;
 pub mod complex_key;
 pub mod condition;
+pub mod delegate_to;
 pub mod config;
 pub mod expressions;
 pub mod fs;

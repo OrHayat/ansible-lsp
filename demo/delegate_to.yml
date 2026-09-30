@@ -1,0 +1,50 @@
+---
+# `unknown-delegate-host` (T-105) — `delegate_to:` a host no inventory declares.
+#
+# Ansible does not call that an error. Measured on 2.21.3 against an inventory holding only
+# `web1`: `delegate_to: wbe1` makes up a host by that name and connects to it, and the run
+# ends `UNREACHABLE … Could not resolve hostname wbe1` — nothing says the host was unknown.
+# A WARNING, not an error: a real machine outside the inventory is legitimate here, and
+# `# noqa: unknown-delegate-host` says so.
+#
+# ansible.cfg names inventory-lab.yml: web01, web02, db01.
+
+- name: delegate_to
+  hosts: web01
+  gather_facts: false
+  tasks:
+    - name: bring a host into existence from an imported file
+      ansible.builtin.import_tasks: tasks/creates_host.yml
+
+    - name: a host the inventory declares
+      ansible.builtin.command: "true"
+      delegate_to: db01 # GOOD
+
+    - name: a typo
+      ansible.builtin.command: "true"
+      delegate_to: db10 # WARN: no host `db10`; Ansible connects to that name anyway
+
+    - name: a group name is not a host
+      ansible.builtin.command: "true"
+      delegate_to: webservers # WARN: Ansible makes a host called `webservers`
+
+    - name: the implicit localhost
+      ansible.builtin.command: "true"
+      delegate_to: localhost # GOOD: 127.0.0.1 and ::1 too
+
+    - name: created by add_host in the imported file
+      ansible.builtin.command: "true"
+      delegate_to: buildbox # GOOD
+
+    - name: templated
+      ansible.builtin.command: "true"
+      delegate_to: "{{ groups['webservers'][0] }}" # GOOD: not judged
+
+    - name: a real machine outside the inventory
+      ansible.builtin.command: "true"
+      delegate_to: bastion.example.com # noqa: unknown-delegate-host
+
+    - block:
+        - name: a block's delegate_to reaches its tasks
+          ansible.builtin.command: "true"
+      delegate_to: web03 # WARN

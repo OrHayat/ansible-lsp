@@ -913,6 +913,7 @@ impl State {
         out.extend(Backend::inert_import_var_diagnostics(a, path, &inv, &self.var_cache, rev));
         let cache = ScanCache::default().with_inventory(inv).with_install(self.install());
         out.extend(Backend::unknown_host_diagnostics(a, path, &cache));
+        out.extend(Backend::unknown_delegate_host_diagnostics(a, path, &cache));
         out
     }
 
@@ -1478,6 +1479,48 @@ impl Backend {
                          Ansible reports it as `hostvars['{name}']` with no further \
                          explanation, which reads like a missing variable rather than a \
                          missing host."
+                    ),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// T-105: a literal `delegate_to:` naming no host. The host set and its escapes are
+    /// `unknown-host`'s — inventory (`None` when dynamic or unresolved), `add_host`, and the
+    /// implicit localhost. A WARNING, not an error: Ansible fabricates the host and connects
+    /// to the name, which is right when it is a real machine outside the inventory.
+    fn unknown_delegate_host_diagnostics(a: &Analysis, path: &Path, cache: &ScanCache) -> Vec<Diagnostic> {
+        let uses = ansible_core::delegate_to::literal_hosts(&ansible_core::ast::build(&a.nodes), &a.nodes);
+        if uses.is_empty() {
+            return Vec::new();
+        }
+        let (Some(inventory), Some(created)) = (
+            vars::inventory_hosts(path, cache),
+            vars::created_hosts_in(path, &a.nodes, cache),
+        ) else {
+            return Vec::new();
+        };
+        uses.into_iter()
+            .filter(|(name, _)| {
+                !condition::IMPLICIT_HOSTS.contains(&name.as_str())
+                    && !inventory.contains(name)
+                    && !created.contains(name)
+            })
+            .filter(|(_, s)| !a.doc.is_suppressed(s.start, "unknown-delegate-host"))
+            .map(|(name, s)| {
+                let (sl, sc) = a.doc.byte_to_lsp(s.start);
+                let (el, ec) = a.doc.byte_to_lsp(s.end);
+                Diagnostic {
+                    range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String("unknown-delegate-host".into())),
+                    message: format!(
+                        "No host `{name}` in the inventory. Ansible does not report that: it \
+                         creates a host by this name and connects to it, so a typo shows up as \
+                         UNREACHABLE (\"Could not resolve hostname {name}\"). A real machine \
+                         outside the inventory is fine here — `# noqa: unknown-delegate-host`."
                     ),
                     ..Default::default()
                 }
@@ -6339,6 +6382,107 @@ mod tests {
 
     fn msgs(ds: &[tower_lsp::lsp_types::Diagnostic]) -> Vec<String> {
         ds.iter().map(|d| d.message.clone()).collect()
+    }
+
+    /// T-105 on its demo: every `# WARN` row carries exactly one `unknown-delegate-host`
+    /// warning, and nothing else in the file does — the add_host, implicit-localhost,
+    /// templated and noqa rows included.
+    #[test]
+    fn the_delegate_to_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/delegate_to.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let ds = super::Backend::unknown_delegate_host_diagnostics(&a, &path, &ScanCache::default());
+        let got: Vec<_> = ds.iter().map(|d| (d.range.start.line, d.severity, d.code.clone())).collect();
+        let expected: Vec<_> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
+            .map(|(i, _)| {
+                (i as u32, Some(DiagnosticSeverity::WARNING), Some(NumberOrString::String("unknown-delegate-host".into())))
+            })
+            .collect();
+        assert!(expected.len() >= 3, "the fixture lost rows: {expected:?}");
+        assert_eq!(got, expected, "{:?}", msgs(&ds));
+        assert!(ds[0].message.contains("db10") && ds[0].message.contains("Could not resolve hostname"), "{}", ds[0].message);
+    }
+
+    /// T-105's false-positive gate: `placement.yml`'s `local_action` rows name `other`, which
+    /// no inventory holds, and Ansible never connects to it.
+    #[test]
+    fn every_other_demo_file_is_free_of_unknown_delegate_host() {
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        for path in ansible_core::workspace::yaml_files(&demo) {
+            if path.file_name().is_some_and(|n| n == "delegate_to.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let ds = super::Backend::unknown_delegate_host_diagnostics(&a, &path, &ScanCache::default());
+            assert!(ds.is_empty(), "{}: {:?}", path.display(), msgs(&ds));
+        }
+    }
+
+    /// Same escapes as `unknown-host`: the rule claims absence, so it answers only when the
+    /// whole host list is knowable.
+    #[test]
+    fn unknown_delegate_host_is_silent_wherever_the_host_list_is_not_knowable() {
+        let d = std::env::temp_dir().join("ansible-lsp-t105");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("hosts.ini"), "[web]\nweb01\n").unwrap();
+        std::fs::write(d.join("dyn.yml"), "plugin: amazon.aws.aws_ec2\nregions: [us-east-1]\n")
+            .unwrap();
+        let play = d.join("play.yml");
+        let fires = |text: &str, inventory: Vec<std::path::PathBuf>| {
+            std::fs::write(&play, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &play).unwrap();
+            let cache = ScanCache::default().with_inventory(inventory);
+            super::Backend::unknown_delegate_host_diagnostics(&a, &play, &cache).len()
+        };
+        let ini = || vec![d.join("hosts.ini")];
+        let task = "- hosts: all\n  tasks:\n    - command: x\n      delegate_to: wbe1\n";
+
+        assert_eq!(fires(task, ini()), 1, "control: a typo against a read inventory");
+        assert_eq!(fires(task, vec![]), 0, "no inventory resolved");
+        assert_eq!(fires(task, vec![d.join("dyn.yml")]), 0, "a declined dynamic inventory");
+        assert_eq!(fires(&task.replace("wbe1", "web01"), ini()), 0, "a host the inventory declares");
+        for implicit in ["localhost", "127.0.0.1", "\"::1\""] {
+            assert_eq!(fires(&task.replace("wbe1", implicit), ini()), 0, "implicit {implicit}");
+        }
+        let added = format!("{task}    - add_host:\n        name: wbe1\n");
+        assert_eq!(fires(&added, ini()), 0, "add_host creates it");
+        let noqa = task.replace("wbe1\n", "wbe1 # noqa: unknown-delegate-host\n");
+        assert_eq!(fires(&noqa, ini()), 0, "noqa");
+    }
+
+    /// T-105's corpus gate. `ANSIBLE_CORPUS=<dir> cargo test -p ansible-lsp
+    /// unknown_delegate_host_corpus -- --ignored --nocapture` prints every hit, to be read one
+    /// by one, beside the number of literal `delegate_to:` values the sweep saw — zero hits
+    /// over zero values is a sweep that looked at nothing. Control: `demo/` reports the
+    /// three `# WARN` rows of `delegate_to.yml`.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-lsp unknown_delegate_host_corpus -- --ignored --nocapture"]
+    fn unknown_delegate_host_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        let (mut hits, mut literals) = (Vec::new(), 0usize);
+        for f in ansible_core::workspace::yaml_files(&root) {
+            let Ok(t) = std::fs::read_to_string(&f) else { continue };
+            if !t.contains("delegate_to") {
+                continue;
+            }
+            let Some(a) = super::Backend::analyze_text(t, &f) else { continue };
+            literals += ansible_core::delegate_to::literal_hosts(&ansible_core::ast::build(&a.nodes), &a.nodes).len();
+            for d in super::Backend::unknown_delegate_host_diagnostics(&a, &f, &ScanCache::default()) {
+                hits.push(format!("{}:{}  {}", f.strip_prefix(&root).unwrap_or(&f).display(), d.range.start.line + 1, d.message));
+            }
+        }
+        println!("unknown-delegate-host: {} hit(s) over {literals} literal delegate_to value(s)", hits.len());
+        for h in &hits {
+            println!("  HIT {h}");
+        }
     }
 
     /// T-062 box 8 on the demo: the unknown host is flagged, the real one beside it is not.

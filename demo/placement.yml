@@ -392,7 +392,7 @@
       delegate_to: other # action: <class 'NoneType'>` upstream — a different rule's message
 
     - debug: { msg: y }
-      delegate_to: other # GOOD: the ordinary spelling, and it really does delegate
+      delegate_to: db01 # GOOD: the ordinary spelling, and it really does delegate
 
     - action: debug msg=x # GOOD: either key alone is fine
     - local_action: debug msg=y # GOOD
