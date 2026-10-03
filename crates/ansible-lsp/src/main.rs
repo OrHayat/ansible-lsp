@@ -6444,7 +6444,7 @@ mod tests {
             let rel = d.related_information.as_ref().expect("the link");
             assert_eq!(rel.len(), 1);
             assert_eq!(rel[0].location.range.start.line, play_var_line);
-            assert_eq!(rel[0].location.uri.to_file_path().unwrap(), path);
+            assert_eq!(super::canon(&rel[0].location.uri.to_file_path().unwrap()), path);
         }
     }
 
@@ -13606,8 +13606,8 @@ mod tests {
         };
         let module = lsp::Url::from_file_path(pkg.join("modules/debug.py").canonicalize().unwrap()).unwrap();
         assert!(
-            targets.iter().any(|t| t.to_file_path().ok().and_then(|p| p.canonicalize().ok())
-                == module.to_file_path().ok()),
+            targets.iter().any(|t| t.to_file_path().ok().map(|p| super::canon(&p))
+                == module.to_file_path().ok().map(|p| super::canon(&p))),
             "definition jumps into the stored install: {targets:?}"
         );
     }
