@@ -144,3 +144,13 @@ build it, just don't lose that `returned:` carries this.
 - [ ] modules missing the docstrings degrade to nothing (→ T-058), never a false error
 
 Docs: https://docs.ansible.com/ansible/latest/dev_guide/developing_modules_documenting.html
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DOC_FRAGMENT_PLUGIN_PATH` | `ANSIBLE_DOC_FRAGMENT_PLUGINS` | `[defaults] doc_fragment_plugins` | Colon-separated paths in which Ansible will search for Documentation Fragments Plugins. |
+| `DEFAULT_MODULE_UTILS_PATH` | `ANSIBLE_MODULE_UTILS` | `[defaults] module_utils` | Colon-separated paths in which Ansible will search for Module utils files, which are shared by modules. |

@@ -157,3 +157,12 @@ statically provable task failure. That diagnostic is in the split-out list, not 
   exist and misses the one that does. Live bug, unrelated to this ticket, T-053 code.
 - **Provable-failure diagnostics.** The arg list is closed, so an unknown parameter and mixing
   `dir:` with `file:` are both statically provable task failures. Cheap, no filesystem needed.
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `YAML_FILENAME_EXTENSIONS` | `ANSIBLE_YAML_FILENAME_EXT` | `[defaults] yaml_valid_extensions` | Check all of these extensions when looking for 'variable' files which should be YAML or JSON or vaulted versio |

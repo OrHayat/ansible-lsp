@@ -74,3 +74,18 @@ resolving paths, and it lives with the other file-reference work.
 - [ ] every child is closed or rejected
 - [ ] everything derived from ansible-core here records the version it was read from
 - [ ] no rule in this epic fires on the corpus without a human confirming the hit is real
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_JINJA2_NATIVE` | `ANSIBLE_JINJA2_NATIVE` | `[defaults] jinja2_native` | This option preserves variable types during template operations. |
+| `DEFAULT_NULL_REPRESENTATION` | `ANSIBLE_NULL_REPRESENTATION` | `[defaults] null_representation` | What templating should return as a 'null' value. When not set it will let Jinja2 decide. |
+| `STRING_TYPE_FILTERS` | `ANSIBLE_STRING_TYPE_FILTERS` | `[jinja2] dont_type_filters` | This list of filters avoids 'type conversion' when templating variables. Useful when you want to avoid convers |
+| `_TEMPLAR_SANDBOX_MODE` | `_ANSIBLE_TEMPLAR_SANDBOX_MODE` | — | The default Jinja sandbox behavior blocks template access to all `_` prefixed object attributes and known coll |
+| `_TEMPLAR_UNKNOWN_TYPE_CONVERSION` | `_ANSIBLE_TEMPLAR_UNKNOWN_TYPE_CONVERSION` | — | Action to take when an unknown type is converted for variable storage during template finalization. This setti |
+| `_TEMPLAR_UNKNOWN_TYPE_ENCOUNTERED` | `_ANSIBLE_TEMPLAR_UNKNOWN_TYPE_ENCOUNTERED` | — | Action to take when an unknown type is encountered inside a template pipeline. Experimental diagnostic feature |
+| `_TEMPLAR_UNTRUSTED_TEMPLATE_BEHAVIOR` | `_ANSIBLE_TEMPLAR_UNTRUSTED_TEMPLATE_BEHAVIOR` | — | Action to take when processing of an untrusted template is skipped. For `ignore` or `warn`, the input template |

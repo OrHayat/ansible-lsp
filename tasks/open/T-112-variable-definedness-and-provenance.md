@@ -73,3 +73,19 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [ ] every child is closed or rejected
 - [ ] `var-undefined` runs over `~/app/ansible` with a hit count small enough to read, and
       every remaining hit is a real fault or a documented concession
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_HASH_BEHAVIOUR` | `ANSIBLE_HASH_BEHAVIOUR` | `[defaults] hash_behaviour` | This setting controls how duplicate definitions of dictionary variables (aka hash, map, associative array) are |
+| `DEFAULT_PRIVATE_ROLE_VARS` | `ANSIBLE_PRIVATE_ROLE_VARS` | `[defaults] private_role_vars` | By default, imported roles publish their variables to the play and other roles, this setting can avoid that. T |
+| `INJECT_FACTS_AS_VARS` | `ANSIBLE_INJECT_FACT_VARS` | `[defaults] inject_facts_as_vars` | Facts are available inside the `ansible_facts` variable, this setting also pushes them as their own vars in th |
+| `VARIABLE_PRECEDENCE` | `ANSIBLE_PRECEDENCE` | `[defaults] precedence` | Allows to change the group variable precedence merge order. |
+| `FACTS_MODULES` | `ANSIBLE_FACTS_MODULES` | `[defaults] facts_modules` | Which modules to run during a play's fact gathering stage, using the default of 'smart' will try to figure it |
+| `CONNECTION_FACTS_MODULES` | — | — | Which modules to run during a play's fact gathering stage based on connection |
+| `DEFAULT_GATHERING` | `ANSIBLE_GATHERING` | `[defaults] gathering` | This setting controls the default policy of fact gathering (facts discovered about remote systems). This optio |
+| `DEFAULT_MANAGED_STR` | — | `[defaults] ansible_managed` | Sets the macro for the 'ansible_managed' variable available for :ref:`ansible_collections.ansible.builtin.temp |

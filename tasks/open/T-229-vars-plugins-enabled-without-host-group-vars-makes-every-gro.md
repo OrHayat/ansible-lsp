@@ -40,3 +40,12 @@ Two halves, both cheap once T-228 reads the list:
 - [ ] the cfg line gets the warning; the default list and an explicit list that includes
       `host_group_vars` get none
 - [ ] `# noqa`-suppressible per T-010; the demo cfg stays clean
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `PLAYBOOK_VARS_ROOT` | `ANSIBLE_PLAYBOOK_VARS_ROOT` | `[defaults] playbook_vars_root` | This sets which playbook dirs will be used as a root to process vars plugins, which includes finding host_vars |

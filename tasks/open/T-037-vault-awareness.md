@@ -71,3 +71,17 @@ secrets.
 - [ ] a test fixture with a real vault header is pinned
 
 Docs: https://docs.ansible.com/ansible/latest/vault_guide/index.html
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_VAULT_PASSWORD_FILE` | `ANSIBLE_VAULT_PASSWORD_FILE` | `[defaults] vault_password_file` | The vault password file to use. Equivalent to ``--vault-password-file`` or ``--vault-id``. If executable, it w |
+| `DEFAULT_VAULT_IDENTITY_LIST` | `ANSIBLE_VAULT_IDENTITY_LIST` | `[defaults] vault_identity_list` | A list of vault-ids to use by default. Equivalent to multiple ``--vault-id`` args. Vault-ids are tried in orde |
+| `DEFAULT_VAULT_ID_MATCH` | `ANSIBLE_VAULT_ID_MATCH` | `[defaults] vault_id_match` | If true, decrypting vaults with a vault id will only try the password from the matching vault-id. |
+| `DEFAULT_VAULT_IDENTITY` | `ANSIBLE_VAULT_IDENTITY` | `[defaults] vault_identity` | The label to use for the default vault id label in cases where a vault id label is not provided. |
+| `DEFAULT_VAULT_ENCRYPT_IDENTITY` | `ANSIBLE_VAULT_ENCRYPT_IDENTITY` | `[defaults] vault_encrypt_identity` | The vault_id to use for encrypting by default. If multiple vault_ids are provided, this specifies which to use |
+| `VAULT_ENCRYPT_SALT` | `ANSIBLE_VAULT_ENCRYPT_SALT` | `[defaults] vault_encrypt_salt` | The salt to use for the vault encryption. If it is not provided, a random salt will be used. |

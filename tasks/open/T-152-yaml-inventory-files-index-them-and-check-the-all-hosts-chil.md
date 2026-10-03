@@ -39,3 +39,16 @@ parse the group tree, feed host/group vars into the same index `group_vars/` use
 - [ ] no shape-guessing on files not named as inventory — a vars file can never be
       misflagged
 - [ ] `# noqa`-suppressible, demo inventory stays clean
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `INVENTORY_ENABLED` | `ANSIBLE_INVENTORY_ENABLED` | `[inventory] enable_plugins` | List of enabled inventory plugins, it also determines the order in which they are used. |
+| `INVENTORY_IGNORE_EXTS` | `ANSIBLE_INVENTORY_IGNORE` | `[defaults] inventory_ignore_extensions`, `[inventory] ignore_extensions` | List of extensions to ignore when using a directory as an inventory source. |
+| `INVENTORY_IGNORE_PATTERNS` | `ANSIBLE_INVENTORY_IGNORE_REGEX` | `[defaults] inventory_ignore_patterns`, `[inventory] ignore_patterns` | List of patterns to ignore when using a directory as an inventory source. |
+| `TRANSFORM_INVALID_GROUP_CHARS` | `ANSIBLE_TRANSFORM_INVALID_GROUP_CHARS` | `[defaults] force_valid_group_names` | Make ansible transform invalid characters in group names supplied by inventory sources. |
+| `DEFAULT_INVENTORY_PLUGIN_PATH` | `ANSIBLE_INVENTORY_PLUGINS` | `[defaults] inventory_plugins` | Colon-separated paths in which Ansible will search for Inventory Plugins. |

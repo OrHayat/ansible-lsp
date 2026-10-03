@@ -137,7 +137,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | ~~T-020~~ |
-| T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](open/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | S    | —    |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
@@ -164,6 +163,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](open/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | M    | —    |
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
+| T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -214,6 +214,7 @@ T-021 is now unblocked on that side.
 | T-210 | [meta/main.yml accepts 22 keys that do nothing, and we say nothing](open/T-210-meta-main-yml-accepts-22-keys-that-do-nothing-and-we-say-not.md) | M    | T-209      |
 | T-234 | [Find All References on a module name lists every task that uses it](open/T-234-find-all-references-on-a-module-name-lists-every-task-that-u.md) | M    | T-132      |
 | T-242 | [A plugin file that exists but cannot load reads as found](open/T-242-a-plugin-file-that-exists-but-cannot-load-reads-as-found.md) | M    | ~~T-109~~  |
+| T-245 | [A play hosts: pattern matching no inventory host is governed by host_pattern_mismatch, which we never read](open/T-245-a-play-hosts-pattern-matching-no-inventory-host-is-governed.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
@@ -351,6 +352,7 @@ T-021 is now unblocked on that side.
 | T-243 | **bug** · [Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml](closed/T-243-role-metadata-is-read-only-from-meta-main-yml-and-the-reload.md) | done     |
 | T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](closed/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | done     |
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](closed/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | **rejected** |
+| T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](closed/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | done     |
 
 ## Settled — don't re-derive these
 

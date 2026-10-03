@@ -81,3 +81,12 @@ in those paths.
 - [ ] a reference that resolves under a guess but under no real chain no longer resolves
 - [ ] files no chain reaches stay silent
 - [ ] the four `~/app/ansible` references stay navigable, verified by a corpus scan
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `PLAYBOOK_DIR` | `ANSIBLE_PLAYBOOK_DIR` | `[defaults] playbook_dir` | A number of non-playbook CLIs have a ``--playbook-dir`` argument; this sets the default value for it. |

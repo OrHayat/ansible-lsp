@@ -52,3 +52,12 @@ default('y') }}` does not.
 - [ ] severity follows the per-keyword behaviour — `when:` fatal, `name:` warning
 - [ ] the vault case is expressed as marker propagation, and T-037 cites it rather than
       re-deriving it
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_UNDEFINED_VAR_BEHAVIOR` | `ANSIBLE_ERROR_ON_UNDEFINED_VARS` | `[defaults] error_on_undefined_vars` | When True, this causes ansible templating to fail steps that reference variable names that are likely typoed. |

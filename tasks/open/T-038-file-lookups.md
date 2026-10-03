@@ -41,3 +41,12 @@ machinery exists (T-007). Extend the reference extractor to recognise these look
 
 Docs: https://docs.ansible.com/ansible/latest/plugins/lookup.html ·
 https://docs.ansible.com/ansible/latest/playbook_guide/playbook_pathing.html
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_LOOKUP_PLUGIN_PATH` | `ANSIBLE_LOOKUP_PLUGINS` | `[defaults] lookup_plugins` | Colon-separated paths in which Ansible will search for Lookup Plugins. |

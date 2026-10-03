@@ -365,3 +365,14 @@ Traps:
 - [ ] the corpus scan's undefined count moves by exactly the plugin's names once they are
       declared or read, and by zero before that — 12 of 136 on 2026-09-08; re-count before
       pinning, the plugin has changed three times in two days
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `VARIABLE_PLUGINS_ENABLED` | `ANSIBLE_VARS_ENABLED` | `[defaults] vars_plugins_enabled` | Accept list for variable plugins that require it. |
+| `DEFAULT_VARS_PLUGIN_PATH` | `ANSIBLE_VARS_PLUGINS` | `[defaults] vars_plugins` | Colon-separated paths in which Ansible will search for Vars Plugins. |
+| `RUN_VARS_PLUGINS` | `ANSIBLE_RUN_VARS_PLUGINS` | `[defaults] run_vars_plugins` | This setting can be used to optimize vars_plugin usage depending on the user's inventory size and play selecti |

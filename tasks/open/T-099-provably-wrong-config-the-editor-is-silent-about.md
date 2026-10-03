@@ -48,6 +48,8 @@ these nine are individually-argued rules, while T-106 is one table applied unifo
 - [ ] T-198 — A handler with a templated name and no listen: can never be notified
 - [ ] T-205 — A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens
 - [x] T-230 — tags: on a dynamic include without apply: tags: reaches none of the included tasks
+- [ ] T-244 — Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run
+- [ ] T-245 — A play hosts: pattern matching no inventory host is governed by host_pattern_mismatch, which we never read
 
 ## Done when
 

@@ -59,3 +59,13 @@ dirs) — both cases where the naive model was wrong in the same direction.
 - [ ] one module models the loader search order, cited to `plugins/loader.py` and versioned
 - [ ] the corpus `module` resolution count (3665 resolved, 0 missing) is unchanged or the
       change is explained
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `PLUGIN_FILTERS_CFG` | — | `[defaults] plugin_filters_cfg` | A path to configuration for filtering which plugins installed on the system are allowed to be used. See :ref:` |
+| `COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH` | `ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH` | `[defaults] collections_on_ansible_version_mismatch` | When a collection is loaded that does not support the running Ansible version (with the collection metadata ke |

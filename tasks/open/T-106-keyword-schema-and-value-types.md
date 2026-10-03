@@ -54,3 +54,18 @@ sibling epic).
 - [ ] the six tables live in one module with the ansible-core version they were read from
 - [ ] the corpus scan over `~/app/ansible` reports zero false positives — a schema rule that
       fires on a working repo is wrong by construction
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_STRATEGY` | `ANSIBLE_STRATEGY` | `[defaults] strategy` | Set the default strategy used for plays. |
+| `DEFAULT_BECOME_METHOD` | `ANSIBLE_BECOME_METHOD` | `[privilege_escalation] become_method` | Privilege escalation method to use when `become` is enabled. |
+| `DEFAULT_TRANSPORT` | `ANSIBLE_TRANSPORT` | `[defaults] transport` | Can be any connection plugin available to your ansible installation. |
+| `ANY_ERRORS_FATAL` | `ANSIBLE_ANY_ERRORS_FATAL` | `[defaults] any_errors_fatal` | Sets the default value for the any_errors_fatal keyword, if True, Task failures will be considered fatal error |
+| `DEFAULT_FORCE_HANDLERS` | `ANSIBLE_FORCE_HANDLERS` | `[defaults] force_handlers` | This option controls if notified handlers run on a host even if a failure occurs on that host. When false, the |
+| `ENABLE_TASK_DEBUGGER` | `ANSIBLE_ENABLE_TASK_DEBUGGER` | `[defaults] enable_task_debugger` | Whether or not to enable the task debugger, this previously was done as a strategy plugin. Now all strategy pl |
+| `TASK_DEBUGGER_IGNORE_ERRORS` | `ANSIBLE_TASK_DEBUGGER_IGNORE_ERRORS` | `[defaults] task_debugger_ignore_errors` | This option defines whether the task debugger will be invoked on a failed task when ignore_errors=True is spec |

@@ -71,3 +71,13 @@ applies to vars plugins.
 - [ ] a filter or test file in reach marks the set open and the diagnostic half is silent there,
       pinned by a fixture with a one-line local filter
 - [ ] the unknown-name diagnostic is a separate, later decision — not shipped with the index
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `DEFAULT_FILTER_PLUGIN_PATH` | `ANSIBLE_FILTER_PLUGINS` | `[defaults] filter_plugins` | Colon-separated paths in which Ansible will search for Jinja2 Filter Plugins. |
+| `DEFAULT_TEST_PLUGIN_PATH` | `ANSIBLE_TEST_PLUGINS` | `[defaults] test_plugins` | Colon-separated paths in which Ansible will search for Jinja2 Test Plugins. |

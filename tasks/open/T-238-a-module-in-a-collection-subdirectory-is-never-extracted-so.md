@@ -51,3 +51,12 @@ confirms is right.
 - [ ] routing and action-plugin behaviour for nested names measured and pinned, or recorded here
       as not applicable
 - [ ] an unresolved nested name hovers T-133's collection wording and is not a diagnostic
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `MODULE_IGNORE_EXTS` | `ANSIBLE_MODULE_IGNORE_EXTS` | `[defaults] module_ignore_exts` | List of extensions to ignore when looking for modules to load. This is for rejecting script and binary module |

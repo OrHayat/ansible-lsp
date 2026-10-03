@@ -53,3 +53,13 @@ Sequencing:
 - [ ] no child is left at "partly done" — either the remainder ships or it is split out and
       the ticket closes honestly
 - [ ] the corpus classification rate is re-reported after T-122 widens the surface
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `ALLOW_BROKEN_CONDITIONALS` | `ANSIBLE_ALLOW_BROKEN_CONDITIONALS` | `[defaults] allow_broken_conditionals` | When enabled, this option allows conditionals with non-boolean results to be used. A deprecation warning will |
+| `ALLOW_EMBEDDED_TEMPLATES` | `ANSIBLE_ALLOW_EMBEDDED_TEMPLATES` | `[defaults] allow_embedded_templates` | When enabled, this option allows embedded templates to be used for specific backward compatibility scenarios. |

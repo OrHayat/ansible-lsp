@@ -46,3 +46,12 @@ place they do matter.
 - [ ] a short key is resolved as `ansible.legacy.*` and ignores `collections:`
 - [ ] an unresolvable top-level key is an ERROR; an unresolvable group member is a HINT
 - [ ] `group/<name>` is checked against `action_groups` once T-064 lands
+
+## Config settings that change this (T-144 audit, ansible-core 2.21.2)
+
+Precedence is env -> ini -> default; none of these declare a `vars`, `cli` or
+`keyword` rung, so those do not apply (the T-098 pattern).
+
+| setting | env | ini | what it changes |
+| --- | --- | --- | --- |
+| `VALIDATE_ACTION_GROUP_METADATA` | `ANSIBLE_VALIDATE_ACTION_GROUP_METADATA` | `[defaults] validate_action_group_metadata` | A toggle to disable validating a collection's 'metadata' entry for a module_defaults action group. Metadata co |
