@@ -137,7 +137,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | ~~T-020~~ |
-| T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](open/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | S    | —    |
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
@@ -353,6 +352,7 @@ T-021 is now unblocked on that side.
 | T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](closed/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | done     |
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](closed/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | **rejected** |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](closed/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | done     |
+| T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](closed/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | done     |
 
 ## Settled — don't re-derive these
 
