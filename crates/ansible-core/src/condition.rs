@@ -96,6 +96,80 @@ impl From<&str> for VarRef {
     }
 }
 
+/// Which Jinja type a literal was written as. Carried beside the text because the two
+/// spellings of the same characters are different conditions: measured on 2.21.2,
+/// `0 == '0'` is false while `0 == 0.0` is true, so a verdict that kept only "0" could not
+/// tell `rc == 0` from `rc == '0'` — and, worse, compared a default against a literal on
+/// the stringified form and got the run-by-default answer backwards (T-214).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LitKind {
+    Str,
+    Int,
+    Float,
+    Bool,
+    None,
+}
+
+/// A literal as the source wrote it: `text` is what a label prints, `kind` is what it
+/// compares as. Keeping the rendered text rather than a parsed `f64` keeps [`Verdict`]
+/// `Eq`, and keeps the prose identical to what it was before the type was carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Literal {
+    pub text: String,
+    pub kind: LitKind,
+}
+
+impl Literal {
+    pub fn str(s: impl Into<String>) -> Self {
+        Literal { text: s.into(), kind: LitKind::Str }
+    }
+    pub fn int(i: i64) -> Self {
+        Literal { text: i.to_string(), kind: LitKind::Int }
+    }
+    pub fn float(f: f64) -> Self {
+        Literal { text: f.to_string(), kind: LitKind::Float }
+    }
+    pub fn bool(b: bool) -> Self {
+        Literal { text: b.to_string(), kind: LitKind::Bool }
+    }
+    pub fn none() -> Self {
+        Literal { text: "none".to_string(), kind: LitKind::None }
+    }
+
+    /// The numeric value a comparison would use, for the three kinds Python compares
+    /// numerically. `None` for `Str` and `None` — neither is ever numerically equal to
+    /// anything, which is the whole point of carrying the kind.
+    fn numeric(&self) -> Option<f64> {
+        match self.kind {
+            LitKind::Int | LitKind::Float => self.text.parse().ok(),
+            LitKind::Bool => Some(if self.text == "true" { 1.0 } else { 0.0 }),
+            LitKind::Str | LitKind::None => None,
+        }
+    }
+
+    /// Jinja's `==`, measured on ansible-core 2.21.2 rather than assumed from Python:
+    /// `0 == 0.0`, `1 == true` and `0 == false` are true; `0 == '0'`, `0.0 == '0.0'`,
+    /// `true == 'true'` and `none == 'none'` are false. So numerics compare across their
+    /// three kinds, a string equals only a string, and `none` equals only `none`.
+    pub fn same_value(&self, other: &Literal) -> bool {
+        match (self.kind, other.kind) {
+            (LitKind::Str, LitKind::Str) => self.text == other.text,
+            (LitKind::None, LitKind::None) => true,
+            (LitKind::Str | LitKind::None, _) | (_, LitKind::Str | LitKind::None) => false,
+            _ => match (self.numeric(), other.numeric()) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// `not (skip_x | default(false) | bool)` — 80% of import-level conditions here.
@@ -108,7 +182,7 @@ pub enum Verdict {
     /// defaulted value satisfies the comparison, i.e. whether this runs when unset.
     WhenEquals {
         var: VarRef,
-        value: String,
+        value: Literal,
         negated: bool,
         matches_default: bool,
     },
@@ -122,7 +196,7 @@ pub enum Verdict {
     /// [`invert`], where `Some(false)` becomes `Some(true)`.
     WhenIn {
         var: VarRef,
-        values: Vec<String>,
+        values: Vec<Literal>,
         negated: bool,
         matches_default: Option<bool>,
     },
@@ -170,7 +244,7 @@ impl Verdict {
                 (false, true) => format!("runs only if {var} changes from {value}"),
             },
             Verdict::WhenIn { var, values, negated, matches_default } => {
-                let list = values.join(", ");
+                let list = values.iter().map(|v| v.text.as_str()).collect::<Vec<_>>().join(", ");
                 // `matches_default` picks the framing and `negated` picks the direction, the
                 // same split [`Verdict::WhenEquals`] uses. "Runs unless" is this module's
                 // wording for *runs by default*, so it is only ever correct for `Some(true)`
@@ -232,7 +306,11 @@ impl Verdict {
                 *matches_default,
             ),
             Verdict::WhenIn { var, values, negated, matches_default } => or_unset(
-                format!("{var} {}in [{}]", if *negated { "not " } else { "" }, values.join(", ")),
+                format!(
+                    "{var} {}in [{}]",
+                    if *negated { "not " } else { "" },
+                    values.iter().map(|v| v.text.as_str()).collect::<Vec<_>>().join(", ")
+                ),
                 *matches_default == Some(true),
             ),
             Verdict::RequiresDefined { var, negated: false } => format!("{var} set"),
@@ -267,11 +345,11 @@ impl Verdict {
             (
                 Verdict::WhenEquals { var: a, value: x, negated: false, .. },
                 Verdict::WhenEquals { var: b, value: y, negated: false, .. },
-            ) => a == b && x != y,
+            ) => a == b && !x.same_value(y),
             (
                 Verdict::WhenIn { var: a, values: x, negated: false, .. },
                 Verdict::WhenIn { var: b, values: y, negated: false, .. },
-            ) => a == b && !x.iter().any(|v| y.contains(v)),
+            ) => a == b && !x.iter().any(|v| y.iter().any(|w| v.same_value(w))),
             (
                 Verdict::RequiresDefined { var: a, negated: p },
                 Verdict::RequiresDefined { var: b, negated: q },
@@ -1164,12 +1242,12 @@ fn classify_expr(src: &str, e: &Expr) -> Verdict {
                 // `mode | default('native') == 'native'`, and the `!=` form.
                 CmpOp::Eq | CmpOp::Ne => {
                     let negated = matches!(op, CmpOp::Ne);
-                    let Some(value) = literal_text(rhs) else { return Verdict::Unknown };
+                    let Some(value) = literal_value(rhs) else { return Verdict::Unknown };
                     match strip_guards(src, expr) {
                         // Unguarded `x == 'lit'`: no default, so nothing is known about an
                         // unset run, and a verdict would be inventing one.
                         Some((var, Some(dflt), filters)) if filters.is_empty() => {
-                            let matches_default = (dflt == value) != negated;
+                            let matches_default = dflt.same_value(&value) != negated;
                             Verdict::WhenEquals { var, value, negated, matches_default }
                         }
                         _ => Verdict::Unknown,
@@ -1188,7 +1266,8 @@ fn classify_expr(src: &str, e: &Expr) -> Verdict {
                     if values.is_empty() {
                         return Verdict::Unknown;
                     }
-                    let matches_default = dflt.map(|d| values.contains(&d) != negated);
+                    let matches_default =
+                        dflt.map(|d| values.iter().any(|v| v.same_value(&d)) != negated);
                     Verdict::WhenIn { var, values, negated, matches_default }
                 }
                 _ => Verdict::Unknown,
@@ -1199,9 +1278,9 @@ fn classify_expr(src: &str, e: &Expr) -> Verdict {
         // is the bare `x | default(D) | bool` form.
         ExprKind::Filter { .. } => match strip_guards(src, e) {
             Some((var, Some(dflt), filters)) if filters.is_empty() => {
-                if is_truthy(&dflt) {
+                if is_truthy(&dflt.text) {
                     Verdict::UnlessCleared { var }
-                } else if is_falsy(&dflt) {
+                } else if is_falsy(&dflt.text) {
                     Verdict::OnlyIfSet { var }
                 } else {
                     Verdict::Unknown
@@ -1277,7 +1356,7 @@ fn is_zero(e: &Expr) -> bool {
 /// (`plugins/filter/core.py`), and T-211 is the bug where only the long spelling classified.
 /// `bool` is passed through because it changes nothing about which value is used when the
 /// variable is unset, which is the only question these verdicts answer.
-fn strip_guards<'a>(src: &str, e: &'a Expr) -> Option<(VarRef, Option<String>, Vec<String>)> {
+fn strip_guards<'a>(src: &str, e: &'a Expr) -> Option<(VarRef, Option<Literal>, Vec<String>)> {
     let mut node = e;
     let mut dflt = None;
     let mut unmodelled: Vec<String> = Vec::new();
@@ -1289,7 +1368,7 @@ fn strip_guards<'a>(src: &str, e: &'a Expr) -> Option<(VarRef, Option<String>, V
                 // `default(D)` and `default(D, true)`: the second argument only decides
                 // whether a *falsy* value is replaced too, not what the unset value is.
                 match args.args.first() {
-                    Some(a) => dflt = literal_text(a),
+                    Some(a) => dflt = literal_value(a),
                     None => return None,
                 }
                 if dflt.is_none() {
@@ -1339,28 +1418,29 @@ fn literal_path(e: &Expr) -> bool {
     }
 }
 
-/// A literal's value as a label would print it. `None` for anything computed.
-fn literal_text(e: &Expr) -> Option<String> {
+/// A literal as a label would print it, plus the type it compares as. `None` for anything
+/// computed. The type is the half T-214 added: without it `0` and `'0'` arrive identical.
+fn literal_value(e: &Expr) -> Option<Literal> {
     match &e.kind {
-        ExprKind::Const(JConst::Str(s)) => Some(s.clone()),
-        ExprKind::Const(JConst::Int(i)) => Some(i.to_string()),
-        ExprKind::Const(JConst::Float(f)) => Some(f.to_string()),
-        ExprKind::Const(JConst::Bool(b)) => Some(b.to_string()),
-        ExprKind::Const(JConst::None) => Some("none".to_string()),
+        ExprKind::Const(JConst::Str(s)) => Some(Literal::str(s.clone())),
+        ExprKind::Const(JConst::Int(i)) => Some(Literal::int(*i)),
+        ExprKind::Const(JConst::Float(f)) => Some(Literal::float(*f)),
+        ExprKind::Const(JConst::Bool(b)) => Some(Literal::bool(*b)),
+        ExprKind::Const(JConst::None) => Some(Literal::none()),
         _ => None,
     }
 }
 
 /// The members of a literal list or tuple. Empty for anything else — `groups['servers']` is
 /// a subscript, not a list, and reading it as one produced a bogus single-element membership.
-fn literal_list(e: &Expr) -> Vec<String> {
+fn literal_list(e: &Expr) -> Vec<Literal> {
     let items = match &e.kind {
         ExprKind::List(items) | ExprKind::Tuple(items) => items,
         _ => return Vec::new(),
     };
     let mut out = Vec::new();
     for item in items {
-        match literal_text(item) {
+        match literal_value(item) {
             Some(v) => out.push(v),
             None => return Vec::new(),
         }
@@ -1608,7 +1688,7 @@ mod tests {
             classify("mode | default('a|b') == 'a|b'"),
             Verdict::WhenEquals {
                 var: "mode".into(),
-                value: "a|b".to_string(),
+                value: Literal::str("a|b"),
                 negated: false,
                 matches_default: true,
             }
@@ -1617,7 +1697,7 @@ mod tests {
             classify("mode | default('x') == 'a > 0'"),
             Verdict::WhenEquals {
                 var: "mode".into(),
-                value: "a > 0".to_string(),
+                value: Literal::str("a > 0"),
                 negated: false,
                 matches_default: false,
             }
@@ -1813,7 +1893,7 @@ mod tests {
                 "m | default('a') == 'a'",
                 WhenEquals {
                     var: "m".into(),
-                    value: "a".into(),
+                    value: Literal::str("a"),
                     negated: false,
                     matches_default: true,
                 },
@@ -1823,7 +1903,7 @@ mod tests {
                 "m | default('a') in ['a', 'b']",
                 WhenIn {
                     var: "m".into(),
-                    values: vec!["a".into(), "b".into()],
+                    values: vec![Literal::str("a"), Literal::str("b")],
                     negated: false,
                     matches_default: Some(true),
                 },
@@ -2025,7 +2105,7 @@ mod tests {
             v,
             Verdict::WhenIn {
                 var: "ap_operation".into(),
-                values: vec!["snapshot-expose".into(), "snapshot-unexpose".into()],
+                values: vec![Literal::str("snapshot-expose"), Literal::str("snapshot-unexpose")],
                 negated: false,
                 matches_default: None,
             }
@@ -3099,4 +3179,144 @@ mod corpus {
             );
         }
     }
+
+    /// T-214. The two spellings are different conditions in Jinja, and before the literal
+    /// carried its type they produced byte-identical verdicts.
+    ///
+    /// Measured on ansible-core 2.21.2, `rc` unset so the default fires:
+    ///
+    /// | condition                      | runs? |
+    /// | ------------------------------ | ----- |
+    /// | `rc \| d(0) == 0`              | ok    |
+    /// | `rc \| d(0) == '0'`            | skip  |
+    /// | `rc \| d(0) not in [0, 2]`     | skip  |
+    /// | `rc \| d(0) not in ['0', '2']` | ok    |
+    ///
+    /// The second and fourth rows are the ones the stringified form got *backwards*: it
+    /// compared `"0"` against `"0"`, called the default a match, and framed the label as
+    /// "runs unless" for a task that does not run by default.
+    #[test]
+    fn an_int_literal_and_a_str_literal_are_different_verdicts() {
+        let int_eq = classify("rc | d(0) == 0");
+        let str_eq = classify("rc | d(0) == '0'");
+        assert_ne!(int_eq, str_eq, "the two spellings must not collapse");
+
+        // `0 == 0` holds, so the task runs with `rc` unset.
+        assert_eq!(
+            int_eq,
+            Verdict::WhenEquals {
+                var: "rc".into(),
+                value: Literal::int(0),
+                negated: false,
+                matches_default: true,
+            }
+        );
+        // `0 == '0'` does not, so it does not.
+        assert_eq!(
+            str_eq,
+            Verdict::WhenEquals {
+                var: "rc".into(),
+                value: Literal::str("0"),
+                negated: false,
+                matches_default: false,
+            }
+        );
+
+        let int_in = classify("rc | d(0) not in [0, 2]");
+        let str_in = classify("rc | d(0) not in ['0', '2']");
+        assert_ne!(int_in, str_in);
+        assert_eq!(
+            int_in,
+            Verdict::WhenIn {
+                var: "rc".into(),
+                values: vec![Literal::int(0), Literal::int(2)],
+                negated: true,
+                matches_default: Some(false),
+            }
+        );
+        assert_eq!(
+            str_in,
+            Verdict::WhenIn {
+                var: "rc".into(),
+                values: vec![Literal::str("0"), Literal::str("2")],
+                negated: true,
+                matches_default: Some(true),
+            }
+        );
+    }
+
+    /// The run-by-default framing each of the four corpus conditions must carry, stated as
+    /// the prose a user reads rather than as a field. "Runs unless" is this module's wording
+    /// for *runs by default*, so each label must agree with the measured column above.
+    #[test]
+    fn the_four_corpus_conditions_frame_their_default_run_the_way_ansible_runs_them() {
+        for (cond, runs_by_default, label) in [
+            ("rc | d(0) == 0", true, "runs unless rc changes from 0"),
+            ("rc | d(0) == '0'", false, "runs only if rc = 0"),
+            ("rc | d(0) not in [0, 2]", false, "runs only if rc is not one of [0, 2]"),
+            ("rc | d(0) not in ['0', '2']", true, "runs unless rc is one of [0, 2]"),
+        ] {
+            let got = classify(cond).label().expect("a verdict");
+            assert_eq!(got, label, "{cond}");
+            assert_eq!(
+                got.starts_with("runs unless"),
+                runs_by_default,
+                "{cond}: framing must match the measured run"
+            );
+        }
+    }
+
+    /// The type is carried for comparison, never for display: a label prints `0`, not
+    /// `Int(0)` and not `"0"`. The prose was right before T-214 and must survive it.
+    #[test]
+    fn carrying_the_type_does_not_leak_into_the_prose() {
+        for cond in ["rc | d(0) == 0", "rc | d(0) == '0'", "rc | d(0) not in [0, 2]"] {
+            let label = classify(cond).label().expect("a verdict");
+            assert!(!label.contains("Int("), "{cond}: {label}");
+            assert!(!label.contains("Str("), "{cond}: {label}");
+            assert!(!label.contains('"'), "{cond}: {label}");
+            assert!(label.contains('0'), "{cond}: {label}");
+        }
+        assert_eq!(
+            classify("mode | default('native') == 'native'").label().unwrap(),
+            "runs unless mode changes from native"
+        );
+    }
+
+    /// `Literal::same_value` is Jinja's `==`, and every row here was run against
+    /// ansible-core 2.21.2 as a `when:` rather than reasoned from Python's rules.
+    #[test]
+    fn literal_equality_matches_the_measured_jinja_table() {
+        let t: &[(Literal, Literal, bool)] = &[
+            (Literal::int(0), Literal::str("0"), false),
+            (Literal::int(0), Literal::float(0.0), true),
+            (Literal::int(1), Literal::bool(true), true),
+            (Literal::int(0), Literal::bool(false), true),
+            (Literal::none(), Literal::none(), true),
+            (Literal::none(), Literal::str("none"), false),
+            (Literal::str("a"), Literal::str("a"), true),
+            (Literal::float(0.0), Literal::str("0.0"), false),
+            (Literal::bool(true), Literal::str("true"), false),
+            // The controls: unequal values of the same kind stay unequal, so the table is
+            // not just reporting "same kind wins".
+            (Literal::int(0), Literal::int(2), false),
+            (Literal::str("a"), Literal::str("b"), false),
+        ];
+        for (a, b, want) in t {
+            assert_eq!(a.same_value(b), *want, "{a:?} == {b:?}");
+            assert_eq!(b.same_value(a), *want, "symmetry: {b:?} == {a:?}");
+        }
+    }
+
+    /// `excludes` reads values, not spellings: `x == 0` and `x == '0'` cannot both run,
+    /// which the stringified form could not see.
+    #[test]
+    fn excludes_separates_an_int_branch_from_a_str_branch() {
+        let int_b = classify("x | d('') == 0");
+        let str_b = classify("x | d('') == '0'");
+        assert!(int_b.excludes(&str_b), "{int_b:?} vs {str_b:?}");
+        // The control: the same literal on both sides does not exclude itself.
+        assert!(!int_b.excludes(&classify("x | d('') == 0")));
+    }
+
 }

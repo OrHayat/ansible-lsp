@@ -44,7 +44,7 @@ Sequencing:
 - [ ] T-122 — changed_when, failed_when and until are the same expression language
 - [x] T-166 — when-import-var-mutated covers import_playbook only, and four more constructs flip the same way
 - [x] T-213 — A defaulted membership test whose default is in the list is labelled runs only if
-- [ ] T-214 — Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable
+- [x] T-214 — Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable
 - [x] T-215 — requirement() drops matches_default so an All clause that runs by default reads as required
 
 ## Done when

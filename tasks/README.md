@@ -213,7 +213,6 @@ T-021 is now unblocked on that side.
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
 | T-209 | [Model meta/main.yml whole, not just its top-level key names](open/T-209-model-meta-main-yml-whole-not-just-its-top-level-key-names.md) | M    | —          |
 | T-210 | [meta/main.yml accepts 22 keys that do nothing, and we say nothing](open/T-210-meta-main-yml-accepts-22-keys-that-do-nothing-and-we-say-not.md) | M    | T-209      |
-| T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](open/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | S    | —          |
 | T-234 | [Find All References on a module name lists every task that uses it](open/T-234-find-all-references-on-a-module-name-lists-every-task-that-u.md) | M    | T-132      |
 | T-242 | [A plugin file that exists but cannot load reads as found](open/T-242-a-plugin-file-that-exists-but-cannot-load-reads-as-found.md) | M    | ~~T-109~~  |
 
@@ -351,6 +350,7 @@ T-021 is now unblocked on that side.
 | T-172 | [Diagnose a hostvars read of a play-scoped variable](closed/T-172-diagnose-a-hostvars-read-of-a-play-scoped-variable.md) | done     |
 | T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](closed/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | done     |
 | T-243 | **bug** · [Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml](closed/T-243-role-metadata-is-read-only-from-meta-main-yml-and-the-reload.md) | done     |
+| T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](closed/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | done     |
 
 ## Settled — don't re-derive these
 
