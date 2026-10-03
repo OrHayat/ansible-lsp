@@ -207,7 +207,6 @@ T-021 is now unblocked on that side.
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
-| T-192 | [A register from a check_mode task carries fabricated values, not missing keys](open/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | S    | —          |
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
 | T-204 | [An Ansible upgrade mid-session is invisible until restart](open/T-204-an-ansible-upgrade-mid-session-is-invisible-until-restart.md) | M    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
@@ -351,6 +350,7 @@ T-021 is now unblocked on that side.
 | T-239 | **bug** · [Role defaults and vars outside main.yml never reach the variable index](closed/T-239-role-defaults-and-vars-outside-main-yml-never-reach-the-vari.md) | done     |
 | T-243 | **bug** · [Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml](closed/T-243-role-metadata-is-read-only-from-meta-main-yml-and-the-reload.md) | done     |
 | T-214 | [Verdict values stringify integer literals so x == 0 and x == '0' are indistinguishable](closed/T-214-verdict-values-stringify-integer-literals-so-x-0-and-x-0-are.md) | done     |
+| T-192 | [A register from a check_mode task carries fabricated values, not missing keys](closed/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | **rejected** |
 
 ## Settled — don't re-derive these
 
