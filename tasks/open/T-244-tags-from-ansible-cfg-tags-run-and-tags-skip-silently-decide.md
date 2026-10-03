@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P2       | S    | T-099 | —          |
+| partly done | task | P2  | S    | T-099 | —          |
 
 ## Problem
 
@@ -55,10 +55,49 @@ does this configured run execute" are different questions and some rules want ea
 Found by the T-144 `base.yml` audit. T-230 covered tags on a dynamic include and is closed;
 it never looked at the cfg defaults, so no open ticket owned these two.
 
+## Landed: the config is read. Not landed: anything consumes it
+
+`config.rs` now carries `run_tags` / `skip_tags`, from `[tags] run` / `[tags] skip` and
+`ANSIBLE_RUN_TAGS` / `ANSIBLE_SKIP_TAGS`, env replacing ini.
+
+The parse keeps one distinction that a `Vec<String>` would have destroyed, and it is the
+sharp edge of this ticket. Measured with `ansible-config dump` on 2.21.2:
+
+| ansible.cfg | parses to | runs |
+| --- | --- | --- |
+| unset | `[]` | everything |
+| `run =` | `['']` | **nothing** |
+| `run = a, b` | `['a','b']` | the tagged two, trimmed |
+
+So `None` is never-set and `Some(vec![""])` is a bare `run =` that silences the playbook.
+`name_list`, the existing comma-list helper, filters empty elements out and would have
+collapsed `['']` into `[]` — turning "nothing runs" into "everything runs", the most
+inverted answer available. `tag_list` exists for that one reason and the test fails with
+`left: Some([]) right: Some([""])` if it is pointed back at `name_list`.
+
+### The consumer audit (box 3), measured
+
+None of the three reachability consumers can lie about this today:
+
+| consumer | state |
+| --- | --- |
+| `unused-file` / `unused-role` (T-021) | not implemented — zero references in `crates/` |
+| `notify:` -> handler resolution (T-028) | not implemented |
+| `dead-handler-name` (T-157, `placement.rs:795`) | **unaffected** — builds `notified` from the literal `notify:` names in the play's task containers and `live` from the handler names and `listen:`. It asks whether a *name* is answered, not whether a task *runs*, and tag filtering changes neither the `notify:` text nor the handler definition |
+
+That is why this stays a task. The second box is deliberately left open: it asks for the
+task-run rows to be pinned, and nothing filters tasks by tag yet, so there is no behaviour to
+pin. Pinning the parse instead would be a green test for a box that asked a different
+question.
+
 ## Done when
 
-- [ ] `[tags] run` / `[tags] skip` and `ANSIBLE_RUN_TAGS` / `ANSIBLE_SKIP_TAGS` are read, with
+- [x] `[tags] run` / `[tags] skip` and `ANSIBLE_RUN_TAGS` / `ANSIBLE_SKIP_TAGS` are read, with
       the env-over-ini precedence asserted
+      — `tags_run_and_skip_read_ini_and_env_and_keep_the_empty_value_distinct`, which also
+      pins the never-set vs set-and-empty pair and that `[defaults] run` is not a tag setting
 - [ ] the three measured rows above are pinned as a test, including the untagged-task row
-- [ ] each reachability consumer listed above is measured under `[tags] run` and recorded here
-      as correct-today or re-filed as a bug
+      — blocked on there being a consumer: nothing filters tasks by tag, so the rows have no
+      behaviour to assert against. The parse side of each row is pinned above
+- [x] each reachability consumer listed above is measured under `[tags] run` and recorded here
+      as correct-today or re-filed as a bug — all three recorded above, none affected

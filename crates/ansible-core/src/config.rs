@@ -69,6 +69,21 @@ pub struct AnsibleConfig {
     /// deliberate "no platforms". Like every list key it *replaces* the default rather
     /// than extending it, so the two cases can't be collapsed into an empty `Vec`.
     pub network_group_modules: Option<Vec<String>>,
+    /// `TAGS_RUN` / `TAGS_SKIP` — ini `[tags] run` / `[tags] skip`, env `ANSIBLE_RUN_TAGS` /
+    /// `ANSIBLE_SKIP_TAGS`, `type: list`, default `[]` (T-244).
+    ///
+    /// `None` = never set, so no tag filter applies and every task runs. That is **not** the
+    /// same as `Some(vec![])`, and the difference is why this is an `Option` rather than a
+    /// bare `Vec`: measured on 2.21.2 with `ansible-config dump`, an unset key reads `[]` and
+    /// runs everything, while a key present with an empty value reads `['']` — a one-element
+    /// list holding the empty string, which matches no tag, so **nothing runs**. A bare
+    /// `run =` silences an entire playbook.
+    ///
+    /// Values are comma-separated and trimmed (`a, b` -> `["a", "b"]`). Unlike [`name_list`]
+    /// the empty element is kept, because dropping it is exactly how `['']` would collapse
+    /// into the harmless `[]`.
+    pub run_tags: Option<Vec<String>>,
+    pub skip_tags: Option<Vec<String>>,
     /// What a duplicate YAML mapping key does. `DUPLICATE_YAML_DICT_KEY`'s ini name is
     /// `duplicate_dict_key`; the env var keeps the longer spelling. T-102.
     pub duplicate_dict_key: DuplicateDictKey,
@@ -152,6 +167,8 @@ impl Default for AnsibleConfig {
             config_file: None,
             ansible_home: None,
             network_group_modules: None,
+            run_tags: None,
+            skip_tags: None,
             duplicate_dict_key: DuplicateDictKey::default(),
             invalid_task_attribute_failed: true,
             error_on_missing_handler: true,
@@ -235,6 +252,8 @@ impl AnsibleConfig {
         // apart from `entries` because configparser interpolates within a section, and
         // nothing here is interpolated across the two.
         let mut inventory_section: Vec<(String, String)> = Vec::new();
+        // `[tags]` is its own section for the same reason `[inventory]` is (T-244).
+        let mut tags_section: Vec<(String, String)> = Vec::new();
         if let Some(text) = text {
             let mut section = String::new();
             for line in text.lines() {
@@ -246,6 +265,7 @@ impl AnsibleConfig {
                 let bucket = match section.as_str() {
                     "[defaults]" => &mut entries,
                     "[inventory]" => &mut inventory_section,
+                    "[tags]" => &mut tags_section,
                     _ => continue,
                 };
                 if line.starts_with('#') || line.starts_with(';') {
@@ -261,6 +281,13 @@ impl AnsibleConfig {
                     key.trim().to_lowercase(),
                     strip_inline_comment(value.trim()).to_string(),
                 ));
+            }
+        }
+        for (key, value) in &tags_section {
+            match key.as_str() {
+                "run" => cfg.run_tags = Some(tag_list(value)),
+                "skip" => cfg.skip_tags = Some(tag_list(value)),
+                _ => continue,
             }
         }
         for (key, value) in &inventory_section {
@@ -346,6 +373,14 @@ impl AnsibleConfig {
             .or_else(|| env.var("HOME").map(|h| PathBuf::from(h).join(".ansible")));
         if let Some(v) = env.var("ANSIBLE_NETWORK_GROUP_MODULES") {
             cfg.network_group_modules = Some(name_list(v));
+        }
+        // Env replaces the ini value outright rather than merging — measured on 2.21.2:
+        // `[tags] run = a` with `ANSIBLE_RUN_TAGS=b` runs the `b` task and not the `a` one.
+        if let Some(v) = env.var("ANSIBLE_RUN_TAGS") {
+            cfg.run_tags = Some(tag_list(v));
+        }
+        if let Some(v) = env.var("ANSIBLE_SKIP_TAGS") {
+            cfg.skip_tags = Some(tag_list(v));
         }
         if let Some(v) = env.var("ANSIBLE_JINJA2_EXTENSIONS") {
             cfg.jinja2_extensions = name_list(v);
@@ -506,6 +541,13 @@ fn name_list(value: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// A tag list the way Ansible's `type: list` reads one: split on comma, trim each element,
+/// and **keep** the empties. [`name_list`] drops them; here the empty element is the whole
+/// point, since `run =` parses to `['']` and silences the playbook (T-244).
+fn tag_list(value: &str) -> Vec<String> {
+    value.split(',').map(str::trim).map(str::to_owned).collect()
 }
 
 /// A boolean the way Ansible's `boolean()` reads one (`convert_bool.py:12-13`):
@@ -1245,4 +1287,78 @@ jinja2_extensions = jinja2.ext.debug
             .load();
         assert_eq!(c.ansible_home, Some(PathBuf::from("/opt/env")));
     }
+
+    /// T-244. Every row measured on ansible-core 2.21.2 against a playbook holding one task
+    /// tagged `a`, one tagged `b` and one untagged — the run reported by `ansible-playbook`,
+    /// and the parsed value by `ansible-config dump`:
+    ///
+    /// | ansible.cfg | `TAGS_RUN` | runs |
+    /// | --- | --- | --- |
+    /// | (control) no `[tags]` | `[]` | all three |
+    /// | `[tags] run =` | `['']` | **nothing** |
+    /// | `[tags] run = a` | `['a']` | the `a` task only |
+    /// | `[tags] run = a,b` | `['a','b']` | both tagged, not the untagged one |
+    /// | `[tags] run = a, b` | `['a','b']` | whitespace trimmed |
+    /// | `[tags] run = a` + `ANSIBLE_RUN_TAGS=b` | `['b']` | the `b` task only |
+    #[test]
+    fn tags_run_and_skip_read_ini_and_env_and_keep_the_empty_value_distinct() {
+        // Never set is not the same as set-and-empty, and this is the pair that matters:
+        // `[]` runs everything, `['']` runs nothing.
+        assert_eq!(cfg("[defaults]
+roles_path = ./roles
+").run_tags, None);
+        assert_eq!(cfg("[tags]
+run =
+").run_tags, Some(vec![String::new()]));
+
+        assert_eq!(cfg("[tags]
+run = a
+").run_tags, Some(vec!["a".to_string()]));
+        assert_eq!(
+            cfg("[tags]
+run = a,b
+").run_tags,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(
+            cfg("[tags]
+run = a, b
+").run_tags,
+            Some(vec!["a".to_string(), "b".to_string()]),
+            "whitespace around a comma is trimmed"
+        );
+
+        // `skip` is the same key in the same section, and must not be read off `run`.
+        assert_eq!(cfg("[tags]
+skip = b
+").skip_tags, Some(vec!["b".to_string()]));
+        assert_eq!(cfg("[tags]
+skip = b
+").run_tags, None);
+        assert_eq!(cfg("[tags]
+run = a
+").skip_tags, None);
+
+        // The section is real: the same keys under `[defaults]` are not tag settings.
+        assert_eq!(cfg("[defaults]
+run = a
+skip = b
+").run_tags, None);
+        assert_eq!(cfg("[defaults]
+run = a
+skip = b
+").skip_tags, None);
+
+        let env = EnvMap::from_pairs(&[("ANSIBLE_RUN_TAGS", "b"), ("ANSIBLE_SKIP_TAGS", "c")]);
+        let got = AnsibleConfig::builder(Path::new("/p"))
+            .fs(&CfgFs::some("[tags]
+run = a
+skip = a
+"))
+            .env(&env)
+            .load();
+        assert_eq!(got.run_tags, Some(vec!["b".to_string()]), "env must beat the ini value");
+        assert_eq!(got.skip_tags, Some(vec!["c".to_string()]));
+    }
+
 }
