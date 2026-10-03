@@ -26,6 +26,7 @@ use ansible_core::parse::{Document, Loader, Node, Span};
 use ansible_core::include_tags;
 use ansible_core::keyword_values;
 use ansible_core::looped_register;
+use ansible_core::templated_key;
 use ansible_core::placement;
 use ansible_core::plugin_names;
 use ansible_core::references::{self, Reference, ReferenceKind};
@@ -1821,6 +1822,24 @@ impl Backend {
             })
             .collect();
 
+        // A template in a module argument key, which Ansible never renders (T-170).
+        let templated_arg_keys: Vec<Diagnostic> =
+            templated_key::problems(&ansible_core::ast::build(&a.nodes))
+            .into_iter()
+            .filter(|p| !a.doc.is_suppressed(p.span.start, p.rule))
+            .map(|p| Diagnostic {
+                range: range_of(p.span),
+                severity: Some(match p.tier {
+                    ansible_core::attributes::Tier::Error => DiagnosticSeverity::ERROR,
+                    ansible_core::attributes::Tier::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(p.rule.into())),
+                message: p.message,
+                ..Default::default()
+            })
+            .collect();
+
         // A role file's include that resolves outside the role — works, but ties the role to
         // this repo's layout (T-185). A faint hint, not a fault.
         let escaping_includes: Vec<Diagnostic> = role_escape::problems(
@@ -1917,6 +1936,7 @@ impl Backend {
             .chain(bad_values)
             .chain(untagged_includes)
             .chain(looped_register_reads)
+            .chain(templated_arg_keys)
             .chain(escaping_includes)
             .chain(unknown_plugins)
             .chain(unloadable)
@@ -8003,6 +8023,82 @@ mod tests {
         expected.sort_unstable();
         assert!(expected.len() >= 3, "the fixture lost rows: {expected:?}");
         assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-170 on `demo/templated_keys.yml`: the exact set of `templated-arg-key`
+    /// diagnostics, read off the per-line markers. Both tiers are claims about different
+    /// Ansible behaviour — `BAD-ERROR` is a task that cannot run, `BAD-WARN` is one that
+    /// runs and quietly does the wrong thing — so the severity is asserted, not just the line.
+    #[test]
+    fn the_templated_keys_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let path = std::path::Path::new("../../demo/templated_keys.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let mut got: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "templated-arg-key"))
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+        let mut expected: Vec<(u32, DiagnosticSeverity)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#'))
+            .filter_map(|(i, l)| {
+                if l.contains("# BAD-ERROR") {
+                    Some((i as u32, DiagnosticSeverity::ERROR))
+                } else if l.contains("# BAD-WARN") {
+                    Some((i as u32, DiagnosticSeverity::WARNING))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        got.sort_unstable();
+        expected.sort_unstable();
+        // The fixture must keep both tiers, or the test passes while checking one of them.
+        assert_eq!(expected.len(), 3, "the fixture lost rows: {expected:?}");
+        assert!(expected.iter().any(|(_, s)| *s == DiagnosticSeverity::WARNING));
+        assert!(expected.iter().any(|(_, s)| *s == DiagnosticSeverity::ERROR));
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-170's false-positive gate. The demo tree is full of templated values and of
+    /// `set_fact`, which is the one place a templated key is correct — so a rule that
+    /// stopped distinguishing keys from values, or forgot the exemption, lights this up.
+    #[test]
+    fn every_other_demo_file_is_free_of_templated_arg_key_diagnostics() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        let mut saw_add_host_row = false;
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "templated_keys.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text.clone(), &path) else { continue };
+            let hits: Vec<u32> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "templated-arg-key"))
+                .map(|d| d.range.start.line)
+                .collect();
+            // `add_host_vars.yml` carries this hazard on purpose — it is the row documenting
+            // that a templated key defines nothing reachable. Pinned to that one line rather
+            // than skipped, so the file cannot quietly grow a second one.
+            if path.file_name().is_some_and(|n| n == "add_host_vars.yml") {
+                let want = text
+                    .lines()
+                    .position(|l| l.contains("\"{{ dyn }}\": whatever"))
+                    .expect("the demo row is still there") as u32;
+                assert_eq!(hits, vec![want], "{}", path.display());
+                saw_add_host_row = true;
+                continue;
+            }
+            assert!(hits.is_empty(), "{}: lines {hits:?}", path.display());
+        }
+        assert!(saw_add_host_row, "the add_host_vars.yml row vanished from the demo walk");
     }
 
     /// T-193's false-positive gate: registers all over the demo tree, looped and not.

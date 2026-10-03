@@ -141,7 +141,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
-| T-170 | [A template in a mapping key that is never rendered](open/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | S    | —    |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
 | T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
@@ -353,6 +352,7 @@ T-021 is now unblocked on that side.
 | T-192 | [A register from a check_mode task carries fabricated values, not missing keys](closed/T-192-a-register-from-a-check-mode-task-carries-fabricated-values.md) | **rejected** |
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](closed/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | done     |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](closed/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | done     |
+| T-170 | [A template in a mapping key that is never rendered](closed/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | done     |
 
 ## Settled — don't re-derive these
 

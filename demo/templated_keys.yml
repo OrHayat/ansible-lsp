@@ -1,0 +1,43 @@
+# T-170: a template in a module argument key is never rendered. Measured on 2.21.2 — only
+# set_fact and set_stats' data: render a key; everywhere else the braces reach the module
+# as text. The marker on each key line is the claim this file's test pins.
+- name: templated argument keys
+  hosts: localhost
+  gather_facts: false
+  vars:
+    argname: realname
+    k: realkey
+  tasks:
+    # Fatal: the module gets the literal braces as a parameter name.
+    - ansible.builtin.debug:
+        "{{ argname }}": hello  # BAD-ERROR
+
+    # Fatal too, but group_by validates its own options, so the wording differs.
+    - ansible.builtin.group_by:
+        key: g1
+        "{{ k }}": v  # BAD-ERROR
+
+    # Runs, and silently sets a host var literally named "{{ k }}".
+    - ansible.builtin.add_host:
+        name: h1
+        "{{ k }}": v  # BAD-WARN
+
+    # GOOD: set_fact is one of the two rendering sites — this really does set `realkey`.
+    - ansible.builtin.set_fact:
+        "{{ k }}": v
+
+    # GOOD: set_stats renders the keys of its data: child.
+    - ansible.builtin.set_stats:
+        data:
+          "{{ k }}": 1
+
+    # NO HINT: a key nested inside a value is ordinary data, where braces are legal and
+    # mean nothing. Measured: this runs and prints the literal key.
+    - ansible.builtin.debug:
+        msg:
+          "{{ k }}": v
+
+    # NO HINT: command is free-form — it drops the unknown key and fails for a different
+    # reason, so no message we could write would match what the user sees.
+    - ansible.builtin.command:
+        "{{ k }}": v
