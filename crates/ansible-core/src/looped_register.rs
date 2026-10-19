@@ -169,6 +169,14 @@ mod tests {
         assert_eq!(after("    - debug: msg=\"{{ r.stdout }}\"\n"), vec!["stdout"]);
     }
 
+    /// T-226. The key is read off the document at the use's end, so a use in a block scalar
+    /// with the wrong span read whatever text sat there instead — and missed this one.
+    #[test]
+    fn a_key_read_inside_a_block_scalar_fires_on_the_key() {
+        let block = "    - copy:\n        dest: /tmp/x\n        content: |\n          one\n          two\n          out={{ r.stdout }}\n";
+        assert_eq!(after(block), vec!["stdout"]);
+    }
+
     #[test]
     fn the_bracket_spelling_fires() {
         assert_eq!(after("    - debug: msg=\"{{ r['stdout'] }}\"\n"), vec!["stdout"]);

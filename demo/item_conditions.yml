@@ -1,0 +1,41 @@
+# `when-item-without-loop` — `item` in a condition on a task that does not bind it.
+#
+# Only judged in a playbook, where the task and its loop are always in one file. A task file
+# is never judged: a looped `include_tasks` or `include_role` binds `item` for every task in
+# the file it pulls in, and its callers can live outside the workspace (T-139).
+#
+# Measured on core 2.21.2: each BAD row dies with "'item' is undefined"; each GOOD row runs.
+
+- name: item in conditions
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: "BAD — when-item-without-loop: `item` only exists inside a loop"
+      ansible.builtin.debug: { msg: hi }
+      when: item.rc == 0
+
+    - name: "BAD — when-item-without-loop: loop_control renamed the loop variable"
+      # A loop binds exactly one variable and `loop_var:` names it. After the rename `item`
+      # is undefined again despite the loop being right there.
+      ansible.builtin.debug: { msg: hi }
+      loop: [1, 2]
+      loop_control:
+        loop_var: demo_entry
+      when: item > 1
+
+    - name: "SILENCED — rule-scoped noqa, same syntax as ansible-lint"
+      ansible.builtin.debug: { msg: hi }
+      when: item.rc == 0  # noqa: when-item-without-loop
+
+    - name: "GOOD — `item` with a loop is correct, so no warning"
+      ansible.builtin.debug: { msg: hi }
+      loop: [1, 2]
+      when: item > 1
+
+    - name: "GOOD — the word `item` inside a string literal is not a reference"
+      ansible.builtin.debug: { msg: hi }
+      when: demo_mode | default('x') == 'item'
+
+    - name: "GOOD — `item_count` merely starts with `item`, so it must not warn"
+      ansible.builtin.debug: { msg: hi }
+      when: item_count | default(0) | int > 0

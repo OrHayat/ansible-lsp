@@ -121,9 +121,92 @@ pub fn candidates_in(bases: &[PathBuf], value: &str, fs: &dyn Fs) -> Vec<PathBuf
     out
 }
 
+/// The values a templated path's one variable takes across `targets`, the files
+/// [`candidates_in`] found for it (T-071): `{{ protocol }}_target/check.yml` over
+/// `http_target/check.yml` and `ftp_target/check.yml` gives `("protocol", ["ftp", "http"])`.
+///
+/// `None` unless the answer is the whole set: one bare variable, at most once per path
+/// component, a glob that was not cut off at [`MAX_MATCHES`], and every target readable
+/// back. A value containing `/` can reach files no single-component glob sees, so the set is
+/// what is on disk for plain values, not a proof that nothing else works.
+pub fn implied_values(value: &str, targets: &[PathBuf]) -> Option<(String, Vec<String>)> {
+    if targets.is_empty() || targets.len() >= MAX_MATCHES {
+        return None;
+    }
+    let mut var: Option<String> = None;
+    let mut parts: Vec<(String, Option<String>)> = Vec::new();
+    for comp in value.split('/').filter(|c| !c.is_empty()) {
+        let Some(open) = comp.find("{{") else {
+            parts.push((comp.to_string(), None));
+            continue;
+        };
+        let close = comp[open..].find("}}")? + open;
+        let name = comp[open + 2..close].trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        if var.as_deref().is_some_and(|v| v != name) || comp[close + 2..].contains("{{") {
+            return None;
+        }
+        var = Some(name.to_string());
+        parts.push((comp[..open].to_string(), Some(comp[close + 2..].to_string())));
+    }
+    let var = var?;
+    let mut values: Vec<String> = Vec::new();
+    for t in targets {
+        let comps: Vec<String> = t.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let tail = comps.get(comps.len().checked_sub(parts.len())?..)?;
+        let mut seen: Option<String> = None;
+        for ((prefix, suffix), name) in parts.iter().zip(tail) {
+            match suffix {
+                None if prefix == name => {}
+                None => return None,
+                Some(suffix) => {
+                    let v = name.strip_prefix(prefix.as_str())?.strip_suffix(suffix.as_str())?;
+                    if seen.as_deref().is_some_and(|s| s != v) {
+                        return None;
+                    }
+                    seen = Some(v.to_string());
+                }
+            }
+        }
+        values.push(seen?);
+    }
+    values.sort();
+    values.dedup();
+    Some((var, values))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-071. The values read back off the matched files, and the shapes that give no answer
+    /// rather than a partial one.
+    #[test]
+    fn implied_values_reads_the_variable_back_off_each_match() {
+        let p = |s: &str| PathBuf::from(s);
+        let both = [p("/r/tasks/http_target/check.yml"), p("/r/tasks/ftp_target/check.yml")];
+        assert_eq!(
+            implied_values("{{ protocol }}_target/check.yml", &both),
+            Some(("protocol".to_string(), vec!["ftp".to_string(), "http".to_string()]))
+        );
+        assert_eq!(
+            implied_values("nested/{{ which }}.yml", &[p("/r/tasks/nested/deep.yml")]),
+            Some(("which".to_string(), vec!["deep".to_string()]))
+        );
+        // The same variable twice must agree within one path.
+        assert_eq!(
+            implied_values("{{ v }}/{{ v }}.yml", &[p("/r/a/a.yml"), p("/r/b/b.yml")]),
+            Some(("v".to_string(), vec!["a".to_string(), "b".to_string()]))
+        );
+        assert_eq!(implied_values("{{ v }}/{{ v }}.yml", &[p("/r/a/b.yml")]), None);
+        assert_eq!(implied_values("{{ a }}/{{ b }}.yml", &[p("/r/x/y.yml")]), None, "two variables");
+        assert_eq!(implied_values("{{ a.b }}_t/c.yml", &[p("/r/x_t/c.yml")]), None, "not a bare name");
+        assert_eq!(implied_values("{{ a }}_t/c.yml", &[]), None, "nothing matched");
+        let capped: Vec<PathBuf> = (0..MAX_MATCHES).map(|i| p(&format!("/r/{i}_t/c.yml"))).collect();
+        assert_eq!(implied_values("{{ a }}_t/c.yml", &capped), None, "a cut-off glob is not the whole set");
+    }
 
     #[test]
     fn jinja_becomes_a_wildcard() {

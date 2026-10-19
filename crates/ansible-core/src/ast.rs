@@ -444,7 +444,7 @@ fn vars_files_of(value: &Node) -> (Vec<VarsFilesEntry>, Vec<InvalidVarsFilesEntr
             // one — a `-` with no value parses as `Node::Null`. It passes the type gate and
             // then resolves to the search dir itself, so it is the directory fault, not
             // this one, and it is left to the resolver.
-            Node::Scalar { value, span } if !value.is_empty() => Some((value.clone(), *span)),
+            Node::Scalar { value, span, .. } if !value.is_empty() => Some((value.clone(), *span)),
             _ => None,
         }
     }
@@ -624,7 +624,7 @@ fn build_roles(roles: &Node, dependencies: bool) -> Vec<RoleUse> {
         .iter()
         .filter_map(|item| match item {
             // - myrole
-            Node::Scalar { value, span } => Some(RoleUse {
+            Node::Scalar { value, span, .. } => Some(RoleUse {
                 name: value.clone(),
                 span: *span,
                 entry_span: *span,
@@ -648,7 +648,7 @@ fn build_roles(roles: &Node, dependencies: bool) -> Vec<RoleUse> {
                     .or_else(|| item.get("name"))
                     .or_else(|| dependencies.then(|| item.get("src")).flatten())
                     .and_then(|n| match n {
-                        Node::Scalar { value, span } if !value.is_empty() => {
+                        Node::Scalar { value, span, .. } if !value.is_empty() => {
                             Some((value.clone(), *span))
                         }
                         // No usable name is fatal upstream ("role definitions must contain
@@ -763,9 +763,14 @@ fn build_task(node: &Node, handlers: bool) -> Task {
             || k == "local_action"
             || Some(k) == module_key.as_deref()
     };
-    let mut unknown_keys = unknown_keys_of(node, ctx, skip);
-    if let Some(lc) = node.get("loop_control") {
-        unknown_keys.extend(unknown_keys_of(lc, KeyContext::LoopControl, |_| false));
+    // A task the args parser rejects never reaches attribute validation, so its one error is
+    // the parser's (T-159).
+    let mut unknown_keys = Vec::new();
+    if !crate::placement::args_parser_raises(node) {
+        unknown_keys = unknown_keys_of(node, ctx, skip);
+        if let Some(lc) = node.get("loop_control") {
+            unknown_keys.extend(unknown_keys_of(lc, KeyContext::LoopControl, |_| false));
+        }
     }
     Task {
         span: node.span(),

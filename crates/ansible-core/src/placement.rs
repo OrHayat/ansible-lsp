@@ -95,6 +95,9 @@ const LOOP_CONTROL_SHAPE: &str = "the `loop_control` value must be specified as 
                                   variables)";
 const BLOCK_AS_HANDLER: &str = "Using a block as a handler is not supported.";
 const NO_MODULE: &str = "no module/action detected in task.";
+/// Upstream appends the Python class of the rejected value (`<class '..._AnsibleTaggedList'>`),
+/// which names an internal type, so only the part a reader can act on is kept.
+const PARAMETER_TYPE: &str = "unexpected parameter type in action: a list";
 const USER_AND_REMOTE_USER: &str = "both 'user' and 'remote_user' are set for this play. The \
                                     use of 'user' is deprecated, and should be removed";
 const DEPRECATED_USER: &str = "`user` is a deprecated alias for `remote_user`. Ansible renames \
@@ -1121,7 +1124,7 @@ fn action_candidates(node: &Node) -> Vec<(Span, &str, &Node)> {
         .collect()
 }
 
-/// Row 12, and **no module resolution is involved** — the ticket had that wrong.
+/// Rows 12 and 22, and **no module resolution is involved** — the ticket had that wrong.
 /// `load_list_of_tasks` calls `parse(skip_action_validation=True)` (`helpers.py:121`), and that
 /// flag makes every surviving key an action candidate whether or not it names a real module.
 /// Measured: `debug:` beside a `frobnicate:` conflicts, and `frobnicate` resolves to nothing.
@@ -1129,38 +1132,50 @@ fn action_candidates(node: &Node) -> Vec<(Span, &str, &Node)> {
 /// sees a single candidate — which is why a lone unresolvable key gets `couldn't resolve
 /// module/action` instead.
 ///
-/// Anchored on the second key, the one whose arrival raises. Known miss: the first candidate's
-/// value is normalized before the second is looked at, so a value `_normalize_parameters`
-/// rejects raises `unexpected parameter type in action` there instead — measured on a list.
-/// Scalars are assumed to be strings, since the parse tree keeps no scalar style; a bare int
-/// first value is the one shape where we give the wrong message rather than none.
+/// The walk is upstream's, candidate by candidate in document order (`mod_args.py:330-354`),
+/// all measured on 2.21.2 (T-159): once an action is set, the next candidate is a conflict,
+/// anchored on that candidate; `action:` and `local_action:` set one before the walk starts, so
+/// `action: debug` beside a `nmae:` conflicts too. Before a candidate becomes the action its
+/// value is normalized, and a list is rejected there with `unexpected parameter type in
+/// action`, alone or not. Scalars are assumed to be strings, since the parse tree keeps no
+/// scalar style; a bare int is the one shape that also raises and that we miss (T-162).
 fn action_walk(node: &Node, out: &mut Vec<Problem>) -> bool {
-    match action_candidates(node).as_slice() {
-        // Row 22 (`mod_args.py:368`): nothing to run. `action:`/`local_action:` are Task
-        // attributes so they never appear as candidates, but each sets the action in its own
-        // branch above the walk — measured, both load clean alone.
-        [] => {
-            if node.get("action").is_some() || node.get("local_action").is_some() {
-                return false;
-            }
-            out.push(error(node.span(), NO_MODULE.into()));
-            true
+    let mut action = ["action", "local_action"].iter().find_map(|k| {
+        let v = node.get(k)?;
+        let name = v.as_str().or_else(|| v.get("module").and_then(Node::as_str))?;
+        Some(name.split_whitespace().next().unwrap_or(name).to_string())
+    });
+    let candidates = action_candidates(node);
+    // Row 22 (`mod_args.py:368`): nothing to run. `action:`/`local_action:` are Task attributes
+    // so they never appear as candidates — measured, each loads clean alone.
+    if candidates.is_empty() && action.is_none() {
+        if node.get("action").is_some() || node.get("local_action").is_some() {
+            return false;
         }
-        [_] => false,
-        // Row 12 (`mod_args.py:353-354`): the second candidate is the one that raises, so it is
-        // the one underlined. The first's value is normalized before the second is looked at,
-        // so a value `_normalize_parameters` rejects raises there instead — measured on a list.
-        [first, second, ..] => {
-            if matches!(first.2, Node::Sequence { .. }) {
-                return false;
-            }
-            out.push(error(
-                second.0,
-                format!("conflicting action statements: {}, {}", first.1, second.1),
-            ));
-            true
-        }
+        out.push(error(node.span(), NO_MODULE.into()));
+        return true;
     }
+    for (span, key, value) in candidates {
+        if let Some(first) = &action {
+            out.push(error(span, format!("conflicting action statements: {first}, {key}")));
+            return true;
+        }
+        if matches!(value, Node::Sequence { .. }) {
+            out.push(error(value.span(), PARAMETER_TYPE.into()));
+            return true;
+        }
+        action = Some(key.to_string());
+    }
+    false
+}
+
+/// Whether `ModuleArgsParser` raises on this task: row 11's mutual exclusions, or rows 12 and
+/// 22 above. It runs in `load_list_of_tasks` before `Task.load`, so a task it rejects never
+/// reaches attribute validation — measured on 2.21.2, `debug:` with a `nmae:` typo and a
+/// `listen:` reports only the conflict, whichever order they are written in (T-159).
+pub(crate) fn args_parser_raises(node: &Node) -> bool {
+    let mut sink = Vec::new();
+    exclusions(node, On::Task, &mut sink) || action_walk(node, &mut sink)
 }
 
 /// Row 9. `PlaybookInclude.preprocess_data` collects the `import_playbook` spellings present as
@@ -1218,7 +1233,7 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
         // `hosts:` with nothing after it is None; `hosts: ""` is the empty string. Both are
         // falsy, so both take the same branch and the same message.
         Node::Null { .. } => out.push(error(value.span(), HOSTS_EMPTY.into())),
-        Node::Scalar { value: s, span } if s.is_empty() => out.push(error(*span, HOSTS_EMPTY.into())),
+        Node::Scalar { value: s, span, .. } if s.is_empty() => out.push(error(*span, HOSTS_EMPTY.into())),
         // A non-empty scalar is the ordinary `hosts: web`, and also where the `hosts: 42` miss
         // above lands: no scalar style in the tree, so we take every scalar for a string.
         Node::Scalar { .. } => {}
@@ -1865,14 +1880,23 @@ mod tests {
         assert!(check("- hosts: web\n  tasks:\n    - debug: {msg: x}\n      static: yes\n").is_empty());
     }
 
-    /// The first candidate's value is normalized before the second is examined, so a value
-    /// `_normalize_parameters` rejects raises there instead — measured on a list. A scalar is
-    /// assumed to be a string, since the parse tree keeps no scalar style.
+    /// A candidate's value is normalized before it becomes the action, so a list raises
+    /// `unexpected parameter type in action` there, alone or with a second key after it —
+    /// measured on 2.21.2 (T-159). A scalar is assumed to be a string, since the parse tree
+    /// keeps no scalar style.
     #[test]
-    fn row_12_defers_when_the_first_value_would_fail_normalization() {
-        assert!(
-            check("- hosts: web\n  tasks:\n    - foo: [1, 2]\n      bar: x\n").is_empty(),
-            "a list first value is `unexpected parameter type in action` upstream"
+    fn a_list_module_value_is_an_unexpected_parameter_type() {
+        for task in ["- foo: [1, 2]\n      bar: x", "- foo: [1, 2]"] {
+            assert_eq!(
+                check(&format!("- hosts: web\n  tasks:\n    {task}\n")),
+                ["unexpected parameter type in action: a list"],
+                "{task}"
+            );
+        }
+        // A list on a *later* candidate is never normalized: the conflict comes first.
+        assert_eq!(
+            check("- hosts: web\n  tasks:\n    - action: debug\n      nmae: [a]\n"),
+            ["conflicting action statements: debug, nmae"]
         );
         for first in ["foo: \"a string\"", "foo:"] {
             assert_eq!(

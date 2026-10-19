@@ -43,6 +43,12 @@ pub enum Node {
     Scalar {
         value: String,
         span: Span,
+        /// `(value offset, document offset)` at each point where the value stops being a
+        /// copy of the source: every content line of a block scalar, whose indentation is
+        /// stripped, and after each escape or folded line break of a flow scalar. An offset
+        /// into such a value is not `span.start + offset` (T-226). `None` where it is. Read
+        /// it through [`Node::doc_offset`].
+        lines: Option<Box<[(usize, usize)]>>,
     },
     Sequence {
         items: Vec<Node>,
@@ -73,6 +79,27 @@ impl Node {
             | Node::Null { span }
             | Node::Other { span } => *span,
         }
+    }
+
+    /// The document offset of byte `offset` of this scalar's value.
+    pub fn doc_offset(&self, offset: usize) -> usize {
+        let span = self.span();
+        let Node::Scalar { lines: Some(lines), .. } = self else {
+            return span.start + offset;
+        };
+        let i = lines.partition_point(|&(v, _)| v <= offset);
+        let Some(&(v, d)) = i.checked_sub(1).and_then(|i| lines.get(i)) else {
+            return span.start;
+        };
+        // An offset past the end of its line is in a line-break separator: it lands at that
+        // line's end, or at worst in the next line's indentation, never in its content.
+        let next = lines.get(i).map_or(span.end, |&(_, d)| d);
+        (d + offset - v).min(next)
+    }
+
+    /// [`Node::doc_offset`] for both ends of a span into the value.
+    pub fn doc_span(&self, s: Span) -> Span {
+        Span { start: self.doc_offset(s.start), end: self.doc_offset(s.end) }
     }
 
     pub fn as_str(&self) -> Option<&str> {

@@ -8,7 +8,8 @@ mic key on this Mac).
 | ---- | ----- |
 | `ansible.cfg` | marks the project root, so `playbook_dir` and the role path have values |
 | `tasks/main.yml` | navigation — what's clickable, what deliberately isn't |
-| `tasks/conditions.yml` | condition analysis — every verdict and every rule, across all five bare-expression keywords (`when:`, `failed_when:`, `changed_when:`, `until:`, `assert: that:`), with severities that follow the detected ansible-core version |
+| `tasks/conditions.yml` | condition analysis — every verdict and every rule but `when-item-without-loop`, across all five bare-expression keywords (`when:`, `failed_when:`, `changed_when:`, `until:`, `assert: that:`), with severities that follow the detected ansible-core version |
+| `item_conditions.yml` | `when-item-without-loop` — judged only in a playbook, since a task file's `item` can come from a looped include (T-139) |
 | `hostvars.yml` | `hostvars['other']` — reading another host's variables: what navigates, and the play-scoped sources it structurally cannot see, which are provably undefined (T-104) |
 | `tasks/variables.yml` | where a variable comes from — play/block/task `vars:`, `set_fact`, `register`, precedence and run order, and the two mapping **keys** ansible renders rather than takes literally (T-169) |
 | `playbook.yml` | `roles:`, `import_playbook`, and `# noqa` suppression |

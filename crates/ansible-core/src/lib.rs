@@ -36,6 +36,7 @@ pub mod vars;
 pub mod vars_files;
 pub mod workspace;
 pub mod templated_key;
+pub mod validate_argspec;
 
 /// A path rendered the way Ansible would print it: POSIX separators.
 ///

@@ -542,6 +542,52 @@ mod tests {
         );
     }
 
+    /// T-159. This rule and placement's args-parser rows together, against what ansible-core
+    /// 2.21.2 printed for each shape (`scratchpad/t159/probe.sh`). The exact set per case, so a
+    /// second message beside the right one fails here.
+    #[test]
+    fn an_extra_key_gets_exactly_the_one_error_ansible_gives() {
+        let all = |src: &str| -> Vec<String> {
+            let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+            let mut out: Vec<String> =
+                problems(&ast::build(&nodes), true).into_iter().map(|p| p.message).collect();
+            out.extend(crate::placement::problems(&nodes, src, true).into_iter().map(|p| p.message));
+            // Ours adds a spelling hint to ansible's text; the hint is not what is compared.
+            out.into_iter().map(|m| m.split(" (did you mean").next().unwrap_or("").to_string()).collect()
+        };
+        let task = |body: &str| format!("- hosts: localhost\n  tasks:\n    - {body}\n");
+        let handler = |body: &str| format!("- hosts: localhost\n  handlers:\n    - {body}\n");
+        let conflict = |a: &str, b: &str| vec![format!("conflicting action statements: {a}, {b}")];
+        let cases: Vec<(String, Vec<String>)> = vec![
+            (task("debug: {msg: x}\n      nmae: oops"), conflict("debug", "nmae")),
+            (task("action: debug\n      nmae: oops"), conflict("debug", "nmae")),
+            (task("local_action: debug\n      nmae: oops"), conflict("debug", "nmae")),
+            (task("include_tasks: inc.yml\n      nmae: oops"), conflict("include_tasks", "nmae")),
+            (task("debug: {msg: x}\n      nmae: oops\n      whne: true"), conflict("debug", "nmae")),
+            (task("nmae: oops\n      debug: {msg: x}"), conflict("nmae", "debug")),
+            (task("debug: {msg: x}\n      nmae: oops\n      listen: x"), conflict("debug", "nmae")),
+            (task("listen: x\n      debug: {msg: x}\n      nmae: oops"), conflict("debug", "nmae")),
+            (task("debug: [a]\n      nmae: oops"), vec!["unexpected parameter type in action: a list".into()]),
+            (task("name: y\n      listen: x"), vec!["no module/action detected in task.".into()]),
+            (task("debug: {msg: x}\n      listen: x"), vec!["'listen' is not a valid attribute for a Task".into()]),
+            (task("debug: {msg: x}\n      static: yes"), vec!["'static' is not a valid attribute for a Task".into()]),
+            (handler("debug: {msg: x}\n      nmae: oops"), conflict("debug", "nmae")),
+            (handler("debug: {msg: x}\n      listen: x"), vec![]),
+            (handler("debug: {msg: x}\n      static: yes"), vec!["'static' is not a valid attribute for a Handler".into()]),
+            (
+                "- hosts: localhost\n  tasks:\n    - block:\n        - debug: {msg: x}\n      nmae: oops\n".into(),
+                vec!["'nmae' is not a valid attribute for a Block".into()],
+            ),
+            (
+                "- hosts: localhost\n  nmae: oops\n  tasks: []\n".into(),
+                vec!["'nmae' is not a valid attribute for a Play".into()],
+            ),
+        ];
+        for (src, want) in cases {
+            assert_eq!(all(&src), want, "{src}");
+        }
+    }
+
     #[test]
     fn task_severity_follows_invalid_task_attribute_failed() {
         let src = "- hosts: web\n  tasks:\n    - debug:\n      listen: x\n";
@@ -560,7 +606,7 @@ mod tests {
         let got = check(
             "- hosts: web\n  tasks:\n    - include_tasks: f.yml\n      become: true\n    \
              - include_role: {name: r}\n      become: true\n  handlers:\n    - debug:\n      \
-             hosts: web\n",
+             static: yes\n",
             true,
         );
         assert_eq!(
@@ -568,7 +614,7 @@ mod tests {
             [
                 (Tier::Error, "'become' is not a valid attribute for a TaskInclude".into()),
                 (Tier::Error, "'become' is not a valid attribute for a IncludeRole".into()),
-                (Tier::Error, "'hosts' is not a valid attribute for a Handler".into()),
+                (Tier::Error, "'static' is not a valid attribute for a Handler".into()),
             ]
         );
     }

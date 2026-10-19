@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P2       | M    | —          |
+| done   | bug  | P2       | M    | —          |
 
 ## Symptom
 
@@ -68,12 +68,39 @@ Consumers to assert individually (rule 3): `effective()` — used by go-to-defin
 the hover/inlay value — and `source_label` in the LSP, which names the source in the hover and
 would start claiming "inventory group_vars" where it said "group_vars".
 
+## Resolution
+
+Measured all eight levels on 2.21.2 with `scratchpad/t175/probe.sh`: fourteen pairs, each name
+defined in exactly two sources with different values, every pair able to come out either way.
+The order is exactly the published one (3 to 10 in the table above). The comment's "6" for
+`Inventory` was wrong on both halves: a `[g:vars]` section is 3, a host-line `k=v` is 8.
+
+- `InventoryVar` carries `host`, set by the INI, YAML and TOML readers from the same
+  group/host position they already track for `ansible_group_priority`.
+- `VarSource::Inventory` is now `InventoryGroup` (3) and `InventoryHost` (8). The
+  inventory-adjacent dirs are `InventoryGroupVarsAll` (4), `InventoryGroupVars` (6) and
+  `InventoryHostVars` (9). `read_var_dir` takes an `inventory` flag from its two call sites.
+- Every other reader gives each new variant the arm its old variant had (`host_scoped`,
+  `visible_to_hostvars`, `can_supply_import_playbook`, the literal-value sources, `def_value`).
+  Only precedence and the hover label change.
+
+Tests: `effective_ranks_inventory_and_playbook_sources_as_measured` replays all fourteen pairs
+through `effective()`. `hover_tells_inventory_group_vars_from_playbook_group_vars` checks the
+hover labels, the `← effective` mark, and that go-to-definition lands on the playbook copy. Both
+were seen red with the old levels restored. Two `import_role`/role-name tests had their expected
+labels updated to the precise ones ("inventory group_vars/all", "inventory host_vars",
+"inventory group var").
+
+Corpus: `volumez/matrix/ansible` at `12d9c16e` reports 241 undefined uses before and after, the
+same list. Precedence decides which definition wins, never whether one exists, so zero movement
+is the expected result.
+
 ## Done when
 
-- [ ] each level in the table above is measured with a two-file probe that could report either
-- [ ] inventory-adjacent `group_vars`/`host_vars` carry their own `VarSource` variants
-- [ ] `VarSource::Inventory`'s level is re-measured for both the `[g:vars]` and host-line cases
-- [ ] `effective()` picks the playbook copy over the inventory copy, pinned by test
-- [ ] hover's source label distinguishes the two, pinned by test
-- [ ] the stale "aren't here" comment on `precedence()` is gone
-- [ ] corpus count recorded; a move in either direction is explained before it lands
+- [x] each level in the table above is measured with a two-file probe that could report either
+- [x] inventory-adjacent `group_vars`/`host_vars` carry their own `VarSource` variants
+- [x] `VarSource::Inventory`'s level is re-measured for both the `[g:vars]` and host-line cases
+- [x] `effective()` picks the playbook copy over the inventory copy, pinned by test
+- [x] hover's source label distinguishes the two, pinned by test
+- [x] the stale "aren't here" comment on `precedence()` is gone
+- [x] corpus count recorded; a move in either direction is explained before it lands

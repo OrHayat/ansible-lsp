@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P3       | M    | —          |
+| done   | bug  | P3       | M    | —          |
 
 ## Symptom
 
@@ -81,21 +81,56 @@ Worth deciding while doing it: ansible *warns* on the collision. A tool that kno
 names collide could say so, which is more useful than silently declining to report one
 variable. Out of scope unless it falls out for free.
 
+## Resolution
+
+Measured wider than the ticket on 2.21.2 (`scratchpad/t200/probe.sh`, INI). The collision moves
+*every* variable on the host's line, not just the priority key. With `web` both a group and a
+host in it, and `node1` a non-colliding host in the same group:
+
+| on the line of | variable              | result                                                        |
+| -------------- | --------------------- | ------------------------------------------------------------- |
+| `web`          | ordinary              | `node1` sees it too, and it loses to inventory `group_vars/all` |
+| `web`          | `ansible_group_priority` | eaten                                                      |
+| `node1`        | ordinary              | host only, and beats inventory `group_vars/all`               |
+| `node1`        | `ansible_group_priority` | an ordinary host variable (`20`)                           |
+
+So a colliding host position is a group position for every key. That is both the priority drop
+and T-175's group level (3) instead of the host level (8).
+
+- `GroupPosition::of_host(name, groups)` makes the call, with a `:port` suffix stripped. Each
+  reader's host branch uses it, so the priority key is consumed and the `host` flag is false.
+- `ini_groups` / `yaml_groups` / `toml_groups` collect group names (headers, `:children` entries,
+  `children:` keys, plus `all` and `ungrouped`). `ini_vars_in` / `yaml_vars_in` / `toml_vars_in`
+  take the set. The one-file `ini_vars` / `yaml_vars` / `toml_vars` keep their signatures and use
+  the file's own groups, so the ~20 existing test call sites did not change.
+- `vars.rs` reads the inventory in two passes, collecting groups across every source first.
+
+Tests, all seen red with `of_host` forced to "host" (the break confirmed in the file):
+`a_host_named_like_a_group_is_a_group_position_in_every_reader` (INI, YAML, TOML, with the
+`node1` control and the port case),
+`a_host_named_like_a_group_in_another_inventory_file_is_a_group_position` (the directory case,
+with the file read alone as the control), and
+`group_priority_on_a_host_named_like_its_group_never_substitutes_a_path` (the hover consumer,
+with an ordinary `control` on the same line still substituting).
+
+Not done: ansible's `Found both group and host with same name` warning. It would need a
+per-inventory diagnostic surface that does not exist yet.
+
+Corpus: 241 undefined uses before and after, the same list.
+
 ## Done when
 
-- [ ] a host whose name matches a group has its host-position `ansible_group_priority`
+- [x] a host whose name matches a group has its host-position `ansible_group_priority`
       dropped, one test per reader, with a **non-colliding host in the same fixture** as the
       control that must still report it — the shape the measurement above used
-- [ ] group names are collected across every file of a **directory** source, not just the one
+- [x] group names are collected across every file of a **directory** source, not just the one
       being read, asserted with the collision and the definition in different files — this is
       the case a per-file reader cannot get right and the whole reason for the two-pass
-- [ ] an ordinary variable on the same colliding host line is **still** reported, since only
-      this one key is consumed — `Group.set_variable` intercepts exactly one name
-- [ ] `path_substitution_hover` refuses to substitute from a colliding host position, per
+- [x] an ordinary variable on the same colliding host line is **still** reported, since only
+      this one key is consumed. It is, now as a group variable, which is what measurement shows
+- [x] `path_substitution_hover` refuses to substitute from a colliding host position, per
       T-178's per-consumer box and by the same fixture shape
-- [ ] seen red before the fix, per rule 5, and the break confirmed to have landed in the file
+- [x] seen red before the fix, per rule 5, and the break confirmed to have landed in the file
       before believing a green run
-- [ ] the `GroupPosition` comment at `inventory.rs:115-116` recording this as an open limit is
+- [x] the `GroupPosition` comment at `inventory.rs:115-116` recording this as an open limit is
       removed, since it will no longer be one
-
-[T-178]: T-178-an-inventory-source-s-ansible-group-priority-is-indexed-as-a.md

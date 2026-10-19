@@ -35,10 +35,11 @@ pub struct Site {
     /// The expressions. A list value is several ANDed clauses, exactly as `when:` has always
     /// been; a scalar is one clause.
     pub clauses: Vec<String>,
-    /// The owning mapping binds `item` — it has a `loop:`/`with_*` *and* has not renamed the
-    /// loop variable. `loop_control: loop_var: thing` leaves `item` undefined, and a
-    /// condition using it then dies exactly as it would with no loop at all (verified on
-    /// ansible-core 2.21.2).
+    /// `item` is, or may be, bound here. In a playbook, the owning mapping has a
+    /// `loop:`/`with_*` *and* has not renamed the loop variable: `loop_control: loop_var:
+    /// thing` leaves `item` undefined, and a condition using it then dies exactly as it would
+    /// with no loop at all (verified on ansible-core 2.21.2). In a task file it is always
+    /// `true` — see [`sites`].
     pub binds_item: bool,
 }
 
@@ -47,13 +48,23 @@ pub struct Site {
 /// Returns nothing for a file that is neither a playbook nor a task list. A vars file is
 /// free to have a key called `when`, and it would be data — the rules must not read it as a
 /// condition.
+///
+/// A task file's `item` can come from whoever includes it: a looped `include_tasks` or
+/// `include_role` binds `item` for every task in the file, even one whose own loop renamed
+/// its variable (both measured on 2.21.2). Proving no caller loops needs every caller, and a
+/// role's task file has callers outside any workspace, so there `item` counts as bound (T-139).
 pub fn sites(nodes: &[Node]) -> Vec<Site> {
-    if matches!(ast::build(nodes), Ast::Other) {
-        return Vec::new();
-    }
+    let task_file = match ast::build(nodes) {
+        Ast::Other => return Vec::new(),
+        Ast::Tasks(_) => true,
+        Ast::Playbook(_) => false,
+    };
     let mut out = Vec::new();
     for n in nodes {
         walk(n, &mut out);
+    }
+    if task_file {
+        out.iter_mut().for_each(|s| s.binds_item = true);
     }
     out
 }
@@ -170,14 +181,36 @@ mod tests {
         assert_eq!(s[0].clauses, ["risky"]);
     }
 
+    /// `tasks` (a task list at column 0) as the tasks of one play.
+    fn in_play(tasks: &str) -> String {
+        let body: String = tasks.lines().map(|l| format!("    {l}\n")).collect();
+        format!("- hosts: all\n  tasks:\n{body}")
+    }
+
     #[test]
     fn a_loop_on_the_owning_task_is_carried() {
-        let s = sites_of("- command: x\n  loop: [1, 2]\n  failed_when: item > 1\n");
+        let s = sites_of(&in_play("- command: x\n  loop: [1, 2]\n  failed_when: item > 1\n"));
         assert!(s[0].binds_item);
-        let s = sites_of("- command: x\n  with_items: [1]\n  when: item\n");
+        let s = sites_of(&in_play("- command: x\n  with_items: [1]\n  when: item\n"));
         assert!(s[0].binds_item);
-        let s = sites_of("- command: x\n  failed_when: item > 1\n");
+        let s = sites_of(&in_play("- command: x\n  failed_when: item > 1\n"));
         assert!(!s[0].binds_item);
+    }
+
+    /// T-139. Measured on 2.21.2: a looped `include_tasks` or `include_role` binds `item` in
+    /// every task of the included file, and a task there whose own loop renamed its variable
+    /// still sees the including loop's `item`. Without a loop at the include site the same
+    /// file dies with "'item' is undefined", but no one file says which caller it has.
+    #[test]
+    fn a_task_file_may_have_item_from_its_includer() {
+        let bare = "- command: x\n  when: item > 1\n";
+        let renamed = "- command: x\n  loop: [1, 2]\n  loop_control:\n    loop_var: thing\n  \
+                       when: item > 0\n";
+        assert!(sites_of(bare)[0].binds_item);
+        assert!(sites_of(renamed)[0].binds_item);
+        // The control: the same tasks in a play have no includer, and are judged as written.
+        assert!(!sites_of(&in_play(bare))[0].binds_item);
+        assert!(!sites_of(&in_play(renamed))[0].binds_item);
     }
 
     /// A loop binds *one* variable and `loop_control:` renames it. After a rename `item` is
@@ -187,15 +220,15 @@ mod tests {
     fn a_renamed_loop_variable_does_not_bind_item() {
         let renamed = "- command: x\n  loop: [1, 2]\n  loop_control:\n    loop_var: thing\n  \
                        when: item > 0\n";
-        assert!(!sites_of(renamed)[0].binds_item);
+        assert!(!sites_of(&in_play(renamed))[0].binds_item);
 
         // Spelling the default explicitly still binds it, and so does any other
         // `loop_control:` setting.
         let explicit = "- command: x\n  loop: [1]\n  loop_control:\n    loop_var: item\n  \
                         when: item > 0\n";
-        assert!(sites_of(explicit)[0].binds_item);
+        assert!(sites_of(&in_play(explicit))[0].binds_item);
         let other = "- command: x\n  loop: [1]\n  loop_control:\n    label: x\n  when: item\n";
-        assert!(sites_of(other)[0].binds_item);
+        assert!(sites_of(&in_play(other))[0].binds_item);
     }
 
     /// A null value is absence, not an empty condition — so it is not a site at all, and

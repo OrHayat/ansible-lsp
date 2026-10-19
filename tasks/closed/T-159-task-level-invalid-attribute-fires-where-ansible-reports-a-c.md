@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P2       | M    | T-106 | —          |
+| done   | bug  | P2       | M    | T-106 | —          |
 
 ## Symptom
 
@@ -80,12 +80,46 @@ Task-only: a block has no module slot, so an unknown key there really is an inva
 and `attributes.rs` is right — but that should be measured rather than assumed, given this one
 went the other way.
 
+## Resolution
+
+Measured 21 shapes on 2.21.2 with `scratchpad/t159/probe.sh` (`--syntax-check`, one file each).
+Two findings went past the ticket:
+
+- `action: debug` or `local_action: debug` beside a typo is also `conflicting action statements:
+  debug, nmae`. Row 12 used to require two candidates, so this shape got only the wrong
+  attribute message.
+- Once the args parser raises, nothing else on the task is reported: `debug:` + `nmae:` +
+  `listen:` gives only the conflict, in either order. So the right fix is not "drop candidate
+  keys" but "no attribute check on a task the parser rejects".
+
+Changes:
+
+- `placement::action_walk` follows upstream's walk candidate by candidate. An action already
+  set (by `action:`/`local_action:` or an earlier candidate) makes the next candidate a
+  conflict. Otherwise a list value raises `unexpected parameter type in action: a list`, alone
+  or not, which closes the gap where row 12 used to defer into silence. A bare int also raises
+  upstream and is still missed, because the parser keeps no scalar style (T-162).
+- `placement::args_parser_raises` (rows 11, 12 and 22) is the single answer, and
+  `ast::build_task` leaves `unknown_keys` empty when it is true.
+- Block and Play were measured and are unaffected: `'nmae' is not a valid attribute for a
+  Block/Play`.
+
+Tests: `an_extra_key_gets_exactly_the_one_error_ansible_gives` runs 17 measured shapes through
+both rules and asserts the exact message set for each, Task, Handler, Block and Play included.
+It was seen red under both halves of the fix reverted separately. Two tests that pinned the old
+answers were corrected: the handler case of `the_class_in_the_message_matches_ansibles` (now
+`static:`, measured), and the deferral test, which now asserts the parameter-type message. The
+`demo/placement.yml` row that called that message "a different rule's" is now a BAD row, and
+the demo test lists it.
+
 ## Done when
 
-- [ ] a typo'd key on a task with a module produces **one** diagnostic, ansible's own
+- [x] a typo'd key on a task with a module produces **one** diagnostic, ansible's own
       `conflicting action statements: %s, %s`
-- [ ] `listen:` and `static:` on a plain task still produce `'%s' is not a valid attribute for
+- [x] `listen:` and `static:` on a plain task still produce `'%s' is not a valid attribute for
       a Task`, which is what upstream gives — asserted for both
-- [ ] the row-12-defers gap is closed or documented, not left as new silence
-- [ ] Block and Play contexts measured and confirmed unaffected, or filed separately
-- [ ] `demo/invalid_attributes.yml` and `demo/placement.yml` agree on which rule owns which key
+- [x] the row-12-defers gap is closed or documented, not left as new silence. A list is closed;
+      a bare int is documented (T-162)
+- [x] Block and Play contexts measured and confirmed unaffected, or filed separately
+- [x] `demo/invalid_attributes.yml` and `demo/placement.yml` agree on which rule owns which key.
+      Both demo tests assert exact lists, and the `every_other_demo_file` guard is green

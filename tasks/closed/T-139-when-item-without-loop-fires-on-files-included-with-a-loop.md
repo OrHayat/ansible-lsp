@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | bug  | P1       | M    | T-020      |
+| done   | bug  | P1       | M    | T-020      |
 
 ## Symptom
 
@@ -59,11 +59,26 @@ cannot do. Until the chain exists, the safe interim is to suppress the rule in t
 entirely and keep it for playbooks, where the task and its loop are always in one file: a
 missed warning costs nothing, a false one costs trust.
 
+## Resolution
+
+Took the interim, and it is the whole answer: the reverse index (T-020) cannot prove no caller
+loops, because a role's task file has callers outside any workspace. `expressions::sites`
+marks `item` as bound for every site in a task file, so the server, `scan` and the demo test
+all read it from one place. Measured on 2.21.2: a looped `include_tasks` and a looped
+`include_role` each bind `item` in the included file, even under an inner task's
+`loop_control: loop_var:`; an unlooped include dies with `'item' is undefined`.
+
+The rule stays a warning in playbooks: a play `vars: {item: 2}` makes `when: item == 2` run
+(measured), and the rule does not read variables. The BAD rows moved from
+`demo/tasks/conditions.yml` to the playbook `demo/item_conditions.yml`, pinned by
+`the_item_conditions_demo_matches_its_annotations_exactly` and guarded by
+`every_other_demo_file_is_free_of_item_without_loop`.
+
 ## Done when
 
-- [ ] the three corpus cases stop being reported
-- [ ] `condition::corpus::item_from_an_including_loop_is_not_flagged` passes with its
+- [x] the three corpus cases stop being reported
+- [x] `condition::corpus::item_from_an_including_loop_is_not_flagged` passes with its
       `#[ignore]` deleted. It was `..._is_flagged_today_and_should_not_be`, which asserted the
       false positive was present; rule 7 replaced it with the correct expectation, ignored.
       Its live control, `..._is_well_formed_once_the_loop_is_known`, must stay green throughout
-- [ ] a playbook-local `item` with no loop anywhere is still reported
+- [x] a playbook-local `item` with no loop anywhere is still reported

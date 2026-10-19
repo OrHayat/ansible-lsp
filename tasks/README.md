@@ -96,9 +96,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
-| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](open/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | M    | ~~T-020~~      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
-| T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](open/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | M    | —          |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
 
 ### P2 — coverage and usability
@@ -137,12 +135,10 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | ~~T-020~~ |
-| T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](open/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | M    | —    |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
-| T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](open/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | M    | —    |
 | T-189 | [Type-check a registered result's sub-keys against the module's RETURN schema](open/T-189-type-check-a-registered-result-s-sub-keys-against-the-module.md) | M    | T-057 |
 | T-191 | [A failure-tolerating task's register is read for a key the module does not always return](open/T-191-a-failure-tolerating-task-s-register-is-read-for-a-key-the-m.md) | M    | T-057 |
 | T-195 | [Validate rules against public corpora, not one codebase](open/T-195-validate-rules-against-public-corpora-not-one-codebase.md) | M    | —    |
@@ -198,14 +194,12 @@ T-021 is now unblocked on that side.
 | T-149 | [Validate meta/argument_specs.yml itself, not just call sites](open/T-149-validate-meta-argument-specs-yml-itself-not-just-call-sites.md) | M    | —          |
 | T-151 | [Validate galaxy.yml and requirements.yml against the galaxy schemas](open/T-151-validate-galaxy-yml-and-requirements-yml-against-the-galaxy.md) | M    | —          |
 | T-152 | [YAML inventory files: index them and check the all/hosts/children shape](open/T-152-yaml-inventory-files-index-them-and-check-the-all-hosts-chil.md) | M    | —          |
-| T-153 | [Playbook .meta files: the playbook-level argument_specs](open/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | S    | —          |
 | T-156 | [with_<lookup> to loop: modernization, with autofix only where it is provably safe](open/T-156-with-lookup-to-loop-modernization-with-autofix-only-where-it.md) | M    | —          |
 | T-163 | [Row 8's remaining cases: judging a file as a playbook when nothing in it says so](open/T-163-row-8-s-remaining-cases-judging-a-file-as-a-playbook-when-no.md) | M    | ~~T-020~~      |
 | T-176 | [Run a dynamic inventory on explicit user command](open/T-176-run-a-dynamic-inventory-on-explicit-user-command.md) | L    | —          |
 | T-180 | [Derive a closed value set from an assert that dominates a use](open/T-180-derive-a-closed-value-set-from-an-assert-that-dominates-a-us.md) | L    | —          |
 | T-181 | [add_host names the loop forms we do not expand leave unreadable](open/T-181-add-host-names-the-loop-forms-we-do-not-expand-leave-unreada.md) | M    | —          |
 | T-190 | [Reading a register from a task that may not have run](open/T-190-reading-a-register-from-a-task-that-may-not-have-run.md) | M    | —          |
-| T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](open/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | M    | —          |
 | T-204 | [An Ansible upgrade mid-session is invisible until restart](open/T-204-an-ansible-upgrade-mid-session-is-invisible-until-restart.md) | M    | —          |
 | T-146 | [Centralize noqa suppression instead of per-rule wiring](open/T-146-centralize-noqa-suppression-instead-of-per-rule-wiring.md) | M    | —          |
 | T-209 | [Model meta/main.yml whole, not just its top-level key names](open/T-209-model-meta-main-yml-whole-not-just-its-top-level-key-names.md) | M    | —          |
@@ -353,6 +347,13 @@ T-021 is now unblocked on that side.
 | T-144 | [Audit base.yml: every setting that touches what we model, routed to its ticket](closed/T-144-audit-base-yml-every-setting-that-touches-what-we-model-rout.md) | done     |
 | T-150 | [File-kind coverage matrix: every YAML kind, its schema, our status](closed/T-150-file-kind-coverage-matrix-every-yaml-kind-its-schema-our-sta.md) | done     |
 | T-170 | [A template in a mapping key that is never rendered](closed/T-170-a-template-in-a-mapping-key-that-is-never-rendered.md) | done     |
+| T-139 | **bug** · [when-item-without-loop fires on files included with a loop](closed/T-139-when-item-without-loop-fires-on-files-included-with-a-loop.md) | done     |
+| T-226 | **bug** · [A variable use inside a block scalar carries the wrong span, so every consumer points at the wrong line](closed/T-226-a-variable-use-inside-a-block-scalar-carries-the-wrong-span.md) | done     |
+| T-246 | **bug** · [An undefined variable passed to default() ahead of another default() is reported undefined, and the chain runs fine](closed/T-246-an-undefined-variable-passed-to-default-ahead-of-another-def.md) | done     |
+| T-175 | **bug** · [Inventory-adjacent group_vars carry the playbook precedence level](closed/T-175-inventory-adjacent-group-vars-carry-the-playbook-precedence.md) | done     |
+| T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](closed/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | done     |
+| T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](closed/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | done     |
+| T-153 | [Playbook .meta files: the playbook-level argument_specs](closed/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | done     |
 
 ## Settled — don't re-derive these
 

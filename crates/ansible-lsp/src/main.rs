@@ -14,6 +14,7 @@ use ansible_core::config::DuplicateDictKey;
 use ansible_core::expressions;
 use ansible_core::fs::{Counting, Fs, StdFs};
 use ansible_core::include_target;
+use ansible_core::validate_argspec;
 use ansible_core::injected;
 use ansible_core::jinja;
 use ansible_core::install::{AnsibleInstall, Version};
@@ -556,6 +557,9 @@ struct Backend {
     state: Arc<State>,
 }
 
+/// T-071's rule id, matched exactly by `# noqa`.
+const UNCONSTRAINED_PATH_VAR: &str = "unconstrained-path-var";
+
 struct Analysis {
     /// The editor's buffers at the moment this analysis was taken (T-199). Held here so the
     /// diagnostics answer from the same text the hover does — the two contradicting each
@@ -574,6 +578,9 @@ struct Analysis {
     /// T-230, computed during analysis for the same reason as `include_targets`: whether an
     /// include's tags lose anything depends on the tags written in the file it brings in.
     untagged_includes: Vec<include_tags::Problem>,
+    /// T-153, computed during analysis for the same reason: the answer is in the playbook's
+    /// sibling `.meta` file, read through the scan cache that is only live here.
+    argspec: Vec<validate_argspec::Site>,
 }
 
 /// Per-phase time accumulated across a workspace scan (T-074). Sums, not per-file — the
@@ -1175,7 +1182,9 @@ impl Backend {
             &inner,
         );
 
-        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets, is_role_metadata, untagged_includes })
+        let argspec = validate_argspec::sites(&nodes, &doc.text, path, &scan);
+
+        Some(Analysis { open: open.clone(), doc, nodes, ctx, refs, include_targets, is_role_metadata, untagged_includes, argspec })
     }
 
     /// Warn only on literal paths that resolved to nothing. Templated values and
@@ -1651,6 +1660,57 @@ impl Backend {
         // T-110 rows 5 and 23: the file an `import_tasks:`/`include_tasks:` points at is empty,
         // or is not a list of tasks. Anchored on the reference here, since the file at fault
         // may not be open.
+        // T-153: `validate_argspec:` naming a spec its playbook's `.meta` file does not have,
+        // or a meta file that is not there. A load error, so an ERROR on every core.
+        let argspec: Vec<Diagnostic> = a
+            .argspec
+            .iter()
+            .filter_map(|s| match &s.outcome {
+                validate_argspec::Outcome::Fault(m) => Some((s.value, m)),
+                validate_argspec::Outcome::Found { .. } => None,
+            })
+            .filter(|(span, _)| !a.doc.is_suppressed(span.start, validate_argspec::RULE_ID))
+            .map(|(span, m)| Diagnostic {
+                range: range_of(span),
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(validate_argspec::RULE_ID.into())),
+                message: m.clone(),
+                ..Default::default()
+            })
+            .collect();
+
+        // T-071: a templated `include_tasks` whose glob found files implies the values its
+        // variable must take, and nothing states them. INFORMATION, never a warning: correct
+        // code trips it — a caller, an `assert` or a `choices:` may well constrain the value,
+        // and none of those is read. Measured on 2.21.2 for `include_tasks` only: a value with
+        // no matching directory fails the task with "Could not find or access".
+        let unconstrained: Vec<Diagnostic> = a
+            .refs
+            .iter()
+            .filter(|(r, res)| {
+                r.kind == ReferenceKind::IncludeTasks
+                    && res.skip_reason == Some(SkipReason::Templated)
+                    && !a.doc.is_suppressed(r.span.start, UNCONSTRAINED_PATH_VAR)
+            })
+            .filter_map(|(r, res)| {
+                let (var, values) = ansible_core::glob::implied_values(&r.value, &res.targets)?;
+                let list = values.iter().map(|v| format!("`{v}`")).collect::<Vec<_>>().join(", ");
+                Some(Diagnostic {
+                    range: range_of(r.span),
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    source: Some("ansible-lsp".into()),
+                    code: Some(NumberOrString::String(UNCONSTRAINED_PATH_VAR.into())),
+                    message: format!(
+                        "`{var}` must be one of {list} — the only values for which `{}` exists; \
+                         nothing here constrains it",
+                        r.value
+                    ),
+                    ..Default::default()
+                })
+            })
+            .collect();
+
         let bad_targets: Vec<Diagnostic> = a
             .include_targets
             .iter()
@@ -1942,6 +2002,8 @@ impl Backend {
             .chain(unloadable)
             .chain(bad_vars_files)
             .chain(bad_targets)
+            .chain(argspec)
+            .chain(unconstrained)
             .chain(redundant_role_vars)
             .collect()
     }
@@ -2868,6 +2930,8 @@ impl Backend {
                         .with_inventory(inv.to_vec())
                         .with_install(install.cloned());
                     Self::host_key_defs_at(doc, nodes, pos, path, &scan)
+                        // Or on a play's `validate_argspec:` value (T-153).
+                        .or_else(|| Self::argspec_def_at(doc, nodes, pos, path, &scan))
                 });
         };
         let ctx = FileContext::discover(path).with_install(install.cloned());
@@ -2878,6 +2942,32 @@ impl Backend {
         }
         let locations: Vec<Location> = res.targets.iter().filter_map(|t| location_at(t)).collect();
         (!locations.is_empty()).then_some(locations)
+    }
+
+    /// The spec a play's `validate_argspec:` names, at its key in the `.meta` file — the same
+    /// [`validate_argspec::sites`] answer the diagnostic reads, so the two cannot disagree on
+    /// which file or which entry.
+    fn argspec_def_at(
+        doc: &Document,
+        nodes: &[Node],
+        pos: Position,
+        path: &Path,
+        scan: &ScanCache,
+    ) -> Option<Vec<Location>> {
+        let byte = doc.lsp_to_byte(pos.line, pos.character);
+        validate_argspec::sites(nodes, &doc.text, path, scan).into_iter().find_map(|s| {
+            if byte < s.value.start || byte > s.value.end {
+                return None;
+            }
+            let validate_argspec::Outcome::Found { meta, entry } = s.outcome else { return None };
+            let target = Document::new(scan.source(&meta)?.text.to_string());
+            let (sl, sc) = target.byte_to_lsp(entry.start);
+            let (el, ec) = target.byte_to_lsp(entry.end);
+            Some(vec![Location {
+                uri: Url::from_file_path(&meta).ok()?,
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            }])
+        })
     }
 
     /// Go to Implementation: the file a module task is dispatched to, which for a module with
@@ -3286,7 +3376,11 @@ fn source_label(s: vars::VarSource) -> &'static str {
         GroupVarsAll => "group_vars/all",
         GroupVars => "group_vars",
         HostVars => "host_vars",
-        Inventory => "inventory",
+        InventoryGroupVarsAll => "inventory group_vars/all",
+        InventoryGroupVars => "inventory group_vars",
+        InventoryHostVars => "inventory host_vars",
+        InventoryGroup => "inventory group var",
+        InventoryHost => "inventory host var",
         IncludeVars => "include_vars",
         RoleParams => "role param",
         RoleEntryVars => "roles: entry vars",
@@ -3306,7 +3400,8 @@ fn def_value(d: &vars::Located, text: &str) -> Option<String> {
     use vars::VarSource::*;
     match d.source {
         PlayVars | BlockVars | TaskVars | VarsFiles | RoleDefaults | RoleVars
-        | GroupVarsAll | GroupVars | HostVars | Inventory | IncludeVars | RoleParams
+        | GroupVarsAll | GroupVars | HostVars | InventoryGroupVarsAll | InventoryGroupVars
+        | InventoryHostVars | InventoryGroup | InventoryHost | IncludeVars | RoleParams
         | RoleEntryVars | AddHost | ApplyVars => {
             let raw = d.span.slice(text).trim();
             if raw.is_empty() {
@@ -4782,7 +4877,7 @@ impl Backend {
     ) {
         use ansible_core::parse::Node;
         match node {
-            Node::Scalar { value, span } => {
+            Node::Scalar { value, span, .. } => {
                 // A block scalar's value is not its source text — `>` and `|` strip the
                 // indicator and the indent, and a `\"` escape shortens the value — so
                 // `span.start + offset` would paint the wrong columns. Measured: for `|` the
@@ -5904,6 +5999,7 @@ mod tests {
                 "action and local_action are mutually exclusive",
                 "conflicting action statements: debug, frobnicate",
                 "conflicting action statements: ansible.builtin.debug, nmae",
+                "unexpected parameter type in action: a list",
                 "no module/action detected in task.",
                 "no module/action detected in task.",
                 "Found conflicting import_playbook actions: ansible.builtin.import_playbook, \
@@ -8121,6 +8217,75 @@ mod tests {
                 .collect();
             assert!(bad.is_empty(), "{}: {bad:?}", path.display());
         }
+    }
+
+    /// T-139's fixture: one `when-item-without-loop` on the `when:` of each BAD task, none on
+    /// the SILENCED or GOOD ones.
+    #[test]
+    fn the_item_conditions_demo_matches_its_annotations_exactly() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let path = std::path::Path::new("../../demo/item_conditions.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let got: Vec<u32> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "when-item-without-loop"))
+            .map(|d| d.range.start.line)
+            .collect();
+        let mut expected = Vec::new();
+        let mut bad = false;
+        for (i, l) in text.lines().enumerate() {
+            let l = l.trim_start();
+            if l.starts_with("- name:") {
+                bad = l.contains("\"BAD");
+            } else if l.starts_with("when:") && bad {
+                expected.push(i as u32);
+            }
+        }
+        assert_eq!(expected.len(), 2, "the fixture lost rows");
+        assert_eq!(got, expected, "diagnostics and annotations disagree");
+    }
+
+    /// T-139's false-positive gate. Every task file in the demo is silent by construction;
+    /// this is what catches a playbook that starts tripping the rule.
+    #[test]
+    fn every_other_demo_file_is_free_of_item_without_loop() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files {
+            if path.file_name().is_some_and(|n| n == "item_conditions.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let lines: Vec<u32> = super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "when-item-without-loop"))
+                .map(|d| d.range.start.line)
+                .collect();
+            assert!(lines.is_empty(), "{}: lines {lines:?}", path.display());
+        }
+    }
+
+    /// T-139's server-level answer: the same unlooped `item` condition is reported in a play
+    /// and silent in a task file, where a looped include may bind it.
+    #[test]
+    fn item_without_loop_is_judged_in_a_playbook_and_not_in_a_task_file() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let dir = std::env::temp_dir().join("ansible-lsp-t139");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fires = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a).iter().any(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "when-item-without-loop"),
+            )
+        };
+        assert!(fires("play.yml", "- hosts: all\n  tasks:\n    - command: x\n      when: item.copy_to is defined\n"));
+        assert!(!fires("tasks.yml", "- command: x\n  when: item.copy_to is defined\n"));
     }
 
     /// T-185's fixture, both directions: every HINT row in the demo role carries exactly one
@@ -10987,6 +11152,43 @@ mod tests {
         );
     }
 
+    /// T-200, the same consumer: a host whose name is also a group's is a group position, so
+    /// the key on its line is eaten and must not substitute, while the ordinary `control` on
+    /// the same line still does. The fixture is T-178's host fixture with the host renamed to
+    /// its group's name, which is the only difference between a substitution and none.
+    #[test]
+    fn group_priority_on_a_host_named_like_its_group_never_substitutes_a_path() {
+        use ansible_core::testing::project;
+        const PLAY: &str = concat!(
+            "- hosts: all\n",
+            "  vars_files:\n",
+            "    - \"vars/{{ ansible_group_priority }}.yml\"\n",
+            "    - \"vars/{{ control }}.yml\"\n",
+        );
+        let root = project(
+            "t200-path-collision",
+            "[defaults]\ninventory = inv.ini\n",
+            &[
+                ("inv.ini", "[web]\nweb ansible_group_priority=10 control=10\n"),
+                ("vars/10.yml", "x: 1\n"),
+                ("play.yml", PLAY),
+            ],
+        );
+        let hover_on = |name: &str| -> String {
+            let path = root.join("play.yml");
+            let doc = super::Document::new(PLAY.to_string());
+            let nodes = doc.parse().expect("fixture parses");
+            let byte = PLAY.find(&format!("vars/{{{{ {name} }}}}.yml")).expect("fixture carries the path") + 1;
+            super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None, None)
+                .map(|h| h.0)
+                .unwrap_or_default()
+        };
+        let priority = hover_on("ansible_group_priority");
+        assert!(!priority.contains("`ansible_group_priority` = "), "must not substitute:\n{priority}");
+        let control = hover_on("control");
+        assert!(control.contains("`control` = `10`") && control.contains("inv.ini"), "the control:\n{control}");
+    }
+
     // ---- T-199: an unsaved buffer in a *second* file -------------------------------------
     //
     // `shared_port` is defined in `vars/x.yml` and used from `play.yml`, so every answer
@@ -11275,6 +11477,176 @@ mod tests {
                 ),
             ],
         )
+    }
+
+    /// T-175: hover names which copy a definition is, and picks the playbook's over the
+    /// inventory's — measured on 2.21.2, playbook `group_vars/all` (5) beats the inventory's
+    /// (4).
+    #[tokio::test]
+    async fn hover_tells_inventory_group_vars_from_playbook_group_vars() {
+        let root = ansible_core::testing::project(
+            "t175-hover",
+            "[defaults]\ninventory = inv/hosts.ini\n",
+            &[
+                ("inv/hosts.ini", "[web]\nh1\n"),
+                ("inv/group_vars/all.yml", "only_inv: from_inv\nin_both: inv_copy\n"),
+                ("group_vars/all.yml", "in_both: pb_copy\n"),
+                ("play.yml", "- hosts: web\n  tasks:\n    - debug: {msg: \"{{ only_inv }} {{ in_both }}\"}\n"),
+            ],
+        );
+        let s = T199Server::over(root);
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        let only = s.hover_in("play.yml", "{{ only_inv", 4).await.expect("a hover");
+        assert!(only.contains("- inventory group_vars/all ·"), "{only}");
+
+        let both = s.hover_in("play.yml", "{{ in_both", 4).await.expect("a hover");
+        let line = |v: &str| both.lines().find(|l| l.contains(v)).unwrap_or_else(|| panic!("{v}: {both}")).to_string();
+        assert!(line("pb_copy").starts_with("- group_vars/all ·"), "{both}");
+        assert!(line("pb_copy").ends_with("← effective"), "{both}");
+        assert!(line("inv_copy").starts_with("- inventory group_vars/all ·"), "{both}");
+        assert!(!line("inv_copy").contains("effective"), "{both}");
+
+        assert_eq!(
+            s.def_in("play.yml", "{{ in_both", 4).await,
+            vec![("group_vars/all.yml".to_string(), "pb_copy".to_string())]
+        );
+    }
+
+    /// T-153 at the server: the fault is an ERROR on the `validate_argspec:` value, `# noqa`
+    /// silences it by rule id, and the `.meta.yml` beside the playbook is not diagnosed itself.
+    #[test]
+    fn validate_argspec_naming_a_missing_spec_is_an_error_on_the_value() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let play = "- hosts: localhost\n  validate_argspec: nope\n  tasks: []\n";
+        let meta = "argument_specs:\n  myspec:\n    options: {}\n";
+        let root = ansible_core::testing::project("t153-diag", "[defaults]\n", &[("site.yml", play), ("site.meta.yml", meta)]);
+        let ours = |rel: &str, text: &str| -> Vec<tower_lsp::lsp_types::Diagnostic> {
+            let path = root.join(rel).canonicalize().unwrap();
+            let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == super::validate_argspec::RULE_ID))
+                .collect()
+        };
+        let got = ours("site.yml", play);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(got[0].message.contains("No argument spec named 'nope' in site.meta.yml"), "{}", got[0].message);
+        assert_eq!((got[0].range.start.line, got[0].range.start.character), (1, 20), "on the value");
+
+        let silenced = "- hosts: localhost\n  validate_argspec: nope  # noqa: validate-argspec\n  tasks: []\n";
+        assert!(ours("site.yml", silenced).is_empty());
+        let meta_diags = {
+            let path = root.join("site.meta.yml").canonicalize().unwrap();
+            let a = super::Backend::analyze_text(meta.to_string(), &path).unwrap();
+            super::Backend::diagnostics_of(&a)
+        };
+        assert!(meta_diags.is_empty(), "the meta file itself: {meta_diags:?}");
+    }
+
+    #[tokio::test]
+    async fn definition_on_validate_argspec_lands_on_the_spec_entry() {
+        let play = "- hosts: localhost\n  validate_argspec: myspec\n  tasks: []\n";
+        let meta = "argument_specs:\n  other:\n    options: {}\n  myspec:\n    options: {}\n";
+        let s = T199Server::over(ansible_core::testing::project(
+            "t153-def",
+            "[defaults]\n",
+            &[("site.yml", play), ("site.meta.yml", meta)],
+        ));
+        s.scan().await;
+        s.open_disk("site.yml").await;
+        assert_eq!(
+            s.def_in("site.yml", "myspec", 2).await,
+            vec![("site.meta.yml".to_string(), "myspec".to_string())]
+        );
+    }
+
+    const T226_PLAY: &str = concat!(
+        "- hosts: all\n",
+        "  vars:\n",
+        "    blk_port: 8080\n",
+        "  tasks:\n",
+        "    - name: t\n",
+        "      ansible.builtin.copy:\n",
+        "        dest: /tmp/x\n",
+        "        content: |\n",
+        "          line one\n",
+        "          line two\n",
+        "          port={{ blk_port }} gone={{ blk_missing }}\n",
+    );
+
+    /// T-226, one test per consumer of a use's span. Before the fix each use in the block
+    /// scalar sat two lines up, so the cursor on the written name found nothing.
+    #[tokio::test]
+    async fn hover_answers_on_a_use_inside_a_block_scalar() {
+        let s = T199Server::over(ansible_core::testing::project("t226-hover", "[defaults]\n", &[("play.yml", T226_PLAY)]));
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        let md = s.hover_in("play.yml", "{{ blk_port }}", 4).await.expect("a hover on the written name");
+        assert!(md.contains("8080"), "{md}");
+    }
+
+    #[tokio::test]
+    async fn definition_answers_on_a_use_inside_a_block_scalar() {
+        let s = T199Server::over(ansible_core::testing::project("t226-def", "[defaults]\n", &[("play.yml", T226_PLAY)]));
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        assert_eq!(
+            s.def_in("play.yml", "{{ blk_port }}", 4).await,
+            vec![("play.yml".to_string(), "8080".to_string())]
+        );
+    }
+
+    #[test]
+    fn var_undefined_in_a_block_scalar_is_anchored_on_the_name() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let root = ansible_core::testing::project("t226-diag", "[defaults]\n", &[("play.yml", T226_PLAY)]);
+        let path = root.join("play.yml").canonicalize().unwrap();
+        let a = super::Backend::analyze_text(T226_PLAY.to_string(), &path).unwrap();
+        let got: Vec<_> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+            .map(|d| d.range)
+            .collect();
+        let doc = super::Document::new(T226_PLAY.to_string());
+        let at = T226_PLAY.find("blk_missing").unwrap();
+        let (l, c) = doc.byte_to_lsp(at);
+        let (el, ec) = doc.byte_to_lsp(at + "blk_missing".len());
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(
+            (got[0].start.line, got[0].start.character, got[0].end.line, got[0].end.character),
+            (l, c, el, ec)
+        );
+    }
+
+    /// T-226's flow half: an escape or a folded line shifts everything after it the same way
+    /// a block scalar's indentation does.
+    #[test]
+    fn var_undefined_after_an_escape_or_a_fold_is_anchored_on_the_name() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let play = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - debug: { msg: \"a\\tb\\n\\u00e9 {{ esc_missing }}\" }\n",
+            "    - debug:\n",
+            "        msg: wrapped\n",
+            "          over {{ fold_missing }}\n",
+        );
+        let root = ansible_core::testing::project("t226-flow", "[defaults]\n", &[("play.yml", play)]);
+        let path = root.join("play.yml").canonicalize().unwrap();
+        let a = super::Backend::analyze_text(play.to_string(), &path).unwrap();
+        let doc = super::Document::new(play.to_string());
+        let got: Vec<&str> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "var-undefined"))
+            .map(|d| {
+                let s = doc.lsp_to_byte(d.range.start.line, d.range.start.character);
+                let e = doc.lsp_to_byte(d.range.end.line, d.range.end.character);
+                &play[s..e]
+            })
+            .collect();
+        assert_eq!(got, ["esc_missing", "fold_missing"]);
     }
 
     /// Box 1: the included file's use resolves to the `apply: vars:` entry at its call site,
@@ -11745,7 +12117,7 @@ mod tests {
             ("group_vars", "t236-src-gv", format!("{HEAD}{ROLE}"), vec![("group_vars/g.yml", "flavor: web\n")]),
             ("host_vars", "t236-src-hv", format!("{HEAD}{ROLE}"), vec![("host_vars/localhost.yml", "flavor: web\n")]),
             (
-                "inventory",
+                "inventory group var",
                 "t236-src-inv",
                 format!("{HEAD}{ROLE}"),
                 vec![("inv/hosts", "[g]\nlocalhost ansible_connection=local\n\n[all:vars]\nflavor=web\n")],
@@ -11875,10 +12247,10 @@ mod tests {
             "{PLAY_HEAD}  tasks:\n    - command: echo web\n      register: flavor\n    - import_role: {{name: \"{{{{ flavor.stdout }}}}\"}}\n"
         );
         let cases: Vec<(&str, &str, String, Vec<(&str, &str)>)> = vec![
-            ("group_vars/all", "t236-ir-gva-inv", tasks(""), vec![("inv/group_vars/all.yml", "flavor: web\n")]),
+            ("inventory group_vars/all", "t236-ir-gva-inv", tasks(""), vec![("inv/group_vars/all.yml", "flavor: web\n")]),
             ("group_vars/all", "t236-ir-gva-pb", tasks(""), vec![("group_vars/all.yml", "flavor: web\n")]),
-            ("host_vars", "t236-ir-hv", tasks(""), vec![("inv/host_vars/localhost.yml", "flavor: web\n")]),
-            ("inventory", "t236-ir-inv", tasks(""), vec![("inv/hosts", allvars)]),
+            ("inventory host_vars", "t236-ir-hv", tasks(""), vec![("inv/host_vars/localhost.yml", "flavor: web\n")]),
+            ("inventory group var", "t236-ir-inv", tasks(""), vec![("inv/hosts", allvars)]),
             ("include_vars", "t236-ir-iv", tasks("    - include_vars: iv.yml\n"), vec![("iv.yml", "flavor: web\n")]),
             ("add_host", "t236-ir-ah", tasks("    - add_host: {name: localhost, flavor: web}\n"), vec![]),
             ("set_fact", "t236-ir-sf", tasks("    - set_fact: {flavor: web}\n"), vec![]),

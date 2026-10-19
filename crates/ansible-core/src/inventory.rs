@@ -23,6 +23,7 @@
 //! because ansible reads them (T-225, [`source_dirs`]), and the status bar says the file is
 //! missing in ansible's own words rather than saying nothing.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::AnsibleConfig;
@@ -90,6 +91,9 @@ pub enum Kind {
 pub struct InventoryVar {
     pub name: String,
     pub span: Span,
+    /// Written on a host rather than a group: an INI host line, or a host's own mapping in
+    /// YAML or TOML. One published precedence level apart, 8 against 3 (T-175).
+    pub host: bool,
 }
 
 /// The key ansible reads as a merge-order control instead of storing as a variable — in a
@@ -108,18 +112,29 @@ pub(crate) const GROUP_PRIORITY: &str = "ansible_group_priority";
 /// positions, so a filter one level down would drop the key from hosts too, which is the
 /// mistake T-178 originally prescribed.
 ///
-/// **Known limit.** The position is not the last word: all three plugins set host vars through
-/// `InventoryData.set_variable` (`inventory/data.py:233-245`), which dispatches on the *name* —
-/// `if entity in self.groups` is tested **before** hosts. So a host sharing a name with a group
-/// has its host-line vars applied to the Group, which eats the key. Measured on 2.21.3, all
-/// three formats: ansible warns `Found both group and host with same name: web` and the key is
-/// absent, while a non-colliding host in the same file keeps it. We still report it there.
-/// Closing that needs the inventory's group-name set, which no reader has — they deliberately
-/// return hosts and not group names, and a directory source spreads groups across files.
+/// The position is not the last word for a host: all three plugins set host vars through
+/// `InventoryData.set_variable` (`inventory/data.py:233-245`), which dispatches on the *name*,
+/// testing `if entity in self.groups` **before** hosts. So a host sharing a name with a group
+/// has its host-line vars applied to the Group ([`GroupPosition::of_host`], T-200).
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum GroupPosition {
     Yes,
     No,
+}
+
+impl GroupPosition {
+    /// A host's own variables, unless its name is also a group's. Measured on 2.21.2, INI:
+    /// every variable on the colliding host `web`'s line reaches `node1`, another host in the
+    /// group, and loses to inventory `group_vars/all` the way a group var does, while
+    /// `ansible_group_priority` there is eaten. A non-colliding host in the same file keeps
+    /// all of it as host vars. A `:port` suffix is not part of the name.
+    pub(crate) fn of_host(name: &str, groups: &HashSet<String>) -> Self {
+        let bare = match name.rsplit_once(':') {
+            Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+            _ => name,
+        };
+        if groups.contains(bare) { Self::Yes } else { Self::No }
+    }
 }
 
 impl GroupPosition {
@@ -353,6 +368,11 @@ pub fn classify(path: &Path, text: &str, nodes: &[Node], fs: &dyn Fs) -> Kind {
 /// inline tables, dotted keys. A line reader would cover a subset and would have to detect
 /// everything outside it to stay quiet, which is most of the way to parsing anyway.
 pub fn toml_vars(text: &str) -> Vec<InventoryVar> {
+    toml_vars_in(text, &toml_groups(text).into_iter().collect())
+}
+
+/// [`toml_vars`], with the group names of the whole inventory, which may span files.
+pub fn toml_vars_in(text: &str, groups: &HashSet<String>) -> Vec<InventoryVar> {
     let Ok(doc) = toml_edit::Document::parse(text) else {
         return Vec::new();
     };
@@ -363,10 +383,26 @@ pub fn toml_vars(text: &str) -> Vec<InventoryVar> {
             collect_toml(vars, text, GroupPosition::Yes, &mut out);
         }
         if let Some(hosts) = group.get("hosts").and_then(|i| i.as_table_like()) {
-            for (_host, entry) in hosts.iter() {
+            for (host, entry) in hosts.iter() {
                 if let Some(host_vars) = entry.as_table_like() {
-                    collect_toml(host_vars, text, GroupPosition::No, &mut out);
+                    collect_toml(host_vars, text, GroupPosition::of_host(host, groups), &mut out);
                 }
+            }
+        }
+    }
+    out
+}
+
+/// Every group a TOML inventory names: its top-level tables and their `children`, plus the
+/// `all` and `ungrouped` every inventory has.
+pub fn toml_groups(text: &str) -> Vec<String> {
+    let mut out = vec!["all".to_string(), "ungrouped".to_string()];
+    let Ok(doc) = toml_edit::Document::parse(text) else { return out };
+    for (name, item) in doc.as_table().iter() {
+        out.push(name.to_string());
+        if let Some(children) = item.as_table_like().and_then(|g| g.get("children")) {
+            if let Some(list) = children.as_array() {
+                out.extend(list.iter().filter_map(|v| v.as_str()).map(str::to_owned));
             }
         }
     }
@@ -397,7 +433,7 @@ fn collect_toml(
             start += 1;
             end -= 1;
         }
-        out.push(InventoryVar { name: name.to_string(), span: Span { start, end } });
+        out.push(InventoryVar { name: name.to_string(), span: Span { start, end }, host: position == GroupPosition::No });
     }
 }
 
@@ -587,41 +623,12 @@ pub fn toml_hosts(text: &str) -> Option<Vec<String>> {
 ///
 /// Group and host names themselves are not variables and are not returned; only the leaves.
 pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
-    fn group(node: &Node, out: &mut Vec<InventoryVar>) {
-        for (k, v) in node.entries() {
-            match k.as_str() {
-                Some("vars") => bindings(v, GroupPosition::Yes, out),
-                Some("hosts") => {
-                    // Each entry is a host; its mapping is that host's variables. A host
-                    // with no vars is a null value, which has no entries and is skipped.
-                    for (_, hv) in v.entries() {
-                        bindings(hv, GroupPosition::No, out);
-                    }
-                }
-                Some("children") => {
-                    for (_, gv) in v.entries() {
-                        group(gv, out);
-                    }
-                }
-                // Anything else is skipped, not walked. Ansible warns "Skipping unexpected
-                // key (x) in group (g), only vars, children and hosts are valid"
-                // (`yaml.py::_parse_group`) — so a typo like `var:` for `vars:` must define
-                // nothing. Walking it invented names, and an invented name is one
-                // `var-undefined` then stops reporting.
-                _ => {}
-            }
-        }
-    }
-    fn bindings(node: &Node, position: GroupPosition, out: &mut Vec<InventoryVar>) {
-        for (k, v) in node.entries() {
-            if let Some(name) = k.as_str() {
-                if position.consumes(name) {
-                    continue;
-                }
-                out.push(InventoryVar { name: name.to_string(), span: v.span() });
-            }
-        }
-    }
+    yaml_vars_in(nodes, &yaml_groups(nodes).into_iter().collect())
+}
+
+/// [`yaml_vars`], with the group names of the whole inventory, which may span files.
+pub fn yaml_vars_in(nodes: &[Node], groups: &HashSet<String>) -> Vec<InventoryVar> {
+    let group = |node: &Node, out: &mut Vec<InventoryVar>| yaml_group_vars(node, groups, out);
     let mut out = Vec::new();
     for n in nodes {
         // Every top-level key is a group name, whatever it is spelled — a file whose first
@@ -634,10 +641,96 @@ pub fn yaml_vars(nodes: &[Node]) -> Vec<InventoryVar> {
     out
 }
 
+/// Every group a YAML inventory names: its top-level keys and every `children:` key under
+/// them, plus the `all` and `ungrouped` every inventory has.
+pub fn yaml_groups(nodes: &[Node]) -> Vec<String> {
+    fn walk(node: &Node, out: &mut Vec<String>) {
+        for (name, g) in node.entries() {
+            if let Some(n) = name.as_str() {
+                out.push(n.to_string());
+            }
+            if let Some(children) = g.get("children") {
+                walk(children, out);
+            }
+        }
+    }
+    let mut out = vec!["all".to_string(), "ungrouped".to_string()];
+    for n in nodes {
+        walk(n, &mut out);
+    }
+    out
+}
+
+fn yaml_group_vars(node: &Node, groups: &HashSet<String>, out: &mut Vec<InventoryVar>) {
+    fn bindings(node: &Node, position: GroupPosition, out: &mut Vec<InventoryVar>) {
+        for (k, v) in node.entries() {
+            if let Some(name) = k.as_str() {
+                if position.consumes(name) {
+                    continue;
+                }
+                out.push(InventoryVar { name: name.to_string(), span: v.span(), host: position == GroupPosition::No });
+            }
+        }
+    }
+    for (k, v) in node.entries() {
+        match k.as_str() {
+            Some("vars") => bindings(v, GroupPosition::Yes, out),
+            Some("hosts") => {
+                // Each entry is a host; its mapping is that host's variables. A host
+                // with no vars is a null value, which has no entries and is skipped.
+                for (h, hv) in v.entries() {
+                    let position = h.as_str().map_or(GroupPosition::No, |h| GroupPosition::of_host(h, groups));
+                    bindings(hv, position, out);
+                }
+            }
+            Some("children") => {
+                for (_, gv) in v.entries() {
+                    yaml_group_vars(gv, groups, out);
+                }
+            }
+            // Anything else is skipped, not walked. Ansible warns "Skipping unexpected
+            // key (x) in group (g), only vars, children and hosts are valid"
+            // (`yaml.py::_parse_group`) — so a typo like `var:` for `vars:` must define
+            // nothing. Walking it invented names, and an invented name is one
+            // `var-undefined` then stops reporting.
+            _ => {}
+        }
+    }
+}
+
 /// Every variable an INI inventory defines: a `[group:vars]` section's `name=value` pairs,
 /// and the inline `var=value` on a host line. `[group:children]` names groups, not
 /// variables, and contributes none.
 pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
+    ini_vars_in(text, &ini_groups(text).into_iter().collect())
+}
+
+/// Every group an INI inventory names: each section header's group, and each group listed
+/// under a `:children` section, plus the `all` and `ungrouped` every inventory has.
+pub fn ini_groups(text: &str) -> Vec<String> {
+    let mut out = vec!["all".to_string(), "ungrouped".to_string()];
+    let mut children = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[').and_then(|h| h.split(']').next()) {
+            children = header.ends_with(":children");
+            out.push(header.split(':').next().unwrap_or(header).to_string());
+            continue;
+        }
+        if children {
+            if let Some((s, e)) = host_tokens(trimmed, 0).into_iter().next() {
+                out.push(trimmed[s..e].to_string());
+            }
+        }
+    }
+    out
+}
+
+/// [`ini_vars`], with the group names of the whole inventory, which may span files.
+pub fn ini_vars_in(text: &str, groups: &HashSet<String>) -> Vec<InventoryVar> {
     /// What the lines under the current header are. Three states, not a `is_vars` bool:
     /// `:children` is neither a vars section nor a host list, and sharing `false` with
     /// `Hosts` meant its lines went to the host-line reader — harmless for a bare group
@@ -690,13 +783,17 @@ pub fn ini_vars(text: &str) -> Vec<InventoryVar> {
             continue;
         }
         // A host line: the first token is the host name, the rest are `k=v` pairs.
+        let mut position = GroupPosition::No;
         for (i, (tok_at, tok_end)) in host_tokens(trimmed, base).into_iter().enumerate() {
+            let tok = &text[tok_at..tok_end];
             if i == 0 {
+                position = GroupPosition::of_host(tok, groups);
                 continue;
             }
-            let tok = &text[tok_at..tok_end];
             if let Some(v) = pair(tok, tok_at) {
-                out.push(v);
+                if !position.consumes(&v.name) {
+                    out.push(InventoryVar { host: position == GroupPosition::No, ..v });
+                }
             }
         }
     }
@@ -808,7 +905,7 @@ fn pair(s: &str, base: usize) -> Option<InventoryVar> {
         start += 1;
         end -= 1;
     }
-    Some(InventoryVar { name: name.to_string(), span: Span { start: base + start, end: base + end } })
+    Some(InventoryVar { name: name.to_string(), span: Span { start: base + start, end: base + end }, host: false })
 }
 
 #[cfg(test)]
@@ -1477,6 +1574,33 @@ mod tests {
             names(&ini_vars(src)),
             ["ansible_group_priority", "ungrouped_var", "ansible_group_priority", "host_var"]
         );
+    }
+
+    #[test]
+    fn a_host_named_like_a_group_is_a_group_position_in_every_reader() {
+        // T-200. `web` is both the group and a host in it, `node1` the non-colliding control
+        // in the same group. Measured on 2.21.2 (INI) and 2.21.3 (all three for the priority
+        // key): the colliding host's line is the group's, so `ansible_group_priority` there is
+        // eaten and an ordinary variable is a group variable; `node1` keeps both as host vars.
+        let got = |vars: Vec<InventoryVar>| -> Vec<(String, bool)> {
+            vars.into_iter().map(|v| (v.name, v.host)).collect()
+        };
+        let want = [
+            ("colvar".to_string(), false),
+            ("ansible_group_priority".to_string(), true),
+            ("ctl".to_string(), true),
+        ];
+        let ini = "[web]\nweb ansible_group_priority=10 colvar=1\nnode1 ansible_group_priority=20 ctl=2\n";
+        assert_eq!(got(ini_vars(ini)), want, "ini");
+        let yaml = "web:\n  hosts:\n    web:\n      ansible_group_priority: 10\n      colvar: 1\n    \
+                    node1:\n      ansible_group_priority: 20\n      ctl: 2\n";
+        let nodes = Document::new(yaml.to_string()).parse().unwrap();
+        assert_eq!(got(yaml_vars(&nodes)), want, "yaml");
+        let toml = "[web.hosts.web]\nansible_group_priority = 10\ncolvar = 1\n\
+                    [web.hosts.node1]\nansible_group_priority = 20\nctl = 2\n";
+        assert_eq!(got(toml_vars(toml)), want, "toml");
+        // A port is not part of the host's name.
+        assert_eq!(got(ini_vars("[web]\nweb:2222 colvar=1\n")), [("colvar".to_string(), false)]);
     }
 
     /// Nesting does not change the answer: a `vars:` under `children:` is still a group

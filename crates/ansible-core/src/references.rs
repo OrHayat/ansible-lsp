@@ -220,7 +220,7 @@ pub fn meta_dependencies(nodes: &[Node]) -> Vec<Reference> {
                 Node::Mapping { .. } => item.get("role").or_else(|| item.get("name")),
                 _ => None,
             };
-            if let Some(Node::Scalar { value, span }) = target {
+            if let Some(Node::Scalar { value, span, .. }) = target {
                 out.push(Reference::new(ReferenceKind::Role, value, *span));
             }
         }
@@ -476,21 +476,21 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
                 Node::Mapping { .. } => a.args.get("file"),
                 _ => None,
             };
-            if let Some(Node::Scalar { value, span }) = target {
+            if let Some(Node::Scalar { value, span, .. }) = target {
                 out.push(Reference::new(kind, value, *span));
             }
         }
 
         // `import_playbook` as a task key is unusual, but keep parity with the old walk.
         "import_playbook" => {
-            if let Node::Scalar { value, span } = &a.args {
+            if let Node::Scalar { value, span, .. } = &a.args {
                 out.push(Reference::new(ReferenceKind::ImportPlaybook, value, *span));
             }
         }
 
         "include_role" | "import_role" => {
             let name = match a.args.get("name") {
-                Some(Node::Scalar { value, span }) => Some((value.clone(), *span)),
+                Some(Node::Scalar { value, span, .. }) => Some((value.clone(), *span)),
                 _ => None,
             };
             let tasks_from = a.args.get("tasks_from");
@@ -499,7 +499,7 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
                 r.has_tasks_from = tasks_from.is_some();
                 out.push(r);
             }
-            if let Some(Node::Scalar { value: from, span }) = tasks_from {
+            if let Some(Node::Scalar { value: from, span, .. }) = tasks_from {
                 let mut r = Reference::new(ReferenceKind::TasksFrom, from, *span);
                 r.role = name.map(|(n, _)| n);
                 out.push(r);
@@ -510,11 +510,11 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
         "template" => {
             let src = match &a.args {
                 // The k=v spelling: `template: src=x.j2 dest=/etc/x`.
-                Node::Scalar { value, span } => crate::splitter::parse_kv(value, false)
+                Node::Scalar { value, span, .. } => crate::splitter::parse_kv(value, false)
                     .ok()
                     .and_then(|kv| kv.get("src").map(|s| (s.to_string(), *span))),
                 Node::Mapping { .. } => match a.args.get("src") {
-                    Some(Node::Scalar { value, span }) => Some((value.clone(), *span)),
+                    Some(Node::Scalar { value, span, .. }) => Some((value.clone(), *span)),
                     _ => None,
                 },
                 _ => None,
@@ -530,7 +530,7 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
             match &a.args {
                 // The bare scalar is a k=v line, not a path: `=` tokens are options
                 // (`dir=` even flips the kind), the non-`=` remainder is the file.
-                Node::Scalar { value, span } => {
+                Node::Scalar { value, span, .. } => {
                     match crate::splitter::parse_kv(value, false) {
                         Ok(kv) => {
                             if let Some(d) = kv.get("dir") {
@@ -553,12 +553,12 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
                     }
                 }
                 Node::Mapping { .. } => {
-                    if let Some(Node::Scalar { value: d, span }) = a.args.get("dir") {
+                    if let Some(Node::Scalar { value: d, span, .. }) = a.args.get("dir") {
                         let mut r = Reference::new(ReferenceKind::IncludeVarsDir, d, *span);
                         r.include_vars =
                             crate::include_vars::params_from_args(&a.args).map(Box::new);
                         out.push(r);
-                    } else if let Some(Node::Scalar { value, span }) = a.args.get("file") {
+                    } else if let Some(Node::Scalar { value, span, .. }) = a.args.get("file") {
                         out.push(Reference::new(ReferenceKind::IncludeVars, value, *span));
                     }
                 }

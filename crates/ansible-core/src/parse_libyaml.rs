@@ -9,7 +9,7 @@
 //! This is the ONLY module allowed to touch `libyaml-safer`, so a version bump stays a
 //! one-file change — the same isolation `parse.rs` once gave saphyr.
 
-use libyaml_safer::{Event, EventData, Parser};
+use libyaml_safer::{Event, EventData, Parser, ScalarStyle};
 
 use crate::parse::{Node, Span};
 
@@ -181,8 +181,12 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
         EventData::Scalar { value, .. } if value.is_empty() && raw.start == raw.end => {
             (Some(Node::Null { span: raw }), i + 1)
         }
-        EventData::Scalar { value, .. } => {
-            (Some(Node::Scalar { value: value.clone(), span: unquote(raw, text) }), i + 1)
+        EventData::Scalar { value, style, .. } => {
+            let lines = match style {
+                ScalarStyle::Literal | ScalarStyle::Folded => block_lines(value, raw, text),
+                _ => flow_lines(value, raw, text, *style),
+            };
+            (Some(Node::Scalar { value: value.clone(), span: unquote(raw, text), lines }), i + 1)
         }
         EventData::SequenceStart { .. } => {
             let mut items = Vec::new();
@@ -216,6 +220,173 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
     }
 }
 
+/// Where each content line of a `|` or `>` scalar starts, in its value and in the document.
+///
+/// Matched line by line against the value rather than re-deriving YAML's folding and
+/// chomping rules: each content line, indentation stripped, appears verbatim in the value,
+/// and only line-break separators (`\n`, or the space `>` folds one into) lie between them.
+/// The indentation is the first content line's, less the spaces the value itself keeps
+/// there, which covers an explicit indentation indicator without knowing the parent's.
+/// `None` if anything fails to line up, so a reader falls back rather than guesses.
+fn block_lines(value: &str, raw: Span, text: &str) -> Option<Box<[(usize, usize)]>> {
+    let src = raw.slice(text);
+    let header = src.find('\n')? + 1;
+    let mut lines = Vec::new();
+    let mut at = raw.start + header;
+    for l in src[header..].split_inclusive('\n') {
+        lines.push((at, l.trim_end_matches(['\n', '\r'])));
+        at += l.len();
+    }
+    let lead = |s: &str| s.len() - s.trim_start_matches(' ').len();
+    let (_, first) = lines.iter().find(|(_, b)| !b.trim().is_empty())?;
+    let indent = lead(first).checked_sub(lead(value.trim_start_matches('\n')))?;
+
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    for (start, body) in lines {
+        if body.trim().is_empty() {
+            continue;
+        }
+        if lead(body) < indent {
+            break;
+        }
+        let content = &body[indent..];
+        while !value[cursor..].starts_with(content) {
+            match value.as_bytes().get(cursor) {
+                Some(b'\n' | b' ') => cursor += 1,
+                _ => return None,
+            }
+        }
+        out.push((cursor, start + indent));
+        cursor += content.len();
+    }
+    Some(out.into_boxed_slice())
+}
+
+/// The same table for a flow scalar whose value is not its source slice: an escape in a
+/// double-quoted one, `''` in a single-quoted one, or a line break folded in any of the three.
+///
+/// Decodes the source the way libyaml does, starting a new entry after each escape and each
+/// fold, and keeps the table only if the decoding reproduces libyaml's value byte for byte. So
+/// a rule decoded wrongly costs the table, never a wrong offset. `None` for the common case,
+/// a value that is its own source.
+fn flow_lines(value: &str, raw: Span, text: &str, style: ScalarStyle) -> Option<Box<[(usize, usize)]>> {
+    let src = raw.slice(text);
+    let quoted = matches!(style, ScalarStyle::SingleQuoted | ScalarStyle::DoubleQuoted);
+    let (body, base) = if quoted { (src.get(1..src.len().checked_sub(1)?)?, raw.start + 1) } else { (src, raw.start) };
+    if body == value {
+        return None;
+    }
+    let b = body.as_bytes();
+    let mut out = String::new();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    // `fresh`: the next character starts an entry. `hard`: how much of `out` a fold may not
+    // trim — an escaped space or tab is content, not trailing whitespace.
+    let mut fresh = true;
+    let mut hard = 0;
+    let push = |out: &mut String, runs: &mut Vec<(usize, usize)>, fresh: &mut bool, s: &str, at: usize| {
+        if *fresh {
+            runs.push((out.len(), base + at));
+            *fresh = false;
+        }
+        out.push_str(s);
+    };
+    let blank = |c: u8| c == b' ' || c == b'\t';
+    let skip_break = |i: usize| if b[i] == b'\r' && b.get(i + 1) == Some(&b'\n') { i + 2 } else { i + 1 };
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\\' if style == ScalarStyle::DoubleQuoted => {
+                if matches!(b.get(i + 1), Some(b'\r' | b'\n')) {
+                    // An escaped line break: the break and the next line's indentation go.
+                    i = skip_break(i + 1);
+                    while i < b.len() && blank(b[i]) {
+                        i += 1;
+                    }
+                    fresh = true;
+                    continue;
+                }
+                let (s, len) = escape(&body[i + 1..])?;
+                fresh = true;
+                push(&mut out, &mut runs, &mut fresh, &s, i);
+                fresh = true;
+                hard = out.len();
+                i += 1 + len;
+            }
+            b'\'' if style == ScalarStyle::SingleQuoted && b.get(i + 1) == Some(&b'\'') => {
+                fresh = true;
+                push(&mut out, &mut runs, &mut fresh, "'", i);
+                fresh = true;
+                i += 2;
+            }
+            b'\r' | b'\n' => {
+                // Trailing whitespace before a break is dropped. One break folds to a space;
+                // a break followed by empty lines becomes one newline per empty line.
+                let keep = out.trim_end_matches([' ', '\t']).len().max(hard);
+                out.truncate(keep);
+                runs.retain(|&(v, _)| v < keep);
+                let at = i;
+                let mut empty = 0;
+                i = skip_break(i);
+                loop {
+                    while i < b.len() && blank(b[i]) {
+                        i += 1;
+                    }
+                    if i < b.len() && matches!(b[i], b'\r' | b'\n') {
+                        empty += 1;
+                        i = skip_break(i);
+                    } else {
+                        break;
+                    }
+                }
+                fresh = true;
+                let sep = if empty == 0 { " ".to_string() } else { "\n".repeat(empty) };
+                push(&mut out, &mut runs, &mut fresh, &sep, at);
+                fresh = true;
+            }
+            _ => {
+                let ch = body[i..].chars().next()?;
+                push(&mut out, &mut runs, &mut fresh, &body[i..i + ch.len_utf8()], i);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    (out == value).then(|| runs.into_boxed_slice())
+}
+
+/// One double-quoted escape, `s` starting just after its backslash: the text it stands for
+/// and how many bytes of `s` it took. The set libyaml's scanner accepts.
+fn escape(s: &str) -> Option<(String, usize)> {
+    let c = *s.as_bytes().first()?;
+    let simple = match c {
+        b'0' => '\0',
+        b'a' => '\x07',
+        b'b' => '\x08',
+        b't' | b'\t' => '\t',
+        b'n' => '\n',
+        b'v' => '\x0b',
+        b'f' => '\x0c',
+        b'r' => '\r',
+        b'e' => '\x1b',
+        b' ' => ' ',
+        b'"' => '"',
+        b'/' => '/',
+        b'\'' => '\'',
+        b'\\' => '\\',
+        b'N' => '\u{85}',
+        b'_' => '\u{a0}',
+        b'L' => '\u{2028}',
+        b'P' => '\u{2029}',
+        b'x' | b'u' | b'U' => {
+            let n = match c { b'x' => 2, b'u' => 4, _ => 8 };
+            let code = u32::from_str_radix(s.get(1..1 + n)?, 16).ok()?;
+            return Some((char::from_u32(code)?.to_string(), 1 + n));
+        }
+        _ => return None,
+    };
+    Some((simple.to_string(), 1))
+}
+
 /// A quoted scalar's marks span the quotes; `parse.rs` ranges the value, so match it.
 fn unquote(mut span: Span, text: &str) -> Span {
     let s = span.slice(text);
@@ -232,6 +403,106 @@ fn unquote(mut span: Span, text: &str) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// For each needle, where [`Node::doc_offset`] puts its start in the value of the scalar
+    /// `pick` chooses, as the document text from there to the end of that line.
+    fn landed(src: &str, pick: fn(&Node) -> &Node, needles: &[&str]) -> Vec<String> {
+        let nodes = parse_lenient(src).expect("valid yaml");
+        let c = pick(&nodes[0]);
+        let value = c.as_str().expect("a scalar");
+        needles
+            .iter()
+            .map(|n| {
+                let o = value.find(n).unwrap_or_else(|| panic!("{n:?} in {value:?}"));
+                let rest = &src[c.doc_offset(o)..];
+                rest[..rest.find(['\r', '\n']).unwrap_or(rest.len())].to_string()
+            })
+            .collect()
+    }
+
+    fn key_c(n: &Node) -> &Node {
+        n.get("c").expect("a c: key")
+    }
+
+    /// T-226. A block scalar's value is its source with each line's indentation stripped, so
+    /// `span.start + offset` falls short by the indentation of every line before the use.
+    /// Every style, a use on the first content line and on a later one.
+    #[test]
+    fn an_offset_into_a_block_scalar_lands_on_its_source() {
+        let both = ["{{ x }}", "{{ y }}"];
+        for src in [
+            "c: |\n  {{ x }}\n  b {{ y }}\n",
+            "c: |-\n  {{ x }}\n  b {{ y }}\n",
+            "c: |+\n  {{ x }}\n  b {{ y }}\n\n\n",
+            "c: >\n  {{ x }}\n  b {{ y }}\n",
+            "c: >-\n  {{ x }}\n\n  b {{ y }}\n",
+            // Folded, with a more-indented line: its break is kept, not folded to a space.
+            "c: >\n  {{ x }}\n    more\n  b {{ y }}\n",
+            // An explicit indicator, so the value's first line keeps three of its spaces.
+            "c: |2\n     {{ x }}\n   b {{ y }}\n",
+            "c: |  # a comment on the header\n  {{ x }}\n  b {{ y }}\n",
+            // Leading blank lines are in the value as newlines.
+            "c: |\n\n  {{ x }}\n  b {{ y }}\n",
+            "c: |\r\n  {{ x }}\r\n  b {{ y }}\r\n",
+        ] {
+            assert_eq!(landed(src, key_c, &both), both, "{src:?}");
+        }
+        // Ten spaces in, under a list item — the reference tree's shape.
+        let deep = "c:\n  - k: |\n          deep\n          {{ x }}\n          b {{ y }}\n";
+        fn k(n: &Node) -> &Node {
+            n.get("c").unwrap().items()[0].get("k").unwrap()
+        }
+        assert_eq!(landed(deep, k, &both), both);
+    }
+
+    /// A flow scalar whose value is not its source: escapes, `''`, and line folding. A use
+    /// after each one, since every one shifts what follows it. Each value was measured to
+    /// render its `{{ v }}` on ansible-core 2.21.2.
+    #[test]
+    fn an_offset_past_an_escape_or_a_fold_lands_on_its_source() {
+        let x = ["{{ x }}"];
+        for src in [
+            "c: \"a\\tb\\n{{ x }}\"\n",
+            "c: \"\\u00e9\\x41\\U0001F600 {{ x }}\"\n",
+            "c: \"q\\\"q\\\\ {{ x }}\"\n",
+            "c: \"\\  {{ x }}\"\n",
+            "c: 'it''s {{ x }}'\n",
+            "c: wrapped plain\n  line {{ x }}\n",
+            "c: wrapped plain   \n  line\n\n\n  after blanks {{ x }}\n",
+            "c: \"quoted\n    {{ x }}\"\n",
+            "c: 'single\n\n    {{ x }}'\n",
+            "c: \"escaped \\\n    break {{ x }}\"\n",
+            "c: \"crlf\r\n    {{ x }}\"\r\n",
+        ] {
+            assert_eq!(landed(src, key_c, &x)[0].trim_end_matches(['"', '\'']), x[0], "{src:?}");
+            assert!(matches!(key_c(&parse_lenient(src).unwrap()[0]), Node::Scalar { lines: Some(_), .. }), "{src:?}");
+        }
+        // Two escapes before two uses, so a table that only knew the first shift fails here.
+        let two = "c: \"\\t{{ x }}\\t\\t{{ y }}\"\n";
+        assert_eq!(landed(two, key_c, &["{{ x }}", "{{ y }}"]), ["{{ x }}\\t\\t{{ y }}\"", "{{ y }}\""]);
+    }
+
+    /// The table is kept only when decoding the source reproduces libyaml's value. A value the
+    /// decoder disagrees with gets no table, and its readers fall back rather than guess.
+    #[test]
+    fn a_decoding_that_does_not_reproduce_the_value_is_dropped() {
+        let src = "c: \"a\\tb {{ x }}\"\n";
+        let raw = Span { start: 3, end: src.len() - 1 };
+        assert!(flow_lines("a\tb {{ x }}", raw, src, ScalarStyle::DoubleQuoted).is_some(), "the control");
+        assert!(flow_lines("a b {{ x }}", raw, src, ScalarStyle::DoubleQuoted).is_none());
+    }
+
+    /// The control: a flow scalar is a contiguous slice of the document, carries no line table,
+    /// and has always been exact.
+    #[test]
+    fn an_offset_into_a_flow_scalar_is_still_span_start_plus_offset() {
+        for src in ["c: a {{ x }}\n", "c: \"a {{ x }}\"\n", "c: 'a {{ x }}'\n"] {
+            let nodes = parse_lenient(src).expect("valid yaml");
+            assert!(matches!(nodes[0].get("c"), Some(Node::Scalar { lines: None, .. })), "{src:?}");
+            let got = landed(src, key_c, &["{{ x }}"]);
+            assert_eq!(got[0].trim_end_matches(['"', '\'']), "{{ x }}", "{src:?}");
+        }
+    }
 
     /// T-117. `when:` is YAML null and `when: ""` is an empty string; Ansible treats the first
     /// as absence and the second as fatal. libyaml hands both to us as an empty value, so the

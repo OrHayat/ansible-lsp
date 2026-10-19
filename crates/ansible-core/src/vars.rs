@@ -53,11 +53,19 @@ pub enum VarSource {
     GroupVars,
     /// A key in a playbook-adjacent `host_vars/<host>` file — applies only to that host.
     HostVars,
-    /// A variable written in the inventory itself — a `[group:vars]` section, an inline
-    /// `var=value` on a host line, or `vars:`/`hosts:` in a YAML inventory (T-062).
-    /// Host-dependent like [`VarSource::GroupVars`]: which hosts it reaches depends on the
-    /// group it sits in, which needs the inventory's own group membership to answer.
-    Inventory,
+    /// The same three beside the inventory rather than the playbook (T-175): each is one
+    /// published level below its playbook-adjacent twin, and both pairs interleave with the
+    /// other group levels, so they cannot share a variant.
+    InventoryGroupVarsAll,
+    InventoryGroupVars,
+    InventoryHostVars,
+    /// A group variable written in the inventory itself: a `[group:vars]` section, or a
+    /// group's `vars:` in a YAML or TOML inventory (T-062). Host-dependent like
+    /// [`VarSource::GroupVars`]: which hosts it reaches depends on the group it sits in.
+    InventoryGroup,
+    /// A host variable written in the inventory itself: an inline `var=value` on an INI
+    /// host line, or a host's mapping in a YAML or TOML inventory.
+    InventoryHost,
     /// A key loaded by an `include_vars:` task (file or dir form).
     IncludeVars,
     /// A param on a play's `roles:` entry — any key the entry wrote that
@@ -82,19 +90,24 @@ pub enum VarSource {
 }
 
 impl VarSource {
-    /// Ansible's variable-precedence level (higher wins). Only the sources we index; the
-    /// inventory-adjacent copies (next to a separate inventory file) and extra-vars (22)
-    /// aren't here.
+    /// Ansible's variable-precedence level (higher wins), for the sources we index.
+    ///
+    /// Levels 3 to 10 measured on 2.21.2 (T-175): fourteen pairs, each name defined in
+    /// exactly two of them with different values, every pair able to come out either way.
+    /// The order is exactly the published one: inventory-file group vars 3, inventory
+    /// `group_vars/all` 4, playbook `group_vars/all` 5, inventory `group_vars/*` 6, playbook
+    /// `group_vars/*` 7, inventory-file host vars 8, inventory `host_vars/*` 9, playbook
+    /// `host_vars/*` 10. `scratchpad/t175/probe.sh` reruns it.
     pub fn precedence(self) -> u8 {
         match self {
             VarSource::RoleDefaults => 2,
+            VarSource::InventoryGroup => 3,
+            VarSource::InventoryGroupVarsAll => 4,
             VarSource::GroupVarsAll => 5,
+            VarSource::InventoryGroupVars => 6,
             VarSource::GroupVars => 7,
-            // Ansible publishes inventory group vars at 6 and inventory host vars at 10.
-            // We do not know which a given entry is without resolving group membership,
-            // so the lower of the two is used: it can only lose a precedence tie, never
-            // wrongly win one.
-            VarSource::Inventory => 6,
+            VarSource::InventoryHost => 8,
+            VarSource::InventoryHostVars => 9,
             VarSource::HostVars => 10,
             // Level 8, "inventory file or script host vars" — bracketed on both sides by
             // measurement rather than read off the published table, since a host var set at
@@ -159,7 +172,11 @@ impl VarSource {
             VarSource::GroupVarsAll
             | VarSource::GroupVars
             | VarSource::HostVars
-            | VarSource::Inventory
+            | VarSource::InventoryGroupVarsAll
+            | VarSource::InventoryGroupVars
+            | VarSource::InventoryHostVars
+            | VarSource::InventoryGroup
+            | VarSource::InventoryHost
             | VarSource::AddHost => false,
             // Need a task to have run.
             VarSource::SetFact | VarSource::Register | VarSource::IncludeVars => false,
@@ -177,7 +194,10 @@ impl VarSource {
             self,
             VarSource::GroupVars
                 | VarSource::HostVars
-                | VarSource::Inventory
+                | VarSource::InventoryGroupVars
+                | VarSource::InventoryHostVars
+                | VarSource::InventoryGroup
+                | VarSource::InventoryHost
                 | VarSource::AddHost
         )
     }
@@ -211,7 +231,11 @@ impl VarSource {
             VarSource::GroupVarsAll
             | VarSource::GroupVars
             | VarSource::HostVars
-            | VarSource::Inventory
+            | VarSource::InventoryGroupVarsAll
+            | VarSource::InventoryGroupVars
+            | VarSource::InventoryHostVars
+            | VarSource::InventoryGroup
+            | VarSource::InventoryHost
             | VarSource::IncludeVars
             | VarSource::SetFact
             | VarSource::AddHost
@@ -661,14 +685,16 @@ fn walk_uses(
     names: Option<LoadName>,
 ) {
     match node {
-        Node::Scalar { value, span } => {
+        Node::Scalar { value, .. } => {
             let before = out.len();
             if in_when {
-                expression_uses_with(value, span.start, out, ex);
+                expression_uses_with(value, 0, out, ex);
             } else {
-                template_uses_with(value, span.start, out, ex);
+                template_uses_with(value, 0, out, ex);
             }
             for u in &mut out[before..] {
+                u.span = node.doc_span(u.span);
+                u.expr = node.doc_span(u.expr);
                 u.guard = guard.to_vec();
                 u.site = site.clone();
                 u.site.in_when = in_when;
@@ -714,10 +740,12 @@ fn walk_uses(
                 // A name rendered at load is guarded by nothing ([`Site::load_name`]).
                 let g: &[String] = if names_role { &[] } else if is_when { guard } else { &inner };
                 if keys == Keys::Templated {
-                    if let Node::Scalar { value, span } = k {
+                    if let Node::Scalar { value, .. } = k {
                         let before = out.len();
-                        template_uses_with(value, span.start, out, ex);
+                        template_uses_with(value, 0, out, ex);
                         for u in &mut out[before..] {
+                            u.span = k.doc_span(u.span);
+                            u.expr = k.doc_span(u.expr);
                             u.guard = inner.clone();
                             u.site = site.clone();
                         }
@@ -1028,6 +1056,7 @@ fn value_span_source(s: VarSource) -> bool {
             | VarSource::RoleDefaults
             | VarSource::RoleVars
             | VarSource::GroupVarsAll
+            | VarSource::InventoryGroupVarsAll
             | VarSource::IncludeVars
     )
 }
@@ -1685,14 +1714,19 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // Playbook-adjacent group_vars/ and host_vars/ — a fixed location next to this file, not
     // a workspace scan. The inventory-adjacent copies (next to a separate inventory file)
     // need the inventory's location, which we don't guess, so those stay unindexed.
-    read_var_dir(&ctx.file_dir.join("group_vars"), true, out, walk);
-    read_var_dir(&ctx.file_dir.join("host_vars"), false, out, walk);
+    read_var_dir(&ctx.file_dir.join("group_vars"), true, false, out, walk);
+    read_var_dir(&ctx.file_dir.join("host_vars"), false, false, out, walk);
 
     // The inventory itself (T-062) — the single largest source of names this index used to
     // be blind to, and the reason `var-undefined` concedes inventory in every message.
     // `sources` resolves the same ladder Ansible does; a dynamic one is skipped, never run.
-    for src in crate::inventory::sources(&ctx.config, walk.cache) {
-        read_inventory(&src, out, walk);
+    // Two passes: whether a host's name is also a group's decides what its variables are
+    // (T-200), and a directory source can declare the group in one file and the host in
+    // another.
+    let sources = crate::inventory::sources(&ctx.config, walk.cache);
+    let groups = inventory_groups(&sources, walk.cache);
+    for src in &sources {
+        read_inventory(src, &groups, out, walk);
     }
     // The `group_vars/`/`host_vars/` beside the *inventory*, which are a different pair from
     // the playbook-adjacent ones read above — Ansible loads both. Keyed on the configured
@@ -1700,8 +1734,8 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
     // its base at the top however deep the host files sit inside it.
     for dir in crate::inventory::source_dirs(&ctx.config, walk.cache) {
         if dir != ctx.file_dir {
-            read_var_dir(&dir.join("group_vars"), true, out, walk);
-            read_var_dir(&dir.join("host_vars"), false, out, walk);
+            read_var_dir(&dir.join("group_vars"), true, true, out, walk);
+            read_var_dir(&dir.join("host_vars"), false, true, out, walk);
         }
     }
 
@@ -1876,7 +1910,9 @@ fn role_task_files(role_main: &Path, walk: &Walk) -> Arc<Vec<PathBuf>> {
 /// Read every `*.yml` in a playbook-adjacent `group_vars/` or `host_vars/` directory. The
 /// source is derived from the file name: `group_vars/all` applies to all hosts, any other
 /// name is group- or host-scoped.
-fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk) {
+/// `inventory`: the dir sits beside an inventory source rather than the playbook, one
+/// precedence level lower ([`VarSource::precedence`]).
+fn read_var_dir(dir: &Path, group: bool, inventory: bool, out: &mut Contribution, walk: &mut Walk) {
     let files = walk.cache.listing(dir);
     for p in files.iter() {
         // The entity is the `group_vars/<entity>` entry, not the leaf file: everything under
@@ -1890,12 +1926,13 @@ fn read_var_dir(dir: &Path, group: bool, out: &mut Contribution, walk: &mut Walk
             .and_then(|c| Path::new(c.as_os_str()).file_stem())
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        let source = if !group {
-            VarSource::HostVars
-        } else if stem == "all" {
-            VarSource::GroupVarsAll
-        } else {
-            VarSource::GroupVars
+        let source = match (group, stem == "all", inventory) {
+            (false, _, false) => VarSource::HostVars,
+            (false, _, true) => VarSource::InventoryHostVars,
+            (true, true, false) => VarSource::GroupVarsAll,
+            (true, true, true) => VarSource::InventoryGroupVarsAll,
+            (true, false, false) => VarSource::GroupVars,
+            (true, false, true) => VarSource::InventoryGroupVars,
         };
         read_var_file(p, source, None, out, walk);
     }
@@ -2023,7 +2060,23 @@ pub fn ignored_group_priority(file: &Path, nodes: &[Node]) -> Vec<Span> {
 /// [`crate::inventory`]; a dynamic one contributes nothing, because learning its hosts
 /// would mean executing a file out of the workspace. The skip is observable through
 /// [`declined_inventories`], which is what keeps "no hosts" and "hosts unknown" apart.
-fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
+/// Every group name across `sources`, for [`read_inventory`].
+fn inventory_groups(sources: &[PathBuf], cache: &ScanCache) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for file in sources {
+        let Some(src) = cache.source(file) else { continue };
+        let nodes: &[Node] = src.nodes.as_deref().map_or(&[], |n| n.as_slice());
+        out.extend(match crate::inventory::classify(file, &src.text, nodes, cache) {
+            crate::inventory::Kind::Dynamic => Vec::new(),
+            crate::inventory::Kind::Toml => crate::inventory::toml_groups(&src.text),
+            crate::inventory::Kind::Yaml => crate::inventory::yaml_groups(nodes),
+            crate::inventory::Kind::Ini => crate::inventory::ini_groups(&src.text),
+        });
+    }
+    out
+}
+
+fn read_inventory(file: &Path, groups: &HashSet<String>, out: &mut Contribution, walk: &mut Walk) {
     let Some(src) = walk.cache.source(file) else {
         return;
     };
@@ -2035,14 +2088,14 @@ fn read_inventory(file: &Path, out: &mut Contribution, walk: &mut Walk) {
         // A dynamic inventory is the one source we decline: running a plugin against a
         // live account to learn a host list is not a trade worth making.
         crate::inventory::Kind::Dynamic => return,
-        crate::inventory::Kind::Toml => crate::inventory::toml_vars(&src.text),
-        crate::inventory::Kind::Yaml => crate::inventory::yaml_vars(nodes),
-        crate::inventory::Kind::Ini => crate::inventory::ini_vars(&src.text),
+        crate::inventory::Kind::Toml => crate::inventory::toml_vars_in(&src.text, groups),
+        crate::inventory::Kind::Yaml => crate::inventory::yaml_vars_in(nodes, groups),
+        crate::inventory::Kind::Ini => crate::inventory::ini_vars_in(&src.text, groups),
     };
     for v in vars {
         out.defs.push(Located {
             name: v.name,
-            source: VarSource::Inventory,
+            source: if v.host { VarSource::InventoryHost } else { VarSource::InventoryGroup },
             span: v.span,
             file: file.to_path_buf(),
             after: None,
@@ -2208,6 +2261,178 @@ mod tests {
             "{{ groups }} {{ inventory_dir }} {{ nope_missing }}\" }\n",
         );
         assert_eq!(undef(src), ["nope_missing"]);
+    }
+
+    /// T-226's Symptom file. The use on the fourth line of a `content: |` was reported two
+    /// lines up, short by the stripped indentation of each line before it. The flow scalar is
+    /// the control: it was always exact and must stay so.
+    ///
+    /// The guard check reads the document at the use's expression span, so the wrong span
+    /// also fed it the wrong text: on the reference tree 93 unguarded uses in block scalars
+    /// were dropped that way (178 reports before, 271 after; the same 988 with the guard
+    /// check disabled on both builds).
+    #[test]
+    fn a_use_in_a_block_scalar_is_reported_where_it_is_written() {
+        let src = concat!(
+            "- hosts: all\n",
+            "  tasks:\n",
+            "    - name: t\n",
+            "      copy:\n",
+            "        dest: /tmp/x\n",
+            "        content: |\n",
+            "          line one\n",
+            "          line two\n",
+            "          line three\n",
+            "          value={{ zzz_missing }}\n",
+            // Guarded, and split over two lines so the document text the guard check reads
+            // carries the block's indentation inside the expression.
+            "          opt={{ zzz_guarded\n",
+            "            | default('') }}\n",
+            "    - debug: { msg: \"{{ zzz_flow }}\" }\n",
+        );
+        let doc = Document::new(src.to_string());
+        let nodes = doc.parse().expect("valid yaml");
+        let got: Vec<(String, u32, &str)> = undefined_uses(Path::new("/nonexistent-t226/p.yml"), &nodes, src)
+            .into_iter()
+            .map(|u| (u.name, doc.byte_to_lsp(u.span.start).0, u.span.slice(src)))
+            .collect();
+        assert_eq!(
+            got,
+            [("zzz_missing".to_string(), 9, "zzz_missing"), ("zzz_flow".to_string(), 12, "zzz_flow")]
+        );
+    }
+
+    /// T-246. Every row run on ansible-core 2.21.2 with `a`, `y` and `w` undefined and `s`
+    /// set, each in a `debug: msg:`. An undefined value is not an error until something uses
+    /// it: it passes up through attributes, subscripts, filters and method calls to the next
+    /// `default`, and fails at an operator, a comparison, `mandatory`, or the render.
+    #[test]
+    fn an_undefined_value_is_reported_only_where_ansible_fails_on_it() {
+        // (expression, fails on 2.21.2)
+        let rows: &[(&str, bool)] = &[
+            ("a | default(y)", true),
+            ("a | default(y) | default('z')", false),
+            ("a | default(y.attr) | default('z')", false),
+            ("a | default(y['k']) | default('z')", false),
+            ("a | default(y.p.q) | default('z')", false),
+            ("a | default(y | upper) | default('z')", false),
+            ("a | default(y ~ '/x') | default('z')", true),
+            ("a | default(y, true) | default('z')", false),
+            ("(a | default(y)) is defined", false),
+            ("a | default(y) | length", true),
+            ("a | d(y) | d('z')", false),
+            ("a | d('z')", false),
+            ("a | default(y) | default(w) | default('z')", false),
+            ("s | default(y) | default('z')", false),
+            ("a | default(b | default(y)) | default('z')", false),
+            ("a | upper | default('z')", false),
+            ("a | length | default('z')", false),
+            ("a | map('upper') | list | default('z')", false),
+            ("a | regex_replace('x', 'y') | default('z')", false),
+            ("a | mandatory | default('z')", true),
+            ("'x' | regex_replace(y, 'q') | default('z')", false),
+            ("a.split(',') | default('z')", false),
+        ];
+        let tasks: String = rows.iter().map(|(e, _)| format!("    - debug: {{ msg: \"{{{{ {e} }}}}\" }}\n")).collect();
+        let src = format!("- hosts: all\n  vars: {{ s: SET }}\n  tasks:\n{tasks}");
+        let doc = Document::new(src.clone());
+        let nodes = doc.parse().expect("valid yaml");
+        let reported: Vec<u32> = undefined_uses(Path::new("/nonexistent-t246/p.yml"), &nodes, &src)
+            .into_iter()
+            .map(|u| doc.byte_to_lsp(u.span.start).0 - 3)
+            .collect();
+        for (i, (e, fails)) in rows.iter().enumerate() {
+            assert_eq!(reported.contains(&(i as u32)), *fails, "{e}: reported {reported:?}");
+        }
+    }
+
+    /// T-175. The probe's fourteen pairs (`scratchpad/t175/probe.sh`), each name in exactly
+    /// two sources with the winner measured on 2.21.2, asserted through [`effective`], which
+    /// go-to-definition and the hover value answer from. Before the split, three pairs tied
+    /// and five came out the wrong way round.
+    #[test]
+    fn effective_ranks_inventory_and_playbook_sources_as_measured() {
+        use VarSource::*;
+        let d = std::env::temp_dir().join("ansible-lsp-t175-effective");
+        let _ = std::fs::remove_dir_all(&d);
+        let file = |s: VarSource| match s {
+            InventoryGroupVarsAll => "inv/group_vars/all.yml",
+            InventoryGroupVars => "inv/group_vars/web.yml",
+            InventoryHostVars => "inv/host_vars/h1.yml",
+            GroupVarsAll => "pb/group_vars/all.yml",
+            GroupVars => "pb/group_vars/web.yml",
+            HostVars => "pb/host_vars/h1.yml",
+            _ => unreachable!(),
+        };
+        // (a, b, the measured winner)
+        let pairs = [
+            (InventoryGroupVarsAll, GroupVarsAll, GroupVarsAll),
+            (InventoryGroupVars, GroupVars, GroupVars),
+            (InventoryHostVars, HostVars, HostVars),
+            (InventoryGroupVars, GroupVarsAll, InventoryGroupVars),
+            (InventoryGroup, InventoryGroupVarsAll, InventoryGroupVarsAll),
+            (InventoryHost, GroupVars, InventoryHost),
+            (InventoryHost, InventoryHostVars, InventoryHostVars),
+            (InventoryGroup, GroupVarsAll, GroupVarsAll),
+            (InventoryHost, InventoryGroupVars, InventoryHost),
+            (InventoryGroupVarsAll, InventoryGroupVars, InventoryGroupVars),
+            (GroupVars, InventoryHostVars, InventoryHostVars),
+            (InventoryGroup, InventoryHost, InventoryHost),
+            (InventoryGroup, GroupVars, GroupVars),
+            (InventoryHost, HostVars, HostVars),
+        ];
+        let mut files: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+        let (mut line, mut section) = (String::new(), String::new());
+        for (i, (a, b, _)) in pairs.iter().enumerate() {
+            for s in [a, b] {
+                match s {
+                    InventoryGroup => section.push_str(&format!("p{i}={s:?}\n")),
+                    InventoryHost => line.push_str(&format!(" p{i}={s:?}")),
+                    _ => files.entry(file(*s)).or_default().push_str(&format!("p{i}: {s:?}\n")),
+                }
+            }
+        }
+        files.insert("inv/hosts.ini", format!("[web]\nh1{line}\n[web:vars]\n{section}"));
+        files.insert("pb/ansible.cfg", "[defaults]\ninventory = ../inv/hosts.ini\n".into());
+        files.insert("pb/play.yml", "- hosts: h1\n  tasks: []\n".into());
+        for (rel, text) in &files {
+            let p = d.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let play = d.join("pb/play.yml");
+        let nodes = Document::new(files["pb/play.yml"].clone()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        for (i, (a, b, winner)) in pairs.iter().enumerate() {
+            let name = format!("p{i}");
+            let mine: Vec<Located> = defs.iter().filter(|d| d.name == name).cloned().collect();
+            assert_eq!(mine.len(), 2, "{a:?} vs {b:?}: both indexed, {:?}", mine.iter().map(|d| d.source).collect::<Vec<_>>());
+            assert_eq!(effective(&mine).map(|d| d.source), Some(*winner), "{a:?} vs {b:?}");
+        }
+    }
+
+    /// T-200's directory case, the one no per-file reader can get right: the group `web` is
+    /// declared in one file of an inventory directory and the host `web` in another. The
+    /// control is the same file read alone, where `web` is no group and the line is a host's.
+    #[test]
+    fn a_host_named_like_a_group_in_another_inventory_file_is_a_group_position() {
+        let d = std::env::temp_dir().join("ansible-lsp-t200-dir");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("inv")).unwrap();
+        let host_file = "web ansible_group_priority=5 colvar=1\n";
+        std::fs::write(d.join("ansible.cfg"), "[defaults]\ninventory = inv\n").unwrap();
+        std::fs::write(d.join("inv/a.yml"), "web:\n  hosts:\n    node1:\n").unwrap();
+        std::fs::write(d.join("inv/b.ini"), host_file).unwrap();
+        let play = d.join("play.yml");
+        std::fs::write(&play, "- hosts: all\n  tasks: []\n").unwrap();
+        let nodes = Document::new("- hosts: all\n  tasks: []\n".into()).parse().unwrap();
+        let defs = definitions(&play, &nodes);
+        assert!(defs.iter().all(|x| x.name != "ansible_group_priority"), "{:?}", names_of(&defs));
+        let colvar = defs.iter().find(|x| x.name == "colvar").expect("an ordinary var stays indexed");
+        assert_eq!(colvar.source, VarSource::InventoryGroup);
+
+        let alone = crate::inventory::ini_vars(host_file);
+        assert!(alone.iter().any(|v| v.name == "ansible_group_priority" && v.host), "the control");
     }
 
     /// [`undef`] with the scope each flag lacks, for the T-224 scope rows.
@@ -3194,7 +3419,20 @@ mod tests {
     #[test]
     fn hostvars_visibility_matches_what_was_measured() {
         use VarSource::*;
-        for s in [GroupVarsAll, GroupVars, HostVars, Inventory, IncludeVars, SetFact, Register, AddHost]
+        for s in [
+            GroupVarsAll,
+            GroupVars,
+            HostVars,
+            InventoryGroupVarsAll,
+            InventoryGroupVars,
+            InventoryHostVars,
+            InventoryGroup,
+            InventoryHost,
+            IncludeVars,
+            SetFact,
+            Register,
+            AddHost,
+        ]
         {
             assert!(s.visible_to_hostvars(), "{s:?} was measured VISIBLE");
         }
@@ -4205,7 +4443,7 @@ mod tests {
             "expected the host-line definition only, got {:?}",
             hits.iter().map(|h| h.source).collect::<Vec<_>>()
         );
-        assert_eq!(hits[0].source, VarSource::Inventory);
+        assert_eq!(hits[0].source, VarSource::InventoryHost);
     }
 
     /// T-062 end to end: an inventory named by `ansible.cfg` reaches the variable index of
@@ -4228,12 +4466,14 @@ mod tests {
 
         let nodes = Document::new(std::fs::read_to_string(&play).unwrap()).parse().unwrap();
         let defs = definitions(&play, &nodes);
-        for name in ["ip_from_host_line", "from_group_section"] {
+        for (name, source) in
+            [("ip_from_host_line", VarSource::InventoryHost), ("from_group_section", VarSource::InventoryGroup)]
+        {
             let hit = defs
                 .iter()
                 .find(|x| x.name == name)
                 .unwrap_or_else(|| panic!("{name} not indexed: {:?}", names_of(&defs)));
-            assert_eq!(hit.source, VarSource::Inventory);
+            assert_eq!(hit.source, source, "{name}");
             // Host-dependent, like a named group_vars file — the hover caveat depends on it.
             assert!(hit.source.host_scoped());
             // And reachable through `hostvars`, which is the whole point of T-172.
@@ -4326,9 +4566,9 @@ mod tests {
         write(&d, "ansible.cfg", "[defaults]\ninventory = inv.toml\n");
         write(&d, "inv.toml", "[web.vars]\nfrom_toml = \"yes\"\n[web.hosts.node1]\ntoml_host_var = 1\n");
         let defs = definitions(&play, &nodes);
-        for name in ["from_toml", "toml_host_var"] {
+        for (name, source) in [("from_toml", VarSource::InventoryGroup), ("toml_host_var", VarSource::InventoryHost)] {
             assert!(
-                defs.iter().any(|x| x.name == name && x.source == VarSource::Inventory),
+                defs.iter().any(|x| x.name == name && x.source == source),
                 "{name} missing from a TOML inventory: {:?}",
                 names_of(&defs)
             );
@@ -4343,7 +4583,9 @@ mod tests {
         // A configured inventory that is not there is the normal state where inventories
         // are generated and untracked — silence, not a panic and not a message.
         write(&d, "ansible.cfg", "[defaults]\ninventory = never_generated.yml\n");
-        assert!(definitions(&play, &nodes).iter().all(|d| d.source != VarSource::Inventory));
+        assert!(definitions(&play, &nodes)
+            .iter()
+            .all(|d| !matches!(d.source, VarSource::InventoryGroup | VarSource::InventoryHost)));
     }
 
     /// T-062: `ansibleLsp.inventory` stands in for `-i`, which beats the env var and the

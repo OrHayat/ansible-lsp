@@ -976,6 +976,12 @@ pub enum Guard {
 /// argument. Nothing else — a `default` on `a` says nothing about a `b` elsewhere in the
 /// same expression, which is the substring check's mistake ([[T-223]]). Empty when the
 /// expression does not parse.
+/// `default`, or Jinja's `d` alias for it: `a | d('z')` runs with `a` undefined (measured on
+/// 2.21.2, T-246).
+fn is_default(name: &str) -> bool {
+    name == "default" || name == "d" || name.ends_with(".default")
+}
+
 fn guards(expr: &str) -> Vec<(crate::parse::Span, Guard)> {
     let Ok(tree) = jinja::parse(expr) else { return Vec::new() };
     let mut out = Vec::new();
@@ -1024,7 +1030,7 @@ fn walk_guards(
                 walk_guards(a, None, ambient, named, out);
             }
         }
-        ExprKind::Filter { node, name, args } if name == "default" || name.ends_with(".default") => {
+        ExprKind::Filter { node, name, args } if is_default(name) => {
             walk_guards(node, Some(&Guard::Handled), ambient, named, out);
             // Inside the argument: evaluated only if the defaulted root is undefined. A
             // default nested in another default's argument stays with the outer guard —
@@ -1035,18 +1041,34 @@ fn walk_guards(
                 (None, Some(root)) => Some(Guard::WhenUndefined(root.to_string())),
                 (None, None) => None,
             };
+            // An undefined argument comes out as this default's result, so where that result
+            // is itself guarded — `a | default(y) | default('z')` — so is the argument
+            // (T-246, measured on 2.21.2).
             for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
-                walk_guards(a, None, inner.as_ref(), named, out);
+                walk_guards(a, spine, inner.as_ref(), named, out);
             }
         }
-        ExprKind::Filter { node, args, .. } | ExprKind::Test { node, args, .. } => {
+        // An undefined input or argument does not fail a filter: the filter is skipped and
+        // the undefined value is its result, failing only where something uses it (T-246).
+        // Measured on 2.21.2 for fourteen filters before a `default` and for an argument of
+        // `regex_replace`. `mandatory` is the exception: it fails on purpose.
+        ExprKind::Filter { node, name, args } => {
+            let through = spine.filter(|_| name != "mandatory" && !name.ends_with(".mandatory"));
+            walk_guards(node, through, ambient, named, out);
+            for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
+                walk_guards(a, through, ambient, named, out);
+            }
+        }
+        ExprKind::Test { node, args, .. } => {
             walk_guards(node, None, ambient, named, out);
             for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
                 walk_guards(a, None, ambient, named, out);
             }
         }
+        // A method on an undefined value is undefined too: `a.split(',') | default('z')`
+        // runs (measured). Its arguments are not covered; that was not measured.
         ExprKind::Call { node, args } => {
-            walk_guards(node, None, ambient, named, out);
+            walk_guards(node, spine, ambient, named, out);
             for a in args.args.iter().chain(args.kwargs.iter().map(|(_, v)| v)) {
                 walk_guards(a, None, ambient, named, out);
             }
@@ -2561,9 +2583,9 @@ mod tests {
         // 2.21.2 — so it is an error, not a warning that contradicts its own message.
         assert_eq!(Problem::AssignmentNotComparison.tier(None), Tier::Error);
         assert_eq!(Problem::UnbalancedDelimiters.tier(None), Tier::Error);
-        // `item` is just as fatal, and stays a warning only because T-139 makes it fire on
-        // conditions that work — invert this when the including task's loop is visible.
-        assert_eq!(Problem::ItemWithoutLoop.tier(None), Tier::Warning, "T-139 fixed? raise it");
+        // `item` is usually just as fatal, but a play `vars: {item: …}` defines it and the
+        // condition runs (measured on 2.21.2), and this rule does not read variables.
+        assert_eq!(Problem::ItemWithoutLoop.tier(None), Tier::Warning);
     }
 
     /// A warning on an old core reads as "this is broken" unless it says otherwise — the point
@@ -2671,6 +2693,24 @@ mod tests {
         ]));
         assert!(!is_guarded(&[]));
     }
+
+    /// T-246, the other two readers of [`guard_at`]. A filter between a name and its default
+    /// leaves it guarded, and `mandatory` does not. Measured on 2.21.2:
+    /// `a | upper | default(false) or true` runs, and `hostvars['nohost'].x | upper |
+    /// default('n')` prints `n` where the bare read fails.
+    #[test]
+    fn a_filter_before_the_default_keeps_the_guard_for_every_reader() {
+        assert!(is_guarded(&["a | upper | default(false)".into()]));
+        assert!(is_guarded(&["a | d(false)".into()]));
+        assert!(!is_guarded(&["a | mandatory | default(false)".into()]));
+
+        let text = "{{ hostvars['nohost'].x | upper | default('n') }}";
+        let s = text.find("'nohost'").unwrap();
+        assert!(expression_swallows_undefined(text, s, s + "'nohost'".len()));
+        let bare = "{{ hostvars['nohost'].x | upper }}";
+        let s = bare.find("'nohost'").unwrap();
+        assert!(!expression_swallows_undefined(bare, s, s + "'nohost'".len()), "the control");
+    }
 }
 
 /// Coverage against the real corpus. Not a unit test — a measurement, so it's ignored by
@@ -2678,7 +2718,7 @@ mod tests {
 #[cfg(test)]
 mod corpus {
     use super::*;
-    use crate::parse::{Document, Node};
+    use crate::parse::Document;
 
     /// Real `when:` expressions, verbatim, from four official Ansible collections. This is
     /// the corpus — it replaces a sweep over a private repo under `$HOME`, which skipped
@@ -2837,40 +2877,16 @@ mod corpus {
         &["select_crypto_backend == 'cryptography'", "cryptography_version is version('3.3', '>=')"],
     ];
 
-    /// Conditions we get **wrong**. All three sit in task files that are `include_tasks`'d
-    /// with the loop at the *include* site — `loop: "{{ cmd_echo_tests }}"` in
-    /// `community.general`'s `cmd_runner/tasks/main.yml`, `with_sequence: start=1 end=2` in
+    /// Conditions we got **wrong** until T-139. All three sit in task files that are
+    /// `include_tasks`'d with the loop at the *include* site — `loop: "{{ cmd_echo_tests }}"`
+    /// in `community.general`'s `cmd_runner/tasks/main.yml`, `with_sequence: start=1 end=2` in
     /// its `alternatives/tasks/tests.yml` — so `item` is defined and these run fine upstream.
-    /// [`problems`] only sees the task's own mapping, so it calls all three broken. T-139.
+    /// [`problems`] only sees the task's own mapping, so alone it calls all three broken.
     const ITEM_FROM_AN_INCLUDING_LOOP: &[&str] = &[
         "item.copy_to is defined",
         "ansible_facts.os_family != 'RedHat' or with_alternatives or item != 1",
         "ansible_facts.os_family == 'RedHat' and not with_alternatives and item == 1",
     ];
-
-    fn whens(node: &Node, out: &mut Vec<(Vec<String>, bool)>) {
-        match node {
-            Node::Sequence { items, .. } => items.iter().for_each(|i| whens(i, out)),
-            Node::Mapping { entries, .. } => {
-                if let Some(w) = node.get("when") {
-                    let has_loop = entries.iter().any(|(k, _)| {
-                        matches!(k.as_str(), Some(s) if s == "loop" || s.starts_with("with_"))
-                    });
-                    let cs: Vec<String> = match w {
-                        Node::Sequence { items, .. } => {
-                            items.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect()
-                        }
-                        o => o.as_str().map(str::to_owned).into_iter().collect(),
-                    };
-                    if !cs.is_empty() {
-                        out.push((cs, has_loop));
-                    }
-                }
-                entries.iter().for_each(|(_, v)| whens(v, out));
-            }
-            _ => {}
-        }
-    }
 
     /// The demo files are the only place these problems exist, so they double as the
     /// fixture. Not ignored — they must not silently stop demonstrating them.
@@ -2889,14 +2905,11 @@ mod corpus {
             let nodes = doc
                 .parse()
                 .unwrap_or_else(|| panic!("{} must stay parseable", path.display()));
-            let mut ws = Vec::new();
-            for n in &nodes {
-                whens(n, &mut ws);
-            }
-            for (cs, has_loop) in ws {
-                verdicts.push(classify_all(&cs));
-                for c in &cs {
-                    problems_found.extend(problems(c, has_loop));
+            // The server's own reading of where `item` is bound, not a copy of it (T-139).
+            for s in crate::expressions::sites(&nodes).into_iter().filter(|s| s.keyword == "when") {
+                verdicts.push(classify_all(&s.clauses));
+                for c in &s.clauses {
+                    problems_found.extend(problems(c, s.binds_item));
                 }
             }
         }
@@ -3162,20 +3175,36 @@ mod corpus {
     }
 
     /// T-139: `item` **is** defined in these three — the loop sits on the `include_tasks`
-    /// that pulls their file in, which [`problems`] never sees, so we report a false
-    /// positive.
-    ///
-    /// This used to assert the false positive was present, with a comment saying to invert it
-    /// on the fix. That is a green test claiming the wrong answer is correct (rule 7), so it
-    /// now states the answer we owe and is ignored until we give it. The control above keeps
-    /// the half that passes today.
+    /// that pulls their file in. Read as they sit upstream, a task with no loop of its own in
+    /// a task file, and through [`crate::expressions::sites`] as the server reads them.
     #[test]
-    #[ignore = "asserts the loop-aware answer we do not give yet — T-139"]
     fn item_from_an_including_loop_is_not_flagged() {
         for c in ITEM_FROM_AN_INCLUDING_LOOP {
+            let src = format!("- command: x\n  when: \"{c}\"\n");
+            let nodes = Document::new(src).parse().expect("valid yaml");
+            let sites = crate::expressions::sites(&nodes);
+            assert_eq!(sites.len(), 1, "{c}");
             assert!(
-                !problems(c, false).contains(&Problem::ItemWithoutLoop),
+                !problems(&sites[0].clauses[0], sites[0].binds_item)
+                    .contains(&Problem::ItemWithoutLoop),
                 "{c}: the including loop defines `item`"
+            );
+        }
+    }
+
+    /// The control for the one above: the same conditions on an unlooped task in a play,
+    /// where nothing can bind `item`, are still reported.
+    #[test]
+    fn item_without_any_loop_in_a_playbook_is_flagged() {
+        for c in ITEM_FROM_AN_INCLUDING_LOOP {
+            let src = format!("- hosts: all\n  tasks:\n    - command: x\n      when: \"{c}\"\n");
+            let nodes = Document::new(src).parse().expect("valid yaml");
+            let sites = crate::expressions::sites(&nodes);
+            assert_eq!(sites.len(), 1, "{c}");
+            assert!(
+                problems(&sites[0].clauses[0], sites[0].binds_item)
+                    .contains(&Problem::ItemWithoutLoop),
+                "{c}: nothing in a play binds `item` here"
             );
         }
     }
