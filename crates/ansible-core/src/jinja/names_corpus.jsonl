@@ -1,0 +1,124 @@
+{"src": "{% for h in groups.web %}{{ h }}:{{ port }} {% endfor %}", "meta": ["groups", "port"]}
+{"src": "{% for h in xs %}{% endfor %}{{ h }}", "meta": ["h", "xs"]}
+{"src": "{% for h in xs %}{{ loop.index }}{% endfor %}", "meta": ["xs"]}
+{"src": "{{ loop.index }}", "meta": ["loop"]}
+{"src": "{% for h in xs if h.ok %}{{ h }}{% endfor %}", "meta": ["xs"]}
+{"src": "{% for h in xs if loop %}{% endfor %}", "meta": ["loop", "xs"]}
+{"src": "{% for h in xs %}{% else %}{{ h }}{{ loop }}{% endfor %}", "meta": ["h", "loop", "xs"]}
+{"src": "{% for k, v in d.items() %}{{ k }}{{ v }}{% endfor %}", "meta": ["d"]}
+{"src": "{% for (a, (b, c)) in xs %}{{ a }}{{ c }}{% endfor %}", "meta": ["xs"]}
+{"src": "{% for i in i %}{% endfor %}", "meta": ["i"]}
+{"src": "{% for i in t recursive %}{{ loop(i.c) }}{% endfor %}{{ loop }}", "meta": ["loop", "t"]}
+{"src": "{% for x in xs %}{% for x in x %}{{ x }}{% endfor %}{{ x }}{% endfor %}", "meta": ["xs"]}
+{"src": "{% for i in xs %}{% set q = i %}{{ q }}{% endfor %}{{ q }}", "meta": ["q", "xs"]}
+{"src": "{% for i in xs %}{{ q }}{% set q = i %}{% endfor %}", "meta": ["q", "xs"]}
+{"src": "{% set q = 1 %}{{ q }}", "meta": []}
+{"src": "{{ q }}{% set q = 1 %}", "meta": ["q"]}
+{"src": "{% set q = q + 1 %}", "meta": ["q"]}
+{"src": "{% set a, b = 1, 2 %}{{ a }}{{ b }}", "meta": []}
+{"src": "{% set q %}{{ r }}{% endset %}{{ q }}", "meta": ["r"]}
+{"src": "{% set q | upper %}x{% endset %}{{ q }}", "meta": []}
+{"src": "{% set ns = namespace(a=1) %}{% set ns.a = 2 %}{{ ns.a }}", "meta": []}
+{"src": "{% set ns.x = 1 %}", "meta": ["ns"]}
+{"src": "{% if c %}{% set q = 1 %}{{ q }}{% endif %}", "meta": ["c", "q"]}
+{"src": "{% if c %}{% set q = 1 %}{% else %}{{ q }}{% endif %}", "meta": ["c", "q"]}
+{"src": "{% if c %}{% set q = 1 %}{% else %}{% set q = 2 %}{% endif %}{{ q }}", "meta": ["c", "q"]}
+{"src": "{% if a %}{% elif b %}{% else %}{% endif %}", "meta": ["a", "b"]}
+{"src": "{% with a = 1, b = a %}{{ a }}{{ b }}{% endwith %}{{ a }}", "meta": ["a"]}
+{"src": "{% with a = z %}{{ a }}{% endwith %}", "meta": ["z"]}
+{"src": "{% with %}{% set q = 1 %}{% endwith %}{{ q }}", "meta": ["q"]}
+{"src": "{% macro f(p, q=d) %}{{ p }}{{ q }}{{ r }}{{ varargs }}{{ kwargs }}{{ caller() }}{% endmacro %}{{ f(1) }}{{ p }}", "meta": ["d", "p", "r"]}
+{"src": "{% macro f(a, b=a) %}{% endmacro %}", "meta": []}
+{"src": "{% macro f(n) %}{{ f(n - 1) }}{% endmacro %}", "meta": []}
+{"src": "{% macro f() %}{{ q }}{% endmacro %}{% set q = 1 %}", "meta": []}
+{"src": "{% for i in xs %}{% macro f() %}{{ i }}{{ loop }}{% endmacro %}{% endfor %}", "meta": ["xs"]}
+{"src": "{% call(u) f(xs) %}{{ u }}{% endcall %}", "meta": ["f", "xs"]}
+{"src": "{% macro f() %}{% endmacro %}{% for i in xs %}{% call f() %}{{ i }}{% endcall %}{% endfor %}", "meta": ["xs"]}
+{"src": "{% filter replace(a, b) %}{{ c }}{% endfilter %}", "meta": ["a", "b", "c"]}
+{"src": "{% for i in xs %}{% filter upper %}{{ i }}{% endfilter %}{% endfor %}", "meta": ["xs"]}
+{"src": "{% block body %}{{ x }}{{ super() }}{% endblock %}", "meta": ["x"]}
+{"src": "{% block b %}{% set q = 1 %}{% endblock %}{{ q }}", "meta": ["q"]}
+{"src": "{% import 'm' as m %}{{ m.f() }}", "meta": []}
+{"src": "{% from 'm' import a, b as c %}{{ a }}{{ b }}{{ c }}", "meta": ["b"]}
+{"src": "{% include tpl %}", "meta": ["tpl"]}
+{"src": "{% include ['a', b] ignore missing with context %}", "meta": ["b"]}
+{"src": "{% extends base %}", "meta": ["base"]}
+{"src": "{% autoescape ae %}{{ x }}{% endautoescape %}", "meta": ["ae", "x"]}
+{"src": "{{ xs | map(attribute='a') | list }}", "meta": ["xs"]}
+{"src": "{{ x | default(y) }}{{ x is divisibleby n }}", "meta": ["n", "x", "y"]}
+{"src": "{{ lookup('x') }}{{ o.m(a) }}", "meta": ["a", "lookup", "o"]}
+{"src": "{{ {'a': b} }}{{ xs[a:b] }}{{ (c, d) }}{{ e if f else g }}", "meta": ["a", "b", "c", "d", "e", "f", "g", "xs"]}
+{"src": "{{ f(*a, **b) }}", "meta": ["a", "b", "f"]}
+{"src": "{% raw %}{{ nope }}{% endraw %}", "meta": []}
+{"src": "{# {{ nope }} #}", "meta": []}
+{"src": "{% raw %}{% include 'x.j2' %}{% endraw %}", "meta": []}
+{"src": "{# {% include 'x.j2' %} #}", "meta": []}
+{"src": "{% if x == '%}' %}ok{% endif %}", "meta": ["x"]}
+{"src": "{% if x == \"%}\" %}ok{% endif %}", "meta": ["x"]}
+{"src": "{% set xs = [1, 2] %}", "meta": []}
+{"src": "a  {%- if x -%}  b  {%- endif -%}  c", "meta": ["x"]}
+{"src": "a  {%+ if x +%}  b  {% endif %}  c", "meta": ["x"]}
+{"src": "a {{- x -}} b", "meta": ["x"]}
+{"src": "a {#- c -#} b", "meta": []}
+{"src": "{% raw %}{% endraw %}", "meta": []}
+{"src": "{% raw %}a{% endraw %}b{% raw %}c{% endraw %}", "meta": []}
+{"src": "{%- raw -%}  x  {%- endraw -%}", "meta": []}
+{"src": "{% raw %}{% raw %}{% endraw %}", "meta": []}
+{"src": "{# a #}{# b #}", "meta": []}
+{"src": "{##}", "meta": []}
+{"src": "{# unclosed", "meta": null, "err": "Missing end of comment tag"}
+{"src": "{% if x %}", "meta": null, "err": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'."}
+{"src": "{{ x", "meta": null, "err": "unexpected end of template, expected 'end of print statement'."}
+{"src": "{% for x in xs %}", "meta": null, "err": "Unexpected end of template. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'."}
+{"src": "{% set a = '{{' %}", "meta": []}
+{"src": "{% set a = '{%' %}", "meta": []}
+{"src": "{{ '}}' }}", "meta": []}
+{"src": "", "meta": []}
+{"src": "no tags at all", "meta": []}
+{"src": "{{}}", "meta": null, "err": "Expected an expression, got 'end of print statement'"}
+{"src": "{%%}", "meta": null, "err": "tag name expected"}
+{"src": "{{ xs[1] }}", "meta": ["xs"]}
+{"src": "{{ {'a': 1} }}", "meta": []}
+{"src": "{{ f(a, [1, 2], {'k': 'v'}) }}", "meta": ["a", "f"]}
+{"src": "{% extends 'base.j2' %}", "meta": []}
+{"src": "{% include 'partials/header.j2' %}", "meta": []}
+{"src": "{% import 'macros.j2' as m %}", "meta": []}
+{"src": "{% from 'macros.j2' import a, b as c %}", "meta": []}
+{"src": "{% include some_var %}", "meta": ["some_var"]}
+{"src": "{% include ['a.j2', 'b.j2'] %}", "meta": []}
+{"src": "{% include 'a.j2' ignore missing %}", "meta": []}
+{"src": "{% include 'a.j2' with context %}", "meta": []}
+{"src": "line one\n{% if x %}\n  body\n{% endif %}\nline two", "meta": ["x"]}
+{"src": "{{\n  x\n}}", "meta": ["x"]}
+{"src": "#jinja2: block_start_string:'<%', block_end_string:'%>'\n<% include 'a.j2' %>\n", "meta": []}
+{"src": "\n#jinja2: block_start_string:'<%', block_end_string:'%>'\n<% include 'a.j2' %>\n", "meta": []}
+{"src": "#jinja2: variable_start_string:'[%', variable_end_string:'%]'\n{% include 'a.j2' %}\n", "meta": []}
+{"src": "#jinja2: line_statement_prefix:'#'\n# include 'a.j2'\n", "meta": []}
+{"src": "#jinja2: lstrip_blocks=True\n{% include 'a.j2' %}\n", "meta": []}
+{"src": "#jinja2: nosuchkey:'x'\n{% include 'a.j2' %}\n", "meta": []}
+{"src": "#jinja2: block_start_string:'<%', , block_end_string:'%>'\n{% include 'a.j2' %}\n", "meta": []}
+{"src": "#jinja2: variable_start_string:'{%'\n{% include 'a.j2' %}\n", "meta": null, "err": "tag name expected"}
+{"src": "#jinja2: block_start_string:'<%'", "meta": []}
+{"src": "文字化け\n", "meta": []}
+{"src": "BAR\n", "meta": []}
+{"src": "Before\n{{ fail() }}\nAfter\n", "meta": ["fail"]}
+{"src": "Foo\n{% for item in broken %}\n  ...\n{% endif %}\n", "meta": null, "err": "Encountered unknown tag 'endif'. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'."}
+{"src": "FOO\n", "meta": []}
+{"src": "{# BAD — `partials/nowhere.j2` is on no search path of any task that renders this file, so\n   the render fails on the target host the moment this line is reached. One\n   `missing-template` WARNING.\n\n   Measured on ansible-core 2.21.2, rendering this file from a play-level task:\n\n     Task failed: Error rendering template: 'partials/nowhere.j2' not found in search paths:\n     '<demo>/templates', '<demo>', '<demo>/templates', '<demo>', '<demo>/templates/templates',\n     '<demo>/templates'\n\n   — at task run time, which is why no task in `templates_chain.yml` actually renders it.\n   Note the repeats: that is ansible's own list, `[playbook_dir, basedir, dirname(source)]`\n   each doubled as `<p>/templates` then `<p>`. #}\n{% include \"partials/nowhere.j2\" %}\n\n{# GOOD — the same absent target with `ignore missing`. Legal by design: ansible renders\n   nothing here and the play carries on, so this must stay silent. #}\n{% include \"partials/nowhere.j2\" ignore missing %}\n\n{# GOOD — this one exists. #}\n{% include \"partials/header.j2\" %}\n", "meta": []}
+{"src": "{# GOOD — this file carries no `#jinja2:` header. Its delimiters come from the TASK that\n   renders it, which passes `block_start_string: \"<%\"` and friends\n   (`plugins/action/template.py:125-134`). So the grammar of this file is written in another\n   file, and reading it needs the link from here back to `templates_chain.yml`. #}\n<% if inventory_hostname is defined %>\nhost = [[ inventory_hostname ]]\n<% endif %>\n\n{# NO HINT — with the block delimiters moved by the task, this is ordinary text and the file\n   renders it verbatim. Read with the default `{% %}` we would call `notatag` an unknown tag\n   and squiggle a template that works. Same trap as the `#jinja2:` header, one file further\n   away. #}\n{% notatag %}\n", "meta": null, "err": "Encountered unknown tag 'notatag'."}
+{"src": "{# T-040 — the root of the include chain. All four target-naming tags, each with a literal\n   target, which is exactly what `jinja2.meta.find_referenced_templates` reports:\n\n       extends base.conf.j2 · import macros.j2 · from macros.j2 · include partials/header.j2\n       · include optional.conf.j2\n\n   Ansible never parses this file at playbook-parse time; a broken tag here is a run-time\n   failure on the target host. `broken.conf.j2` is that case. #}\n{% extends \"base.conf.j2\" %}\n{% import \"macros.j2\" as m %}\n{% from \"macros.j2\" import listen_line %}\n\n{% block header %}\n{% include \"partials/header.j2\" %}\n{% endblock %}\n\n{% block body %}\n{{ listen_line(app_port | default(8080)) }}\n{{ m.upstream('web') }}\n{% include \"optional.conf.j2\" %}\n{% endblock %}\n", "meta": ["app_port", "listen_line", "m"]}
+{"src": "#jinja2: line_statement_prefix:\"#\"\n{# GOOD in itself — nothing in this file is wrong. It exists to give\n   `partials/inherited.j2` an includer whose grammar is not the default one, which is what\n   makes that partial unparseable. Measured on ansible-core 2.21.2: rendering this file fails\n   with `Encountered unknown tag 'notatag'`, pointing at the partial, so no task renders it.\n\n   Note the comment you are reading is `{# #}` and not `##`: this header sets\n   `line_statement_prefix` and NOT `line_comment_prefix`, so a line opening `##` here would be\n   a line STATEMENT whose body begins with `#`. That is a syntax error, and it is the mistake\n   this fixture was first written with. #}\n# include \"partials/inherited.j2\"\n", "meta": []}
+{"src": "#jinja2: nosuchkey:\"x\"\n{# BAD — `Invalid '#jinja2:' override key 'nosuchkey'.`, measured verbatim on ansible-core\n   2.21.2 as `Task failed: Syntax error in template: ...`. One `template-syntax` ERROR, on\n   the header line. #}\nplain text, and the header above stops the file rendering at all\n", "meta": []}
+{"src": "#jinja2: block_start_string:\"<%\", block_end_string:\"%>\", variable_start_string:\"[%\", variable_end_string:\"%]\"\n{# GOOD — the `#jinja2:` header replaces the delimiters for this file only. Ansible reads it\n   (`_jinja_bits.py:76,162-192`); it must be the very first byte, and it beats anything the\n   `template:` module passes. Both measured on ansible-core 2.21.2. #}\n<% include \"partials/header.j2\" %>\nserver [% inventory_hostname %];\n\n{# Measured, and not obvious: the overridden delimiters belong to the whole render, not to\n   this file. `partials/header.j2` is written with the default `{{ }}` and is pulled in here,\n   so its `{{ inventory_hostname }}` comes out LITERAL — `# rendered for {{ inventory_hostname }}`\n   — while `[% inventory_hostname %]` above renders. One template, two delimiter sets, and\n   only the includer's win. #}\n\n{# NO HINT — with the block delimiters moved, this is ordinary text, and the file renders it\n   verbatim. Read with the default `{% %}` we would call `notatag` an unknown tag and put a\n   red squiggle on a template that works. That false positive is the reason the header is\n   read at all. #}\n{% notatag %}\n", "meta": null, "err": "Encountered unknown tag 'notatag'."}
+{"src": "{# T-040 — the parent of the chain. `app.conf.j2` extends this file, so this is the template\n   that produces the output; the child only fills the blocks. #}\n# {{ app_name | default('demo') }} — generated by ansible, do not edit\n{% block header %}{% endblock %}\n[server]\nport = {{ app_port | default(8080) }}\n{% block body %}{% endblock %}\n", "meta": ["app_name", "app_port"]}
+{"src": "{# T-040 — one file, three answers. The include target below is a bare name, and the search\n   path that resolves it belongs to the *task doing the rendering*, not to this file. Measured\n   on ansible-core 2.21.2 with this exact fixture:\n\n       rendered from roles/edge-proxy  ->  roles/edge-proxy/templates/shared.j2\n       rendered from roles/edge-cache  ->  roles/edge-cache/templates/shared.j2\n       rendered from a play-level task ->  templates/shared.j2\n\n   So \"go to definition\" on this line has no single answer. It jumps to the play-level\n   `templates/shared.j2` — the third row, correct for a play-level render and one of three.\n   Offering all three needs the link from this file back to the tasks that render it, which is\n   T-015's, so the jump is \"a file this include reaches\" rather than \"the file\". #}\n{% include \"shared.j2\" %}\n", "meta": []}
+{"src": "{# T-040 — the play-level `shared.j2`. Two roles have a file of the same name; this is the\n   one a play-level task gets. #}\n# shared: play-level templates/\n", "meta": []}
+{"src": "#jinja2: line_statement_prefix:\"#\", line_comment_prefix:\"##\"\n## GOOD — the sixth and seventh lexer states. A line opening with `#` (blanks allowed before\n## it) is a statement; `##` runs to end of line and vanishes. Both are ordinary\n## `TemplateOverrides` fields, so this header is all it takes to change the grammar.\n## MEASURED THE HARD WAY — this include names `partials/plain.j2` and not\n## `partials/header.j2`, which every other template here uses. `header.j2` opens with\n## `# rendered for {{ inventory_hostname }}`, and under THIS file's delimiters that leading\n## `#` makes it a line statement: ansible fails the render with\n## `Encountered unknown tag 'rendered'`. The delimiters belong to the whole render, not to\n## the file that declares them, so a partial written for the default grammar can become\n## unparseable purely by who includes it.\n# include \"partials/plain.j2\"\n# for h in [\"alpha\", \"beta\"]\nhost = {{ h }}   ## this trailing comment is stripped from the output\n# endfor\n\n{# GOOD — mixing is legal and measured: a block opened with braces can be closed by a line\n   statement. Before the line states existed we read this as an unclosed `{% if %}` and put a\n   `template-syntax` ERROR on a template ansible renders fine. #}\n{% if true %}\nmixed = yes\n# endif\n\n## NO HINT — a `#` in the middle of a line is not a statement: the rule is anchored to the\n## start of the line, so this next line survives verbatim.\nnot a statement: there is a # in the middle of this line\n", "meta": null, "err": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'."}
+{"src": "{# T-040 — the import target. `import` binds this whole file as a namespace and `from` binds\n   one name out of it; both spellings name the same file and both are references. #}\n{% macro upstream(group) %}upstream {{ group }} { server 127.0.0.1; }{% endmacro %}\n{% macro listen_line(port) %}listen {{ port }};{% endmacro %}\n", "meta": []}
+{"src": "{# T-040 — every way of writing an include that is not one plain literal. Each comment says\n   what `find_referenced_templates` reports, which is what this project must report too. #}\n\n{# NAMES BOTH: a list is not a dynamic name. Jinja tries the entries in order and renders the\n   first that exists; upstream reports every entry, so both are references. #}\n{% include [\"partials/site.j2\", \"partials/header.j2\"] %}\n\n{# NAMES ONE: `ignore missing` makes an absent target legal, and it is still a reference —\n   the modifier changes what happens at render, not what the tag points at. #}\n{% include \"partials/absent.j2\" ignore missing %}\n\n{# NAMES NOTHING: the target is a runtime value. There is no file to judge, so the answer is\n   silence rather than a guess — the standing trade everywhere in this codebase. #}\n{% include tuning_file %}\n\n{# NAMES NOTHING: `raw` is a lexer state, so its body is literal text and not a tag at all. #}\n{% raw %}{% include \"partials/header.j2\" %}{% endraw %}\n\n{# NAMES NOTHING, and this line is why the lexer has a comment state:\n   {% include \"partials/header.j2\" %} #}\n\n{# ONE TAG, NOT TWO: the `%}` is inside a string, so it does not end the tag. A `{%`-search\n   splits this line and reports the rest of it as template data. #}\n{% if app_env == '%}' %}# unreachable unless app_env really is that string{% endif %}\n", "meta": ["app_env", "tuning_file"]}
+{"src": "{# BAD — a template that cannot render. `Encountered unknown tag 'forr'`, from jinja2 3.1.6\n   and from us; one `template-syntax` ERROR on the line below.\n\n   No task renders this file, and that is the point. Measured on ansible-core 2.21.2: a\n   playbook with this file sitting in `templates/` runs `ok`, because a template is not\n   parsed until the task that renders it runs on the target. The runtime does report this\n   — at deploy, on the managed host. Here it is a squiggle while you type. #}\n{% forr host in groups['web'] %}\nserver {{ host }};\n{% endforr %}\n", "meta": null, "err": "Encountered unknown tag 'forr'."}
+{"src": "listen = {{ app_port | default(8080) }}\n", "meta": ["app_port"]}
+{"src": "{# BAD, and only from here — this file is included by `line_statements.conf.j2`, whose\n   `#jinja2:` header sets `line_statement_prefix:\"#\"`. Delimiters belong to the RENDER, not to\n   the file, so the line below is a line statement in that grammar and the render fails:\n\n     Task failed: Syntax error in template: Encountered unknown tag 'notatag'\n\n   measured on ansible-core 2.21.2. Read on its own with the default grammar this file is\n   perfectly fine, which is the whole point: nothing about these bytes is wrong, and the fault\n   is who includes them. #}\n# notatag this line is text by itself and a tag when included\n", "meta": []}
+{"src": "{# T-040 — a leaf of the chain, one directory down. Nothing here names another template. #}\n# rendered for {{ inventory_hostname }}\n", "meta": ["inventory_hostname"]}
+{"src": "{# T-040 — edge-cache's `shared.j2`. Same name as the play-level one and as edge-proxy's. #}\n# shared: roles/edge-cache/templates/\n", "meta": []}
+{"src": "{# T-040 — edge-proxy's `shared.j2`. Same name as the play-level one and as edge-cache's. #}\n# shared: roles/edge-proxy/templates/\n", "meta": []}

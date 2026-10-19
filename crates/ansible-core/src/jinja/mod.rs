@@ -14,12 +14,14 @@
 mod ast;
 mod highlight;
 mod lexer;
+mod names;
 mod parser;
 mod statement;
 mod template;
 
 pub use ast::{Args, BinOp, CmpOp, Const, Expr, ExprKind, UnOp};
 pub use lexer::{Cause, Error};
+pub use names::{expression_lookups, template_lookups, Lookup};
 pub use parser::parse;
 pub use statement::{references, references_in, will_not_render, will_not_render_in, RefTag, Reference, Stmt};
 pub use highlight::{expression_tokens, tokens as semantic_tokens, SemToken, TokenType};

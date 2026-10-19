@@ -440,20 +440,43 @@ impl Site {
     }
 }
 
-/// Variable uses inside `{{ }}` templates in `text`. `base` is the byte offset of `text`
-/// in the document, so the returned spans are absolute. Literal text outside `{{ }}` is
-/// not scanned — only a template expression references variables.
+/// Variable uses in `text` read as the template Ansible renders it. `base` is the byte offset
+/// of `text` in the document, so the returned spans are absolute. Literal text is not
+/// scanned, and a name the template binds itself — a `{% for %}` target, a `{% set %}`, a
+/// macro parameter — is not a use (T-212).
 pub fn template_uses(text: &str, base: usize, out: &mut Vec<VarUse>) {
     template_uses_with(text, base, out, condition::variable_uses)
 }
 
-/// Which words count is the caller's choice — see [`Extract`].
+/// Which words count is the caller's choice — see [`Extract`]. Which of them are context
+/// lookups is [`crate::jinja::template_lookups`]'s: a word survives only where it is one.
 fn template_uses_with(
     text: &str,
     base: usize,
     out: &mut Vec<VarUse>,
     extract: impl Fn(&str) -> Vec<(String, usize, usize)>,
 ) {
+    if !text.contains("{{") && !text.contains("{%") {
+        return;
+    }
+    if let Some(lookups) = crate::jinja::template_lookups(text) {
+        let mut exprs: Vec<Span> = Vec::new();
+        for l in &lookups {
+            if !exprs.contains(&l.expr) {
+                exprs.push(l.expr);
+            }
+        }
+        for e in exprs {
+            let mut found = Vec::new();
+            push_uses(e.slice(text), base + e.start, &mut found, &extract);
+            out.extend(found.into_iter().filter(|u| {
+                u.through_hostvars || lookups.iter().any(|l| l.span.start + base == u.span.start && l.span.end + base == u.span.end)
+            }));
+        }
+        return;
+    }
+    // A template that does not parse — usually one being typed — keeps the `{{ }}` scan, so
+    // hover and definition still answer on it.
     let mut i = 0;
     while let Some(open) = text[i..].find("{{") {
         let expr_start = i + open + 2;
@@ -1075,8 +1098,8 @@ pub fn definitions(path: &Path, nodes: &[Node]) -> Vec<Located> {
 /// - playbooks only: a tasks/role file can receive vars from any caller
 /// - a definition anywhere reachable exempts, even one that runs later (ordering is the
 ///   uncovered-`when` check's business, not this one's)
-/// - magic vars, `ansible_*` facts, `loop_var`/`vars_prompt`/`{% set %}` declarations
-///   are never flagged
+/// - magic vars, `ansible_*` facts, `loop_var`/`vars_prompt` declarations, and names a
+///   template binds itself (`{% for %}`, `{% set %}`, …) are never flagged
 /// - a use whose own expression or guard handles undefinedness (`default(…)`,
 ///   `is defined`) is the author saying "I know" — silent
 ///
@@ -1102,7 +1125,7 @@ pub fn undefined_uses_in(
     // every name the file mentions. That is what keeps `app_config_dir: {{ app_env }}`
     // inside an entry silent while the same name in the play's tasks is reported.
     let all = definitions_with_deps_in(path, nodes, cache).0;
-    let declared = declared_names(nodes, text);
+    let declared = declared_names(nodes);
     let plays = facts_possible(nodes, cache.context(path).config.facts_persist());
     let core = cache.core_version();
     let facts_at = |at: usize| {
@@ -1286,9 +1309,10 @@ fn facts_possible(nodes: &[Node], persist: bool) -> Vec<(Span, bool)> {
 }
 
 /// Names declared by constructs the definition index doesn't model: `loop_control:
-/// loop_var` / `index_var`, `vars_prompt:`, and `{% set %}`. Collected file-wide — broader
-/// than their real scope, which errs toward silence.
-fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
+/// loop_var` / `index_var` and `vars_prompt:`. Collected file-wide — broader than their real
+/// scope, which errs toward silence. A name a template binds itself never becomes a use at
+/// all ([`template_uses`]).
+fn declared_names(nodes: &[Node]) -> HashSet<String> {
     fn walk(n: &Node, out: &mut HashSet<String>) {
         match n {
             Node::Mapping { entries, .. } => {
@@ -1319,20 +1343,6 @@ fn declared_names(nodes: &[Node], text: &str) -> HashSet<String> {
     }
     let mut out = HashSet::new();
     nodes.iter().for_each(|n| walk(n, &mut out));
-    let mut rest = text;
-    while let Some(i) = rest.find("{%") {
-        rest = &rest[i + 2..];
-        if let Some(after) = rest.trim_start().strip_prefix("set ") {
-            let name: String = after
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !name.is_empty() {
-                out.insert(name);
-            }
-        }
-    }
     out
 }
 
@@ -2521,6 +2531,66 @@ mod tests {
             "    - debug: { msg: \"{{ password }} {% set tmp = 1 %}{{ tmp }}\" }\n",
         );
         assert!(undef(src).is_empty());
+    }
+
+    fn undef_in_msg(msg: &str) -> Vec<String> {
+        undef(&format!("- hosts: all\n  tasks:\n    - debug:\n        msg: \"{msg}\"\n"))
+    }
+
+    /// T-212's Symptom: `h` is the loop's, and `groups` — read in the `{% for %}` itself —
+    /// is a use the `{{ }}` scan never saw.
+    #[test]
+    fn a_for_target_is_not_undefined_and_its_iterable_is_read() {
+        assert_eq!(undef_in_msg("{% for h in web_hosts %}{{ h }}:{{ port }} {% endfor %}"), ["web_hosts", "port"]);
+        // Control: the same name after `endfor` is unbound, measured on 2.21.2.
+        assert_eq!(undef_in_msg("{% for h in web_hosts %}{% endfor %}{{ h }}"), ["web_hosts", "h"]);
+        assert_eq!(undef_in_msg("{% for h in xs %}{{ loop.index }}{% endfor %}{{ loop }}"), ["xs", "loop"]);
+    }
+
+    #[test]
+    fn every_binding_tag_binds_and_only_in_its_scope() {
+        let cases: &[(&str, &[&str])] = &[
+            ("{% set zz = 1 %}{{ zz }}", &[]),
+            ("{{ zz }}{% set zz = 1 %}", &["zz"]),
+            ("{% set zz %}x{% endset %}{{ zz }}", &[]),
+            ("{% with a = 2 %}{{ a }}{% endwith %}", &[]),
+            ("{% with a = 2 %}{% endwith %}{{ a }}", &["a"]),
+            ("{% macro f(p) %}{{ p }}{% endmacro %}{{ f(1) }}", &[]),
+            ("{% macro f(p) %}{% endmacro %}{{ f(1) }}{{ p }}", &["p"]),
+            ("{% from 'm' import a %}{{ a }}", &[]),
+            ("{{ a }}{% from 'm' import a %}", &["a"]),
+            ("{% import 'm' as m %}{{ m.x }}", &[]),
+            ("{% block b %}{{ super() }}{% endblock %}", &[]),
+        ];
+        for (msg, want) in cases {
+            assert_eq!(undef_in_msg(msg), *want, "{msg}");
+        }
+    }
+
+    /// Each scalar is its own template: a `{% set %}` in one is not bound in another,
+    /// measured on 2.21.2 (`'zz' is undefined`).
+    #[test]
+    fn a_jinja_set_does_not_reach_another_scalar() {
+        let src = concat!(
+            "- hosts: all\n  tasks:\n",
+            "    - debug: { msg: \"{% set zz = 1 %}{{ zz }}\" }\n",
+            "    - debug: { msg: \"{{ zz }}\" }\n",
+        );
+        assert_eq!(undef(src), ["zz"]);
+    }
+
+    /// The corpus rows T-212 lists beside the bindings: a keyword argument and `raw` text.
+    #[test]
+    fn a_keyword_argument_and_raw_text_are_not_uses() {
+        assert_eq!(undef_in_msg("{{ out | map(attribute='stdout') | list }}"), ["out"]);
+        assert_eq!(undef_in_msg("{{ n | int(base=16) }}"), ["n"]);
+        assert_eq!(undef_in_msg("{% raw %}{{ end }}{% endraw %}{{ real }}"), ["real"]);
+    }
+
+    /// A template that does not parse still reports what its `{{ }}` hold.
+    #[test]
+    fn an_unparsed_template_falls_back_to_the_brace_scan() {
+        assert_eq!(undef_in_msg("{{ x }} {% frobnicate %}"), ["x"]);
     }
 
     /// A tasks/role file can receive vars from any caller — never diagnosable.
