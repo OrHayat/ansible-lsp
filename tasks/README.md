@@ -97,6 +97,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
+| T-248 | **bug** · [A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry](open/T-248-a-role-include-written-x-yml-loads-x-yml-beside-the-file-thr.md) | M    | —          |
 
 ### P2 — coverage and usability
 
