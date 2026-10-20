@@ -42,5 +42,32 @@ value is *valid*, just not what the author meant.
 - [ ] a `listof` violation is an ERROR naming the expected item type
 - [ ] a play with no `hosts:`, or an empty/None entry, is an ERROR
 - [ ] `notify:` containing a comma warns that it is one handler name, not two
-- [ ] `register`, `loop_var` and `index_var` are checked against `validate_variable_name`
+- [x] `register`, `loop_var` and `index_var` are checked against `validate_variable_name`
+      — `keyword_values::variable_names`, rule `invalid-keyword-value`, demo rows in
+      `demo/keyword_values.yml`
 - [ ] `vars_prompt` keys are checked against the closed set
+
+## Variable names — measured 2.21.3
+
+The two kinds fail at different times, and the messages say which:
+
+| Shape                                            | Ansible                                        |
+| ------------------------------------------------ | ---------------------------------------------- |
+| `register: my-var` / `none` / `café` / `42` / `""` | load error — `--syntax-check` fails            |
+| `register: {a-b: x}` (projection form)           | load error on the key                          |
+| `register: class` / `null` / `~`                 | runs                                           |
+| `register: "{{ x }}"`                            | load error — reported by `static-template`, not here |
+| `loop_var: my-item` / `True` / `null`, `index_var: my-idx` / `5` | task fails at run time; `--syntax-check` passes |
+| the same under `when: false`, task or block      | **still fails**                                |
+| with `ignore_errors` / `rescue`                  | caught like any task failure                   |
+| with no `loop:` at all                           | still fails — `post_validate` runs regardless (T-155 measured valid names only) |
+| `loop_var: "{{ v }}"`                            | rendered first, then checked                   |
+
+Known silences, not false claims: a plain YAML 1.1 bool (`register: yes`) reads as the
+string `yes` because the parser drops scalar style (T-162); `loop_var: null` is fatal but
+skipped. A `register` projection value must be an expression over `_task.result` —
+`_task.result.msg` works, a bare `"{{ msg }}"` fails at run time — which nothing checks yet.
+
+Found on the way, not a box here: a **literal** bad `vars:` key (`vars: {my-var: 1}`) is
+fatal at parse through the same `validate_variable_name` (`base.py:620`), and no rule
+reports it — `static-template` covers only the templated key.

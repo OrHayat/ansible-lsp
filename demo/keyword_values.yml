@@ -66,3 +66,33 @@
     - "25%" # GOOD
   tasks:
     - debug: msg=x
+
+# T-108 — names that must pass `validate_variable_name`. A bad `register` fails at load, so
+# `--syntax-check` catches it; a bad `loop_var` / `index_var` passes it and fails the task
+# when it runs, even under a false `when:`.
+- name: variable names
+  hosts: localhost
+  gather_facts: false
+  vars:
+    var_name: my_item
+  tasks:
+    - debug: msg=x
+      register: my-result # BAD: a dash is not allowed
+    - debug: msg=x
+      register: none # BAD: Jinja reserves it
+    - debug: msg=x
+      register: class # GOOD: Python keywords pass
+    - debug: msg=x
+      register:
+        good_name: _task.result.msg # GOOD: the dict form checks keys
+        bad-name: _task.result.msg # BAD
+    - debug: msg="{{ my_item }}"
+      loop: [1]
+      loop_control:
+        loop_var: "{{ var_name }}" # GOOD: rendered first
+        index_var: my-index # BAD: the task fails when it runs
+    - debug: msg=x
+      loop: [1]
+      when: false
+      loop_control:
+        loop_var: my-item # BAD: when false does not stop it

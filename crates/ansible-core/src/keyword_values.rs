@@ -80,7 +80,82 @@ fn stmt(s: &Stmt, nodes: &[Node], out: &mut Vec<Problem>) {
                 stmt(child, nodes, out);
             }
         }
-        Stmt::Task(t) => directives(&t.directives, Scope::Task, nodes, out),
+        Stmt::Task(t) => {
+            directives(&t.directives, Scope::Task, nodes, out);
+            variable_names(&t.directives, nodes, out);
+        }
+    }
+}
+
+/// T-108: `register`, `loop_var` and `index_var` must pass `validate_variable_name`.
+/// Measured on 2.21.3, the two kinds fail differently:
+///
+/// - `register` is checked when the task loads, before anything renders — `--syntax-check`
+///   fails. The dict form checks each key. Null is fine. A templated name is fatal too, but
+///   [`crate::static_fields`] reports that, so it is skipped here rather than said twice.
+/// - `loop_var` / `index_var` are checked when the task runs, after templating, so a
+///   `{{ }}` value is skipped. A false `when:` on the task or its block does not prevent it;
+///   `ignore_errors` and `rescue` catch it like any task failure.
+///
+/// The parser drops scalar style (T-162), so a plain YAML 1.1 bool like `register: yes`
+/// reads as the string `yes` and passes — a silence, never a false error.
+fn variable_names(ds: &[Directive], nodes: &[Node], out: &mut Vec<Problem>) {
+    if let Some(value) = last(ds, "register", nodes) {
+        let names: Vec<&Node> = match value {
+            Node::Mapping { entries, .. } => entries.iter().map(|(k, _)| k).collect(),
+            _ => vec![value],
+        };
+        for n in names {
+            // `~` is YAML null, which Ansible accepts.
+            let Some(v) = literal(n).filter(|v| *v != "~") else { continue };
+            if !is_variable_name(v) {
+                let message = format!(
+                    "`{v}` is not a valid `register` name — Ansible refuses to load this task, \
+                     and `--syntax-check` fails. {}",
+                    name_rule(v)
+                );
+                out.push(Problem { span: n.span(), tier: Tier::Error, message, rule: RULE_ID });
+            }
+        }
+    }
+    let Some(Node::Mapping { entries, .. }) = last(ds, "loop_control", nodes) else { return };
+    for key in ["loop_var", "index_var"] {
+        let Some((_, value)) = entries.iter().rev().find(|(k, _)| k.as_str() == Some(key)) else { continue };
+        let Some(v) = literal(value) else { continue };
+        if !is_variable_name(v) {
+            let message = format!(
+                "`{v}` is not a valid `{key}` — this task fails whenever it runs, even under a \
+                 false `when:`, though `--syntax-check` passes. {}",
+                name_rule(v)
+            );
+            out.push(Problem { span: value.span(), tier: Tier::Error, message, rule: RULE_ID });
+        }
+    }
+}
+
+/// On a duplicate key Ansible loads only the last.
+fn last<'a>(ds: &[Directive], key: &str, nodes: &'a [Node]) -> Option<&'a Node> {
+    let d = ds.iter().rev().find(|d| d.key == key)?;
+    node_with_span(nodes, d.value)
+}
+
+/// `validate_variable_name` (`utils/vars.py`): `isidentifier()` and `isascii()`, minus the
+/// names Jinja reserves (`_jinja_bits.JINJA_KEYWORDS`). Python keywords like `class` pass.
+pub fn is_variable_name(v: &str) -> bool {
+    let mut chars = v.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !JINJA_KEYWORDS.contains(&v)
+}
+
+const JINJA_KEYWORDS: &[&str] = &["true", "false", "none", "True", "False", "None", "not"];
+
+fn name_rule(v: &str) -> &'static str {
+    if JINJA_KEYWORDS.contains(&v) {
+        "Jinja reserves this name."
+    } else {
+        "A name starts with a letter or underscore and holds only ASCII letters, digits and \
+         underscores."
     }
 }
 
@@ -267,6 +342,76 @@ mod tests {
     #[test]
     fn order_off_a_play_is_not_judged() {
         assert_eq!(run("- debug: msg=x\n  order: random\n"), vec![]);
+    }
+
+    /// T-108, each row measured on 2.21.3: the rejected shapes fail `--syntax-check` with
+    /// "Invalid 'register' specified", the accepted ones run.
+    #[test]
+    fn register_names_follow_validate_variable_name() {
+        let reg = |v: &str| run(&format!("- debug: msg=x\n  register: {v}\n"));
+        for bad in ["my-var", "none", "not", "True", "café", "42", "\"\"", "\"a b\""] {
+            assert_eq!(reg(bad).len(), 1, "register: {bad}");
+        }
+        for good in ["my_var", "_x", "x1", "class", "null", "~", "\"Null\""] {
+            assert_eq!(reg(good), vec![], "register: {good}");
+        }
+        // Fatal too, but `static-template`'s report; one claim per token.
+        assert_eq!(reg("\"{{ x }}\""), vec![]);
+        // The dict form checks each key, and only the key.
+        let got = reg("\n    ok_name: _task.result.msg\n    bad-name: _task.result.msg");
+        assert_eq!(got, vec![("bad-name".into(), Tier::Error)]);
+    }
+
+    /// Measured: both render first and fail at run time, so a template is skipped; a bad
+    /// literal fails the task.
+    #[test]
+    fn loop_var_and_index_var_are_checked_after_templating() {
+        let lc = |k: &str, v: &str| run(&format!("- debug: msg=x\n  loop: [1]\n  loop_control:\n    {k}: {v}\n"));
+        assert_eq!(lc("loop_var", "my-item"), vec![("my-item".into(), Tier::Error)]);
+        assert_eq!(lc("loop_var", "True"), vec![("True".into(), Tier::Error)]);
+        assert_eq!(lc("index_var", "5"), vec![("5".into(), Tier::Error)]);
+        assert_eq!(lc("loop_var", "my_item"), vec![]);
+        assert_eq!(lc("loop_var", "\"{{ v }}\""), vec![]);
+        assert_eq!(lc("index_var", "idx"), vec![]);
+        // `label` and `pause` are not names.
+        assert_eq!(lc("label", "my-label"), vec![]);
+    }
+
+    /// The two kinds fail at different times, and the message must say which.
+    #[test]
+    fn name_messages_say_when_ansible_fails() {
+        let m = messages("- debug: msg=x\n  register: my-var\n  loop: [1]\n  loop_control: {loop_var: my-item}\n");
+        assert_eq!(m.len(), 2, "{m:?}");
+        assert!(m[0].contains("`--syntax-check` fails"), "{}", m[0]);
+        assert!(m[1].contains("`--syntax-check` passes") && m[1].contains("false `when:`"), "{}", m[1]);
+        assert!(messages("- debug: msg=x\n  register: none\n")[0].contains("Jinja reserves"));
+    }
+
+    /// Corpus gate. Prints every hit, beside how many keys of each kind the sweep saw — zero
+    /// hits over zero keys is a sweep that looked at nothing. An error-tier hit on working
+    /// code means the rule is wrong, since it claims the task cannot run.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-core keyword_values_corpus -- --ignored --nocapture"]
+    fn keyword_values_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        let files = crate::workspace::yaml_files(&root);
+        assert!(!files.is_empty(), "no YAML under {}", root.display());
+        let mut seen: std::collections::BTreeMap<&str, usize> = Default::default();
+        let mut hits = 0usize;
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            for key in ["register:", "loop_var:", "index_var:", "debugger:", "order:", "serial:"] {
+                *seen.entry(key).or_default() += text.matches(key).count();
+            }
+            let Some(nodes) = Document::new(text.clone()).parse() else { continue };
+            for p in problems(&crate::ast::build(&nodes), &nodes) {
+                let line = text[..p.span.start.min(text.len())].lines().count();
+                hits += 1;
+                println!("  HIT {:?} {}:{} {}", p.tier, path.strip_prefix(&root).unwrap_or(path).display(), line, p.message);
+            }
+        }
+        println!("--- {} files, {hits} hit(s), keys seen {seen:?}", files.len());
     }
 
     /// The three `serial` hints say three different things; a list item says "remaining".
