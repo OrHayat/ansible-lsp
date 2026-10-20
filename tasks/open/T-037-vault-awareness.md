@@ -58,17 +58,46 @@ secrets.
 - Optional: `vault_password_file` / `vault_identity_list` from `ansible.cfg` — resolve the
   path, warn if missing (extends closed T-003, which already parses the cfg).
 
+## needs decision: hedge to what?
+
+Reproduced 2026-10-20 on 2.21.3: `vars_files: [secrets.yml]` with `secrets.yml` wholly
+vaulted, the play prints `db_password`, and `var-undefined` says it "is never defined in any
+file reachable from this playbook". The typo `db_pasword_typo` beside it is reported the same
+way and is genuinely undefined: Ansible fails on it.
+
+The Approach above says definedness "degrades to a hedge rather than warn". T-228, which faces
+the same opacity with vars plugins, says the opposite: an unknown name "keeps its warning with
+the plugin conceded in the message". The two need one answer, since a reader cannot tell which
+kind of opaque source is behind a warning. Options:
+
+1. **Silence** every undefined name on a path that reaches a vaulted source. Never wrong, but a
+   typo there is invisible.
+2. **Keep the WARNING, name the vault** — "`db_password` is not defined in any file we can read;
+   `secrets.yml` is vaulted and may define it." T-228's choice. Honest, but still a squiggle on
+   working code.
+3. **Downgrade to a HINT** naming the vault. Visible on request, never a warning on working code.
+
+Whichever is chosen, the ignored test above already asserts the shared part and turns green
+for any of them.
+
 ## Done when
 
 - [ ] a vaulted file yields no `unparseable` error (probe says none fires today — pin it
-      as a regression test) and no missing/undefined noise
+      as a regression test) and no missing/undefined noise — the first half is pinned (the
+      same test asserts a wholly vaulted file has no diagnostics at all); the second half is
+      the decision below, with the ignored
+      `a_name_from_a_vaulted_vars_file_is_never_called_undefined_without_naming_the_vault`
+      waiting on it
 - [ ] the vault-id label surfaces on hover
-- [ ] `!vault` scalars count as defined vars, resolve go-to-definition, and don't
-      produce "undefined" warnings (test a task `vars:` and a vars-file entry)
+- [x] `!vault` scalars count as defined vars, resolve go-to-definition, and don't
+      produce "undefined" warnings (test a task `vars:` and a vars-file entry) — already true,
+      pinned by `vaulted_files_parse_clean_and_inline_vault_values_define_their_names` (play
+      `vars:`, task `vars:`, vars file), red under a parser mutation that drops vaulted values
 - [ ] definedness hedges instead of warning whenever a vaulted vars source is reachable,
       the hedge names the vaulted file, and opacity is per-path — playbooks that reach
       no vault keep full coverage
-- [ ] a test fixture with a real vault header is pinned
+- [x] a test fixture with a real vault header is pinned — same test, real `ansible-vault`
+      output for a throwaway password
 
 Docs: https://docs.ansible.com/ansible/latest/vault_guide/index.html
 

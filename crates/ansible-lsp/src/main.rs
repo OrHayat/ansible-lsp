@@ -5229,6 +5229,102 @@ mod tests {
         assert!(jump("{{ ansible_play_name").is_none());
     }
 
+    /// T-037's pins, on real `ansible-vault` output (password `pw`, plaintext `s3cret`).
+    /// Measured on 2.21.3: the play prints both inline-vaulted values. A wholly vaulted file
+    /// is one plain scalar to YAML — header plus hex lines — so it parses and must stay free
+    /// of every diagnostic; an inline `!vault` value is an ordinary key whose value we cannot
+    /// read, so the name is defined and jumps to its key. `nope_token` is the control that
+    /// the undefined rule is live in this fixture.
+    #[test]
+    fn vaulted_files_parse_clean_and_inline_vault_values_define_their_names() {
+        let d = std::env::temp_dir().join("ansible-lsp-t037-vault");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let inline = |name: &str, indent: &str| {
+            let body = [
+                "$ANSIBLE_VAULT;1.1;AES256",
+                "33393564626637313239613739353533666661386433653562633536306466643866303462653032",
+                "6262643964663232326133316536633863653631613234370a653935313538306461653236346635",
+                "33626465633437626139653734373538383732383838356463346461663266653035666333363961",
+                "6463333262313937300a653733613163653863353033616632346230383661333831313030663634",
+                "3762",
+            ];
+            let mut s = format!("{indent}{name}: !vault |\n");
+            for l in body {
+                s += &format!("{indent}      {l}\n");
+            }
+            s
+        };
+        let whole = concat!(
+            "$ANSIBLE_VAULT;1.1;AES256\n",
+            "30633134313464663338636561643833376235613562366430666566313133316633303864326663\n",
+            "6233363664363136646330353165646537303161336462360a623330393537376335363839633635\n",
+            "62666463383833663536383032653835663934613336643036303439306638656662316633396230\n",
+            "3435346135626139360a323139653833363631663362363766376364376636613261613230626164\n",
+            "63663962373662383130353163383233363434373863356138646635613436373633\n",
+        );
+        let secrets = d.join("secrets.yml");
+        std::fs::write(&secrets, whole).unwrap();
+        let a = super::Backend::analyze_text(whole.to_string(), &secrets).expect("a vaulted file parses");
+        let ds: Vec<String> = super::Backend::diagnostics_of(&a).into_iter().map(|d| d.message).collect();
+        assert!(ds.is_empty(), "a vaulted file is not broken YAML: {ds:?}");
+
+        std::fs::write(d.join("file_vars.yml"), inline("file_token", "")).unwrap();
+        let text = format!(
+            "- hosts: all\n  vars:\n{}  vars_files: [file_vars.yml]\n  tasks:\n    - debug: {{ msg: \"{{{{ api_token }}}} {{{{ file_token }}}} {{{{ nope_token }}}}\" }}\n    - debug: {{ msg: \"{{{{ task_token }}}}\" }}\n      vars:\n{}",
+            inline("api_token", "    "),
+            inline("task_token", "        ")
+        );
+        let path = d.join("play.yml");
+        std::fs::write(&path, &text).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let undefined: Vec<String> =
+            ansible_core::vars::undefined_uses(&path, &nodes, &text).into_iter().map(|u| u.name).collect();
+        assert_eq!(undefined, ["nope_token"]);
+
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let jump = |needle: &str| {
+            let (l, c) = doc.byte_to_lsp(text.find(needle).unwrap() + 3);
+            super::Backend::variable_defs_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &no_buffers(), &[], &no_cache(), None, None)
+        };
+        let here = jump("{{ api_token").expect("api_token jumps");
+        assert_eq!((here.len(), here[0].range.start.line), (1, 2), "lands on the `api_token:` key");
+        let there = jump("{{ file_token").expect("file_token jumps");
+        assert_eq!(there.len(), 1);
+        assert!(there[0].uri.path().ends_with("file_vars.yml"), "{:?}", there[0].uri);
+        assert_eq!(there[0].range.start.line, 0);
+        let task = jump("{{ task_token").expect("task_token jumps");
+        assert_eq!(task.len(), 1);
+        assert!(text.lines().nth(task[0].range.start.line as usize).unwrap().trim_start().starts_with("task_token:"));
+    }
+
+    /// T-037's open lie, measured on 2.21.3: the play prints `db_password` from a wholly
+    /// vaulted `vars_files` entry, and we call it never defined. Whether the answer is silence
+    /// or a warning that names the vault is undecided; either way the bare "never defined"
+    /// is wrong, so this asserts the part both answers share.
+    #[test]
+    #[ignore = "a vaulted vars_files source is read as empty — T-037"]
+    fn a_name_from_a_vaulted_vars_file_is_never_called_undefined_without_naming_the_vault() {
+        let d = std::env::temp_dir().join("ansible-lsp-t037-vaulted-vars-files");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("secrets.yml"),
+            "$ANSIBLE_VAULT;1.1;AES256\n30633134313464663338636561643833376235613562366430666566313133316633303864326663\n",
+        )
+        .unwrap();
+        let text = "- hosts: all\n  vars_files: [secrets.yml]\n  tasks:\n    - debug: { msg: \"{{ db_password }}\" }\n";
+        let path = d.join("play.yml");
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        for d in super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None) {
+            if d.message.contains("db_password") {
+                assert!(d.message.contains("secrets.yml"), "names no vault: {}", d.message);
+            }
+        }
+    }
+
     /// T-224: a provided name read outside its scope is reported with the scope it needs,
     /// never as "never defined" — no file could define `item`, and saying so sends the
     /// reader to add one. The unlooped `nope_missing` beside them is the control that the
