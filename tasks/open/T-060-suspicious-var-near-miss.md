@@ -37,6 +37,36 @@ reporting it is a false-positive machine; **the near-miss filter is the feature*
 - Extraction reuses `condition::variables()` — its literals/filters/tests/magic handling
   is pinned by `ignores_literals_filters_tests_and_magic_vars`; extend that test first.
 
+## needs decision: the premise did not hold — reject, or rescope?
+
+Measured 2026-10-20. The rule was built as specified (guarded, reached by no definition, within
+two edits of a name that does reach the use, underscore pairs ranked first) and run over the
+private corpus and seven public trees:
+
+| Tree                | Near misses | Guarded unreached uses |
+| ------------------- | ----------- | ---------------------- |
+| private corpus      | 52          | 615                    |
+| kubespray           | 3           | 48                     |
+| the other six       | 0           | 3,902                  |
+
+Read one by one, **none is a bug.** In the private corpus, 32 of the 33 distinct pairs are the
+input-normalisation idiom: the "near" name is *defined from* the guarded one,
+`_x: "{{ x | default(...) }}"`, so `x` is a deliberate optional input and its `is defined`
+guard is correct. The 33rd is the same shape through a differently named derived variable. The
+kubespray three are `node`, an input its own `assert` says "must be set explicitly", against
+the plural `nodes`. The table under Problem was read off the first group: those pairs are
+not "always false" if the underscored name is computed from the plain one.
+
+So the near-miss filter, which the ticket calls the whole feature, selects the idiom rather
+than typos. A narrowed rule would have to exclude (a) a suggestion whose definition reads the
+guarded name, and (b) a pure prefix/suffix addition (`node`/`nodes`). After both, every tree
+reports **zero**, so nothing is left to show the rule finds anything real. Options: reject;
+keep it open as a P3 waiting on a corpus with a real case; or ship the narrowed rule on the
+strength of synthetic tests alone, which rule 1 argues against.
+
+The attempt (the shared `unreached_uses` split, rule and corpus gate) was reverted, not
+committed; the split itself is sound and is the natural base if this is rescoped.
+
 ## Done when
 
 - [ ] the corpus near-miss list is reported as WARNING; plain guarded-undefined is silent
