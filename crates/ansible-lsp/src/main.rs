@@ -8790,6 +8790,44 @@ mod tests {
         assert_eq!(codes(half), ["invalid-task-file"]);
     }
 
+    /// T-108's `notify-comma` on its demo, both directions: the one WARN row and nothing else
+    /// in the file — the GOOD, NO HINT and suppressed rows are pinned by staying out — then
+    /// no hit in any other demo file.
+    #[test]
+    fn notify_comma_matches_its_demo_exactly_and_fires_nowhere_else() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+        let is_ours = |d: &tower_lsp::lsp_types::Diagnostic| {
+            matches!(&d.code, Some(NumberOrString::String(s)) if s == "notify-comma")
+        };
+        let path = std::path::Path::new("../../demo/notify_comma.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let got: Vec<(u32, DiagnosticSeverity)> = super::Backend::diagnostics_of(&a)
+            .iter()
+            .filter(|d| is_ours(d))
+            .map(|d| (d.range.start.line, d.severity.unwrap()))
+            .collect();
+        let expected: Vec<(u32, DiagnosticSeverity)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("# WARN"))
+            .map(|(i, _)| (i as u32, DiagnosticSeverity::WARNING))
+            .collect();
+        assert_eq!(expected.len(), 1, "the fixture lost its row");
+        assert_eq!(got, expected);
+
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        for path in ansible_core::workspace::yaml_files(&demo) {
+            if path.file_name().is_some_and(|n| n == "notify_comma.yml") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let n = super::Backend::diagnostics_of(&a).iter().filter(|d| is_ours(d)).count();
+            assert_eq!(n, 0, "{}", path.display());
+        }
+    }
+
     /// T-157 on its demo: the exact set of dead names, in file order, anchored on the `name:`
     /// value — so the GOOD rows and the SILENCED row are asserted quiet by the same list. Then
     /// every other demo file, where the one exception is counted rather than exempted:

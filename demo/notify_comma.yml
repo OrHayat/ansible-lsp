@@ -1,0 +1,45 @@
+# T-108 — `notify` is a plain list and never splits a string on commas, unlike `tags`.
+#
+# Measured on core 2.21.3. `--syntax-check` passes every row. A WARN row fails at run time
+# with "The requested handler '...' was not found" once its task reports changed. GOOD rows
+# are the same shape measured working.
+
+- name: notify does not split on commas
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: two handlers meant, one name asked for
+      command: "true"
+      changed_when: true
+      notify: "restart web, restart db" # WARN: one name, and no handler has it
+
+    - name: the list says what was meant
+      command: "true"
+      changed_when: true
+      notify: # GOOD
+        - restart web
+        - restart db
+
+    - name: a part that is no handler here proves nothing
+      command: "true"
+      changed_when: false
+      notify: "restart web, flush cache" # NO HINT: not evidence the author meant two
+
+    - name: something answers the whole string
+      command: "true"
+      changed_when: true
+      notify: "restart web, restart cache" # GOOD: the `listen:` below matches it exactly
+
+    - name: suppressed
+      command: "true"
+      changed_when: false
+      notify: "restart web, restart db" # noqa: notify-comma
+
+  handlers:
+    - name: restart web
+      debug: msg=web
+    - name: restart db
+      debug: msg=db
+    - name: restart cache
+      debug: msg=cache
+      listen: "restart web, restart cache"

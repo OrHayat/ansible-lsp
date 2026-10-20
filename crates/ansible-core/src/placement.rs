@@ -59,6 +59,9 @@ pub const INVALID_TAG_MEMBER_RULE_ID: &str = "invalid-tag-member";
 /// only at run time, from the notifying task, and only when that task reports `changed`.
 pub const DEAD_HANDLER_NAME_RULE_ID: &str = "dead-handler-name";
 
+/// T-108, and ours: `notify: "a, b"` is one handler name, not two. See [`comma_notify`].
+pub const NOTIFY_COMMA_RULE_ID: &str = "notify-comma";
+
 /// T-158, and ours: `user:` on a play. ansible-core calls it deprecated in a comment and in
 /// row 13's error, but alone it loads silently — measured on 2.21.2, no warning at all.
 pub const DEPRECATED_KEYWORD_RULE_ID: &str = "deprecated-keyword";
@@ -801,6 +804,11 @@ fn play(node: &Node, src: &str, error_on_missing_handler: bool, out: &mut Vec<Pr
     }
     let live = live_handler_names(node.get("handlers").map(Node::items).unwrap_or_default());
     for key in keywords::PLAY_TASK_CONTAINERS {
+        for item in node.get(key).map(Node::items).unwrap_or_default() {
+            comma_notify(item, &live, error_on_missing_handler, out);
+        }
+    }
+    for key in keywords::PLAY_TASK_CONTAINERS {
         let pos = if *key == "handlers" { Pos::HandlerEntry } else { Pos::PlayTasks };
         if let Some(list) = node.get(key) {
             for item in list.items() {
@@ -937,6 +945,55 @@ fn dead_handler_name(
         message,
         rule: DEAD_HANDLER_NAME_RULE_ID,
     });
+}
+
+/// `notify` is a plain `isa='list'`, so unlike `tags` a comma-separated string is not split:
+/// `notify: "restart a, restart b"` asks for one handler with that whole name. Measured on
+/// 2.21.3, with handlers `restart a` and `restart b`: `--syntax-check` passes, and the run
+/// fails with "The requested handler 'restart a, restart b' was not found" once the task
+/// reports changed. A handler or `listen:` named the full string answers it, and then it works.
+///
+/// Fires only on proof of intent: every part names a handler or topic of this play, and
+/// nothing in the play answers the whole string. A templated handler `name:` could render to
+/// it (T-196), so one of those anywhere in the play means silence. A block's `notify:` is
+/// inherited by its tasks, so blocks are walked too.
+fn comma_notify(node: &Node, live: &HashSet<String>, error_on_missing_handler: bool, out: &mut Vec<Problem>) {
+    let values: Vec<&Node> = match node.get("notify") {
+        Some(Node::Sequence { items, .. }) => items.iter().collect(),
+        Some(v) => vec![v],
+        None => Vec::new(),
+    };
+    let templated = live.iter().any(|n| n.contains("{{") || n.contains("{%"));
+    for v in values {
+        let Some(name) = v.as_str() else { continue };
+        if templated || !name.contains(',') || name.contains("{{") || live.contains(name) {
+            continue;
+        }
+        let parts: Vec<&str> = name.split(',').map(str::trim).collect();
+        if !parts.iter().all(|p| live.contains(*p)) {
+            continue;
+        }
+        let outcome = if error_on_missing_handler {
+            "fails at run time"
+        } else {
+            "is skipped with a warning at run time (`error_on_missing_handler` is off)"
+        };
+        let list = parts.join(", ");
+        out.push(Problem {
+            span: v.span(),
+            tier: Tier::Warning,
+            message: format!(
+                "`{name}` is one handler name, not a list of {} — `notify` does not split on \
+                 commas the way `tags` does. No handler here has that name, so this {outcome} \
+                 once the task reports changed. Write a list: `notify: [{list}]`.",
+                parts.len()
+            ),
+            rule: NOTIFY_COMMA_RULE_ID,
+        });
+    }
+    for t in inner_tasks(node) {
+        comma_notify(t, live, error_on_missing_handler, out);
+    }
 }
 
 /// The two handler-entry shapes whose `name:` is not a handler name.
@@ -2143,6 +2200,48 @@ mod tests {
             }
         }
         println!("--- {} files, {hits} hit(s)", files.len());
+    }
+
+    fn comma(src: &str) -> Vec<(String, Tier)> {
+        let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
+        problems(&nodes, src, true)
+            .into_iter()
+            .filter(|p| p.rule == NOTIFY_COMMA_RULE_ID)
+            .map(|p| (p.span.slice(src).to_string(), p.tier))
+            .collect()
+    }
+
+    const TWO: &str = "  handlers:\n    - {name: restart a, debug: msg=A}\n    - {name: restart b, debug: msg=B}\n";
+
+    /// T-108, measured on 2.21.3: "The requested handler 'restart a, restart b' was not found".
+    #[test]
+    fn a_comma_notify_naming_two_handlers_warns() {
+        let play = |notify: &str| comma(&format!("- hosts: all\n  tasks:\n    - command: x\n      notify: {notify}\n{TWO}"));
+        assert_eq!(play("\"restart a, restart b\""), vec![("restart a, restart b".into(), Tier::Warning)]);
+        assert_eq!(play("[\"restart a,restart b\"]"), vec![("restart a,restart b".into(), Tier::Warning)]);
+        // The list is what was meant, and works.
+        assert_eq!(play("[restart a, restart b]"), vec![]);
+        // A part that is no handler here is no proof of intent.
+        assert_eq!(play("\"restart a, restart c\""), vec![]);
+        // A block's `notify:` is inherited by its tasks.
+        let block = format!("- hosts: all\n  tasks:\n    - block:\n        - command: x\n      notify: \"restart a, restart b\"\n{TWO}");
+        assert_eq!(comma(&block).len(), 1);
+        // And a task inside a block, or a rescue, is still a task.
+        let inner = format!("- hosts: all\n  tasks:\n    - block:\n        - command: x\n      rescue:\n        - command: y\n          notify: \"restart a, restart b\"\n{TWO}");
+        assert_eq!(comma(&inner).len(), 1);
+        let nodes = Document::new(block.clone()).parse().unwrap();
+        let m: Vec<String> = problems(&nodes, &block, true).into_iter().map(|p| p.message).collect();
+        assert!(m.iter().any(|m| m.contains("one handler name") && m.contains("[restart a, restart b]")), "{m:?}");
+    }
+
+    /// Measured: a handler or `listen:` named the whole string answers it, and the run works.
+    /// A templated handler name could render to it.
+    #[test]
+    fn a_comma_notify_that_something_answers_stays_silent() {
+        let src = |extra: &str| format!("- hosts: all\n  tasks:\n    - command: x\n      notify: \"restart a, restart b\"\n{TWO}{extra}");
+        assert_eq!(comma(&src("    - {name: \"restart a, restart b\", debug: msg=AB}\n")), vec![]);
+        assert_eq!(comma(&src("    - {name: h, listen: \"restart a, restart b\", debug: msg=L}\n")), vec![]);
+        assert_eq!(comma(&src("    - {name: \"restart {{ svc }}\", debug: msg=T}\n")), vec![]);
     }
 
     /// The documented miss: no scalar style in the tree, so an int is indistinguishable

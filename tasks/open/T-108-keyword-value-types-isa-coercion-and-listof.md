@@ -43,7 +43,8 @@ value is *valid*, just not what the author meant.
 - [x] a play with no `hosts:`, or an empty/None entry, is an ERROR — the empty/None/shape
       half shipped in T-110 (`placement::hosts`); the missing key is
       `placement::missing_hosts`, demo row in `demo/placement.yml`
-- [ ] `notify:` containing a comma warns that it is one handler name, not two
+- [x] `notify:` containing a comma warns that it is one handler name, not two —
+      `placement::comma_notify`, rule `notify-comma`, demo `demo/notify_comma.yml`
 - [x] `register`, `loop_var` and `index_var` are checked against `validate_variable_name`
       — `keyword_values::variable_names`, rule `invalid-keyword-value`, demo rows in
       `demo/keyword_values.yml`
@@ -84,3 +85,16 @@ one, `tags: [never]` or not. `hosts: []` by contrast fails at load, before any p
 Two deliberate silences. A file whose only play lacks `hosts:` reads exactly like a task file,
 since `hosts:` is what makes a playbook; and an entry with a key no play accepts (a stray
 top-level `- debug:`) is refused on that key first, which is the invalid-attribute rule's.
+
+## `notify` and commas — measured 2.21.3
+
+`notify: "restart a, restart b"` with handlers `restart a` and `restart b`: `--syntax-check`
+passes, and the run fails with "The requested handler 'restart a, restart b' was not found"
+once the task reports changed. The same string inside a list (`["a, b"]`) is the same one name.
+A handler `name:` or a `listen:` topic equal to the whole string answers it, and the run works.
+
+The rule is a WARNING, and fires only on proof of intent: every comma-split part is a handler
+name or topic of the same play, and nothing in the play answers the whole string. Silent when
+any handler in the play has a templated `name:` (it could render to the string, T-196), and
+when a part names no handler here — handlers from `roles:` are not in the set, so that case is
+a miss rather than a guess. The general "names no handler at all" case is T-196's.
