@@ -87,6 +87,8 @@ pub struct Problem {
 
 const HOSTS_EMPTY: &str = "Hosts list cannot be empty. Please check your playbook";
 const HOSTS_NONE: &str = "Hosts list cannot contain values of 'None'. Please check your playbook";
+const HOSTS_MISSING: &str = "The field 'hosts' is required but was not set. `--syntax-check` \
+     reports it; a run executes the plays before this one first.";
 const HOSTS_SHAPE: &str = "Hosts list must be a sequence or string. Please check your playbook.";
 const NOT_A_PLAY: &str =
     "playbook entries must be either valid plays or 'import_playbook' statements";
@@ -778,6 +780,8 @@ fn play(node: &Node, src: &str, error_on_missing_handler: bool, out: &mut Vec<Pr
     deprecated_user(node, out);
     if let Some(hosts) = node.get("hosts") {
         self::hosts(hosts, src, out);
+    } else {
+        missing_hosts(node, out);
     }
     if let Some(prompts) = node.get("vars_prompt") {
         vars_prompt(prompts, out);
@@ -1264,6 +1268,23 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
         // `Other` with no anchor table, so the value is invisible here. T-160.
         Node::Other { .. } => {}
     }
+}
+
+/// T-108: `hosts` is `required=True` (`base.py:559-563`). Measured on 2.21.3, the error is
+/// not at load: `--syntax-check` reports it, but a run executes every earlier play first and
+/// dies on reaching this one, `tags: [never]` or not.
+///
+/// Only reached in a file another play makes a playbook — a file whose one play lacks `hosts:`
+/// reads exactly like a task file, so it stays a miss. An entry with a key no play accepts is
+/// skipped too: Ansible stops on that key first (a stray `- debug:` at the top level is
+/// `'debug' is not a valid attribute for a Play`), and that is the invalid-attribute rule's.
+fn missing_hosts(node: &Node, out: &mut Vec<Problem>) {
+    let keys: Vec<&Node> = node.entries().iter().map(|(k, _)| k).collect();
+    if keys.iter().any(|k| k.as_str().is_none_or(|k| !keywords::legal_key(keywords::KeyContext::Play, k))) {
+        return;
+    }
+    let Some(first) = keys.first() else { return };
+    out.push(error(first.span(), HOSTS_MISSING.into()));
 }
 
 /// `_load_vars_prompt` (`play.py:234-247`). `preprocess_vars` wraps a lone mapping into a
@@ -2077,6 +2098,51 @@ mod tests {
         ] {
             assert!(check(src).is_empty(), "for {src:?}: {:?}", check(src));
         }
+    }
+
+    /// T-108. Measured on 2.21.3: "The field 'hosts' is required but was not set", from
+    /// `--syntax-check` and, in a run, after every earlier play has run.
+    #[test]
+    fn a_play_without_hosts_is_an_error_in_a_playbook() {
+        let src = "- hosts: all\n  tasks: []\n- name: second\n  tasks: []\n";
+        assert_eq!(check(src), [HOSTS_MISSING]);
+        // Squiggled on the entry's first key, not the whole play.
+        let p = problems(&Document::new(src.into()).parse().unwrap(), src, false);
+        assert_eq!(p[0].span.slice(src), "name");
+        // `user` is a play key too, renamed to `remote_user` before validation.
+        let user = check("- hosts: all\n  tasks: []\n- user: root\n  roles: []\n");
+        assert!(user.contains(&HOSTS_MISSING.to_string()), "{user:?}");
+    }
+
+    /// A lone hostless play reads exactly like a task file; a stray task at the top level is
+    /// refused on its action key first, which is the invalid-attribute rule's report.
+    #[test]
+    fn missing_hosts_stays_silent_where_it_cannot_be_the_first_fault() {
+        let lone = check("- name: only\n  tasks: []\n");
+        assert!(!lone.contains(&HOSTS_MISSING.to_string()), "{lone:?}");
+        let stray = "- hosts: all\n  tasks: []\n- debug: msg=x\n";
+        assert!(!check(stray).contains(&HOSTS_MISSING.to_string()), "{:?}", check(stray));
+    }
+
+    /// Corpus gate: every placement diagnostic, so a before/after diff shows any change.
+    #[test]
+    #[ignore = "corpus gate: ANSIBLE_CORPUS=<path> cargo test -p ansible-core placement_corpus -- --ignored --nocapture"]
+    fn placement_corpus() {
+        let Ok(root) = std::env::var("ANSIBLE_CORPUS") else { return };
+        let root = std::path::PathBuf::from(root);
+        let files = crate::workspace::yaml_files(&root);
+        assert!(!files.is_empty(), "no YAML under {}", root.display());
+        let mut hits = 0usize;
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Some(nodes) = Document::new(text.clone()).parse() else { continue };
+            for p in problems(&nodes, &text, false) {
+                let line = text[..p.span.start.min(text.len())].lines().count();
+                hits += 1;
+                println!("  HIT {}:{} {}", path.strip_prefix(&root).unwrap_or(path).display(), line, p.message);
+            }
+        }
+        println!("--- {} files, {hits} hit(s)", files.len());
     }
 
     /// The documented miss: no scalar style in the tree, so an int is indistinguishable

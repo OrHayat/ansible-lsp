@@ -5955,6 +5955,8 @@ mod tests {
                 "Hosts list cannot contain values of 'None'. Please check your playbook",
                 "Hosts list contains an invalid host value: '{ name: web }'",
                 "Hosts list must be a sequence or string. Please check your playbook.",
+                "The field 'hosts' is required but was not set. `--syntax-check` reports it; a \
+                 run executes the plays before this one first.",
                 "Invalid vars_prompt data structure, found unsupported key 'promt'",
                 "Invalid vars_prompt data structure, missing 'name' key",
                 "Invalid vars_prompt data structure, missing 'name' key",

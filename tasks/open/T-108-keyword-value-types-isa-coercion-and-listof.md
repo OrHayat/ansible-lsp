@@ -40,12 +40,15 @@ value is *valid*, just not what the author meant.
 ## Done when
 
 - [ ] a `listof` violation is an ERROR naming the expected item type
-- [ ] a play with no `hosts:`, or an empty/None entry, is an ERROR
+- [x] a play with no `hosts:`, or an empty/None entry, is an ERROR — the empty/None/shape
+      half shipped in T-110 (`placement::hosts`); the missing key is
+      `placement::missing_hosts`, demo row in `demo/placement.yml`
 - [ ] `notify:` containing a comma warns that it is one handler name, not two
 - [x] `register`, `loop_var` and `index_var` are checked against `validate_variable_name`
       — `keyword_values::variable_names`, rule `invalid-keyword-value`, demo rows in
       `demo/keyword_values.yml`
-- [ ] `vars_prompt` keys are checked against the closed set
+- [x] `vars_prompt` keys are checked against the closed set — shipped in T-110
+      (`placement::vars_prompt`, `keywords::VARS_PROMPT_KEYS`); this box was never ticked
 
 ## Variable names — measured 2.21.3
 
@@ -71,3 +74,13 @@ skipped. A `register` projection value must be an expression over `_task.result`
 Found on the way, not a box here: a **literal** bad `vars:` key (`vars: {my-var: 1}`) is
 fatal at parse through the same `validate_variable_name` (`base.py:620`), and no rule
 reports it — `static-template` covers only the templated key.
+
+## Missing `hosts:` — measured 2.21.3
+
+"The field 'hosts' is required but was not set." is a post-validate error, not a load error:
+`--syntax-check` reports it, but a run executes every earlier play and dies on reaching this
+one, `tags: [never]` or not. `hosts: []` by contrast fails at load, before any play runs.
+
+Two deliberate silences. A file whose only play lacks `hosts:` reads exactly like a task file,
+since `hosts:` is what makes a playbook; and an entry with a key no play accepts (a stray
+top-level `- debug:`) is refused on that key first, which is the invalid-attribute rule's.

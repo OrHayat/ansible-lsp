@@ -33,6 +33,12 @@
   tasks:
     - debug: { msg: ok }
 
+# T-108, measured on 2.21.3: `--syntax-check` reports this, but a run executes every play
+# above first and stops here.
+- name: a play with no hosts at all # BAD: "The field 'hosts' is required but was not set."
+  tasks:
+    - debug: { msg: ok }
+
 # Known miss, deliberate: `hosts: 42` is an int to Ansible and fatal with the same
 # "must be a sequence or string" error, but the parse tree keeps no scalar style, so we
 # cannot tell it from the perfectly good `hosts: "42"`. A miss, never a false error.
