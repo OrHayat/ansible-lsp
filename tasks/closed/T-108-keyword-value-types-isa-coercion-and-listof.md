@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | task | P1       | M    | T-106 | T-107      |
+| done   | task | P1       | M    | T-106 | T-107      |
 
 ## Problem
 
@@ -39,7 +39,9 @@ value is *valid*, just not what the author meant.
 
 ## Done when
 
-- [ ] a `listof` violation is an ERROR naming the expected item type
+- [x] a `listof` violation is an ERROR naming the expected item type — `keyword_values::listof`
+      for `collections`, `gather_subset` and `listen`; `hosts` is `placement::hosts` and a
+      container in `tags` is `placement::tags_checks` (T-110)
 - [x] a play with no `hosts:`, or an empty/None entry, is an ERROR — the empty/None/shape
       half shipped in T-110 (`placement::hosts`); the missing key is
       `placement::missing_hosts`, demo row in `demo/placement.yml`
@@ -72,7 +74,7 @@ string `yes` because the parser drops scalar style (T-162); `loop_var: null` is 
 skipped. A `register` projection value must be an expression over `_task.result` —
 `_task.result.msg` works, a bare `"{{ msg }}"` fails at run time — which nothing checks yet.
 
-Found on the way, not a box here: a **literal** bad `vars:` key (`vars: {my-var: 1}`) is
+Found on the way, filed as T-247: a **literal** bad `vars:` key (`vars: {my-var: 1}`) is
 fatal at parse through the same `validate_variable_name` (`base.py:620`), and no rule
 reports it — `static-template` covers only the templated key.
 
@@ -98,3 +100,17 @@ name or topic of the same play, and nothing in the play answers the whole string
 any handler in the play has a templated `name:` (it could render to the string, T-196), and
 when a part names no handler here — handlers from `roles:` are not in the set, so that case is
 a miss rather than a guess. The general "names no handler at all" case is T-196's.
+
+## `listof` — measured 2.21.3
+
+| Keyword         | Container or bare-dash item                                          |
+| --------------- | -------------------------------------------------------------------- |
+| `collections`   | load error, `Keyword 'collections' items must be of type 'str', not 'dict'.` |
+| `listen`        | load error, same shape, `list` / `dict` / `NoneType`                  |
+| `gather_subset` | `--syntax-check` fails, `Error processing keyword 'gather_subset': …`  |
+| `tags`          | not this path: a container crashes earlier ("unhashable type"), a null item runs fine |
+| `hosts`         | `_validate_hosts` runs first, with its own messages                  |
+
+A lone mapping is wrapped into a one-item list, so it fails the same way; a null *value* is an
+empty list and fine. Scalar style is dropped (T-162), so `gather_subset: [1]` reads as a string
+and stays a miss, and so does an explicit `null` item, which reads the same as `"null"`.

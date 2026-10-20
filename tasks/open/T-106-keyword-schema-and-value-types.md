@@ -39,7 +39,7 @@ sibling epic).
 - [x] T-044 — Semantic AST (Play / Block / Task / Role)
 - [x] T-045 — Keyword schema from Ansible's FieldAttributes
 - [x] T-107 — Per-class keyword sets from FieldAttribute
-- [ ] T-108 — Keyword value types: isa coercion and listof
+- [x] T-108 — Keyword value types: isa coercion and listof
 - [x] T-109 — Keyword value enums
 - [ ] T-110 — Placement and mutual-exclusion rules
 - [ ] T-111 — module_defaults: shape, the 3-segment rule, and action groups
@@ -47,6 +47,7 @@ sibling epic).
 - [x] T-159 — Task-level invalid-attribute fires where ansible reports a conflicting action
 - [ ] T-209 — Model meta/main.yml whole, not just its top-level key names
 - [ ] T-210 — meta/main.yml accepts 22 keys that do nothing, and we say nothing
+- [ ] T-247 — A literal invalid vars: key is fatal at parse and no rule reports it
 
 ## Done when
 

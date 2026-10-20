@@ -15,7 +15,7 @@
 //! The value sets live with the keyword tables ([`keywords::DEBUGGER_VALUES`],
 //! [`keywords::ORDER_VALUES`]).
 
-use crate::ast::{Ast, Directive, PlayItem, Stmt};
+use crate::ast::{Ast, Directive, PlayItem, Stmt, UnknownKey};
 use crate::keywords;
 use crate::parse::{node_with_span, Node, Span};
 
@@ -57,6 +57,7 @@ pub fn problems(ast: &Ast, nodes: &[Node]) -> Vec<Problem> {
                 // what it does there is unmeasured.
                 let PlayItem::Play(p) = item else { continue };
                 directives(&p.directives, Scope::Play, nodes, &mut out);
+                listof(&p.directives, &p.unknown_keys, None, nodes, &mut out);
                 for s in p.pre_tasks.iter().chain(&p.tasks).chain(&p.post_tasks).chain(&p.handlers) {
                     stmt(s, nodes, &mut out);
                 }
@@ -76,12 +77,14 @@ fn stmt(s: &Stmt, nodes: &[Node], out: &mut Vec<Problem>) {
     match s {
         Stmt::Block(b) => {
             directives(&b.directives, Scope::Block, nodes, out);
+            listof(&b.directives, &b.unknown_keys, None, nodes, out);
             for child in b.block.iter().chain(&b.rescue).chain(&b.always) {
                 stmt(child, nodes, out);
             }
         }
         Stmt::Task(t) => {
             directives(&t.directives, Scope::Task, nodes, out);
+            listof(&t.directives, &t.unknown_keys, node_with_span(nodes, t.span), nodes, out);
             variable_names(&t.directives, nodes, out);
         }
     }
@@ -129,6 +132,51 @@ fn variable_names(ds: &[Directive], nodes: &[Node], out: &mut Vec<Problem>) {
                 name_rule(v)
             );
             out.push(Problem { span: value.span(), tier: Tier::Error, message, rule: RULE_ID });
+        }
+    }
+}
+
+/// T-108: `listof` (`base.py:483-491`), for the three keywords no other rule covers — `hosts`
+/// is `placement::hosts`, and a container in `tags` crashes before `listof` runs, which is
+/// `placement::tags_checks`. Measured on 2.21.3, all fail `--syntax-check` with Ansible's
+/// "Keyword 'listen' items must be of type 'str', not 'dict'." A lone mapping is wrapped into
+/// a one-item list first, so it fails the same way; a null *item* is `NoneType`, while a null
+/// value is an empty list and fine.
+///
+/// The parser drops scalar style (T-162), so `[1]` reads as `["1"]` and only containers and
+/// nulls can be judged. A key the invalid-attribute rule already rejects here (`listen:` on a
+/// plain task, `gather_subset:` on a block) is that rule's report, not a second one.
+///
+/// `listen` is structural on a task, so not among its directives; `task` is its own mapping.
+fn listof(ds: &[Directive], unknown: &[UnknownKey], task: Option<&Node>, nodes: &[Node], out: &mut Vec<Problem>) {
+    for key in ["collections", "gather_subset", "listen"] {
+        if unknown.iter().any(|u| u.key == key) {
+            continue;
+        }
+        let entry = match (key, task) {
+            ("listen", Some(t)) => t.entries().iter().rev().find(|(k, _)| k.as_str() == Some(key)).map(|(k, v)| (k.span(), v)),
+            _ => ds.iter().rev().find(|d| d.key == key).and_then(|d| Some((d.key_span, node_with_span(nodes, d.value)?))),
+        };
+        let Some((key_span, value)) = entry else { continue };
+        let items: Vec<&Node> = match value {
+            Node::Sequence { items, .. } => items.iter().collect(),
+            Node::Mapping { .. } => vec![value],
+            _ => continue,
+        };
+        for item in items {
+            let found = match item {
+                Node::Mapping { .. } => "dict",
+                Node::Sequence { .. } => "list",
+                Node::Null { .. } => "NoneType",
+                _ => continue,
+            };
+            let message = format!(
+                "Keyword '{key}' items must be of type 'str', not '{found}'. Ansible refuses to \
+                 load this, and `--syntax-check` fails."
+            );
+            // A null item's span is empty; point at the key instead.
+            let span = if matches!(item, Node::Null { .. }) { key_span } else { item.span() };
+            out.push(Problem { span, tier: Tier::Error, message, rule: RULE_ID });
         }
     }
 }
@@ -385,6 +433,36 @@ mod tests {
         assert!(m[0].contains("`--syntax-check` fails"), "{}", m[0]);
         assert!(m[1].contains("`--syntax-check` passes") && m[1].contains("false `when:`"), "{}", m[1]);
         assert!(messages("- debug: msg=x\n  register: none\n")[0].contains("Jinja reserves"));
+    }
+
+    /// T-108's `listof`, each row measured fatal on 2.21.3 with Ansible's own message.
+    #[test]
+    fn listof_keywords_refuse_container_and_null_items() {
+        let play = |v: &str| run(&format!("- hosts: all\n  {v}\n  tasks: []\n"));
+        assert_eq!(play("gather_subset: [min, {a: 1}]"), vec![("{a: 1}".into(), Tier::Error)]);
+        assert_eq!(play("gather_subset: [[min]]"), vec![("[min]".into(), Tier::Error)]);
+        assert_eq!(play("collections: {a: 1}"), vec![("{a: 1}".into(), Tier::Error)]);
+        // A bare dash is a null item, anchored on the key since it has no text of its own.
+        assert_eq!(play("collections:\n    - ns.coll\n    -"), vec![("collections".into(), Tier::Error)]);
+        let task = |v: &str| run(&format!("- debug: msg=x\n  {v}\n"));
+        assert_eq!(task("collections: [{a: 1}]"), vec![("{a: 1}".into(), Tier::Error)]);
+        // A task file reads as handlers, where `listen` is legal.
+        assert_eq!(task("listen: [t, {a: 1}]"), vec![("{a: 1}".into(), Tier::Error)]);
+        // And under a play's `handlers:`, the case that matters.
+        let h = run("- hosts: all\n  tasks: []\n  handlers:\n    - debug: msg=x\n      listen: [t, [u]]\n");
+        assert_eq!(h, vec![("[u]".into(), Tier::Error)]);
+        let m = messages("- debug: msg=x\n  listen: [{a: 1}]\n");
+        assert!(m[0].starts_with("Keyword 'listen' items must be of type 'str', not 'dict'."), "{}", m[0]);
+    }
+
+    #[test]
+    fn listof_controls_stay_silent() {
+        let play = |v: &str| run(&format!("- hosts: all\n  {v}\n  tasks: []\n"));
+        for ok in ["gather_subset: [min, network]", "gather_subset: min", "gather_subset:", "collections: [a.b]", "gather_subset: [\"{{ s }}\"]"] {
+            assert_eq!(play(ok), vec![], "{ok}");
+        }
+        // `listen` on a play's task (not a handler) is likewise that rule's.
+        assert_eq!(run("- hosts: all\n  tasks:\n    - debug: msg=x\n      listen: [{a: 1}]\n"), vec![]);
     }
 
     /// Corpus gate. Prints every hit, beside how many keys of each kind the sweep saw — zero

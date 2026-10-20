@@ -96,3 +96,21 @@
       when: false
       loop_control:
         loop_var: my-item # BAD: when false does not stop it
+
+# T-108 — `listof` keywords take strings. A container item, or a bare `-`, fails
+# `--syntax-check` with "Keyword '...' items must be of type 'str', not '...'".
+- name: listof items
+  hosts: localhost
+  gather_facts: false
+  gather_subset:
+    - min # GOOD
+    - { network: true } # BAD: a mapping is not a subset name
+  tasks:
+    - debug: msg=x
+      changed_when: true
+      notify: t
+  handlers:
+    - debug: msg=x
+      listen:
+        - t # GOOD
+        - [u, v] # BAD: a list is not a topic

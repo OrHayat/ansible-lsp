@@ -90,7 +90,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
-| T-108 | [Keyword value types: isa coercion and listof](open/T-108-keyword-value-types-isa-coercion-and-listof.md) | M    | ~~T-107~~      |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
@@ -158,6 +157,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
+| T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](open/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -354,6 +354,7 @@ T-021 is now unblocked on that side.
 | T-159 | **bug** · [Task-level invalid-attribute fires where ansible reports a conflicting action](closed/T-159-task-level-invalid-attribute-fires-where-ansible-reports-a-c.md) | done     |
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](closed/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | done     |
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](closed/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | done     |
+| T-108 | [Keyword value types: isa coercion and listof](closed/T-108-keyword-value-types-isa-coercion-and-listof.md) | done     |
 
 ## Settled — don't re-derive these
 
