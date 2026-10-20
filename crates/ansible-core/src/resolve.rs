@@ -3714,6 +3714,25 @@ mod tests {
         assert_eq!(first(&out, ReferenceKind::IncludeTasks).status, Status::Resolved);
     }
 
+    /// T-096's missing candidate, measured on 2.21.3: a role's `include_tasks: x.yml` with
+    /// `x.yml` only at `<playbook_dir>/tasks/` loads from any working directory. Here one
+    /// playbook invokes the role, so the answer is unambiguous; with several in different
+    /// directories it is not, and that policy is the ticket's open decision.
+    #[test]
+    #[ignore = "role includes do not search <playbook_dir>/tasks/ — needs the invoking playbook, T-096"]
+    fn a_role_include_finds_the_invoking_playbooks_tasks_dir() {
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", "[defaults]\n"),
+            ("/p/playbooks/site.yml", "- hosts: all\n  roles: [r1]\n"),
+            ("/p/playbooks/roles/r1/tasks/main.yml", ""),
+            ("/p/playbooks/tasks/x.yml", ""),
+        ]);
+        let out = mem_src("/p/playbooks/roles/r1/tasks/main.yml", "- include_tasks: x.yml\n", &fs);
+        let res = first(&out, ReferenceKind::IncludeTasks);
+        assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/playbooks/tasks/x.yml")]);
+    }
+
     /// T-098. `{{ ansible_config_file }}` is the file discovery found — exact when it
     /// appears, unlike the guessed variables — and stays templated when no config exists,
     /// since the runtime value would be undefined. Through `include_tasks`, because the

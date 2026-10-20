@@ -90,6 +90,12 @@ impl FileContext {
     /// which resolves only against `tasks/` — from the file's own dir it would be
     /// `tasks/query/query/exists.yml`. Getting this wrong invents missing-file
     /// warnings on working playbooks.
+    /// Not modelled, on purpose: `path_dwim_relative`'s `$CWD/<dirname>/<src>` candidate
+    /// (T-096). Measured on 2.21.3, a role's `include_tasks: x.yml` loads `$CWD/tasks/x.yml`
+    /// when run from the directory holding it and fails from anywhere else — an upstream
+    /// accident, see `upstream/ansible-cwd-relative-include.md`. So a `Missing` for a role or
+    /// task-file include is never proof: the file may sit under whatever directory the
+    /// playbook is run from.
     pub fn task_search_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         push_unique(&mut dirs, self.role_anchor_dir.clone());

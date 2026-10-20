@@ -151,6 +151,25 @@ collections root is `<playbook dir>/collections`, not `<project root>/collection
 `collections/` was not searched; `playbooks/collections/` was. `FileContext::collection_roots`
 still uses the project root — T-237 kept it, in the position Ansible gives the playbook's.
 
+## needs decision: which playbook dir, when a role has several invokers?
+
+Re-measured 2026-10-20 on 2.21.3: a role's `include_tasks: x.yml` with `x.yml` only at
+`<playbook_dir>/tasks/` loads from any working directory. T-020's reverse index now says who
+invokes a role, so the candidate is computable, but a role invoked from playbooks in two
+directories has two `<playbook_dir>`s and the resolver gives one verdict:
+
+1. **Only when every invoker agrees.** Add the candidate when the role has exactly one
+   invoking directory, keep today's answer otherwise. Never widens on a guess, and is silent
+   where the answer would depend on which playbook runs.
+2. **Union.** Resolved if found under any invoker's dir. Widens: points confidently at a file
+   that one of the playbooks cannot load, the failure the Approach above rejects.
+3. **Per invoker.** Resolved under some, Missing under others, reported as such. The honest
+   answer, and the multi-root shape T-202 also lacks; needs a verdict type that can say it.
+
+The same question is T-068's (`role_path`) and T-137's (`playbook_dir` in a task file); the
+answer should be one rule for all three. The corpus scan box below stays open until this
+lands, since this is the half that can add resolutions.
+
 ## Done when
 
 - [x] a reference in a playbook file no longer searches `project_root` — `task_bases`
@@ -159,9 +178,12 @@ still uses the project root — T-237 kept it, in the position Ansible gives the
       one entry and a naive filter would have deleted the file's own directory
 - [x] roles keep every slot they have today
 - [x] case 3 is left to T-020, said so in the code
-- [ ] `<playbook_dir>/tasks/<src>` is added as a candidate (real, and intended upstream)
-- [ ] `$CWD/<dirname>/<src>` is **not** modelled, and the code says why, citing
-      `upstream/ansible-cwd-relative-include.md`
+- [ ] `<playbook_dir>/tasks/<src>` is added as a candidate (real, and intended upstream) —
+      pinned by the ignored `a_role_include_finds_the_invoking_playbooks_tasks_dir`; blocked
+      on the decision below
+- [x] `$CWD/<dirname>/<src>` is **not** modelled, and the code says why, citing
+      `upstream/ansible-cwd-relative-include.md` — on `FileContext::task_search_dirs`,
+      re-measured on 2.21.3 the same day it was written
 - [ ] the corpus scan count is unchanged — **not run**, `~/app/ansible` is absent from this
       machine. The shipped half is a narrowing and cannot add resolutions; the remaining half
       can, so it must not ship without the scan.
