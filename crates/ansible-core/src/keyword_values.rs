@@ -15,7 +15,7 @@
 //! The value sets live with the keyword tables ([`keywords::DEBUGGER_VALUES`],
 //! [`keywords::ORDER_VALUES`]).
 
-use crate::ast::{Ast, Directive, PlayItem, Stmt, UnknownKey};
+use crate::ast::{Ast, Directive, PlayItem, RoleUse, Stmt, Task, UnknownKey};
 use crate::keywords;
 use crate::parse::{node_with_span, Node, Span};
 
@@ -48,6 +48,16 @@ enum Scope {
     Task,
 }
 
+impl Scope {
+    fn noun(self) -> &'static str {
+        match self {
+            Scope::Play => "play",
+            Scope::Block => "block",
+            Scope::Task => "task",
+        }
+    }
+}
+
 pub fn problems(ast: &Ast, nodes: &[Node]) -> Vec<Problem> {
     let mut out = Vec::new();
     match ast {
@@ -58,14 +68,18 @@ pub fn problems(ast: &Ast, nodes: &[Node]) -> Vec<Problem> {
                 let PlayItem::Play(p) = item else { continue };
                 directives(&p.directives, Scope::Play, nodes, &mut out);
                 listof(&p.directives, &p.unknown_keys, None, nodes, &mut out);
+                vars_keys(&p.directives, Scope::Play, true, nodes, &mut out);
+                for r in &p.roles {
+                    role_entry_vars(r, nodes, &mut out);
+                }
                 for s in p.pre_tasks.iter().chain(&p.tasks).chain(&p.post_tasks).chain(&p.handlers) {
-                    stmt(s, nodes, &mut out);
+                    stmt(s, true, nodes, &mut out);
                 }
             }
         }
         Ast::Tasks(stmts) => {
             for s in stmts {
-                stmt(s, nodes, &mut out);
+                stmt(s, false, nodes, &mut out);
             }
         }
         Ast::Other => {}
@@ -73,19 +87,92 @@ pub fn problems(ast: &Ast, nodes: &[Node]) -> Vec<Problem> {
     out
 }
 
-fn stmt(s: &Stmt, nodes: &[Node], out: &mut Vec<Problem>) {
+fn stmt(s: &Stmt, playbook: bool, nodes: &[Node], out: &mut Vec<Problem>) {
     match s {
         Stmt::Block(b) => {
             directives(&b.directives, Scope::Block, nodes, out);
             listof(&b.directives, &b.unknown_keys, None, nodes, out);
+            vars_keys(&b.directives, Scope::Block, playbook, nodes, out);
             for child in b.block.iter().chain(&b.rescue).chain(&b.always) {
-                stmt(child, nodes, out);
+                stmt(child, playbook, nodes, out);
             }
         }
         Stmt::Task(t) => {
             directives(&t.directives, Scope::Task, nodes, out);
             listof(&t.directives, &t.unknown_keys, node_with_span(nodes, t.span), nodes, out);
-            variable_names(&t.directives, nodes, out);
+            variable_names(&t.directives, playbook, nodes, out);
+            vars_keys(&t.directives, Scope::Task, playbook, nodes, out);
+            set_fact_keys(t, out);
+        }
+    }
+}
+
+/// What a name checked at load takes down. Measured on 2.21.3: in a playbook, or a task file
+/// reached by `import_tasks`, `--syntax-check` fails; in a file reached by `include_tasks` it
+/// passes, and the include itself fails when it runs.
+fn load_failure(scope: Scope, playbook: bool) -> String {
+    if playbook {
+        format!("Ansible refuses to load this {}, and `--syntax-check` fails", scope.noun())
+    } else {
+        "this file fails to load wherever it is imported or included".into()
+    }
+}
+
+/// T-247: every key of a `vars:` mapping goes through `validate_variable_name` when the
+/// play, block or task loads (`base.py:_load_vars`), so it fails like a bad `register`. A
+/// templated key fails too, but [`crate::static_fields`] reports that. A null key is fatal
+/// with a different message and is left alone.
+fn vars_keys(ds: &[Directive], scope: Scope, playbook: bool, nodes: &[Node], out: &mut Vec<Problem>) {
+    if let Some(vars) = last(ds, "vars", nodes) {
+        vars_mapping(vars, &load_failure(scope, playbook), out);
+    }
+}
+
+/// A `roles:` entry's `vars:` loads with the play, so a bad key takes the play down.
+fn role_entry_vars(r: &RoleUse, nodes: &[Node], out: &mut Vec<Problem>) {
+    let Some(entry) = node_with_span(nodes, r.entry_span) else { return };
+    if let Some((_, vars)) = entry.entries().iter().rev().find(|(k, _)| k.as_str() == Some("vars")) {
+        vars_mapping(vars, &load_failure(Scope::Play, true), out);
+    }
+}
+
+/// A mapping's keys as Ansible sees them. `<<` is YAML's merge key: the loader expands it
+/// instead of keeping it, measured for `vars:`, `set_fact` and `register`, while our parser
+/// keeps it as written.
+fn keys(m: &Node) -> impl Iterator<Item = &Node> {
+    m.entries().iter().map(|(k, _)| k).filter(|k| k.as_str() != Some("<<"))
+}
+
+fn vars_mapping(vars: &Node, fails: &str, out: &mut Vec<Problem>) {
+    if !matches!(vars, Node::Mapping { .. }) {
+        return;
+    }
+    for k in keys(vars) {
+        let Some(v) = literal(k) else { continue };
+        if !is_variable_name(v) {
+            let message = format!("`{v}` is not a valid variable name — {fails}. {}", name_rule(v));
+            out.push(Problem { span: k.span(), tier: Tier::Error, message, rule: RULE_ID });
+        }
+    }
+}
+
+/// T-247: `set_fact` renders each key, then validates it (`plugins/action/set_fact.py:46`), so
+/// a literal bad key fails the task when it runs, and a false `when:` skips it. `cacheable` is
+/// an option, not a fact. Mapping args only; the `k=v` spelling is T-046's to split.
+fn set_fact_keys(t: &Task, out: &mut Vec<Problem>) {
+    let Some(a) = &t.action else { return };
+    if keywords::core_action(&a.name) != "set_fact" {
+        return;
+    }
+    for k in keys(&a.args) {
+        let Some(v) = literal(k).filter(|v| *v != "cacheable") else { continue };
+        if !is_variable_name(v) {
+            let message = format!(
+                "`{v}` is not a valid variable name — this task fails when it runs, though \
+                 `--syntax-check` passes. {}",
+                name_rule(v)
+            );
+            out.push(Problem { span: k.span(), tier: Tier::Error, message, rule: RULE_ID });
         }
     }
 }
@@ -93,19 +180,20 @@ fn stmt(s: &Stmt, nodes: &[Node], out: &mut Vec<Problem>) {
 /// T-108: `register`, `loop_var` and `index_var` must pass `validate_variable_name`.
 /// Measured on 2.21.3, the two kinds fail differently:
 ///
-/// - `register` is checked when the task loads, before anything renders — `--syntax-check`
-///   fails. The dict form checks each key. Null is fine. A templated name is fatal too, but
-///   [`crate::static_fields`] reports that, so it is skipped here rather than said twice.
+/// - `register` is checked when the task loads, before anything renders — see
+///   [`load_failure`] for what that takes down. The dict form checks each key. Null is fine.
+///   A templated name is fatal too, but [`crate::static_fields`] reports that, so it is
+///   skipped here rather than said twice.
 /// - `loop_var` / `index_var` are checked when the task runs, after templating, so a
 ///   `{{ }}` value is skipped. A false `when:` on the task or its block does not prevent it;
 ///   `ignore_errors` and `rescue` catch it like any task failure.
 ///
 /// The parser drops scalar style (T-162), so a plain YAML 1.1 bool like `register: yes`
 /// reads as the string `yes` and passes — a silence, never a false error.
-fn variable_names(ds: &[Directive], nodes: &[Node], out: &mut Vec<Problem>) {
+fn variable_names(ds: &[Directive], playbook: bool, nodes: &[Node], out: &mut Vec<Problem>) {
     if let Some(value) = last(ds, "register", nodes) {
         let names: Vec<&Node> = match value {
-            Node::Mapping { entries, .. } => entries.iter().map(|(k, _)| k).collect(),
+            Node::Mapping { .. } => keys(value).collect(),
             _ => vec![value],
         };
         for n in names {
@@ -113,8 +201,8 @@ fn variable_names(ds: &[Directive], nodes: &[Node], out: &mut Vec<Problem>) {
             let Some(v) = literal(n).filter(|v| *v != "~") else { continue };
             if !is_variable_name(v) {
                 let message = format!(
-                    "`{v}` is not a valid `register` name — Ansible refuses to load this task, \
-                     and `--syntax-check` fails. {}",
+                    "`{v}` is not a valid `register` name — {}. {}",
+                    load_failure(Scope::Task, playbook),
                     name_rule(v)
                 );
                 out.push(Problem { span: n.span(), tier: Tier::Error, message, rule: RULE_ID });
@@ -430,9 +518,44 @@ mod tests {
     fn name_messages_say_when_ansible_fails() {
         let m = messages("- debug: msg=x\n  register: my-var\n  loop: [1]\n  loop_control: {loop_var: my-item}\n");
         assert_eq!(m.len(), 2, "{m:?}");
-        assert!(m[0].contains("`--syntax-check` fails"), "{}", m[0]);
+        assert!(m[0].contains("wherever it is imported or included"), "{}", m[0]);
         assert!(m[1].contains("`--syntax-check` passes") && m[1].contains("false `when:`"), "{}", m[1]);
         assert!(messages("- debug: msg=x\n  register: none\n")[0].contains("Jinja reserves"));
+        let play = messages("- hosts: all\n  tasks:\n    - debug: msg=x\n      register: my-var\n");
+        assert!(play[0].contains("refuses to load this task, and `--syntax-check` fails"), "{}", play[0]);
+    }
+
+    #[test]
+    fn vars_keys_are_checked_at_play_block_and_task() {
+        let src = "- hosts: all\n  vars: {play-var: 1, ok_play: 1}\n  tasks:\n    \
+                   - block:\n        - debug: msg=x\n          vars: {task-var: 1, class: 1}\n      \
+                   vars: {none: 1, '1': 1, \"{{ t }}\": 1}\n";
+        let got: Vec<String> = run(src).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(got, ["play-var", "none", "1", "task-var"], "a templated key is static-template's");
+        let m = messages(src);
+        assert!(m[0].contains("refuses to load this play"), "{}", m[0]);
+        assert!(m[1].contains("refuses to load this block") && m[1].contains("Jinja reserves"), "{}", m[1]);
+        assert!(m[3].contains("refuses to load this task"), "{}", m[3]);
+        let roles = "- hosts: all\n  roles:\n    - role: r\n      vars: {role-var: 1, ok: 1}\n    - r2\n";
+        assert_eq!(run(roles), vec![("role-var".into(), Tier::Error)]);
+        assert!(messages(roles)[0].contains("refuses to load this play"));
+        // A merge key is expanded by the loader, not validated, at every site that reads keys.
+        let merge = "- hosts: all\n  vars:\n    b: &b {x: 1}\n    <<: *b\n  tasks:\n    \
+                     - set_fact:\n        <<: *b\n    - debug: msg=x\n      register:\n        <<: *b\n";
+        assert_eq!(run(merge), vec![]);
+        // Only the last of duplicate `vars:` keys loads.
+        assert_eq!(run("- debug: msg=x\n  vars: {a-b: 1}\n  vars: {ok: 1}\n"), vec![]);
+    }
+
+    #[test]
+    fn set_fact_keys_fail_at_run_time() {
+        let src = "- set_fact: {my-fact: 1, ok_fact: 1, cacheable: true, \"{{ k }}\": 1}\n\
+                   - ansible.builtin.set_fact:\n    other-fact: 1\n\
+                   - uri: {url: x, return-content: true}\n";
+        let got: Vec<String> = run(src).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(got, ["my-fact", "other-fact"]);
+        let m = messages(src);
+        assert!(m[0].contains("fails when it runs") && m[0].contains("`--syntax-check` passes"), "{}", m[0]);
     }
 
     /// T-108's `listof`, each row measured fatal on 2.21.3 with Ansible's own message.

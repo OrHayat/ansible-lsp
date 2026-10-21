@@ -47,7 +47,7 @@ sibling epic).
 - [x] T-159 — Task-level invalid-attribute fires where ansible reports a conflicting action
 - [ ] T-209 — Model meta/main.yml whole, not just its top-level key names
 - [ ] T-210 — meta/main.yml accepts 22 keys that do nothing, and we say nothing
-- [ ] T-247 — A literal invalid vars: key is fatal at parse and no rule reports it
+- [x] T-247 — A literal invalid vars: key is fatal at parse and no rule reports it
 
 ## Done when
 

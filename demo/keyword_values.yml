@@ -114,3 +114,23 @@
       listen:
         - t # GOOD
         - [u, v] # BAD: a list is not a topic
+
+# T-247 — every `vars:` key must pass `validate_variable_name` too. On a play, block or task
+# a bad key fails at load, so `--syntax-check` catches it; a bad `set_fact` key passes it and
+# fails the task when it runs.
+- name: vars keys
+  hosts: localhost
+  gather_facts: false
+  vars:
+    my-setting: 1 # BAD: a dash is not allowed
+    class: 1 # GOOD: Python keywords pass
+  tasks:
+    - block:
+        - debug: msg=x
+          vars:
+            none: 1 # BAD: Jinja reserves it
+      vars:
+        block-var: 1 # BAD
+    - set_fact:
+        my-fact: 1 # BAD: the task fails when it runs
+        cacheable: true # GOOD: an option, not a fact

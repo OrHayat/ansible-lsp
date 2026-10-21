@@ -156,7 +156,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
-| T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](open/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | S    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -356,6 +355,7 @@ T-021 is now unblocked on that side.
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](closed/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | done     |
 | T-108 | [Keyword value types: isa coercion and listof](closed/T-108-keyword-value-types-isa-coercion-and-listof.md) | done     |
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](closed/T-060-suspicious-var-near-miss.md) | **rejected** |
+| T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](closed/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | done     |
 
 ## Settled — don't re-derive these
 
