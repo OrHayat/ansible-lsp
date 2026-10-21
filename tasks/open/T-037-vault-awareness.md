@@ -80,6 +80,11 @@ kind of opaque source is behind a warning. Options:
 Whichever is chosen, the ignored test above already asserts the shared part and turns green
 for any of them.
 
+Upstream has no way to declare the names a vars file defines; the closest is an open 2018
+design proposal, recorded in
+[`upstream/ansible-proposal-redesign-vars.md`](../../upstream/ansible-proposal-redesign-vars.md).
+Declarations exist only as role and play input signatures (T-041, T-240).
+
 ## Done when
 
 - [ ] a vaulted file yields no `unparseable` error (probe says none fires today — pin it
