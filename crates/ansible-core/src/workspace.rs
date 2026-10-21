@@ -120,13 +120,19 @@ impl FileContext {
         dirs
     }
 
-    /// Where a relative `include_vars:` file is looked up, in order (T-206).
+    /// Where a relative `include_vars:` file is looked up, in order (T-206, T-097).
     ///
     /// Upstream is `_find_needle('vars', src)` -> `path_dwim_relative_stack`, which tries
     /// `<path>/vars/<src>` before `<path>/<src>` for each entry on the search stack — so the
     /// `vars/` subdir of a directory always beats the directory itself, and the role comes
-    /// before the file's own dir. Measured on 2.21.3 by putting a copy at all five and
-    /// deleting the winner until the list ran out.
+    /// before the file's own dir. Measured on 2.21.3 by putting a copy at every candidate and
+    /// deleting the winner until the run failed, for a role's `tasks/main.yml`, a file in
+    /// `tasks/sub/` and a handler: `<role>/vars`, `<role>`, `<file dir>/vars`, `<file dir>`,
+    /// then the playbook's dir and its `vars/`. The role root itself is a candidate; a
+    /// subfolder's file never searches `tasks/`.
+    ///
+    /// `project_root` stands in for the playbook's dir, right only when the playbook sits at
+    /// the root (T-096).
     ///
     /// The order matters most where the two collide: a role's `tasks/main.yml` writing
     /// `include_vars: main.yml` means its own `vars/main.yml`, and searching `<file_dir>`
@@ -134,6 +140,7 @@ impl FileContext {
     pub fn include_vars_bases(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         push_unique(&mut dirs, self.role_dir.as_ref().map(|r| r.join("vars")));
+        push_unique(&mut dirs, self.role_dir.clone());
         push_unique(&mut dirs, Some(self.file_dir.join("vars")));
         push_unique(&mut dirs, Some(self.file_dir.clone()));
         push_unique(&mut dirs, self.project_root.as_ref().map(|r| r.join("vars")));

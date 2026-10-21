@@ -6,40 +6,44 @@
 
 ## Symptom
 
-`include_vars:` reports resolved for files Ansible would never find, and missing for files it
-would. The false positives are the worse half — we vouch for a path that fails at runtime.
+`include_vars:` searched a different list of places than Ansible, so it could name a file Ansible
+never loads, or miss one it does.
 
-## Cause
+## Measured order
 
-Ansible resolves via `_find_needle('vars', src)` → `path_dwim_relative_stack` over
-`task.get_search_path()` (`plugins/action/__init__.py:1540-1551`; `playbook/base.py:767-779`).
-For a task in `roles/r/tasks/main.yml` that is:
+2026-10-21 on 2.21.3 (`scratchpad/t097/order*.py`): a copy of `v.yml` at every candidate, the
+winner deleted, the run repeated until it failed. `ansible.cfg` at the repo root, Ansible run
+from `/`.
 
-```
-roles/r/tasks/vars/<src>
-roles/r/tasks/<src>
-<playbook dir>/vars/<src>
-<playbook dir>/<src>
-```
+| `include_vars` written in            | Ansible searches, in order                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| `roles/r/tasks/main.yml`             | `r/vars`, `r`, `r/tasks/vars`, `r/tasks`, `<playbook dir>/vars`, `<playbook dir>`   |
+| `roles/r/tasks/sub/inc.yml`          | `r/vars`, `r`, `r/tasks/sub/vars`, `r/tasks/sub`, `<playbook dir>/vars`, `<playbook dir>` |
+| `roles/r/handlers/main.yml`          | `r/vars`, `r`, `r/handlers/vars`, `r/handlers`, `<playbook dir>/vars`, `<playbook dir>` |
+| `playbooks/tasks/inc.yml`, no role   | `tasks/vars`, `tasks`, `<playbook dir>/vars`, `<playbook dir>`                       |
 
-The role's own `vars/` is **not** searched: the role branch at `dataloader.py:365-368`
-requires `dirname(unfrackpath(path)).endswith('/tasks')`, never true for a search-path entry
-that is itself a directory.
+The repo root is never searched unless it is the playbook's dir. The ticket's first version
+said the role's own `vars/` was not searched: it is searched first (T-206 had already made it so).
 
-`resolve.rs:357-369` uses `[file_dir, file_dir/vars, role_dir/vars, project_root]` —
-`role_dir/vars` and `project_root` are candidates Ansible never tries, and both playbook-dir
-entries are missing.
+## What we searched
 
-`vars_files` uses the same function with `play.get_search_path()`, and
-`vars_files_candidates` (`resolve.rs:644-661`) already matches it. Only `include_vars` is wrong.
+`<role>/vars`, `<file dir>/vars`, `<file dir>`, `<project root>/vars`, `<project root>`:
 
-## Approach
+1. **The role root was missing** — second in Ansible's order. Fixed here.
+2. **`project_root` stands in for the playbook's dir** — right only when the playbook sits at the
+   root, which is T-096's question; this ticket keeps waiting on it for that half.
+3. **A `playbooks/` folder with a `tasks/` subfolder is read as a role**, so `playbooks/vars` came
+   first for its task files. Filed as T-254.
 
-Build the candidate list from the real search path. Needs T-096 for the playbook dir.
+Corpus count: 26 literal `include_vars` in role task files across 45 public repos and the private
+corpus; none lands on a role-root copy, and with the playbook at the root the role root is the only
+difference. Scans identical before and after the fix.
 
 ## Done when
 
-- [ ] `role_dir/vars` and `project_root` are gone from the `include_vars` candidates
-- [ ] both playbook-dir candidates are present
-- [ ] a fixture pins that a file in the role's own `vars/` does *not* resolve
-- [ ] `vars_files` behaviour is unchanged
+- [x] the role root is a candidate, after `<role>/vars` — `include_vars_in_a_role_follows_ansibles_measured_order`
+  replays all three role orders above
+- [x] the templated path searches the same list — `a_substituted_include_vars_searches_the_same_places`;
+  `path_bases` kept a copy of its own without the role root
+- [ ] the playbook's dir replaces `project_root` (T-096)
+- [x] `vars_files` behaviour is unchanged

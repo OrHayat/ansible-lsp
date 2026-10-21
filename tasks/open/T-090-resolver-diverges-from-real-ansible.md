@@ -52,6 +52,7 @@ the same argument applied one layer up.
 - [x] T-235 — A role with no tasks/main.yml is reported missing, though Ansible loads it
 - [x] T-243 — Role metadata is read only from meta/main.yml, and the reload hint knows only vars/main.yml
 - [x] T-248 — A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry
+- [ ] T-254 — A folder holding playbooks and a tasks/ subfolder is read as a role
 
 ## Done when
 

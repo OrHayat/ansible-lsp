@@ -472,16 +472,7 @@ fn path_bases(kind: ReferenceKind, ctx: &FileContext) -> Option<Vec<PathBuf>> {
                 .flatten()
                 .collect(),
         ),
-        ReferenceKind::IncludeVars => {
-            let mut b = vec![ctx.file_dir.clone(), ctx.file_dir.join("vars")];
-            if let Some(role) = &ctx.role_dir {
-                b.push(role.join("vars"));
-            }
-            if let Some(root) = &ctx.project_root {
-                b.push(root.clone());
-            }
-            Some(b)
-        }
+        ReferenceKind::IncludeVars => Some(ctx.include_vars_bases()),
         ReferenceKind::VarsFiles => {
             Some(vec![ctx.file_dir.join("vars"), ctx.file_dir.clone()])
         }
@@ -3754,6 +3745,54 @@ mod tests {
     /// re-resolved, so a change that merely permutes the tail still fails. Upstream is
     /// `_find_needle('vars', src)` -> `path_dwim_relative_stack`, which tries `<path>/vars/`
     /// before `<path>/` for each entry on the search stack.
+    /// T-097: a templated `include_vars` whose variable is known searches the same places, in
+    /// the same order — it used to keep a list of its own without the role root.
+    #[test]
+    fn a_substituted_include_vars_searches_the_same_places() {
+        let file = "/p/roles/r/tasks/main.yml";
+        let fs = crate::testing::MemFs::new(&[(file, ""), ("/p/ansible.cfg", "[defaults]\n"), ("/p/roles/r/probe.yml", "who: x\n")]);
+        let nodes = Document::new("- include_vars: \"{{ n }}.yml\"\n".into()).parse().unwrap();
+        let r = extract(&nodes).refs.into_iter().next().unwrap();
+        let ctx = FileContext::discover_with(Path::new(file), &fs, |root| {
+            crate::config::AnsibleConfig::builder(root).fs(&fs).env(&crate::config::EnvMap::empty()).load()
+        });
+        let literals = HashMap::from([("n".to_string(), vec!["probe".to_string()])]);
+        let res = Resolver { fs: &fs, literals: Some(&literals), ..Default::default() }.resolve(&r, &ctx);
+        assert_eq!(res.targets, vec![PathBuf::from("/p/roles/r/probe.yml")]);
+        assert_eq!(&res.candidates, &ctx.include_vars_bases().iter().map(|b| b.join("probe.yml")).collect::<Vec<_>>());
+    }
+
+    /// T-097: Ansible's own order for a role's `include_vars`, replayed. Each list was
+    /// measured on 2.21.3 by putting `probe.yml` at every candidate and deleting the winner
+    /// until the run failed (`scratchpad/t097/order*.py`); the role root, second, was the
+    /// candidate we lacked.
+    #[test]
+    fn include_vars_in_a_role_follows_ansibles_measured_order() {
+        let layouts: [(&str, &[&str]); 3] = [
+            ("/p/roles/r/tasks/main.yml", &["roles/r/vars", "roles/r", "roles/r/tasks/vars", "roles/r/tasks", "vars", "."]),
+            ("/p/roles/r/tasks/sub/inc.yml", &["roles/r/vars", "roles/r", "roles/r/tasks/sub/vars", "roles/r/tasks/sub", "vars", "."]),
+            ("/p/roles/r/handlers/main.yml", &["roles/r/vars", "roles/r", "roles/r/handlers/vars", "roles/r/handlers", "vars", "."]),
+        ];
+        for (file, order) in layouts {
+            let at = |dir: &str| if dir == "." { "/p/probe.yml".to_string() } else { format!("/p/{dir}/probe.yml") };
+            for skip in 0..=order.len() {
+                let mut files: Vec<(String, &str)> = order[skip..].iter().map(|d| (at(d), "who: x\n")).collect();
+                // Where `tasks/` is not a candidate, a copy there must never be chosen — down
+                // to the last row, where the lookup must still miss.
+                if !order.contains(&"roles/r/tasks") {
+                    files.push((at("roles/r/tasks"), "who: x\n"));
+                }
+                files.push((file.into(), ""));
+                files.push(("/p/ansible.cfg".into(), "[defaults]\n"));
+                let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), *t)).collect();
+                let fs = crate::testing::MemFs::new(&files);
+                let res = first(&mem_src(file, "- include_vars: probe.yml\n", &fs), ReferenceKind::IncludeVars).clone();
+                let want = order.get(skip).map(|d| at(d));
+                assert_eq!(res.targets.first().map(|p| crate::posix_display(p)), want, "{file}, {skip} removed");
+            }
+        }
+    }
+
     #[test]
     fn include_vars_searches_role_vars_first_and_a_vars_subdir_before_its_own_dir() {
         let file = "/p/roles/ad/tasks/main.yml";

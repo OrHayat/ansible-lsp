@@ -85,7 +85,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | ~~T-020~~ |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
-| T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
@@ -94,6 +93,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
+| T-097 | **bug** · [include_vars searches paths Ansible never tries](open/T-097-include-vars-searches-paths-ansible-never-tries.md) | M    | T-096      |
 
 ### P2 — coverage and usability
 
@@ -202,6 +202,7 @@ T-021 is now unblocked on that side.
 | T-245 | [A play hosts: pattern matching no inventory host is governed by host_pattern_mismatch, which we never read](open/T-245-a-play-hosts-pattern-matching-no-inventory-host-is-governed.md) | S    | —          |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~  |
 | T-253 | [Navigation splits templated paths by hand and only sees {{ }}, so a {% %} path has no jump target](open/T-253-navigation-splits-templated-paths-by-hand-and-only-sees-so-a.md) | S    | —          |
+| T-254 | **bug** · [A folder holding playbooks and a tasks/ subfolder is read as a role](open/T-254-a-folder-holding-playbooks-and-a-tasks-subfolder-is-read-as.md) | M    | —          |
 
 ### Downstream — not this repo's code
 
