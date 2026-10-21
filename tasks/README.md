@@ -91,7 +91,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-099 | **epic** · [Provably-wrong config the editor is silent about](open/T-099-provably-wrong-config-the-editor-is-silent-about.md) | L    | —          |
 | T-106 | **epic** · [Keyword schema and value types](open/T-106-keyword-schema-and-value-types.md) | L    | —          |
 | T-112 | **epic** · [Variable definedness and provenance](open/T-112-variable-definedness-and-provenance.md) | L    | —          |
-| T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~      |
 | T-110 | [Placement and mutual-exclusion rules](open/T-110-placement-and-mutual-exclusion-rules.md) | M    | ~~T-107~~, T-162, T-163 |
 | T-196 | [missing-handler: warn where the handler set is provably closed](open/T-196-missing-handler-warn-where-the-handler-set-is-provably-close.md) | M    | T-028      |
 | T-205 | **bug** · [A non-string vars_files entry is diagnosed as a missing file, which says the opposite of what happens](open/T-205-a-non-string-vars-files-entry-is-diagnosed-as-a-missing-file.md) | S    | T-162      |
@@ -208,6 +207,7 @@ T-021 is now unblocked on that side.
 | T-234 | [Find All References on a module name lists every task that uses it](open/T-234-find-all-references-on-a-module-name-lists-every-task-that-u.md) | M    | T-132      |
 | T-242 | [A plugin file that exists but cannot load reads as found](open/T-242-a-plugin-file-that-exists-but-cannot-load-reads-as-found.md) | M    | ~~T-109~~  |
 | T-245 | [A play hosts: pattern matching no inventory host is governed by host_pattern_mismatch, which we never read](open/T-245-a-play-hosts-pattern-matching-no-inventory-host-is-governed.md) | S    | —          |
+| T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~  |
 
 ### Downstream — not this repo's code
 

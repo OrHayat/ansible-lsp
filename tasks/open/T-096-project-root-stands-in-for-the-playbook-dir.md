@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | T-020      |
+| open   | bug  | P3       | M    | T-090 | T-020      |
 
 ## Symptom
 
@@ -143,6 +143,9 @@ once tracing showed both original claims stood. We miss two real candidate locat
 `Missing`) and search one Ansible never uses (false `Resolved`). Wrong in both directions is
 what P1 is for.
 
+Lowered to **P3** on 2026-10-21: the playbook-side half that remains hit no role include in
+the corpus count under "Decided" below.
+
 ## Collections have the same stand-in
 
 Found under T-237, measured 2026-09-17 on 2.21.3 (its rows 10–11): the playbook-adjacent
@@ -151,24 +154,35 @@ collections root is `<playbook dir>/collections`, not `<project root>/collection
 `collections/` was not searched; `playbooks/collections/` was. `FileContext::collection_roots`
 still uses the project root — T-237 kept it, in the position Ansible gives the playbook's.
 
-## needs decision: which playbook dir, when a role has several invokers?
+## Decided 2026-10-21: check every invoking playbook, and warn on a collection role
 
 Re-measured 2026-10-20 on 2.21.3: a role's `include_tasks: x.yml` with `x.yml` only at
-`<playbook_dir>/tasks/` loads from any working directory. T-020's reverse index now says who
-invokes a role, so the candidate is computable, but a role invoked from playbooks in two
-directories has two `<playbook_dir>`s and the resolver gives one verdict:
+`<playbook_dir>/tasks/` loads from any working directory. On 2026-10-21, a collection role
+(`ns.c.r` under `playbooks/collections/`) did the same, and failed once the file was removed.
+A role in `roles/` cannot be named `ansible.legacy.r`: `roles:` and `include_role` both
+report it not found.
 
-1. **Only when every invoker agrees.** Add the candidate when the role has exactly one
-   invoking directory, keep today's answer otherwise. Never widens on a guess, and is silent
-   where the answer would depend on which playbook runs.
-2. **Union.** Resolved if found under any invoker's dir. Widens: points confidently at a file
-   that one of the playbooks cannot load, the failure the Approach above rejects.
-3. **Per invoker.** Resolved under some, Missing under others, reported as such. The honest
-   answer, and the multi-root shape T-202 also lacks; needs a verdict type that can say it.
+The rule applies when the file is in none of the role's own candidates, and covers both
+playbook-side candidates (#6 and #7):
 
-The same question is T-068's (`role_path`) and T-137's (`playbook_dir` in a task file); the
-answer should be one rule for all three. The corpus scan box below stays open until this
-lands, since this is the half that can add resolutions.
+| Role from      | Invoking playbooks (T-020) | We show                                                  |
+| -------------- | -------------------------- | -------------------------------------------------------- |
+| a collection   | any                        | warning: loads only beside the playbook, so not shareable |
+| `roles/`       | all have the file          | nothing; resolved                                        |
+| `roles/`       | some have it               | warning naming each playbook it is missing beside        |
+| `roles/`       | none have it               | today's `Missing`                                        |
+| `roles/`       | none known                 | today's `Missing`                                        |
+
+A collection role warns even when the file is found here: the collection's other consumers'
+playbooks are not in this workspace. Nothing in the table says `Resolved` for a run that would
+fail, so the union option is out.
+
+Corpus count, 2026-10-20: across 45 public repos and the private corpus (~7,000 task
+includes), no role include relies on the playbook-side fallback. The only false `Missing`
+found was T-248's, a different mechanism. Hence P3.
+
+T-068 (`role_path`) and T-137 (`playbook_dir` in a task file) ask the same several-invokers
+question about a value rather than a file, and are not settled by this.
 
 ## Done when
 
@@ -179,8 +193,8 @@ lands, since this is the half that can add resolutions.
 - [x] roles keep every slot they have today
 - [x] case 3 is left to T-020, said so in the code
 - [ ] `<playbook_dir>/tasks/<src>` is added as a candidate (real, and intended upstream) —
-      pinned by the ignored `a_role_include_finds_the_invoking_playbooks_tasks_dir`; blocked
-      on the decision below
+      pinned by the ignored `a_role_include_finds_the_invoking_playbooks_tasks_dir`, following
+      the decided table above
 - [x] `$CWD/<dirname>/<src>` is **not** modelled, and the code says why, citing
       `upstream/ansible-cwd-relative-include.md` — on `FileContext::task_search_dirs`,
       re-measured on 2.21.3 the same day it was written
