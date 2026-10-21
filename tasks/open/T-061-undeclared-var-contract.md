@@ -38,3 +38,12 @@ legitimate `-e` input is worth surfacing once.
 - [ ] `# noqa: undeclared-var` works
 - [ ] overlap with T-051's `var-undefined` resolved: a use flagged by one is not
       double-reported by the other
+
+## needs decision: is an `-e` contract list in scope?
+
+Recorded 2026-10-21. This ticket's whole deliverable is about extra-vars: a list of the
+playbook's required `-e` inputs. The working rule for this LSP since then is to leave
+extra-vars out of explanations and diagnostic text. T-051's last box waits on this ticket to
+reframe its ~110 `-e`-shaped hits. Options: reject it, and let T-051's gate accept those hits as
+honest `var-undefined` reports; rescope it to declared inputs only (T-240's play argument specs,
+T-041's role specs), which needs no `-e` wording; or keep it as written.

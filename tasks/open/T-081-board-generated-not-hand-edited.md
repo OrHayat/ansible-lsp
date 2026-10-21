@@ -127,3 +127,11 @@ sometimes — the P1/P2/P3 grouping, the reference counts in the P2 table (`385`
 the `Blocked by` vs `Refs` split. Those are editorial and would have to move into the headers
 first, or be preserved by the generator rather than regenerated. That inventory is part of this
 ticket, as the Approach section already says.
+
+## needs decision: close, or build the generator?
+
+Recorded 2026-10-21: every Done-when box is ticked. `board new|close|reopen|sync` edits the
+README rows, and the drift test fails the build on any disagreement, so the original harm (a
+table that lies about the backlog) cannot recur unnoticed. The generator would only remove the
+row-editing code, and it needs the editorial-column question above answered first. Close this
+ticket, or keep it open for the generator?
