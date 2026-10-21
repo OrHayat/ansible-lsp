@@ -72,16 +72,35 @@ assertion rather than a shared "we handle literals" claim:
 | `db` whose value is itself `{{ … }}` | template, not a literal |
 | `db[key]` or `db['port']` | subscript, not attribute — a separate extraction shape |
 | the root is undefined | [[T-065]]'s verdict, not this one's; do not double-report |
+| `db.items`, `db.keys`, `db.get`, … | Jinja tries the attribute first, so a name the dict has (`dotted::DICT_ATTRIBUTES`, read from `_AnsibleLazyTemplateDict` on 2.21.3) renders the **method**, never the key — measured |
 
 The tempting version of this ticket — "check every dotted access" — is a false-positive machine,
 because most dotted access in real playbooks is on facts and registers whose shape we cannot
 know. The corpus gate below is what proves we did not build that.
 
+## Progress 2026-10-21: navigation landed, the diagnostic did not
+
+Measured on 2.21.3 with a literal `db` in `group_vars`: `db.port` and `db.nested.deep` render
+their values, `db.prot` fails with "object of type 'dict' has no attribute 'prot'", and
+`db.items` renders the dict's `items` method although an `items:` key is written. That last row
+was missing from the silence table and is added above. `db._priv` reaches a `_priv:` key.
+
+`dotted::chain_at` finds the `.key` chain after a use, and `dotted::walk` follows it through
+literal mappings only. `a_dotted_key_on_a_literal_mapping_hovers_and_jumps_and_guesses_nothing`
+asserts hover and jump, plus one silent row per shape: method name, absent key, template, two
+definitions, `set_fact`, `register`, injected, filter result, `when:`, subscript. Each guard was
+seen failing when removed, except one: a `set_fact` or `register` definition's span is its name,
+so `walk` never enters one, and that guard was dropped as dead. Demo: `dotted_access.yml`, pinned
+by `the_dotted_access_demo_matches_its_annotations`.
+
+Left: the provably-absent-key diagnostic, with its corpus gate, `# noqa` and demo half.
+
 ## Done when
 
-- [ ] hover on the property of a single-definition literal mapping shows its sub-value and the
-      file it is written in
-- [ ] go-to-definition on the property lands on the sub-key's line, not on the root's
+- [x] hover on the property of a single-definition literal mapping shows its sub-value and the
+      file it is written in — `Backend::attribute_hover_at`
+- [x] go-to-definition on the property lands on the sub-key's line, not on the root's — both
+      answer from `Backend::attribute_at`, so they cannot disagree
 - [ ] a provably-absent key on such a mapping is diagnosed, with `# noqa` honoured and the rule
       id matched exactly
 - [ ] one assertion per row of the silence table above — a test per shape, not one test for

@@ -3109,10 +3109,20 @@ impl Backend {
         let byte = doc.lsp_to_byte(pos.line, pos.character);
         // The full view, not the rule-facing one: a definition of `ansible_custom` is a
         // definition, and the prefix must not stop the jump (T-224).
-        let use_ = vars::any_uses(nodes)
-            .into_iter()
-            .find(|u| byte >= u.span.start && byte < u.span.end)?;
         let path = uri.to_file_path().ok()?;
+        let Some(use_) = vars::any_uses(nodes)
+            .into_iter()
+            .find(|u| byte >= u.span.start && byte < u.span.end)
+        else {
+            // On a `.key` after the name: the written key, not the root (T-221).
+            let hit = Self::attribute_at(doc, nodes, byte, &path, open, inv, cache, install, rev)?;
+            let (sl, sc) = hit.def_doc.byte_to_lsp(hit.key.start);
+            let (el, ec) = hit.def_doc.byte_to_lsp(hit.key.end);
+            return Some(vec![Location {
+                uri: Url::from_file_path(&hit.def.file).ok()?,
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+            }]);
+        };
         let defs: Vec<vars::Located> = cached_definitions(&path, nodes, open, inv, cache, install, rev)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, &path))
@@ -3243,9 +3253,12 @@ impl Backend {
         // One scan for both kinds of name. The rule-facing `vars::uses` drops the injected
         // ones, so asking it first and falling back to a second, complementary scan walked
         // the whole tree twice for every token that is not an ordinary variable.
-        let use_ = vars::any_uses(nodes)
+        let Some(use_) = vars::any_uses(nodes)
             .into_iter()
-            .find(|u| byte >= u.span.start && byte < u.span.end)?;
+            .find(|u| byte >= u.span.start && byte < u.span.end)
+        else {
+            return Self::attribute_hover_at(doc, nodes, byte, path, open, inv, cache, install, rev);
+        };
         let mut defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install, rev)
             .iter()
             .filter(|d| d.name == use_.name && d.in_effect_for(&use_, path))
@@ -3348,6 +3361,89 @@ impl Backend {
         let (el, ec) = doc.byte_to_lsp(use_.span.end);
         Some((md.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
     }
+
+    /// T-221: the written sub-key a `{{ root.a.b }}` segment lands on. Hover and
+    /// go-to-definition both answer from this, so they cannot disagree. Only when the root has
+    /// exactly one definition in effect, under no `when:`, whose written value is a literal
+    /// mapping: with several, which one wins is not decided here. A `set_fact` or `register`
+    /// definition's span is its name, never a mapping, so neither is walked.
+    fn attribute_at(
+        doc: &Document,
+        nodes: &[Node],
+        byte: usize,
+        path: &Path,
+        open: &OpenDocs,
+        inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
+    ) -> Option<AttributeHit> {
+        let uses = vars::any_uses(nodes);
+        let (use_, chain, segment) = uses.iter().filter(|u| u.span.end <= byte).find_map(|u| {
+            let (chain, seg) = ansible_core::dotted::chain_at(&doc.text, u.span.end, byte)?;
+            Some((u, chain.into_iter().map(str::to_string).collect::<Vec<_>>(), seg))
+        })?;
+        let defs: Vec<vars::Located> = cached_definitions(path, nodes, open, inv, cache, install, rev)
+            .iter()
+            .filter(|d| d.name == use_.name && d.in_effect_for(use_, path))
+            .cloned()
+            .collect();
+        let [def] = &defs[..] else { return None };
+        if def.condition.is_some() {
+            return None;
+        }
+        let text = if def.file == path { doc.text.clone() } else { open.read(&def.file)? };
+        let def_doc = Document::new(text);
+        let def_nodes = def_doc.parse()?;
+        let value = ansible_core::parse::node_with_span(&def_nodes, def.span)?;
+        let segs: Vec<&str> = chain.iter().map(String::as_str).collect();
+        let (key, val) = ansible_core::dotted::walk(value, &segs)?;
+        Some(AttributeHit {
+            dotted: format!("{}.{}", use_.name, chain.join(".")),
+            segment,
+            def: def.clone(),
+            key: key.span(),
+            value: val.span(),
+            def_doc,
+        })
+    }
+
+    fn attribute_hover_at(
+        doc: &Document,
+        nodes: &[Node],
+        byte: usize,
+        path: &Path,
+        open: &OpenDocs,
+        inv: &[PathBuf],
+        cache: &Mutex<VarCache>,
+        install: Option<&Arc<AnsibleInstall>>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
+    ) -> Option<(String, Range)> {
+        let hit = Self::attribute_at(doc, nodes, byte, path, open, inv, cache, install, rev)?;
+        let line = hit.def_doc.line_of(hit.key.start);
+        let raw = hit.value.slice(&hit.def_doc.text).split_whitespace().collect::<Vec<_>>().join(" ");
+        let value = match raw.chars().count() > 60 {
+            true => format!("{}…", raw.chars().take(60).collect::<String>()),
+            false => raw,
+        };
+        let item = source_label(hit.def.source).md() + " · " + def_link(&hit.def.file, line) + " = " + md::code(&value);
+        let md = Md::new().line(md::code(&hit.dotted).bold()).gap().item(item);
+        let (sl, sc) = doc.byte_to_lsp(hit.segment.start);
+        let (el, ec) = doc.byte_to_lsp(hit.segment.end);
+        Some((md.render(), Range::new(Position::new(sl, sc), Position::new(el, ec))))
+    }
+}
+
+/// What [`Backend::attribute_at`] found: the written key and value of one dotted access.
+struct AttributeHit {
+    /// `db.nested.deep`, up to the segment under the cursor.
+    dotted: String,
+    segment: Span,
+    def: vars::Located,
+    key: Span,
+    value: Span,
+    /// The defining file, which `key` and `value` index into.
+    def_doc: Document,
 }
 
 /// The `host_vars/<host>.yml` file beside `from`, if it exists (T-171). A deterministic
@@ -8095,6 +8191,40 @@ mod tests {
     /// `invalid-keyword-value` error and every HINT row one `serial-batch-size` hint, on
     /// that line, and nothing else in the file fires either rule. GOOD and SILENCED rows are
     /// pinned by staying out of both sets.
+    /// T-221's fixture: on each GOOD row the last key after the dot hovers and jumps to the
+    /// `group_vars/all.yml` line its comment names; on each SILENCED row both are silent.
+    #[test]
+    fn the_dotted_access_demo_matches_its_annotations() {
+        let path = std::path::Path::new("../../demo/dotted_access.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let doc = ansible_core::parse::Document::new(text.clone());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let vars = std::fs::read_to_string(path.with_file_name("group_vars/all.yml")).unwrap();
+        let mut rows = 0;
+        for (i, line) in text.lines().enumerate().filter(|(_, l)| l.contains("{{ demo_db.") && !l.trim_start().starts_with('#')) {
+            let expr = &line[line.find("{{ ").unwrap() + 3..line.find(" }}").unwrap()];
+            let byte = text.lines().take(i).map(|l| l.len() + 1).sum::<usize>()
+                + line.find(expr).unwrap()
+                + expr.rfind('.').unwrap()
+                + 1;
+            let hover = super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None, None);
+            let (l, c) = doc.byte_to_lsp(byte);
+            let jump = super::Backend::definition_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &path, &no_buffers(), &[], &no_cache(), None, None);
+            if let Some(key) = line.split("# GOOD: ").nth(1) {
+                let h = plain(&hover.expect(line).0);
+                assert!(h.contains(expr) && h.contains("group_vars/all.yml"), "{line}: {h}");
+                let at = jump.expect(line)[0].range.start.line as usize;
+                assert!(vars.lines().nth(at).unwrap().trim_start().starts_with(&format!("{}:", key.trim())), "{line}");
+            } else {
+                assert!(line.contains("# SILENCED"), "unlabelled row: {line}");
+                assert!(hover.is_none() && jump.is_none(), "{line}");
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 3, "the fixture lost rows");
+    }
+
     /// T-238's fixture: each GOOD row's module resolves to the nested file its comment names,
     /// and each SILENCED row is skipped with no diagnostic on its line.
     #[test]
@@ -9544,6 +9674,67 @@ mod tests {
         .0;
         assert!(h.contains("include_vars"), "names the source: {h}");
         assert!(h.contains("FROM_ROLE_VARS_DIR"), "reads the role's vars file: {h}");
+    }
+
+    /// T-221, both consumers through their real entry points: hover and Cmd+click on a
+    /// `.key` after a variable answer from the root's written mapping, and every shape where
+    /// that would be a guess stays silent — each its own row.
+    #[test]
+    fn a_dotted_key_on_a_literal_mapping_hovers_and_jumps_and_guesses_nothing() {
+        let root = ansible_core::testing::project(
+            "t221-dotted",
+            "[defaults]\n",
+            &[(
+                "group_vars/all.yml",
+                "db:\n  port: 5432\n  items: x\n  nested:\n    deep: 1\n  tmpl: \"{{ other }}\"\ntwice:\n  a: 1\n",
+            )],
+        );
+        let text = "- hosts: all\n  vars:\n    twice: {a: 2}\n  tasks:\n    - set_fact: {sf: {a: 1}}\n    \
+                    - command: \"true\"\n      register: rr\n    \
+                    - debug: {msg: \"{{ db.port }} {{ db.nested.deep }} {{ db.items }} {{ db.prot }} {{ db.tmpl.x }} {{ twice.a }} {{ sf.a }} {{ rr.stdout }} {{ db['port'] }} {{ ansible_facts.hostname }} {{ (db | default({})).port }}\"}\n    \
+                    - debug: {msg: \"{{ cv.a }}\"}\n      vars: {cv: {a: 1}}\n      when: x is defined\n";
+        let path = root.join("site.yml");
+        std::fs::write(&path, text).unwrap();
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        // The byte of the last segment of the first `needle`.
+        let at = |needle: &str| text.find(needle).unwrap() + needle.rfind('.').unwrap() + 1;
+        let hover = |needle: &str| {
+            super::hover_at(&doc, &nodes, &path, at(needle), Default::default(), &no_buffers(), &[], &no_cache(), None, None)
+                .map(|(h, _)| plain(&h))
+        };
+        let jump = |needle: &str| {
+            let (l, c) = doc.byte_to_lsp(at(needle));
+            super::Backend::definition_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &path, &no_buffers(), &[], &no_cache(), None, None)
+                .map(|locs| (locs[0].uri.path().rsplit('/').next().unwrap().to_string(), locs[0].range.start.line))
+        };
+
+        let h = hover("db.port").expect("a written key hovers");
+        assert!(h.contains("db.port") && h.contains("5432") && h.contains("group_vars/all.yml:2"), "{h}");
+        assert_eq!(jump("db.port"), Some(("all.yml".into(), 1)), "the `port:` line, not `db:`");
+        let h = hover("db.nested.deep").expect("nested");
+        assert!(h.contains("db.nested.deep") && h.contains("= 1"), "{h}");
+        assert_eq!(jump("db.nested.deep"), Some(("all.yml".into(), 4)));
+
+        for silent in [
+            "db.items",               // the dict's method, measured
+            "db.prot",                // not written: the diagnostic's job, not a hover
+            "db.tmpl.x",              // a template is not walked
+            "twice.a",                // two definitions: which wins is not decided here
+            "sf.a",                   // set_fact: computed at run time
+            "rr.stdout",              // register: a runtime result
+            "ansible_facts.hostname", // injected, nothing written
+            "default({})).port",      // a filter's result
+            "cv.a",                   // defined under a `when:`
+        ] {
+            assert_eq!(hover(silent), None, "{silent}");
+            assert_eq!(jump(silent), None, "{silent}");
+        }
+        // A subscript is not an attribute: whatever answers there, it is not this rule.
+        let sub = text.find("db['port']").unwrap() + 4;
+        let h = super::hover_at(&doc, &nodes, &path, sub, Default::default(), &no_buffers(), &[], &no_cache(), None, None);
+        assert!(h.as_ref().is_none_or(|(h, _)| !h.contains("db.port")), "{h:?}");
     }
 
     /// T-206, the `missing-file` consumer. `<project>/vars/` was absent from our candidate

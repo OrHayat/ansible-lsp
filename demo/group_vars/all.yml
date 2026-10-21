@@ -7,3 +7,9 @@ deploy_region: eu-west-1
 # Read by the `inert-import-var` row in playbook.yml: a definition that exists, and that an
 # `import_playbook` can never see, because the import is expanded before any host does.
 deploy_stage: prod
+# Read by dotted_access.yml (T-221): hover or Cmd+click the key after the dot.
+demo_db:
+  port: 5432
+  items: not-reachable-by-dot
+  nested:
+    deep: 1

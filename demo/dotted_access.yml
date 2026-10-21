@@ -1,0 +1,10 @@
+# T-221 — `{{ demo_db.port }}`, where `demo_db` is a literal mapping in group_vars/all.yml.
+# Hover or Cmd+click the KEY after the dot: it shows that key's value and jumps to its line.
+# Measured on core 2.21.3: `demo_db.items` renders the dict's own method, not the `items:` key.
+- name: dotted access
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - debug: msg="{{ demo_db.port }}" # GOOD: port
+    - debug: msg="{{ demo_db.nested.deep }}" # GOOD: deep
+    - debug: msg="{{ demo_db.items }}" # SILENCED: the dict's method, not the key
