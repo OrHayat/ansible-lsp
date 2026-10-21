@@ -69,6 +69,7 @@ resolving paths, and it lives with the other file-reference work.
 - [ ] T-212 — A `{% for %}`-bound name in a scalar is reported as an undefined variable
 - [x] T-219 — Non-ASCII in a Jinja expression panics the request
 - [x] T-252 — A value holding only {% or {# is read as plain text, though Ansible renders it as a template
+- [ ] T-253 — Navigation splits templated paths by hand and only sees {{ }}, so a {% %} path has no jump target
 
 ## Done when
 

@@ -202,6 +202,7 @@ T-021 is now unblocked on that side.
 | T-242 | [A plugin file that exists but cannot load reads as found](open/T-242-a-plugin-file-that-exists-but-cannot-load-reads-as-found.md) | M    | ~~T-109~~  |
 | T-245 | [A play hosts: pattern matching no inventory host is governed by host_pattern_mismatch, which we never read](open/T-245-a-play-hosts-pattern-matching-no-inventory-host-is-governed.md) | S    | —          |
 | T-096 | **bug** · [project_root stands in for the playbook dir](open/T-096-project-root-stands-in-for-the-playbook-dir.md) | M    | ~~T-020~~  |
+| T-253 | [Navigation splits templated paths by hand and only sees {{ }}, so a {% %} path has no jump target](open/T-253-navigation-splits-templated-paths-by-hand-and-only-sees-so-a.md) | S    | —          |
 
 ### Downstream — not this repo's code
 
