@@ -70,11 +70,23 @@ Deliberately **not** doing: picking the `ansible.cfg` nearest each playbook. It 
 plausible-looking guess that ansible never makes — no walk-up, measured — and it would
 quietly disagree with every run from the repo root.
 
+## Progress 2026-10-21
+
+The ladder now ends the way Ansible's does. `scan` on a project with no `ansible.cfg` names
+`~/.ansible.cfg` when one exists (`config: <no project root> -> …/.ansible.cfg`), and still
+reports built-in defaults without one. Corpus scans are unchanged, since neither file exists on
+the measuring machine. Left: the picker for several `ansible.cfg` files, naming the settled file
+on every surface, and the per-file status bar.
+
 ## Done when
 
-- [ ] `~/.ansible.cfg` and `/etc/ansible/ansible.cfg` are read when nothing nearer exists,
-      in that order, pinned by test
-- [ ] a second `ansible.cfg` never contributes a key the chosen one leaves unset
+- [x] `~/.ansible.cfg` and `/etc/ansible/ansible.cfg` are read when nothing nearer exists,
+      in that order, pinned by test — `config::fallback_config_file`,
+      `home_then_system_config_when_the_project_has_none`. Measured on 2.21.3 with a scratch
+      `HOME`; the `/etc` rung is from `manager.py:299`, since writing there needs root
+- [x] a second `ansible.cfg` never contributes a key the chosen one leaves unset — the same
+      test (project over home), and `env_path_values_anchor_to_the_project_not_the_env_config`
+      (`ANSIBLE_CONFIG` over project): one file is read, whole
 - [ ] a workspace with two or more `ansible.cfg` files can be told which one to use
 - [ ] the settled file is named wherever a config-derived answer is shown
 - [ ] the picker and status bar answer for the file being edited, not for a synthetic path

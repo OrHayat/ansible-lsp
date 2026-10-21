@@ -238,7 +238,11 @@ impl AnsibleConfig {
         // `ANSIBLE_CONFIG` beats the walk-found project file — the front of
         // `find_ini_config_file`'s ladder (`manager.py:263-271`). First hit wins whole:
         // when the env file exists the project's is not read, let alone merged.
-        let file = env_config_file(fs, env).unwrap_or_else(|| project_root.join("ansible.cfg"));
+        let project_file = project_root.join("ansible.cfg");
+        let file = env_config_file(fs, env)
+            .or_else(|| fs.is_file(&project_file).then(|| project_file.clone()))
+            .or_else(|| fallback_config_file(fs, env))
+            .unwrap_or(project_file);
         let base = file.parent().unwrap_or(project_root);
         let mut home_key = None;
         // Two passes, because configparser interpolates at read time over the whole parsed
@@ -459,6 +463,15 @@ impl<'a> AnsibleConfigBuilder<'a> {
             None => AnsibleConfig::load_resolved(self.root, fs, &EnvMap::from_process()),
         }
     }
+}
+
+/// The end of the ladder, for a project with no `ansible.cfg` of its own: `~/.ansible.cfg`,
+/// then `/etc/ansible/ansible.cfg` (`manager.py:296-300`, T-174). Measured on 2.21.3 with a
+/// scratch `HOME`: the home file is read when the cwd has none and ignored whole when it has
+/// one. The `/etc` rung is read from source, since writing there needs root.
+fn fallback_config_file(fs: &dyn Fs, env: &EnvMap) -> Option<PathBuf> {
+    let home = env.var("HOME").map(|h| PathBuf::from(h).join(".ansible.cfg"));
+    home.into_iter().chain([PathBuf::from("/etc/ansible/ansible.cfg")]).find(|p| fs.is_file(p))
 }
 
 /// The file `ANSIBLE_CONFIG` names, when it names one that exists: `~` expanded, a
@@ -1083,6 +1096,42 @@ jinja2_extensions = jinja2.ext.debug
         let c =
             AnsibleConfig::builder(Path::new("/q")).fs(&fs).env(&EnvMap::empty()).load();
         assert_eq!(c.config_file, None, "no config anywhere: recorded as such");
+    }
+
+    /// T-174: a project with no `ansible.cfg` falls back to `~/.ansible.cfg`, then
+    /// `/etc/ansible/ansible.cfg`; one with its own never reads either.
+    #[test]
+    fn home_then_system_config_when_the_project_has_none() {
+        use crate::testing::MemFs;
+        let home_cfg = "[defaults]\nroles_path = /from/home\n";
+        let etc_cfg = "[defaults]\nroles_path = /from/etc\n";
+        let home = EnvMap::from_pairs(&[("HOME", "/home/t")]);
+        let load = |fs: &MemFs, root: &str, env: &EnvMap| {
+            let c = AnsibleConfig::builder(Path::new(root)).fs(fs).env(env).load();
+            (c.config_file, c.roles_path)
+        };
+
+        let fs = MemFs::new(&[("/home/t/.ansible.cfg", home_cfg), ("/etc/ansible/ansible.cfg", etc_cfg)]);
+        assert_eq!(
+            load(&fs, "/p", &home),
+            (Some("/home/t/.ansible.cfg".into()), Some(vec![PathBuf::from("/from/home")])),
+            "the home file beats the system one"
+        );
+        assert_eq!(
+            load(&fs, "/p", &EnvMap::empty()),
+            (Some("/etc/ansible/ansible.cfg".into()), Some(vec![PathBuf::from("/from/etc")])),
+            "no HOME: the system file"
+        );
+
+        let fs = MemFs::new(&[("/etc/ansible/ansible.cfg", etc_cfg)]);
+        assert_eq!(load(&fs, "/p", &home).0, Some("/etc/ansible/ansible.cfg".into()));
+
+        let fs = MemFs::new(&[("/p/ansible.cfg", "[defaults]\n"), ("/home/t/.ansible.cfg", home_cfg)]);
+        assert_eq!(
+            load(&fs, "/p", &home),
+            (Some("/p/ansible.cfg".into()), None),
+            "the project's file wins whole: nothing merges from home"
+        );
     }
 
     /// Set-but-empty is not unset: `ANSIBLE_ROLES_PATH=` deliberately disables the
