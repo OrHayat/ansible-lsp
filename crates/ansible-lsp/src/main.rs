@@ -1125,26 +1125,33 @@ impl Backend {
         // It also means the scan and the hover no longer share a cache entry for one file —
         // under the old path-only key whichever ran first decided whether the setting applied.
         let defs = cached_definitions_in(path, &nodes, scan, &[], cache);
-        let literals = vars::known_literals_in(&defs, path, &doc.text, scan);
+        let extracted = references::extract(&nodes);
+        let in_playbook = extracted.in_playbook;
+        let is_role_metadata = ctx.is_role_metadata(path, scan);
+        let mut extracted = extracted.refs;
+        if is_role_metadata {
+            extracted.extend(references::meta_dependencies(&nodes));
+        }
+        // Only a templated reference reads these, and copying out every definition's value
+        // was a third of the scan's CPU on a role-heavy tree — `scan` skips it the same way.
+        let literals = if extracted.iter().any(|r| r.templated) {
+            vars::known_literals_in(&defs, path, &doc.text, scan)
+        } else {
+            Default::default()
+        };
         t.var_index += s.elapsed();
 
         let s = Instant::now();
-        let extracted = references::extract(&nodes);
         // One resolver for the file: `in_playbook` is a property of this file, not of any
         // one reference in it, and every field is a reference or a word so building it
         // costs no allocation (T-135).
         let resolver = resolve::Resolver {
             fs: scan,
             literals: Some(&literals),
-            in_playbook: extracted.in_playbook,
+            in_playbook,
             chains: chains.as_deref(),
             ..Default::default()
         };
-        let is_role_metadata = ctx.is_role_metadata(path, scan);
-        let mut extracted = extracted.refs;
-        if is_role_metadata {
-            extracted.extend(references::meta_dependencies(&nodes));
-        }
         let refs: Vec<(Reference, Resolution)> = extracted
             .into_iter()
             .map(|r| {

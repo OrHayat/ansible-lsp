@@ -43,6 +43,7 @@ better placed where it is.
 - [x] T-084 — Cold `ansible --version` blocks startup for seconds
 - [ ] T-085 — The var walk is syscall-bound, and 4× of the syscalls are repeats
 - [x] T-250 — The workspace walk follows symlinks back into the tree, so one file is analysed and reported under several paths
+- [x] T-251 — The editor's scan computes literal variable values for every file, though only a templated path reads them
 
 ## Done when
 
