@@ -157,7 +157,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
 
-T-031 and T-032 are **partly done** — the classifier, inlay hints and four warning rules
+T-031 and T-032 are **partly done** — the classifier, its `when:` hover and four warning rules
 shipped; the tree consumer and the code action didn't.
 
 Counts are grep estimates with comments excluded — treat as ±5%. Of T-015's 385, roughly 256

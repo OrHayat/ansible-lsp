@@ -1,15 +1,13 @@
 ---
 # `when:` analysis. Two separate things happen in this file:
 #
-#   GREY TEXT to the right of a line = an inlay hint. Derived info, nothing is wrong.
+#   HOVER the `when:` keyword = what the condition means. Derived info, nothing is wrong.
 #   YELLOW SQUIGGLE on the when: value = a warning. That condition can never work.
-#
-# No hints showing? Settings -> search `inlay hints` -> Editor > Inlay Hints: Enabled = on.
 #
 # Every verdict the classifier can produce appears below exactly once, so this file is
 # also the fixture that proves each one still works.
 
-# =========================================================== INLAY HINTS — one per verdict
+# ================================================================ HOVERS — one per verdict
 # Wording is "unless X is set" rather than "runs by default" on purpose: `default(D)`
 # only tells us the value when X is UNSET. Whether it's set in group_vars, inventory or
 # -e is not knowable from the condition, so claiming "by default" would overstate it.

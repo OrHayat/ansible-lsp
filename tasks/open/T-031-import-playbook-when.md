@@ -53,10 +53,11 @@ useful thing isn't finding bugs here — it's **explaining the construct**.
 
 ## Approach — revised, and partly shipped
 
-**The diagnostic was dropped in favour of an inlay hint** (shipped, see T-032). 48 permanent
+**The diagnostic was dropped in favour of an inlay hint**, which `a3da5b4` later replaced
+with a hover on the import (see T-032, T-125). 48 permanent
 INFORMATION rows in the Problems panel would have been suppressed wholesale within a day, and
-then T-024's labelling would have lost its explanation too. The hint carries the verdict
-inline; its tooltip carries the pushed-down explanation on hover only.
+then T-024's labelling would have lost its explanation too. The hover carries the verdict
+and the pushed-down explanation.
 
 What remains open here is the *explanation surface*, not the detection:
 
@@ -109,7 +110,7 @@ both should come from one place in the code.
 
 ## Done when
 
-- [x] all 48 conditional imports are annotated — as inlay hints, not diagnostics
+- [x] all 48 conditional imports are annotated — on hover (first as inlay hints), not diagnostics
 - [x] the tooltip explains the per-task copying, not just "this is conditional"
 - [x] the word *conditional* appears nowhere in the wording
 - [x] `demo/playbook.yml` exercises the case and its comments agree

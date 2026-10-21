@@ -82,6 +82,16 @@ Which of these ship is the decision this ticket makes. Whatever ships, the tree 
 saying hints are already here: fix [[T-031]], [[T-032]] and [[T-025]], and make
 `scripts/inlay-hints.py` match — its filename and its docstring are both stale.
 
+## needs decision: which hints ship, and under what default?
+
+Re-measured 2026-10-21 with `scripts/inlay-hints.py` on `demo/playbook.yml`: 14 of 19 references
+carry the `when:` hover under the default settings and 14 under `enabled=false`. The setting
+gates nothing, and the `when:` explanation sits on the `when:` keyword, not on its value. The
+stale claims are fixed (box below). What remains is the call this ticket was written to make:
+which rows of the two tables above earn an inlay, and whether the setting defaults on. The rare
+table is the low-risk start; the frequent one needs the side-by-side judgement the last boxes
+ask for.
+
 ## Done when
 
 - [ ] the setting works: a provider in `ServerCapabilities`, a handler, and toggling
@@ -99,6 +109,9 @@ saying hints are already here: fix [[T-031]], [[T-032]] and [[T-025]], and make
 - [ ] judged against the real demo side by side, at a stated number of cursor positions, before
       it lands — [[T-078]] settled its anchoring question at twelve, and the clutter question is
       no more answerable by reasoning than that one was
-- [ ] [[T-031]], [[T-032]] and [[T-025]] no longer describe inlay hints as shipped
-- [ ] `scripts/inlay-hints.py` matches whatever was decided, docstring included
+- [x] [[T-031]], [[T-032]] and [[T-025]] no longer describe inlay hints as shipped — nor do
+      `demo/README.md`, `demo/playbook.yml`, `demo/tasks/conditions.yml` or the board README,
+      which told readers to look for grey text that never appears
+- [ ] `scripts/inlay-hints.py` matches whatever was decided, docstring included — the
+      docstring now states the measured answer; the filename waits on the decision below
 - [ ] `grep -rn inlay` across the repo returns nothing surprising

@@ -63,9 +63,10 @@ either — a play that includes it will fail. It's flagged on the offending line
 silently skipped. `# noqa: unparseable` silences it for the templated/partial files you know
 won't parse standalone.
 
-One switch, applied immediately: **`ansibleLsp.inlayHints.enabled`** — `false` removes the
-`when:` hover. It's in [`.vscode/settings.json`](.vscode/settings.json) next door. Diagnostics
-are unaffected; a warning is silenced per-line with `# noqa: <rule-id>`.
+**`ansibleLsp.inlayHints.enabled`** is read but currently gates nothing: there are no inlay
+hints, and the `when:` hover shows either way (T-125). It's in
+[`.vscode/settings.json`](.vscode/settings.json) next door. A warning is silenced per-line with
+`# noqa: <rule-id>`.
 
 Being *window*-scoped, it will not apply from a per-folder file in the multi-root debug
 window — set it in User settings (`Cmd+,`, search `ansible lsp`). If a change seems to do

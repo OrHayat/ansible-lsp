@@ -73,12 +73,9 @@
   # those lines must not accidentally disable these checks.
   import_playbook: definitely_not_here.yml  
 
-# ------------------------------------------------------- STATIC when: (inlay hints)
-# Grey text appears to the RIGHT of these lines saying what a default run does.
+# ------------------------------------------------------------ STATIC when: (hover)
+# Hover `when:`, or the imported file name, to see what a default run does.
 # No squiggle, no Problems entry — it's derived info, not a complaint.
-#
-# If you see nothing: Cmd+Shift+P -> "Preferences: Open Settings (UI)" ->
-# search `inlay hints` -> set Editor > Inlay Hints: Enabled to `on`.
 
 - name: "The skip-flag pattern"
   import_playbook: imported.yml

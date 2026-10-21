@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Drive the server over raw stdio and report the `when:` hover per settings combination.
 
-Verifies `ansibleLsp.inlayHints.enabled` — the one switch that gates the hover — without an
-editor, so "the setting does nothing" can be answered with evidence instead of a guess.
+Checks what `ansibleLsp.inlayHints.enabled` does to that hover without an editor, so "the
+setting does nothing" is answered with evidence instead of a guess. Since T-078 the answer is
+nothing: the hover shows under both values, and there is no inlay provider (T-125).
 
     python3 scripts/inlay-hints.py [file]      # default: demo/playbook.yml
 

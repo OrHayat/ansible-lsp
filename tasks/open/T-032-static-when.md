@@ -6,7 +6,7 @@
 
 ## Shipped
 
-`condition.rs` + inlay hints + 4 warning rules, 20 tests. Coverage measured by
+`condition.rs` + a `when:` hover + 4 warning rules, 20 tests. Coverage measured by
 `condition::corpus::when_coverage` (ignored by default):
 
 ```
@@ -22,8 +22,8 @@ problems found           0
 `UnlessSet`, `UnlessCleared`, `OnlyIfSet`, `WhenEquals` (incl. `!=`), `WhenIn` (incl.
 `not in`), `RequiresDefined`, `RequiresNonEmpty`, `Never`, `Unknown`.
 
-Surfaced as **inlay hints**, not diagnostics — grey text to the right of the line, no
-Problems row. Nothing here is wrong, so a diagnostic would have been 1053 rows of noise.
+Surfaced on **hover** over the `when:`, not as diagnostics — no Problems row. It shipped as
+inlay hints and `a3da5b4` replaced them with this hover; whether any inlay comes back is T-125. Nothing here is wrong, so a diagnostic would have been 1053 rows of noise.
 
 **Four warning rules also shipped** (`problems()`): `when-jinja-delimiters`,
 `when-item-without-loop`, `when-assignment`, `when-unbalanced`. All four find **zero**

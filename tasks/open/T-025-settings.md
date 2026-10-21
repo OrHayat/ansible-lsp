@@ -20,11 +20,11 @@ Two layers, and the split matters:
 
 **VS Code settings** — per-user, per-machine. Things about *this machine*.
 
-Shipped: `ansibleLsp.serverPath`, `ansibleLsp.trace.server`,
-`ansibleLsp.inlayHints.enabled`. It is
-live — the server calls `workspace/inlayHint/refresh` on
-`didChangeConfiguration`, because a setting that only takes effect on the next keystroke
-reads as a setting that doesn't work.
+Shipped: `ansibleLsp.serverPath`, `ansibleLsp.trace.server`. Also present:
+`ansibleLsp.inlayHints.enabled`, which is read and logged but gates nothing, since there is no
+inlay provider (T-125, measured 2026-10-21 with `scripts/inlay-hints.py`). When a setting does
+gate something, it must apply on `didChangeConfiguration`: one that only takes effect on the
+next keystroke reads as a setting that doesn't work.
 
 Still wanted: `ansibleLsp.scanOnStartup`.
 
