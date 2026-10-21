@@ -137,3 +137,23 @@ back. That covers the routing table and the races without depending on FSEvents 
 - [ ] `~/ansible/roles` is either watched deliberately or excluded deliberately, and this ticket
       records which
 - [ ] smoke test drives all four event types over the wire
+
+## needs decision: debounced full rescan first, or index-driven from the start?
+
+Re-measured 2026-10-21 with `target/release/scan`, which is single-threaded and runs every
+report, so it overstates the server's parallel `scan_workspace`: kubespray 1.5 s (1,258 files),
+the private corpus 2.8 s, community.general 2.9 s, debops 4.5 s, kolla-ansible 4.9 s. The
+server has no watcher at all today, and `did_change` republishes only the edited file, never its
+dependents.
+
+1. **Debounced full rescan.** Register the watcher; after ~300 ms of quiet, invalidate the caches
+   for the touched paths and rerun `scan_workspace`, guarded by a generation counter. That covers
+   every Done-when box except the 200-events-one-republish cost bound, in a round. It costs a
+   background scan of a few seconds per burst of saves, and it also fixes dependents of an edited
+   file, which no event-routing table above does.
+2. **Index-driven, as Approach describes.** Changed re-analyses one file; Created/Deleted look up
+   referrers in a candidate-keyed index. Cheaper per event, but every rule that reads another
+   file (variables, handlers, roles) has to be routed through the index, or its diagnostics go
+   stale exactly as they do today.
+
+Recommended: 1 now, then 2 if the rescan cost shows up in use.
