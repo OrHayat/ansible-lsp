@@ -9,6 +9,8 @@
 //! This is the ONLY module allowed to touch `libyaml-safer`, so a version bump stays a
 //! one-file change — the same isolation `parse.rs` once gave saphyr.
 
+use std::collections::HashMap;
+
 use libyaml_safer::{Event, EventData, Parser, ScalarStyle};
 
 use crate::parse::{Node, Span};
@@ -17,13 +19,18 @@ use crate::parse::{Node, Span};
 /// i.e. broken for Ansible too, not merely stricter-than-Ansible.
 pub fn parse_lenient(text: &str) -> Option<Vec<Node>> {
     let events = events(text)?;
+    if undefined_alias(&events, text).is_some() {
+        return None;
+    }
 
     let mut docs = Vec::new();
     let mut i = 0;
     while i < events.len() {
         match events[i].data {
             EventData::DocumentStart { .. } => {
-                let (node, next) = build(&events, i + 1, text);
+                // Anchors are per document.
+                let mut anchors = HashMap::new();
+                let (node, next) = build(&events, i + 1, text, &mut anchors);
                 if let Some(node) = node {
                     docs.push(node);
                 }
@@ -136,6 +143,9 @@ fn scan_dupes(events: &[Event], i: usize, text: &str, out: &mut Vec<DuplicateKey
 /// Where libyaml's scan failed, as a byte span, or `None` if it parses. Mirrors
 /// `parse.rs`'s old `parse_error`: only fires when the file is broken for Ansible too.
 pub fn parse_lenient_error(text: &str) -> Option<Span> {
+    if let Some(events) = events(text) {
+        return undefined_alias(&events, text);
+    }
     let mut parser = Parser::new();
     let mut input = text.as_bytes();
     parser.set_input_string(&mut input);
@@ -166,8 +176,90 @@ pub fn parse_lenient_error(text: &str) -> Option<Span> {
     }
 }
 
+/// The first alias naming an anchor not yet defined in its document, underlined to the end
+/// of its line. libyaml scans it happily; Ansible's loader refuses the file, measured on
+/// 2.21.3: "YAML parsing failed: Found undefined alias" (T-160). An anchor counts from the
+/// start of its node, so `&a [*a]` is defined, and loads, as it does upstream.
+fn undefined_alias(events: &[Event], text: &str) -> Option<Span> {
+    let mut defined: Vec<&str> = Vec::new();
+    for ev in events {
+        match &ev.data {
+            EventData::DocumentStart { .. } => defined.clear(),
+            EventData::Scalar { anchor: Some(a), .. }
+            | EventData::SequenceStart { anchor: Some(a), .. }
+            | EventData::MappingStart { anchor: Some(a), .. } => defined.push(a),
+            EventData::Alias { anchor } if !defined.contains(&anchor.as_str()) => {
+                let start = (ev.start_mark.index as usize).min(text.len());
+                let end = text[start..].find('\n').map_or(text.len(), |n| start + n);
+                return Some(Span { start, end: end.max((start + 1).min(text.len())) });
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Each alias site and the anchored node it repeats, by span, in document order (T-160).
+/// For go-to-definition and related information; no rule reads it, since the tree already
+/// holds the substituted value.
+pub fn aliases(text: &str) -> Vec<(Span, Span)> {
+    let Some(docs) = events(text) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < docs.len() {
+        if matches!(docs[i].data, EventData::DocumentStart { .. }) {
+            let mut anchors = HashMap::new();
+            let (_, next) = build_recording(&docs, i + 1, text, &mut anchors, &mut out);
+            i = next;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Build one node starting at event `i`; returns it and the index just past it.
-fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
+fn build(events: &[Event], i: usize, text: &str, anchors: &mut HashMap<String, Node>) -> (Option<Node>, usize) {
+    build_recording(events, i, text, anchors, &mut Vec::new())
+}
+
+/// [`build`], also recording each alias site with its anchor's span.
+///
+/// An alias becomes a copy of the anchored node, as Ansible's loader resolves it before any
+/// play sees the file. A sequence or mapping takes the alias site's span, so a fault in the
+/// value lands where the value is used: `empty: &empty []` is a fine variable and
+/// `hosts: *empty` is the error. Upstream reports the anchor instead. A scalar keeps the
+/// anchor's span, because offsets into its value map through that span. Its children keep
+/// theirs too, so text sliced through any of them is the text they were parsed from. An
+/// anchor is stored only once its node is complete, so `&a [*a]` stays a positioned `Other`
+/// rather than a copy of itself.
+fn build_recording(
+    events: &[Event],
+    i: usize,
+    text: &str,
+    anchors: &mut HashMap<String, Node>,
+    sites: &mut Vec<(Span, Span)>,
+) -> (Option<Node>, usize) {
+    let (node, next) = build_node(events, i, text, anchors, sites);
+    let anchor = match &events[i].data {
+        EventData::Scalar { anchor, .. }
+        | EventData::SequenceStart { anchor, .. }
+        | EventData::MappingStart { anchor, .. } => anchor.as_ref(),
+        _ => None,
+    };
+    if let (Some(a), Some(n)) = (anchor, &node) {
+        anchors.insert(a.clone(), n.clone());
+    }
+    (node, next)
+}
+
+fn build_node(
+    events: &[Event],
+    i: usize,
+    text: &str,
+    anchors: &mut HashMap<String, Node>,
+    sites: &mut Vec<(Span, Span)>,
+) -> (Option<Node>, usize) {
     let ev = &events[i];
     let raw = Span {
         start: ev.start_mark.index as usize,
@@ -182,6 +274,9 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
             (Some(Node::Null { span: raw }), i + 1)
         }
         EventData::Scalar { value, style, .. } => {
+            // libyaml's mark starts at the node's `&anchor` / `!tag`, not at the value, and
+            // every offset into the value is added to this span's start.
+            let raw = past_properties(raw, text);
             let lines = match style {
                 ScalarStyle::Literal | ScalarStyle::Folded => block_lines(value, raw, text),
                 _ => flow_lines(value, raw, text, *style),
@@ -192,7 +287,7 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
             let mut items = Vec::new();
             let mut j = i + 1;
             while !matches!(events[j].data, EventData::SequenceEnd) {
-                let (item, next) = build(events, j, text);
+                let (item, next) = build_recording(events, j, text, anchors, sites);
                 if let Some(item) = item {
                     items.push(item);
                 }
@@ -205,8 +300,20 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
             let mut entries = Vec::new();
             let mut j = i + 1;
             while !matches!(events[j].data, EventData::MappingEnd) {
-                let (key, after_key) = build(events, j, text);
-                let (val, after_val) = build(events, after_key, text);
+                let (key, after_key) = build_recording(events, j, text, anchors, sites);
+                let aliased_before = sites.len();
+                let (val, after_val) = build_recording(events, after_key, text, anchors, sites);
+                // A `<<` merge key stays opaque when its value comes through an alias, as it
+                // was before aliases were substituted. Measured on 2.21.3, `- <<: *tasks` with
+                // `tasks: &tasks [one, two]` merges the list into a single task, the first
+                // entry winning, and runs only `one`; read as a `<<` key holding a list, it is
+                // a false "unexpected parameter type". Modelling the merge itself is not done.
+                let val = match (&key, val) {
+                    (Some(k), Some(v)) if k.as_str() == Some("<<") && sites.len() > aliased_before => {
+                        Some(Node::Other { span: v.span() })
+                    }
+                    (_, v) => v,
+                };
                 if let (Some(key), Some(val)) = (key, val) {
                     entries.push((key, val));
                 }
@@ -215,9 +322,38 @@ fn build(events: &[Event], i: usize, text: &str) -> (Option<Node>, usize) {
             let span = Span { start: raw.start, end: events[j].end_mark.index as usize };
             (Some(Node::Mapping { entries, span }), j + 1)
         }
-        // Aliases and anything unexpected: a positioned Other, so spans stay sane.
+        EventData::Alias { anchor } => match anchors.get(anchor) {
+            Some(node) => {
+                sites.push((raw, node.span()));
+                let node = match node.clone() {
+                    Node::Sequence { items, .. } => Node::Sequence { items, span: raw },
+                    Node::Mapping { entries, .. } => Node::Mapping { entries, span: raw },
+                    other => other,
+                };
+                (Some(node), i + 1)
+            }
+            // A self-reference, still being built: positioned, and never recursed into.
+            None => (Some(Node::Other { span: raw }), i + 1),
+        },
+        // Anything unexpected: a positioned Other, so spans stay sane.
         _ => (Some(Node::Other { span: raw }), i + 1),
     }
+}
+
+/// `raw` less any leading `&anchor` and `!tag` and the space after each (T-160). Without this,
+/// a use inside `x: &a "{{ y }}"` landed on `"{` instead of `y`.
+fn past_properties(raw: Span, text: &str) -> Span {
+    let b = text.as_bytes();
+    let mut start = raw.start;
+    while start < raw.end && matches!(b[start], b'&' | b'!') {
+        while start < raw.end && !b[start].is_ascii_whitespace() {
+            start += 1;
+        }
+        while start < raw.end && b[start].is_ascii_whitespace() {
+            start += 1;
+        }
+    }
+    Span { start, end: raw.end }
 }
 
 /// Where each content line of a `|` or `>` scalar starts, in its value and in the document.
@@ -689,6 +825,89 @@ mod tests {
             cases.iter().filter(|c| parse_lenient(c).is_none()).count() >= 4,
             "these cases must include real failures, or the invariant is untested"
         );
+    }
+
+    /// T-160: an alias is the anchored value, as Ansible's loader makes it. A collection takes
+    /// the alias site's span and keeps its children's; a scalar keeps the anchor's span.
+    #[test]
+    fn an_alias_is_a_copy_of_its_anchor_placed_at_the_alias() {
+        let src = "a: &m {k: 1}\nb: *m\nc: &s text\nd: *s\ne: &l [x]\nf: *l\n";
+        let docs = parse_lenient(src).unwrap();
+        let get = |key: &str| docs[0].entries().iter().find(|(k, _)| k.as_str() == Some(key)).unwrap().1.clone();
+        let b = get("b");
+        assert_eq!(b.span().slice(src), "*m", "a mapping lands at the alias");
+        assert_eq!(b.entries()[0].1.as_str(), Some("1"));
+        assert_eq!(b.entries()[0].0.span().slice(src), "k", "its children keep their own text");
+        assert_eq!(get("d").as_str(), Some("text"));
+        assert_eq!(get("d").span().slice(src), "text", "a scalar keeps the anchor's span, less `&s`");
+        assert_eq!(get("c").span().slice(src), "text", "the anchored scalar itself too");
+        assert!(matches!(get("f"), Node::Sequence { .. }));
+        assert_eq!(get("f").span().slice(src), "*l");
+        assert_eq!(
+            aliases(src).iter().map(|(at, def)| (at.slice(src), def.slice(src))).collect::<Vec<_>>(),
+            vec![("*m", "&m {k: 1}"), ("*s", "text"), ("*l", "&l [x]")],
+            "the side table maps each alias site to its anchor; a collection's span starts at its `&`"
+        );
+    }
+
+    /// A use inside an anchored or tagged scalar lands on the name, not on the properties.
+    #[test]
+    fn a_use_inside_an_anchored_scalar_lands_on_its_name() {
+        for src in [
+            "- hosts: all\n  vars:\n    x: &a \"{{ yy }}\"\n  tasks: []\n",
+            "- hosts: all\n  vars:\n    x: !!str &a \"{{ yy }}\"\n  tasks: []\n",
+            "- hosts: all\n  vars:\n    x: &a\n      \"{{ yy }}\"\n  tasks: []\n",
+            "- hosts: all\n  vars:\n    x: &a {{ yy }}x\n  tasks: []\n",
+        ] {
+            let Some(nodes) = crate::parse::Document::new(src.into()).parse() else { continue };
+            let u: Vec<&str> = crate::vars::any_uses(&nodes).into_iter().map(|u| u.span.slice(src)).collect();
+            assert_eq!(u, ["yy"], "{src:?}");
+        }
+    }
+
+    /// A merge key's aliased value stays opaque, so a merged task list is not read as a `<<`
+    /// key holding a list; an inline merge value is left as written.
+    #[test]
+    fn a_merge_key_through_an_alias_stays_opaque() {
+        let src = "l: &l [{a: 1}]\nm: &m {b: 2}\nx:\n  <<: *l\ny:\n  <<: *m\nz:\n  <<: [*m]\nw:\n  <<: {c: 3}\n";
+        let docs = parse_lenient(src).unwrap();
+        let merge = |key: &str| docs[0].entries().iter().find(|(k, _)| k.as_str() == Some(key)).unwrap().1.entries()[0].1.clone();
+        for key in ["x", "y", "z"] {
+            assert!(matches!(merge(key), Node::Other { .. }), "{key}");
+        }
+        assert!(matches!(merge("w"), Node::Mapping { .. }), "inline, as before");
+    }
+
+    /// T-102 walks the raw events, not the substituted tree, so a duplicate key inside an
+    /// anchored mapping is one authoring mistake reported once, at the definition, however
+    /// many aliases repeat it.
+    #[test]
+    fn a_duplicate_key_in_an_anchored_mapping_is_reported_once_at_its_definition() {
+        let src = "a: &m {k: 1, k: 2}\nb: *m\nc: *m\n";
+        let dupes = duplicate_keys(src);
+        assert_eq!(dupes.len(), 1, "{dupes:?}");
+        assert!(dupes[0].span.start < src.find("b:").unwrap(), "at the definition");
+    }
+
+    /// A self-reference loads upstream (measured, 2.21.3) and must not recurse here.
+    #[test]
+    fn a_recursive_anchor_terminates() {
+        let src = "r: &a [*a]\n";
+        let docs = parse_lenient(src).expect("loads, as upstream");
+        assert!(matches!(&docs[0].entries()[0].1, Node::Sequence { items, .. } if matches!(items[..], [Node::Other { .. }])));
+        assert_eq!(parse_lenient_error(src), None);
+    }
+
+    /// Measured on 2.21.3: "YAML parsing failed: Found undefined alias". libyaml scans it, so
+    /// the check is ours, and both entry points agree on it.
+    #[test]
+    fn an_alias_to_an_undefined_anchor_is_a_parse_failure() {
+        for src in ["r: *never\n", "a: *later\nb: &later 1\n", "---\nx: &d 1\n---\ny: *d\n"] {
+            assert!(parse_lenient(src).is_none(), "{src:?}");
+            let at = parse_lenient_error(src).expect("located");
+            assert!(at.slice(src).starts_with('*'), "{src:?}: {:?}", at.slice(src));
+        }
+        assert!(parse_lenient("a: &x 1\nb: *x\n").is_some(), "the control");
     }
 
     #[test]

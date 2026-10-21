@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| open   | task | P2       | M    | —          |
+| partly done | task | P2       | M    | —          |
 
 ## Problem
 
@@ -111,19 +111,48 @@ An anchored mapping with a duplicate key inside is therefore reported once at th
 and not at each alias site. That may well be right — it is one authoring mistake, not N — but
 it has to be decided and asserted rather than left to fall out.
 
+## Progress 2026-10-21
+
+Measured on 2.21.3: `hosts: *bad` and `hosts: *empty` fail as written inline; `&a [*a]` loads;
+an alias to an undefined anchor is "YAML parsing failed: Found undefined alias"; and
+`- <<: *tasks`, with `tasks: &tasks [one, two]`, merges the list into one task, the first entry
+winning, and runs only `one`.
+
+`parse_libyaml::build_recording` substitutes each alias with its anchored node. A sequence or
+mapping takes the alias site's span, and its children keep theirs. A scalar keeps the anchor's,
+because offsets into its value map through it. An anchor is stored only once its node is complete,
+so a self-reference stays `Other`. `undefined_alias` makes the undefined case a parse failure in
+both `parse_lenient` and `parse_lenient_error`. `parse_libyaml::aliases` is the side table.
+
+Three things found on the way:
+
+- **A merge key holding an alias stays opaque.** Substituting it turned the merged task list above
+  into a `<<` key holding a list, a false "unexpected parameter type in action" on a real public
+  playbook (`redhat-cop/infra.leapp`). Modelling merge semantics is not done.
+- **References are deduplicated by kind and span.** A block rerun as `block: *prepare` repeated
+  its module references at the same place (3 in community.general).
+- **An anchored scalar's span started at its `&anchor`.** That predates this change, and a use in
+  `x: &a "{{ y }}"` landed on `"{` instead of `y`. Scalars now start past their `&anchor` and
+  `!tag`.
+
+Gate: every editor diagnostic in the 78 corpus files that use aliases, with substitution on and
+off, is identical, and so is `scan` over all 46 repos and the private corpus.
+
 ## Done when
 
-- [ ] `hosts: *bad` and `hosts: *empty` produce T-110 rows 17 and 14, anchored at the alias
-- [ ] a recursive anchor (`&a [*a]`) terminates instead of hanging, pinned by a test — the one
-      way this change can be worse than the silence it replaces
-- [ ] the alias side table maps each alias site to its anchor definition, and no rule reads it
+- [x] `hosts: *bad` and `hosts: *empty` produce T-110 rows 17 and 14, anchored at the alias —
+      `a_hosts_value_through_an_alias_is_checked_at_the_alias`
+- [x] a recursive anchor (`&a [*a]`) terminates instead of hanging, pinned by a test —
+      `a_recursive_anchor_terminates`
+- [x] the alias side table maps each alias site to its anchor definition, and no rule reads it —
+      `parse_libyaml::aliases`
 - [ ] a diagnostic through an alias points at the alias site, not the anchor definition, with
-      the definition attached as related information — pinned by a span assertion, and recorded
-      as a **measured divergence**: upstream points at the definition (`2:11` in the repro
-      above), which is wrong for any rule whose fault depends on where the value is used
-- [ ] merge keys (`<<:`) measured on 2.21.2 and either supported or documented as a miss
-- [ ] an alias to an undefined anchor is confirmed to be a load error upstream, so it stays a
-      parse failure rather than a silent `Other`
-- [ ] T-102 agrees with the substitution: a duplicate key inside an anchored mapping is
-      reported once per alias site, or once at the definition — settled and asserted either way
-- [ ] `Node::Other` is documented as what remains after this: genuinely unexpected events only
+      the definition attached as related information — the alias site holds for a collection;
+      the related information is not attached yet, and a scalar keeps the anchor's span
+- [x] merge keys (`<<:`) measured on 2.21.2 and either supported or documented as a miss — an
+      aliased merge value stays `Other`; `a_merge_key_through_an_alias_stays_opaque`
+- [x] an alias to an undefined anchor is confirmed to be a load error upstream, so it stays a
+      parse failure rather than a silent `Other` — `an_alias_to_an_undefined_anchor_is_a_parse_failure`
+- [x] T-102 agrees with the substitution — once, at the definition:
+      `a_duplicate_key_in_an_anchored_mapping_is_reported_once_at_its_definition`
+- [x] `Node::Other` is documented as what remains after this

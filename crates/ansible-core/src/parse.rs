@@ -65,6 +65,9 @@ pub enum Node {
     Null {
         span: Span,
     },
+    /// What the parser cannot give a value: an alias to its own anchor (`&a [*a]`), a `<<`
+    /// merge key's aliased value, and any event it does not expect. Every other alias is
+    /// substituted with its anchored value (T-160).
     Other {
         span: Span,
     },

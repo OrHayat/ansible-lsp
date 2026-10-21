@@ -133,7 +133,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-129 | [Triage every ansible-lint rule: covered, port, reject, out of scope](open/T-129-triage-every-ansible-lint-rule-covered-port-reject-out-of-sc.md) | M    | —    |
 | T-131 | **epic** · [Performance and responsiveness](open/T-131-performance-and-responsiveness.md) | M    | —    |
 | T-137 | [playbook_dir in task files is the invoking playbook's dir, not a guess](open/T-137-playbook-dir-in-task-files-is-the-invoking-playbook-s-dir-no.md) | M    | ~~T-020~~ |
-| T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 | T-161 | [An empty keyword value is either dead weight or a silent override of an inherited one](open/T-161-an-empty-keyword-value-is-either-dead-weight-or-a-silent-ove.md) | M    | —    |
 | T-162 | [The parser drops scalar style, so no rule can tell 42 from "42"](open/T-162-the-parser-drops-scalar-style-so-no-rule-can-tell-42-from-42.md) | M    | —    |
 | T-174 | **bug** · [Read the ansible.cfg ansible would read, not the workspace root's](open/T-174-read-the-ansible-cfg-ansible-would-read-not-the-workspace-ro.md) | M    | —    |
@@ -154,6 +153,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
+| T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, its `when:` hover and four warning rules
 shipped; the tree consumer and the code action didn't.

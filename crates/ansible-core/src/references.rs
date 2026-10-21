@@ -3,7 +3,7 @@
 use crate::ast::{self, Action, Ast, Import, Play, PlayItem, Stmt, Task};
 use crate::parse::{Node, Span};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReferenceKind {
     IncludeTasks,
     ImportTasks,
@@ -260,6 +260,11 @@ pub fn extract(nodes: &[Node]) -> Extracted {
         }
         Ast::Other => false,
     };
+    // An aliased subtree is a copy whose nodes keep the anchor's spans (T-160), so a block
+    // rerun as `block: *prepare` would repeat each of its references at the same place. One
+    // written location is one reference, kept with its first context.
+    let mut seen = std::collections::HashSet::new();
+    refs.retain(|r| seen.insert((r.kind, r.span.start, r.span.end)));
     Extracted { refs, in_playbook }
 }
 

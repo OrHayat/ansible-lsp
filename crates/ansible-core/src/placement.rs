@@ -1319,10 +1319,8 @@ fn hosts(value: &Node, src: &str, out: &mut Vec<Problem>) {
             }
         }
         Node::Mapping { .. } => out.push(error(value.span(), HOSTS_SHAPE.into())),
-        // An alias (`hosts: *webservers`). A **miss**, not a pass: ansible resolves the anchor
-        // and validates what it holds — measured, `hosts: *bad` pointing at a mapping gives
-        // this rule's own `must be a sequence or string`. Our parser turns every alias into
-        // `Other` with no anchor table, so the value is invisible here. T-160.
+        // The parser substitutes an alias with its anchored value (T-160), so `hosts: *bad`
+        // arrives as the mapping it names. What is left here is a self-referencing anchor.
         Node::Other { .. } => {}
     }
 }
@@ -1400,6 +1398,21 @@ mod tests {
             .filter(|p| p.rule != DEAD_HANDLER_NAME_RULE_ID)
             .map(|p| p.message)
             .collect()
+    }
+
+    /// T-160, T-110 rows 17 and 14 through an alias: measured on 2.21.3, both fail exactly as
+    /// written inline, and the error lands on the alias, where the value is used.
+    #[test]
+    fn a_hosts_value_through_an_alias_is_checked_at_the_alias() {
+        let src = "- hosts: localhost\n  vars:\n    bad: &bad {group: web}\n    empty: &empty []\n  tasks: []\n\
+                   - hosts: *bad\n  tasks: []\n- hosts: *empty\n  tasks: []\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let got: Vec<(&str, String)> = problems(&nodes, src, true)
+            .into_iter()
+            .filter(|p| p.rule != DEAD_HANDLER_NAME_RULE_ID)
+            .map(|p| (p.span.slice(src), p.message))
+            .collect();
+        assert_eq!(got, vec![("*bad", HOSTS_SHAPE.to_string()), ("*empty", HOSTS_EMPTY.to_string())]);
     }
 
     /// Row 7, and the classifier fix underneath it. Before this, `Block.is_block`'s any-of-three
