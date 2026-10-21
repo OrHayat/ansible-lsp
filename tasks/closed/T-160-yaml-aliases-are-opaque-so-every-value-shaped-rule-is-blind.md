@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Depends on |
 | ------ | ---- | -------- | ---- | ---------- |
-| partly done | task | P2       | M    | —          |
+| done   | task | P2       | M    | —          |
 
 ## Problem
 
@@ -146,9 +146,13 @@ off, is identical, and so is `scan` over all 46 repos and the private corpus.
       `a_recursive_anchor_terminates`
 - [x] the alias side table maps each alias site to its anchor definition, and no rule reads it —
       `parse_libyaml::aliases`
-- [ ] a diagnostic through an alias points at the alias site, not the anchor definition, with
-      the definition attached as related information — the alias site holds for a collection;
-      the related information is not attached yet, and a scalar keeps the anchor's span
+- [x] a diagnostic through an alias points at the alias site, not the anchor definition, with
+      the definition attached as related information — `with_alias_origins`, called where open
+      files publish and where the scan publishes, pinned by
+      `a_diagnostic_on_an_alias_links_the_anchored_value`. The test drives the helper: the service
+      harness drops its client socket, so the two call sites are not observed. A scalar keeps the
+      anchor's span by design (offsets into its value map through it), so a scalar's diagnostic
+      sits on the anchor, as upstream's does
 - [x] merge keys (`<<:`) measured on 2.21.2 and either supported or documented as a miss — an
       aliased merge value stays `Other`; `a_merge_key_through_an_alias_stays_opaque`
 - [x] an alias to an undefined anchor is confirmed to be a load error upstream, so it stays a

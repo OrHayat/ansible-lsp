@@ -153,7 +153,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
-| T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](open/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | M    | —    |
 
 T-031 and T-032 are **partly done** — the classifier, its `when:` hover and four warning rules
 shipped; the tree consumer and the code action didn't.
@@ -357,6 +356,7 @@ T-021 is now unblocked on that side.
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](closed/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | done     |
 | T-221 | [Resolve a dotted access into a literal mapping variable](closed/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | done     |
 | T-249 | **bug** · [A task's or block's vars: reach reads outside that task or block](closed/T-249-a-task-s-or-block-s-vars-reach-reads-outside-that-task-or-bl.md) | done     |
+| T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](closed/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | done     |
 
 ## Settled — don't re-derive these
 

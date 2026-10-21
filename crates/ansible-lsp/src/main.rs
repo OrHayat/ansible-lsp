@@ -1363,6 +1363,7 @@ impl Backend {
             diagnostics.extend(self.state.inventory_diagnostics(&a, &path));
             diagnostics.extend(Self::group_priority_diagnostics(&a, &path));
         }
+        with_alias_origins(&mut diagnostics, &a.doc, uri);
         self.state.track(uri, &diagnostics);
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, None)
@@ -2801,6 +2802,7 @@ impl Backend {
                     ft.files = 1;
                     let mut diagnostics = Self::diagnostics_of(&a);
                     diagnostics.extend(st.mutated_condition_diagnostics(&a));
+                    with_alias_origins(&mut diagnostics, &a.doc, &uri);
                     let edges = reverse::edges_of(&*sc, &path, &a.refs, &a.doc);
                     Some((uri, diagnostics, ft, edges))
                 });
@@ -3488,6 +3490,26 @@ struct AttributeHit {
     value: Span,
     /// The defining file, which `key` and `value` index into.
     def_doc: Document,
+}
+
+/// T-160: a diagnostic on an alias site also points at the anchor it repeats. The alias is
+/// where the value is used and where the squiggle belongs; the anchor is where it is written,
+/// which upstream reports instead, so both stay one click away.
+fn with_alias_origins(diagnostics: &mut [Diagnostic], doc: &Document, uri: &Url) {
+    if !doc.text.contains('*') {
+        return;
+    }
+    let sites = ansible_core::parse_libyaml::aliases(&doc.text);
+    for d in diagnostics.iter_mut() {
+        let at = doc.lsp_to_byte(d.range.start.line, d.range.start.character);
+        let Some((_, anchor)) = sites.iter().find(|(site, _)| site.start <= at && at < site.end) else { continue };
+        let (sl, sc) = doc.byte_to_lsp(anchor.start);
+        let (el, ec) = doc.byte_to_lsp(anchor.end);
+        d.related_information.get_or_insert_with(Vec::new).push(DiagnosticRelatedInformation {
+            location: Location { uri: uri.clone(), range: Range::new(Position::new(sl, sc), Position::new(el, ec)) },
+            message: "the anchored value this alias repeats".into(),
+        });
+    }
 }
 
 /// The `host_vars/<host>.yml` file beside `from`, if it exists (T-171). A deterministic
@@ -8280,6 +8302,30 @@ mod tests {
         }
         assert_eq!(rows, 6, "the fixture lost rows");
         assert_eq!(warned.len(), 1, "only the BAD row warns: {warned:?}");
+    }
+
+    /// T-160: a diagnostic raised through an alias sits on the alias and links the anchor; one
+    /// that is not on an alias gets no link.
+    #[test]
+    fn a_diagnostic_on_an_alias_links_the_anchored_value() {
+        let path = std::env::temp_dir().join("ansible-lsp-t160/play.yml");
+        let text = "- hosts: localhost\n  vars:\n    empty: &empty []\n  tasks: []\n- hosts: *empty\n  tasks: []\n\
+                    - hosts: all\n  tasks:\n    - debug: msg=x\n      debugger: sometimes\n";
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let mut d = super::Backend::diagnostics_of(&a);
+        super::with_alias_origins(&mut d, &a.doc, &uri);
+        let slice = |r: &tower_lsp::lsp_types::Range| {
+            let s = a.doc.lsp_to_byte(r.start.line, r.start.character);
+            let e = a.doc.lsp_to_byte(r.end.line, r.end.character);
+            text[s..e].to_string()
+        };
+        let hosts = d.iter().find(|d| d.message.contains("Hosts list cannot be empty")).expect("fires");
+        assert_eq!(slice(&hosts.range), "*empty");
+        let rel = hosts.related_information.as_ref().expect("linked");
+        assert_eq!(slice(&rel[0].location.range), "&empty []");
+        let other = d.iter().find(|d| d.message.contains("debugger")).expect("the control fires");
+        assert!(other.related_information.is_none(), "not on an alias");
     }
 
     /// T-221: the rule fires in its own fixture and nowhere else in the demo.
