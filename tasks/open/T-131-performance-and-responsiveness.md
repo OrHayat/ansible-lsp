@@ -42,6 +42,7 @@ better placed where it is.
 - [x] T-076 — Var-index re-walks shared files once per consumer
 - [x] T-084 — Cold `ansible --version` blocks startup for seconds
 - [ ] T-085 — The var walk is syscall-bound, and 4× of the syscalls are repeats
+- [x] T-250 — The workspace walk follows symlinks back into the tree, so one file is analysed and reported under several paths
 
 ## Done when
 

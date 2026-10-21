@@ -314,31 +314,61 @@ pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
 }
 
 /// [`yaml_files`] against a caller-supplied filesystem (T-085).
+///
+/// Each real file once, at its real path (T-250). A symlink is set aside and followed only
+/// after the plain walk, and only when it lands outside everything walked so far: one back
+/// into the tree names a file already listed under its own path — `debops` links its roles
+/// in three times, which tripled every warning — and one to an ancestor is a loop. A link out
+/// of the tree is still walked, so a role folder vendored by symlink keeps being read.
 pub fn yaml_files_in(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
-    fn walk(dir: &Path, fs: &dyn Fs, out: &mut Vec<PathBuf>) {
+    fn walk(dir: &Path, fs: &dyn Fs, out: &mut Vec<PathBuf>, links: &mut Vec<PathBuf>) {
         // The kind comes from the listing itself — no stat per entry.
         for (p, kind) in fs.read_dir(dir) {
             let name = p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if kind == Kind::Dir {
-                if !matches!(
+            let wanted = match kind {
+                Kind::Dir => !matches!(
                     name.as_str(),
                     ".git" | "__pycache__" | ".pytest_cache" | "node_modules" | "target"
-                ) {
-                    walk(&p, fs, out);
-                }
-            } else if matches!(
-                p.extension().and_then(|s| s.to_str()),
-                Some("yml") | Some("yaml")
-            ) {
+                ),
+                Kind::File => matches!(
+                    p.extension().and_then(|s| s.to_str()),
+                    Some("yml") | Some("yaml")
+                ),
+                Kind::Other => false,
+            };
+            if !wanted {
+                continue;
+            }
+            if fs.symlink_kind(&p) == Some(Kind::Other) {
+                links.push(p);
+            } else if kind == Kind::Dir {
+                walk(&p, fs, out, links);
+            } else {
                 out.push(p);
             }
         }
     }
     let mut out = Vec::new();
-    walk(root, fs, &mut out);
+    let mut links = Vec::new();
+    walk(root, fs, &mut out, &mut links);
+    let mut walked: Vec<PathBuf> = fs.canonical(root).into_iter().collect();
+    let mut i = 0;
+    while let Some(link) = links.get(i).cloned() {
+        i += 1;
+        let Some(target) = fs.canonical(&link) else { continue };
+        if walked.iter().any(|w| target.starts_with(w)) {
+            continue;
+        }
+        walked.push(target);
+        if fs.kind(&link) == Some(Kind::Dir) {
+            walk(&link, fs, &mut out, &mut links);
+        } else {
+            out.push(link);
+        }
+    }
     out
 }
 
@@ -411,6 +441,33 @@ fn is_role_dir(d: &Path, fs: &dyn Fs) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-250: one entry per real file, at its real path. The tree holds every kind of link
+    /// the walk meets: into itself, out of itself twice to one place, a loop, and a file link
+    /// each way.
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_lists_each_real_file_once_at_its_real_path() {
+        use std::os::unix::fs::symlink;
+        let outside = crate::testing::tree("t250-outside", &[("vendored/tasks/main.yml", ""), ("b.yml", "")]);
+        let root = crate::testing::tree("t250-root", &[("ansible/roles/r/tasks/main.yml", ""), ("site.yml", "")]);
+        symlink(root.join("ansible/roles"), root.join("roles")).unwrap();
+        symlink("..", root.join("ansible/up")).unwrap();
+        symlink(outside.join("vendored"), root.join("vendored")).unwrap();
+        symlink(outside.join("vendored"), root.join("vendored_again")).unwrap();
+        symlink(root.join("site.yml"), root.join("site_alias.yml")).unwrap();
+        symlink(outside.join("b.yml"), root.join("b.yml")).unwrap();
+
+        let mut got: Vec<String> = yaml_files(&root)
+            .iter()
+            .map(|p| crate::posix_display(p.strip_prefix(&root).unwrap()))
+            .collect();
+        got.sort();
+        let vendored = got.iter().filter(|p| p.ends_with("/tasks/main.yml") && p.starts_with("vendored")).count();
+        got.retain(|p| !p.starts_with("vendored"));
+        assert_eq!(got, ["ansible/roles/r/tasks/main.yml", "b.yml", "site.yml"]);
+        assert_eq!(vendored, 1, "a link out of the tree is walked, once per target");
+    }
 
     /// Every row measured on 2.21.2 with `dependencies: [dflt]` in the named file: the
     /// dependency ran for each spelling, not for a `main/` directory, and not for a

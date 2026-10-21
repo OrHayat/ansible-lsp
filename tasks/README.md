@@ -357,6 +357,7 @@ T-021 is now unblocked on that side.
 | T-249 | **bug** · [A task's or block's vars: reach reads outside that task or block](closed/T-249-a-task-s-or-block-s-vars-reach-reads-outside-that-task-or-bl.md) | done     |
 | T-160 | [YAML aliases are opaque, so every value-shaped rule is blind through one](closed/T-160-yaml-aliases-are-opaque-so-every-value-shaped-rule-is-blind.md) | done     |
 | T-248 | **bug** · [A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry](closed/T-248-a-role-include-written-x-yml-loads-x-yml-beside-the-file-thr.md) | done     |
+| T-250 | **bug** · [The workspace walk follows symlinks back into the tree, so one file is analysed and reported under several paths](closed/T-250-the-workspace-walk-follows-symlinks-back-into-the-tree-so-on.md) | done     |
 
 ## Settled — don't re-derive these
 
