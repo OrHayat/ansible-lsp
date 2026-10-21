@@ -598,3 +598,23 @@ fn reverse_prints_who_references_each_target() {
         "{text}"
     );
 }
+
+/// T-248: the gate resolves a role include through the ways into its file. `../x.yml` from
+/// `tasks/sub/a.yml` loads `tasks/sub/x.yml` when `main.yml` imports `sub/a.yml` — measured
+/// on 2.21.3 — and fails when `tasks_from` enters `sub/a.yml` directly.
+#[test]
+fn the_gate_resolves_a_role_include_through_the_include_that_reached_it() {
+    let d = tree("ansible-lsp-scan-t248");
+    write(&d, "roles/r/tasks/main.yml", "- import_tasks: sub/a.yml\n");
+    write(&d, "roles/r/tasks/sub/a.yml", "- include_tasks: ../x.yml\n");
+    write(&d, "roles/r/tasks/sub/x.yml", "- debug: {msg: here}\n");
+    write(&d, "site.yml", "- hosts: all\n  roles: [r]\n");
+    let (ok, text) = scan(&d);
+    assert!(ok, "reached through `sub/a.yml`, so `../x.yml` loads:\n{text}");
+
+    write(&d, "roles/r/tasks/main.yml", "- debug: {msg: no include}\n");
+    write(&d, "site.yml", "- hosts: all\n  tasks:\n    - include_role: {name: r, tasks_from: sub/a}\n");
+    let (ok, text) = scan(&d);
+    assert!(!ok, "entered by tasks_from, there is no folder to retry:\n{text}");
+    assert!(text.contains("roles/r/tasks/sub/a.yml:1  ../x.yml"), "{text}");
+}

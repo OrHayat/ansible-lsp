@@ -1,0 +1,18 @@
+# T-248 — where an include inside a role looks depends on how its file was reached. Ansible
+# retries a missed include under the folders the includes above it wrote, so `../x.yml` in
+# `tasks/steps/run.yml` loads `tasks/steps/x.yml` when `main.yml` imported `steps/run.yml`, and
+# fails when `tasks_from` entered the file directly (measured on core 2.21.3). The rows are in
+# roles/include-retry/tasks/steps/.
+- name: reached through main.yml's import
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - include-retry
+
+- name: entered by tasks_from
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - ansible.builtin.include_role:
+        name: include-retry
+        tasks_from: steps/entry

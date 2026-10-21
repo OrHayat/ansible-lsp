@@ -106,6 +106,20 @@ impl FileContext {
         dirs
     }
 
+    /// [`Self::task_search_dirs`] without the file's own directory: the part of a role
+    /// file's search that does not depend on how the file was reached (T-248). The file's
+    /// directory is only searched as the folder an includer wrote, which a file entered by
+    /// `tasks_from` has none of — measured on 2.21.3, `tasks_from: sub/a` cannot include
+    /// a `b.yml` that sits only beside it.
+    pub fn role_search_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        push_unique(&mut dirs, self.role_anchor_dir.clone());
+        push_unique(&mut dirs, self.handler_fallback_dir());
+        push_unique(&mut dirs, self.role_dir.clone());
+        push_unique(&mut dirs, self.project_root.clone());
+        dirs
+    }
+
     /// Where a relative `include_vars:` file is looked up, in order (T-206).
     ///
     /// Upstream is `_find_needle('vars', src)` -> `path_dwim_relative_stack`, which tries

@@ -2,7 +2,7 @@
 
 | Status | Kind | Priority | Size | Epic  | Depends on |
 | ------ | ---- | -------- | ---- | ----- | ---------- |
-| open   | bug  | P1       | M    | T-090 | —          |
+| done   | bug  | P1       | M    | T-090 | —          |
 
 ## Symptom
 
@@ -64,50 +64,53 @@ The doubled `dirname` looks like an upstream accident: nothing documents it, and
 
 ## Fix
 
-For a file in a role's `tasks/` or `handlers/` reached through an include or import, add the
-candidate `<role>/<dir>/<cum>/<src>`, normalised, ahead of the literal `<file_dir>/<src>`.
-`<dir>` is `handlers` for a handler, `tasks` otherwise. `<cum>` is the accumulated `dirname`
-of the parent include paths, so this needs the reverse index (T-020): which include loads this
-file, and what it wrote.
+The resolver answers a role file's include once per **way into the file**, read from the
+reverse index (`reverse::Chain`, `ReverseIndex::chains`, `resolve::through_chains`). A way in
+is the list of `<cum>` folders its includes wrote, nearest first; an entry point — `roles:`,
+`tasks_from`, the role's own `main.yml` — has none. Each `<cum>` adds
+`<anchor>/<cum>/<anchor name>/<src>` then `<anchor>/<cum>/<src>`. An include searches the
+role's own folders first and then the way's; an import searches the way's first.
 
-The candidate only differs from the literal one when `src` starts with `../`. For any other
-`src` it adds `<role>/<dir>/<cum>/tasks/<src>`. That is a real Ansible candidate too, but
-measure it before adding it, since it widens.
+Ways in that cannot be known — a templated or absolute includer, an includer outside the
+role's `tasks/` or `handlers/`, a cycle, more than 64 ways — keep the file-local search for
+the whole file, as does a file nothing reaches. Several ways in: all to one file resolves;
+all missing is a miss; some missing is a miss whose message names the failing way ("when
+this file is reached from `site.yml:5`"); several files resolves to all of them.
 
-A file loaded by several parents with different paths has several `<cum>`s. Answer it the
-way T-096's open decision answers several invoking playbooks; until that is decided, add the
-candidate only when every parent agrees.
+`scan` builds the include edges in a first pass (`reverse::ways_in`); the editor holds role
+files with includes back from its workspace pass and publishes them from a second one, and
+an open buffer, hover and go-to-definition read the live index.
 
-## needs decision: how does the resolver learn how a file was reached?
+Not modelled, each needing a file where nobody writes one: past an `include_role` that is
+itself below an include, Ansible keeps walking with `role/<cum>` and the outer include's
+folder; and the `$CWD` candidates (`upstream/ansible-cwd-relative-include.md`). One level
+deep: an include that resolves only through a way in adds its edge in the second pass, too
+late for the files it reaches in turn. After an includer is edited, the files it includes
+keep their answer until T-012.
 
-Measured 2026-10-21 on 2.21.3: the same `a.yml` with `include_tasks: ../x.yml` and
-`tasks/x.yml` present **fails** when `a.yml` is entered as `include_role: {name: r,
-tasks_from: a}`, and likewise with `import_role`. An `IncludeRole` parent contributes the role
-path itself as `cumulative_path` (`included_file.py:145-146`), so its retry repeats the first
-lookup. Whether `../x.yml` loads therefore depends on **how** the file was reached, not on
-where it sits.
+## Decision (2026-10-21)
 
-The resolver works one file at a time and never reads the reverse index; only the LSP's
-consumers do (`main.rs:250`, `:715`). The options:
+The exact rule, through the reverse index, not the `../`-only special case. Measured on
+2.21.3 while settling it (`scratchpad/t248/probe/probe.py`, one marker task per candidate):
 
-1. **Feed inbound edges to the resolver.** Exact: an include/import edge gives the parent's
-   written path and so `<cum>`, while a `tasks_from` edge rules the retry out. But a file's
-   resolution then depends on other files, so the scan must resolve includers first, and the
-   LSP must re-resolve a file when an includer changes, which is T-012's invalidation.
-2. **File-local guess.** Apply the retry to any role task or handler file except `main.yml`,
-   with `<cum>` taken from the file's own subdirectory. Cheap, and right for every corpus case,
-   but it says `Resolved` for a `tasks_from` entry, which is measured wrong.
-3. **Hedge, no verdict change.** Keep `Missing`, but when the retry candidate exists, lower the
-   diagnostic to a hint naming it ("loads `tasks/x.yml` if this file is reached through an
-   include"). No index needed, and never `Resolved` for a run that fails. Go-to-definition
-   still has no target.
+| Shape                                                               | Ansible loads             | We said before |
+| ------------------------------------------------------------------- | ------------------------- | -------------- |
+| `main` → `sub/a.yml` → `deep/b.yml` → `../x.yml`, only `sub/x.yml`  | `tasks/sub/x.yml`         | Missing        |
+| `sub/a.yml` imports `b.yml`; `tasks/b.yml`, `tasks/sub/b.yml` exist | `tasks/sub/b.yml`         | `tasks/b.yml`  |
+| same with `include_tasks`                                           | `tasks/b.yml`             | right          |
+| `tasks_from: sub/a` includes `b.yml`, only `tasks/sub/b.yml`        | fails                     | Resolved       |
+| playbook includes `roles/r/tasks/a.yml`, with `../x.yml`            | `roles/r/x.yml`, no retry | right          |
+| `a.yml` reached by `roles:` and by `tasks_from`, `../x.yml`         | loads, then fails         | Missing        |
 
-Recommended: 3 now, then 1 when T-012 lands.
+Neither of the two silent wrong answers occurs in the 44 public repos or the private corpus.
+The variable walk follows includes without the ways in, but measured, it still sees a
+`set_fact` in a file only the retry loads (`var-undefined` stays silent, and fires in the
+control with no definition), so it needs no follow-up.
 
 ## Done when
 
-- [ ] cases 1, 2, 3 and 6 resolve to the file Ansible loads, each pinned by a test
-- [ ] case 4 resolves to `tasks/sub/x.yml`, not `tasks/x.yml`
-- [ ] cases 5, 7 and 8 keep today's answer, pinned as controls
-- [ ] a demo row, label pinned by a test
-- [ ] corpus scans diffed: the `ovirt.ovirt` include resolves, nothing else changes
+- [x] cases 1, 2, 3 and 6 resolve to the file Ansible loads, each pinned by a test
+- [x] case 4 resolves to `tasks/sub/x.yml`, not `tasks/x.yml`
+- [x] cases 5, 7 and 8 keep today's answer, pinned as controls
+- [x] a demo row, label pinned by a test
+- [x] corpus scans diffed: the `ovirt.ovirt` include resolves, nothing else changes

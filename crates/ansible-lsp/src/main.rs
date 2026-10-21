@@ -762,7 +762,7 @@ impl State {
     /// isn't a real path, or doesn't parse.
     fn analyze(&self, uri: &Url) -> Option<Analysis> {
         let text = self.text_of(uri)?;
-        Backend::analyze_text_in(text, &uri.to_file_path().ok()?, &self.open_docs(), &self.var_cache)
+        Backend::analyze_text_in(text, &uri.to_file_path().ok()?, &self.open_docs(), &self.var_cache, Some(&self.reverse))
     }
 
     fn track(&self, uri: &Url, diagnostics: &[Diagnostic]) {
@@ -1060,7 +1060,7 @@ impl Backend {
         // Its own cache, not a shared one: "no editor behind this" is the truth for these
         // callers, and a cache per call is what keeps one test's index out of the next
         // test's answer — the whole point of T-201.
-        Self::analyze_text_in(text, path, &OpenDocs::default(), &Mutex::new(VarCache::default()))
+        Self::analyze_text_in(text, path, &OpenDocs::default(), &Mutex::new(VarCache::default()), None)
     }
 
     /// [`analyze_text`] against the editor's open buffers (T-199) — the variable index this
@@ -1074,6 +1074,7 @@ impl Backend {
         path: &Path,
         open: &OpenDocs,
         cache: &Mutex<VarCache>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<Analysis> {
         Self::analyze_text_measured(
             text,
@@ -1082,12 +1083,17 @@ impl Backend {
             &ScanCache::default(),
             open,
             cache,
+            rev,
         )
     }
 
     /// The body of `analyze_text`, wrapping each phase with a timer that accumulates into
     /// `t`. The un-instrumented `analyze_text` passes a throwaway accumulator and its own
     /// one-shot cache, so the logic lives in exactly one place.
+    ///
+    /// `rev` says how a role file is reached, which decides where its includes look (T-248).
+    /// `None` keeps the file-local search, for a caller whose index is not complete yet.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_text_measured(
         text: String,
         path: &Path,
@@ -1095,6 +1101,7 @@ impl Backend {
         scan: &ScanCache,
         open: &OpenDocs,
         cache: &Mutex<VarCache>,
+        rev: Option<&Mutex<reverse::ReverseIndex>>,
     ) -> Option<Analysis> {
         use std::time::Instant;
         let s = Instant::now();
@@ -1107,6 +1114,7 @@ impl Backend {
 
         let s = Instant::now();
         let ctx = (*scan.context(path)).clone();
+        let chains = rev.and_then(|r| r.lock().ok()?.chains_in(scan, path, &ctx));
         t.context += s.elapsed();
 
         // Variable values that are statically knowable, so a `{{ var }}` in a path can be
@@ -1129,6 +1137,7 @@ impl Backend {
             fs: scan,
             literals: Some(&literals),
             in_playbook: extracted.in_playbook,
+            chains: chains.as_deref(),
             ..Default::default()
         };
         let is_role_metadata = ctx.is_role_metadata(path, scan);
@@ -2710,6 +2719,14 @@ impl Backend {
         out
     }
 
+    /// What the workspace scan publishes for one closed file.
+    fn scan_diagnostics(st: &State, a: &Analysis, uri: &Url) -> Vec<Diagnostic> {
+        let mut diagnostics = Self::diagnostics_of(a);
+        diagnostics.extend(st.mutated_condition_diagnostics(a));
+        with_alias_origins(&mut diagnostics, &a.doc, uri);
+        diagnostics
+    }
+
     /// Resolve every YAML file in the workspace and publish what's broken.
     ///
     /// Runs as a detached task (T-075): `initialized` spawns this and returns, so hover /
@@ -2744,8 +2761,12 @@ impl Backend {
             .map(|s| s.in_flight())
             .unwrap_or(4)
             .max(1);
-        let mut set: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, ScanTimings, reverse::SourceEdges)>> =
+        let mut set: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, ScanTimings, reverse::SourceEdges, bool)>> =
             tokio::task::JoinSet::new();
+        // T-248: a role file's includes look where the includes that reached it wrote, which
+        // is known only once every file's edges are in. Such files are held back from the
+        // first pass and published from the second, so their diagnostics never flicker.
+        let mut held: Vec<(Url, PathBuf, Vec<Diagnostic>)> = Vec::new();
         // Sources this pass produced edges for. Anything else in the index at the end is a
         // file that was deleted or stopped parsing since the last pass — unless it is open,
         // in which case the didChange path owns its entry.
@@ -2758,7 +2779,7 @@ impl Backend {
         macro_rules! drain_one {
             () => {
                 if let Some(done) = set.join_next().await {
-                    if let Some((uri, diagnostics, ft, edges)) = done.ok().flatten() {
+                    if let Some((uri, diagnostics, ft, edges, hold)) = done.ok().flatten() {
                         t.add(&ft);
                         // Re-checked here, not only at read time: a file opened while its
                         // analysis was in flight has a buffer whose own publish already
@@ -2769,7 +2790,9 @@ impl Backend {
                                 idx.replace(edges);
                             }
                         }
-                        if !diagnostics.is_empty() && state.text_of(&uri).is_none() {
+                        if let (true, Ok(path)) = (hold, uri.to_file_path()) {
+                            held.push((uri, path, diagnostics));
+                        } else if !diagnostics.is_empty() && state.text_of(&uri).is_none() {
                             still_flagged.insert(uri.clone());
                             client.publish_diagnostics(uri, diagnostics, None).await;
                         }
@@ -2798,21 +2821,63 @@ impl Backend {
                 set.spawn_blocking(move || {
                     let mut ft = ScanTimings::default();
                     let text = std::fs::read_to_string(&path).ok()?;
-                    let a = Self::analyze_text_measured(text, &path, &mut ft, &sc, &open, &st.var_cache)?;
+                    let a = Self::analyze_text_measured(text, &path, &mut ft, &sc, &open, &st.var_cache, None)?;
                     ft.files = 1;
-                    let mut diagnostics = Self::diagnostics_of(&a);
-                    diagnostics.extend(st.mutated_condition_diagnostics(&a));
-                    with_alias_origins(&mut diagnostics, &a.doc, &uri);
+                    let hold = a.ctx.role_anchor_dir.is_some()
+                        && a.refs.iter().any(|(r, _)| matches!(r.kind, ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks));
+                    let diagnostics = Self::scan_diagnostics(&st, &a, &uri);
                     let edges = reverse::edges_of(&*sc, &path, &a.refs, &a.doc);
-                    Some((uri, diagnostics, ft, edges))
+                    Some((uri, diagnostics, ft, edges, hold))
                 });
             }
+        }
+        while !set.is_empty() {
+            drain_one!();
+        }
+
+        // The second pass, over the held role files. One level deep: an include that resolves
+        // only here adds its edge too late for the files it reaches in turn.
+        let mut second: tokio::task::JoinSet<Option<(Url, Vec<Diagnostic>, Option<reverse::SourceEdges>)>> =
+            tokio::task::JoinSet::new();
+        macro_rules! land_one {
+            () => {
+                if let Some((uri, diagnostics, edges)) = second.join_next().await.and_then(|d| d.ok().flatten()) {
+                    if state.text_of(&uri).is_none() {
+                        if let (Some(edges), Ok(mut idx)) = (edges, state.reverse.lock()) {
+                            idx.replace(edges);
+                        }
+                        if !diagnostics.is_empty() {
+                            still_flagged.insert(uri.clone());
+                            client.publish_diagnostics(uri, diagnostics, None).await;
+                        }
+                    }
+                }
+            };
+        }
+        for (uri, path, diagnostics) in held {
+            if second.len() >= in_flight {
+                land_one!();
+            }
+            let st = state.clone();
+            let sc = scan_cache.clone();
+            let open = open_docs.clone();
+            second.spawn_blocking(move || {
+                let known = st.reverse.lock().ok().and_then(|idx| idx.chains_in(&*sc, &path, &sc.context(&path))).is_some();
+                if !known {
+                    return Some((uri, diagnostics, None));
+                }
+                let text = std::fs::read_to_string(&path).ok()?;
+                let a = Self::analyze_text_measured(text, &path, &mut ScanTimings::default(), &sc, &open, &st.var_cache, Some(&st.reverse))?;
+                let diagnostics = Self::scan_diagnostics(&st, &a, &uri);
+                let edges = reverse::edges_of(&*sc, &path, &a.refs, &a.doc);
+                Some((uri, diagnostics, Some(edges)))
+            });
         }
         // Every result must land before the cleanup below, which subtracts `still_flagged`
         // from what was flagged previously — an in-flight file missing from that set would
         // have its diagnostics cleared as though it had been fixed.
-        while !set.is_empty() {
-            drain_one!();
+        while !second.is_empty() {
+            land_one!();
         }
 
         // Clear files that were flagged before but are clean now. Open buffers are the
@@ -2981,7 +3046,8 @@ impl Backend {
                 });
         };
         let ctx = FileContext::discover(path).with_install(install.cloned());
-        let res = resolve::Resolver { in_playbook, ..Default::default() }
+        let chains = rev.and_then(|r| r.lock().ok()?.chains_in(&StdFs, path, &ctx));
+        let res = resolve::Resolver { in_playbook, chains: chains.as_deref(), ..Default::default() }
             .resolve(&reference, &ctx);
         if res.status != Status::Resolved {
             return None;
@@ -3795,7 +3861,21 @@ fn message_for(r: &Reference, res: &Resolution, ctx: &FileContext) -> String {
             r.value
         );
     }
-    format!("no file found for `{}`. Tried:\n{tried}", r.value)
+    // T-248: the other ways into this file load something, so the miss belongs to one way.
+    let way = match &res.fails_from {
+        Some(resolve::WayIn::From(file, line)) => {
+            // The index keys files canonically; the context may spell its root otherwise.
+            let root = ctx.project_root.as_deref().map(reverse::canon);
+            let shown = root
+                .as_deref()
+                .and_then(|r| file.strip_prefix(r).ok())
+                .map_or_else(|| shorten(file, ctx), ansible_core::posix_display);
+            format!(" when this file is reached from `{shown}:{}`", line + 1)
+        }
+        Some(resolve::WayIn::Entry) => " when this file runs as its role's entry point".to_string(),
+        None => String::new(),
+    };
+    format!("no file found for `{}`{way}. Tried:\n{tried}", r.value)
 }
 
 /// Candidate paths are absolute and long; show them relative to the project root.
@@ -4438,7 +4518,8 @@ fn hover_at(
         // one gets the resolved target and the candidates tried, winner marked.
         let defs = cached_definitions(path, nodes, open, inv, cache, install, rev);
         let literals = vars::known_literals(&defs, path, &doc.text);
-        let res = resolve::Resolver { literals: Some(&literals), in_playbook, ..Default::default() }
+        let chains = rev.and_then(|r| r.lock().ok()?.chains_in(&StdFs, path, &ctx));
+        let res = resolve::Resolver { literals: Some(&literals), in_playbook, chains: chains.as_deref(), ..Default::default() }
             .resolve(r, &ctx);
         if r.templated {
             if let Some(hit) = Backend::path_substitution_hover(doc, nodes, r, &res, path, open, inv, cache, install, rev) {
@@ -4730,7 +4811,7 @@ impl LanguageServer for Backend {
                         let closed = uri.clone();
                         let started = std::time::Instant::now();
                         let handle = tokio::task::spawn_blocking(move || {
-                            let edges = Self::analyze_text_in(text, &path, &state.open_docs(), &state.var_cache)
+                            let edges = Self::analyze_text_in(text, &path, &state.open_docs(), &state.var_cache, Some(&state.reverse))
                                 .map(|a| reverse::edges_of(&StdFs, &path, &a.refs, &a.doc));
                             // Reopened meanwhile: that buffer's own publish owns the entry.
                             if state.text_of(&closed).is_some() {
@@ -8734,6 +8815,7 @@ mod tests {
             &scan,
             &super::OpenDocs::default(),
             &std::sync::Mutex::new(super::VarCache::default()),
+            None,
         )?;
         let mut lines: Vec<_> = super::Backend::diagnostics_of(&a)
             .iter()
@@ -8790,6 +8872,7 @@ mod tests {
             &scan,
             &super::OpenDocs::default(),
             &std::sync::Mutex::new(super::VarCache::default()),
+            None,
         )
         .unwrap();
         let rule = ansible_core::plugin_names::THIRD_PARTY_STRATEGY_RULE_ID;
@@ -9072,6 +9155,7 @@ mod tests {
                 &scan,
                 &super::OpenDocs::default(),
                 &std::sync::Mutex::new(super::VarCache::default()),
+                None,
             )
             .unwrap();
             super::Backend::diagnostics_of(&a)
@@ -11998,6 +12082,60 @@ mod tests {
 
     /// T-175: hover names which copy a definition is, and picks the playbook's over the
     /// inventory's — measured on 2.21.2, playbook `group_vars/all` (5) beats the inventory's
+    /// T-248, one assertion per consumer of the ways into a role file. `r` is reached through
+    /// `main.yml`'s import of `sub/a.yml`, so its `../x.yml` loads `tasks/sub/x.yml`; `q` is
+    /// entered only by `tasks_from`, where the same line fails; `p` is reached both ways and
+    /// fails only through `tasks_from`. All three measured on 2.21.3.
+    #[tokio::test]
+    async fn a_role_include_answers_through_the_ways_into_its_file_everywhere() {
+        const X: &str = "- debug: {msg: here}\n";
+        let root = ansible_core::testing::project(
+            "t248-lsp",
+            "[defaults]\n",
+            &[
+                (
+                    "site.yml",
+                    "- hosts: all\n  roles: [r, p]\n  tasks:\n    - include_role: {name: q, tasks_from: sub/a}\n    \
+                     - include_role: {name: p, tasks_from: a}\n",
+                ),
+                ("roles/r/tasks/main.yml", "- import_tasks: sub/a.yml\n"),
+                ("roles/r/tasks/sub/a.yml", "- include_tasks: ../x.yml\n  when: true\n"),
+                ("roles/r/tasks/sub/x.yml", X),
+                ("roles/q/tasks/sub/a.yml", "- include_tasks: ../x.yml\n"),
+                ("roles/q/tasks/sub/x.yml", X),
+                ("roles/p/tasks/main.yml", "- include_tasks: a.yml\n"),
+                ("roles/p/tasks/a.yml", "- include_tasks: ../x.yml\n"),
+                ("roles/p/tasks/x.yml", X),
+            ],
+        );
+        let s = T199Server::over(root);
+        let flagged = |s: &T199Server, rel: &str| s.state().flagged.lock().unwrap().contains(&s.uri(rel));
+
+        // The workspace scan's second pass.
+        s.scan().await;
+        assert!(!flagged(&s, "roles/r/tasks/sub/a.yml"), "reached through sub/a.yml, so it loads");
+        assert!(flagged(&s, "roles/q/tasks/sub/a.yml"), "control: tasks_from has no folder to retry");
+
+        // An open buffer.
+        s.open_disk("roles/r/tasks/sub/a.yml").await;
+        assert!(!flagged(&s, "roles/r/tasks/sub/a.yml"), "and stays clean once opened");
+
+        // Go-to-definition and hover land on the file Ansible loads.
+        let defs: Vec<String> = s.def_in("roles/r/tasks/sub/a.yml", "../x.yml", 1).await.into_iter().map(|d| d.0).collect();
+        assert_eq!(defs, vec!["roles/r/tasks/sub/x.yml".to_string()]);
+        let hover = s.hover_in("roles/r/tasks/sub/a.yml", "../x.yml", 1).await.expect("a guarded include hovers");
+        assert!(hover.contains("roles/r/tasks/sub/x.yml"), "{hover}");
+
+        // The miss on one way in names it: line 5 is `p`'s `tasks_from`.
+        s.open_disk("roles/p/tasks/a.yml").await;
+        let a = s.state().analyze(&s.uri("roles/p/tasks/a.yml")).expect("analyses");
+        let messages: Vec<String> = super::Backend::diagnostics_of(&a).into_iter().map(|d| d.message).collect();
+        assert!(
+            messages.iter().any(|m| m.starts_with("no file found for `../x.yml` when this file is reached from `site.yml:5`.")),
+            "{messages:?}"
+        );
+    }
+
     /// (4).
     #[tokio::test]
     async fn hover_tells_inventory_group_vars_from_playbook_group_vars() {
@@ -14440,6 +14578,7 @@ mod tests {
             &scan,
             &super::OpenDocs::default(),
             &std::sync::Mutex::new(super::VarCache::default()),
+            None,
         )
         .unwrap();
 
@@ -14523,6 +14662,7 @@ mod tests {
                 &scan,
                 &super::OpenDocs::default(),
                 &std::sync::Mutex::new(super::VarCache::default()),
+                None,
             ) else {
                 continue;
             };

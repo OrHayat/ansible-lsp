@@ -61,6 +61,18 @@ pub struct Resolution {
     /// The names a routing table renamed a module to, in the order they were followed; the
     /// written name is not repeated. Empty for every other kind.
     pub redirects: Vec<String>,
+    /// Set on a miss that only some of the ways into this file hit (T-248): the one it
+    /// fails on. The others load a file, so the miss is about that way in, not the line.
+    pub fails_from: Option<WayIn>,
+}
+
+/// How a role file is reached, for naming the one an include fails on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WayIn {
+    /// Run as its role's entry point, from no reference in the workspace.
+    Entry,
+    /// From the reference at this file and 0-based line.
+    From(PathBuf, u32),
 }
 
 impl Resolution {
@@ -81,6 +93,7 @@ impl Resolution {
             skip_reason: Some(reason),
             directory: None,
             redirects: Vec::new(),
+            fails_from: None,
         }
     }
 
@@ -95,6 +108,7 @@ impl Resolution {
                 skip_reason: None,
                 directory: None,
                 redirects: Vec::new(),
+                fails_from: None,
             },
             None => Self {
                 status: Status::Missing,
@@ -103,6 +117,7 @@ impl Resolution {
                 skip_reason: None,
                 directory: None,
                 redirects: Vec::new(),
+                fails_from: None,
             },
         }
     }
@@ -311,12 +326,15 @@ pub struct Resolver<'a> {
     /// exactly. A property of the **file**, which is why it does not belong on a single
     /// [`Reference`] (T-095), and why T-137 can widen it without touching every one.
     pub in_playbook: bool,
+    /// The ways into the file being resolved, from the reverse index (T-248). `None` keeps
+    /// the file-local search, which is all a file whose includers are unknown can have.
+    pub chains: Option<&'a [crate::reverse::Chain]>,
 }
 
 impl Default for Resolver<'static> {
     fn default() -> Self {
         // `&StdFs` const-promotes to `'static`, so this needs no lazy static.
-        Self { fs: &StdFs, literals: None, exts: RoleExts::default(), in_playbook: false }
+        Self { fs: &StdFs, literals: None, exts: RoleExts::default(), in_playbook: false, chains: None }
     }
 }
 
@@ -385,6 +403,62 @@ fn task_bases(in_playbook: bool, ctx: &FileContext) -> Vec<PathBuf> {
         dirs.retain(|d| *d == ctx.file_dir || Some(d.as_path()) != ctx.project_root.as_deref());
     }
     dirs
+}
+
+/// A task include in a role file, resolved once per way into the file (T-248).
+///
+/// Measured on 2.21.3, an include tries the role's own folders first and then the
+/// [`Chain`](crate::reverse::Chain)'s, while an import tries the chain's first: `sub/a.yml`
+/// writing `b.yml`, with both `tasks/b.yml` and `tasks/sub/b.yml` present, includes the
+/// first and imports the second. Each chain folder `P` is tried as `P/<anchor>/<src>` and
+/// then `P/<src>` — `path_dwim_relative` joins the anchor's name onto a folder that already
+/// ends in it, so `include_tasks: ../x.yml` from `tasks/sub/a.yml` loads `tasks/sub/x.yml`.
+/// A handler include also tries `P/tasks/<src>`, its `is_role=True` call; an import's
+/// call detects the role and here finds none.
+///
+/// The ways in are answered together: every way to the same file resolves; every way
+/// missing is a miss; some missing is a miss naming the way that fails; several files
+/// resolve to all of them.
+fn through_chains(r: &Reference, ctx: &FileContext, anchor: &Path, chains: &[crate::reverse::Chain], fs: &dyn Fs) -> Resolution {
+    let dir = anchor.file_name().unwrap_or_default();
+    let fixed = ctx.role_search_dirs();
+    let per: Vec<(Resolution, &crate::reverse::Chain)> = chains
+        .iter()
+        .map(|c| {
+            let mut walked = Vec::new();
+            for cum in &c.cums {
+                let p = anchor.join(cum);
+                walked.push(p.join(dir));
+                if r.kind == ReferenceKind::IncludeTasks && dir == "handlers" {
+                    walked.push(p.join("tasks"));
+                }
+                walked.push(p);
+            }
+            let bases: Vec<&PathBuf> = if r.kind == ReferenceKind::ImportTasks {
+                walked.iter().chain(&fixed).collect()
+            } else {
+                fixed.iter().chain(&walked).collect()
+            };
+            (Resolution::from_candidates(unique(bases.iter().map(|b| normalise(&b.join(&r.value)))), fs), c)
+        })
+        .collect();
+    let missing = per.iter().filter(|(res, _)| res.status == Status::Missing).count();
+    if missing == per.len() {
+        let mut res = per[0].0.clone();
+        res.candidates = unique(per.iter().flat_map(|(res, _)| res.candidates.iter().cloned()));
+        return res;
+    }
+    if let Some((res, c)) = per.iter().find(|(res, _)| res.status == Status::Missing) {
+        let mut res = res.clone();
+        res.fails_from = Some(match &c.via {
+            Some((file, line)) => WayIn::From(file.to_path_buf(), *line),
+            None => WayIn::Entry,
+        });
+        return res;
+    }
+    let mut res = per[0].0.clone();
+    res.targets = unique(per.iter().flat_map(|(res, _)| res.targets.iter().cloned()));
+    res
 }
 
 /// The base directories a path-shaped reference is resolved against. `None` for name-shaped
@@ -508,6 +582,7 @@ impl<'a> Resolver<'a> {
                         skip_reason: None,
                         directory: None,
                         redirects: Vec::new(),
+                        fails_from: None,
                     }
                 }
                 _ => return Resolution::skipped(SkipReason::Templated),
@@ -524,6 +599,7 @@ impl<'a> Resolver<'a> {
                 skip_reason: Some(SkipReason::Templated),
                 directory: None,
                 redirects: Vec::new(),
+                fails_from: None,
             };
         }
 
@@ -536,6 +612,9 @@ impl<'a> Resolver<'a> {
                         unique(values.iter().map(|v| normalise(Path::new(v)))),
                         fs,
                     );
+                }
+                if let (Some(chains), Some(anchor)) = (self.chains, ctx.role_anchor_dir.as_deref()) {
+                    return through_chains(r, ctx, anchor, chains, fs);
                 }
                 Resolution::from_candidates(
                     unique(
@@ -634,6 +713,7 @@ impl<'a> Resolver<'a> {
                         skip_reason: Some(SkipReason::GroupAlternative),
                         directory: None,
                         redirects: Vec::new(),
+                        fails_from: None,
                         ..res
                     },
                     _ => res,
@@ -664,6 +744,7 @@ impl<'a> Resolver<'a> {
                         skip_reason: None,
                         directory: None,
                         redirects: Vec::new(),
+                        fails_from: None,
                     },
                     // Provably absent at the role path; at runtime the value decays to
                     // cwd-relative, which no static verdict can cover.
@@ -674,6 +755,7 @@ impl<'a> Resolver<'a> {
                         skip_reason: None,
                         directory: None,
                         redirects: Vec::new(),
+                        fails_from: None,
                     },
                     include_vars::Outcome::Failed { .. } | include_vars::Outcome::NeedsNeedle { .. } => {
                         Resolution {
@@ -688,6 +770,7 @@ impl<'a> Resolver<'a> {
                             skip_reason: None,
                             directory: None,
                             redirects: Vec::new(),
+                            fails_from: None,
                         }
                     }
                 }
@@ -728,6 +811,7 @@ impl<'a> Resolver<'a> {
                     skip_reason: None,
                     directory: None,
                     redirects: Vec::new(),
+                    fails_from: None,
                 },
             },
 
@@ -1008,6 +1092,7 @@ fn resolve_module(
                     skip_reason: None,
                     directory: None,
                     redirects: Vec::new(),
+                    fails_from: None,
                 }
             }
             _ => return Resolution::skipped(SkipReason::NotInWorkspace),
@@ -1031,6 +1116,7 @@ fn resolve_module(
                     skip_reason: None,
                     directory: None,
                     redirects: Vec::new(),
+                    fails_from: None,
                 }
             }
             _ => {
@@ -1042,6 +1128,7 @@ fn resolve_module(
                     directory: None,
                     // Where the chain stopped is what the hover explains (T-133).
                     redirects: visited[1..].to_vec(),
+                    fails_from: None,
                 }
             }
         }
@@ -1136,6 +1223,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
                 skip_reason: None,
                 directory: None,
                 redirects: Vec::new(),
+                fails_from: None,
             };
         }
     }
@@ -1149,6 +1237,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
         skip_reason: None,
         directory: None,
         redirects: Vec::new(),
+        fails_from: None,
     }
 }
 
@@ -1678,7 +1767,7 @@ fn unique(paths: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
 
 /// Lexical `..`/`.` removal. Not `canonicalize()`, which needs the path to exist —
 /// we want readable candidates precisely when they don't.
-fn normalise(p: &Path) -> PathBuf {
+pub(crate) fn normalise(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
@@ -3290,6 +3379,158 @@ mod tests {
         }
     }
 
+    /// Every `.yml` under `root`, for [`crate::reverse::ways_in`].
+    fn t248_files(root: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "yml") {
+                    out.push(p);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// The task include written `value` in `rel`, resolved the way `scan` does: through the
+    /// ways into `rel` from an index of the whole project.
+    fn t248_resolve(root: &Path, rel: &str, value: &str) -> Resolution {
+        let cache = crate::cache::ScanCache::default();
+        let idx = crate::reverse::ways_in(&cache, &t248_files(root));
+        let path = root.join(rel);
+        let ctx = cache.context(&path);
+        let chains = idx.chains_in(&cache, &path, &ctx);
+        let nodes = cache.source(&path).unwrap().nodes.clone().unwrap();
+        let r = extract(&nodes).refs.into_iter().find(|r| r.value == value).expect("the include is extracted");
+        Resolver { fs: &cache, chains: chains.as_deref(), ..Default::default() }.resolve(&r, &ctx)
+    }
+
+    /// T-248: an include in a role file looks where the includes that reached the file
+    /// wrote. Every row was run on 2.21.3 with a marker task in each candidate file
+    /// (`scratchpad/t248/probe/probe.py`); `want` is what Ansible loaded, empty where the run
+    /// failed. Rows 1-8 are the ticket's cases.
+    #[test]
+    fn a_role_include_looks_where_the_includes_that_reached_it_wrote() {
+        const ROLES: &str = "- hosts: all\n  roles: [r]\n";
+        const TASKS_FROM: &str = "- hosts: all\n  tasks:\n    - include_role: {name: r, tasks_from: sub/a}\n";
+        const BOTH: &str = "- hosts: all\n  roles: [r]\n  tasks:\n    - include_role: {name: r, tasks_from: a}\n";
+        const DIRECT: &str = "- hosts: all\n  tasks:\n    - include_tasks: roles/r/tasks/a.yml\n";
+        const T: &str = "- debug: {msg: here}\n";
+        type Row<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a str, &'a str, &'a [&'a str]);
+        let rows: &[Row] = &[
+            ("1 include, then ../", ROLES, &[("tasks/main.yml", "- include_tasks: a.yml\n"), ("tasks/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/a.yml", "../x.yml", &["tasks/x.yml"]),
+            ("2 import, ../ in a block", ROLES, &[("tasks/main.yml", "- import_tasks: a.yml\n"), ("tasks/a.yml", "- block:\n    - include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/a.yml", "../x.yml", &["tasks/x.yml"]),
+            ("3 from sub/", ROLES, &[("tasks/main.yml", "- import_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/sub/x.yml", T)],
+                "tasks/sub/a.yml", "../x.yml", &["tasks/sub/x.yml"]),
+            ("4 from sub/, both present", ROLES, &[("tasks/main.yml", "- import_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/sub/x.yml", T), ("tasks/x.yml", T)],
+                "tasks/sub/a.yml", "../x.yml", &["tasks/sub/x.yml"]),
+            ("5 from sub/, the literal one", ROLES, &[("tasks/main.yml", "- import_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/sub/a.yml", "../x.yml", &["tasks/x.yml"]),
+            ("6 a handler", ROLES, &[("tasks/main.yml", T), ("handlers/main.yml", "- include_tasks: a.yml\n"), ("handlers/a.yml", "- include_tasks: ../x.yml\n"), ("handlers/x.yml", T)],
+                "handlers/a.yml", "../x.yml", &["handlers/x.yml"]),
+            ("7 a handler, x only in tasks/", ROLES, &[("tasks/main.yml", T), ("handlers/main.yml", "- include_tasks: a.yml\n"), ("handlers/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "handlers/a.yml", "../x.yml", &[]),
+            ("8 ../ in main.yml", ROLES, &[("tasks/main.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/main.yml", "../x.yml", &[]),
+            ("two levels, the outer folder", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: deep/b.yml\n"), ("tasks/deep/b.yml", "- include_tasks: ../x.yml\n"), ("tasks/sub/x.yml", T)],
+                "tasks/deep/b.yml", "../x.yml", &["tasks/sub/x.yml"]),
+            ("two levels, the outer folder doubled", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: deep/b.yml\n"), ("tasks/deep/b.yml", "- include_tasks: ../x.yml\n"), ("tasks/sub/deep/x.yml", T)],
+                "tasks/deep/b.yml", "../x.yml", &["tasks/sub/deep/x.yml"]),
+            ("two levels, nothing there", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: deep/b.yml\n"), ("tasks/deep/b.yml", "- include_tasks: ../x.yml\n")],
+                "tasks/deep/b.yml", "../x.yml", &[]),
+            ("an import tries the chain first", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- import_tasks: b.yml\n"), ("tasks/b.yml", T), ("tasks/sub/b.yml", T)],
+                "tasks/sub/a.yml", "b.yml", &["tasks/sub/b.yml"]),
+            ("an include tries the role first", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: b.yml\n"), ("tasks/b.yml", T), ("tasks/sub/b.yml", T)],
+                "tasks/sub/a.yml", "b.yml", &["tasks/b.yml"]),
+            ("a doubled folder for a plain name", ROLES, &[("tasks/main.yml", "- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: b.yml\n"), ("tasks/sub/tasks/b.yml", T), ("tasks/sub/b.yml", T)],
+                "tasks/sub/a.yml", "b.yml", &["tasks/sub/tasks/b.yml"]),
+            ("tasks_from has no folder to retry", TASKS_FROM, &[("tasks/sub/a.yml", "- include_tasks: b.yml\n"), ("tasks/sub/b.yml", T)],
+                "tasks/sub/a.yml", "b.yml", &[]),
+            ("tasks_from still reaches tasks/", TASKS_FROM, &[("tasks/sub/a.yml", "- include_tasks: b.yml\n"), ("tasks/b.yml", T)],
+                "tasks/sub/a.yml", "b.yml", &["tasks/b.yml"]),
+            ("a playbook including a role file reads it literally", DIRECT, &[("tasks/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/a.yml", "../x.yml", &[]),
+            ("a playbook including a role file, the literal one", DIRECT, &[("tasks/a.yml", "- include_tasks: ../x.yml\n"), ("x.yml", T)],
+                "tasks/a.yml", "../x.yml", &["x.yml"]),
+            ("two ways in, one fails", BOTH, &[("tasks/main.yml", "- include_tasks: a.yml\n"), ("tasks/a.yml", "- include_tasks: ../x.yml\n"), ("tasks/x.yml", T)],
+                "tasks/a.yml", "../x.yml", &[]),
+            ("two ways in, two files", ROLES, &[("tasks/main.yml", "- include_tasks: deep/b.yml\n- include_tasks: sub/a.yml\n"), ("tasks/sub/a.yml", "- include_tasks: deep/b.yml\n"), ("tasks/deep/b.yml", "- import_tasks: ../x.yml\n"), ("tasks/sub/x.yml", T), ("x.yml", T)],
+                "tasks/deep/b.yml", "../x.yml", &["x.yml", "tasks/sub/x.yml"]),
+        ];
+        for (i, (name, site, files, rel, value, want)) in rows.iter().enumerate() {
+            let mut all: Vec<(String, &str)> = files.iter().map(|(p, t)| (format!("roles/r/{p}"), *t)).collect();
+            all.push(("site.yml".into(), site));
+            let all: Vec<(&str, &str)> = all.iter().map(|(p, t)| (p.as_str(), *t)).collect();
+            let root = crate::testing::project(&format!("t248-row{i}"), "[defaults]\n", &all);
+            let res = t248_resolve(&root, &format!("roles/r/{rel}"), value);
+            let role = root.join("roles/r");
+            let got: Vec<String> = res.targets.iter().map(|t| crate::posix_display(t.strip_prefix(&role).unwrap())).collect();
+            assert_eq!(got, *want, "{name}: {:?}", res.candidates);
+            assert_eq!(res.status == Status::Missing, want.is_empty(), "{name}");
+        }
+    }
+
+    /// `demo/include_retry.yml`'s rows, resolved the way `scan` resolves them: a GOOD row
+    /// lands on the file its comment names, a BAD row is a miss.
+    #[test]
+    fn the_include_retry_demo_matches_its_annotations() {
+        let demo = Path::new("../../demo").canonicalize().unwrap();
+        let cache = crate::cache::ScanCache::default();
+        let idx = crate::reverse::ways_in(&cache, &t248_files(&demo));
+        let role = demo.join("roles/include-retry");
+        let mut rows = 0;
+        for rel in ["tasks/steps/run.yml", "tasks/steps/entry.yml"] {
+            let path = role.join(rel);
+            let ctx = cache.context(&path);
+            let chains = idx.chains_in(&cache, &path, &ctx);
+            let src = cache.source(&path).unwrap();
+            let doc = Document::new(src.text.to_string());
+            for r in extract(src.nodes.as_deref().unwrap()).refs {
+                let res = Resolver { fs: &cache, chains: chains.as_deref(), ..Default::default() }.resolve(&r, &ctx);
+                let line = src.text.lines().nth(doc.byte_to_lsp(r.span.start).0 as usize).unwrap();
+                match (line.split("# GOOD: ").nth(1), line.contains("# BAD: ")) {
+                    (Some(want), _) => {
+                        let want = want.split(',').next().unwrap();
+                        assert_eq!(res.targets, vec![role.join(want)], "{line}");
+                    }
+                    (None, true) => assert_eq!(res.status, Status::Missing, "{line}"),
+                    _ => continue,
+                }
+                rows += 1;
+            }
+        }
+        assert_eq!(rows, 3, "the demo lost rows");
+    }
+
+    /// The miss in "two ways in, one fails" belongs to the `tasks_from` way, which is the
+    /// line Ansible fails on; through `roles:` the same include loads `tasks/x.yml`.
+    #[test]
+    fn a_miss_on_one_way_in_names_that_way() {
+        let root = crate::testing::project(
+            "t248-failing-way",
+            "[defaults]\n",
+            &[
+                ("site.yml", "- hosts: all\n  roles: [r]\n  tasks:\n    - include_role: {name: r, tasks_from: a}\n"),
+                ("roles/r/tasks/main.yml", "- include_tasks: a.yml\n"),
+                ("roles/r/tasks/a.yml", "- include_tasks: ../x.yml\n"),
+                ("roles/r/tasks/x.yml", "- debug: {msg: here}\n"),
+            ],
+        );
+        let res = t248_resolve(&root, "roles/r/tasks/a.yml", "../x.yml");
+        assert_eq!(res.fails_from, Some(WayIn::From(crate::reverse::canon(&root.join("site.yml")), 3)));
+        // Control: with only the `roles:` way, nothing fails and nothing is named.
+        std::fs::write(root.join("site.yml"), "- hosts: all\n  roles: [r]\n").unwrap();
+        let res = t248_resolve(&root, "roles/r/tasks/a.yml", "../x.yml");
+        assert_eq!((res.status, res.fails_from), (Status::Resolved, None));
+    }
+
     /// Mirror image: the target sits next to the caller inside a `tasks/` subdirectory.
     /// Three `_converge_one_ap.yml` exist; each caller must reach its own.
     #[test]
@@ -4299,10 +4540,10 @@ mod tests {
     fn the_resolver_is_free_to_build() {
         fn assert_copy<T: Copy>() {}
         assert_copy::<super::Resolver<'_>>();
-        // Two fat pointers, an Option<&_>, and a bool. A regression here means someone
+        // Three fat pointers, an Option<&_>, and a bool. A regression here means someone
         // gave it an owned field, which is an allocation on every hover.
         assert!(
-            std::mem::size_of::<super::Resolver<'_>>() <= 6 * std::mem::size_of::<usize>(),
+            std::mem::size_of::<super::Resolver<'_>>() <= 8 * std::mem::size_of::<usize>(),
             "Resolver grew to {} bytes",
             std::mem::size_of::<super::Resolver<'_>>()
         );

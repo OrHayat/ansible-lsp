@@ -1,0 +1,2 @@
+# Entered by `tasks_from: steps/entry`, which leaves no folder to retry under.
+- ansible.builtin.include_tasks: ../shared.yml # BAD: tasks_from gives no steps/ to retry under

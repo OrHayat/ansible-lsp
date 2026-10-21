@@ -48,6 +48,11 @@ fn main() {
     let mut configs_used: BTreeMap<Option<PathBuf>, (Option<PathBuf>, usize)> = BTreeMap::new();
     let mut reverse = ansible_core::reverse::ReverseIndex::default();
 
+    // How each role file is reached decides where its includes look (T-248), so the include
+    // edges come first. One level deep: an include that resolves only through a chain adds
+    // its edge in the pass below, too late for the files it reaches in turn.
+    let ways_in = ansible_core::reverse::ways_in(&cache, &files);
+
     for path in &files {
         // Through the cache: one read *and* one parse per file, shared with the var walk
         // that will reach most of these files again.
@@ -126,6 +131,7 @@ fn main() {
             std::collections::HashMap::new()
         };
 
+        let chains = ways_in.chains_in(&cache, path, &ctx);
         let mut resolved: Vec<(ansible_core::references::Reference, ansible_core::resolve::Resolution)> =
             Vec::with_capacity(refs.len());
         for r in refs {
@@ -135,6 +141,7 @@ fn main() {
                 fs: &cache,
                 literals: Some(&literals),
                 in_playbook,
+                chains: chains.as_deref(),
                 ..Default::default()
             }
             .resolve(&r, &ctx);

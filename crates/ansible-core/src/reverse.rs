@@ -51,6 +51,8 @@ pub struct Edge {
     /// never has to re-open the file to say where the edge is.
     pub line: u32,
     pub kind: ReferenceKind,
+    /// The value as written, which is what Ansible's include retry reads (T-248).
+    pub value: Arc<str>,
     /// The value carried a Jinja expression, so this is one of the candidates that line may
     /// reach rather than the one file it names.
     pub templated: bool,
@@ -104,6 +106,7 @@ pub fn edges_of(fs: &dyn Fs, source: &Path, refs: &[(Reference, Resolution)], do
             })),
             _ => None,
         };
+        let value: Arc<str> = Arc::from(r.value.as_str());
         for target in &res.targets {
             edges.push((
                 key(target),
@@ -112,6 +115,7 @@ pub fn edges_of(fs: &dyn Fs, source: &Path, refs: &[(Reference, Resolution)], do
                     span: r.span,
                     line,
                     kind: r.kind,
+                    value: value.clone(),
                     templated: r.templated,
                     apply: apply.clone(),
                 },
@@ -193,6 +197,131 @@ impl ReverseIndex {
     }
 }
 
+/// One way Ansible reaches a file in a role's `tasks/` or `handlers/`, as its include retry
+/// sees it (T-248, `included_file.py:136-180`, `helpers.py:158-198`).
+///
+/// When an include in a role file misses, Ansible walks the file's include parents and
+/// retries under `<anchor>/<cum>`, where `<cum>` joins the directories those parents
+/// *wrote* — not where their files sit. Measured on 2.21.3: `sub/a.yml` writing
+/// `deep/b.yml` loads `tasks/deep/b.yml`, and an include in it then retries under `deep/`
+/// and `sub/deep/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chain {
+    /// `<cum>` per include or import above the file, nearest first, relative to the anchor so
+    /// the resolver joins it onto the context's own spelling of that folder. Empty when the
+    /// file is entered as a role's entry point — `roles:`, `tasks_from`, or its `main.yml`.
+    ///
+    /// Not modelled: past an `include_role` that is itself below an include, Ansible goes
+    /// on walking that include's parents with odd paths (`role/<cum>`, then the outer
+    /// include's own directory). Each needs a file at a place nobody writes one.
+    pub cums: Vec<PathBuf>,
+    /// The reference this way starts from, as (file, 0-based line). `None` for a `main.yml`
+    /// no reference in the workspace names.
+    pub via: Option<(Arc<Path>, u32)>,
+}
+
+/// An index of only the edges [`ReverseIndex::chains`] reads — task includes, imports and
+/// role entries — over `files`, each resolved file-locally. What a caller with no complete
+/// index yet builds first, so that its real pass can resolve role files through
+/// [`ReverseIndex::chains_in`].
+pub fn ways_in(cache: &crate::cache::ScanCache, files: &[PathBuf]) -> ReverseIndex {
+    let mut idx = ReverseIndex::default();
+    for path in files {
+        let Some(src) = cache.source(path) else { continue };
+        let Some(nodes) = src.nodes.as_deref() else { continue };
+        let ctx = cache.context(path);
+        let extracted = crate::references::extract(nodes);
+        let resolver = crate::resolve::Resolver { fs: cache, in_playbook: extracted.in_playbook, ..Default::default() };
+        let refs: Vec<_> = extracted
+            .refs
+            .into_iter()
+            .filter(|r| {
+                matches!(
+                    r.kind,
+                    ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks | ReferenceKind::Role | ReferenceKind::TasksFrom
+                )
+            })
+            .map(|r| {
+                let res = resolver.resolve(&r, &ctx);
+                (r, res)
+            })
+            .collect();
+        idx.replace(edges_of(cache, path, &refs, &Document::new(src.text.to_string())));
+    }
+    idx
+}
+
+/// Past this many ways into one file the answer is "not known", never a guess.
+const MAX_CHAINS: usize = 64;
+
+impl ReverseIndex {
+    /// Every way into `file`, a role file under `anchor` (its role's `tasks/` or
+    /// `handlers/`), both canonical. `None` when any way in is unknowable — a templated or
+    /// absolute include, an includer outside `anchor`, a cycle, too many ways — or when
+    /// nothing reaches the file at all, so the caller keeps its file-local answer.
+    pub fn chains(&self, file: &Path, anchor: &Path) -> Option<Vec<Chain>> {
+        if !file.starts_with(anchor) {
+            return None;
+        }
+        let ways = self.ways(file, anchor, &mut Vec::new())?;
+        Some(ways.into_iter().map(|(cums, via)| Chain { cums, via }).collect())
+    }
+
+    /// [`Self::chains`] for `file` where `ctx` places it, both canonicalised through `fs`.
+    pub fn chains_in(&self, fs: &dyn Fs, file: &Path, ctx: &crate::workspace::FileContext) -> Option<Vec<Chain>> {
+        let anchor = fs.canonical(ctx.role_anchor_dir.as_deref()?)?;
+        let file = fs.canonical(file).unwrap_or_else(|| file.to_path_buf());
+        self.chains(&file, &anchor)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn ways(&self, file: &Path, anchor: &Path, seen: &mut Vec<PathBuf>) -> Option<Vec<(Vec<PathBuf>, Option<(Arc<Path>, u32)>)>> {
+        if seen.iter().any(|s| s == file) {
+            return None;
+        }
+        seen.push(file.to_path_buf());
+        let mut out: Vec<(Vec<PathBuf>, Option<(Arc<Path>, u32)>)> = Vec::new();
+        for e in self.by_target.get(file).map_or(&[][..], Vec::as_slice) {
+            match e.kind {
+                ReferenceKind::Role | ReferenceKind::TasksFrom => {
+                    out.push((Vec::new(), Some((e.source.clone(), e.line))));
+                }
+                ReferenceKind::IncludeTasks | ReferenceKind::ImportTasks => {
+                    let written = Path::new(&*e.value);
+                    if e.templated || written.is_absolute() || !e.source.starts_with(anchor) {
+                        return None;
+                    }
+                    let dir = written.parent().unwrap_or(Path::new(""));
+                    for (above, _) in self.ways(&e.source, anchor, seen)? {
+                        let mut cums = vec![dir.to_path_buf()];
+                        cums.extend(above.iter().map(|c| c.join(dir)));
+                        out.push((cums, Some((e.source.clone(), e.line))));
+                    }
+                }
+                _ => {}
+            }
+            if out.len() > MAX_CHAINS {
+                return None;
+            }
+        }
+        let is_main = file.parent() == Some(anchor)
+            && matches!(file.file_name().and_then(|n| n.to_str()), Some("main.yml" | "main.yaml" | "main"));
+        if is_main {
+            out.push((Vec::new(), None));
+        }
+        // One way per set of folders, the first that names a line: two ways with the same
+        // folders search the same places, and keeping both doubles everything below.
+        let mut kept: Vec<(Vec<PathBuf>, Option<(Arc<Path>, u32)>)> = Vec::new();
+        for way in out {
+            if !kept.iter().any(|k| k.0 == way.0) {
+                kept.push(way);
+            }
+        }
+        seen.pop();
+        (!kept.is_empty()).then_some(kept)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +352,55 @@ mod tests {
             .filter_map(|e| e.apply.as_ref())
             .flat_map(|a| a.vars.iter().map(|(n, s)| (n.clone(), s.slice(src).to_string())))
             .collect()
+    }
+
+    /// T-248: the folders each way in wrote, nearest first, and `None` wherever one way in
+    /// cannot be known — which keeps the file-local search for the whole file.
+    #[test]
+    fn the_ways_into_a_role_file_carry_the_folders_their_includes_wrote() {
+        let root = crate::testing::project(
+            "t248-chains",
+            "[defaults]\n",
+            &[
+                ("site.yml", "- hosts: all\n  roles: [r]\n"),
+                ("roles/r/tasks/main.yml", "- include_tasks: sub/a.yml\n- include_tasks: \"loo{{ pick }}.yml\"\n"),
+                ("roles/r/tasks/sub/a.yml", "- include_tasks: deep/b.yml\n- include_tasks: c.yml\n"),
+                ("roles/r/tasks/deep/b.yml", "- debug: {msg: b}\n"),
+                ("roles/r/tasks/c.yml", "- include_tasks: d.yml\n"),
+                ("roles/r/tasks/d.yml", "- include_tasks: c.yml\n"),
+                ("roles/r/tasks/loose.yml", "- debug: {msg: loose}\n"),
+                ("roles/r/handlers/main.yml", "- include_tasks: h.yml\n"),
+                ("roles/r/handlers/h.yml", "- debug: {msg: h}\n"),
+            ],
+        );
+        let cache = ScanCache::default();
+        let files: Vec<PathBuf> = [
+            "site.yml", "roles/r/tasks/main.yml", "roles/r/tasks/sub/a.yml", "roles/r/tasks/deep/b.yml",
+            "roles/r/tasks/c.yml", "roles/r/tasks/d.yml", "roles/r/tasks/loose.yml", "roles/r/handlers/main.yml",
+            "roles/r/handlers/h.yml",
+        ]
+        .iter()
+        .map(|f| root.join(f))
+        .collect();
+        let idx = ways_in(&cache, &files);
+        let r = canon(&root.join("roles/r"));
+        let ways = |rel: &str, dir: &str| -> Option<Vec<Vec<String>>> {
+            Some(
+                idx.chains(&r.join(rel), &r.join(dir))?
+                    .into_iter()
+                    .map(|c| c.cums.iter().map(|p| crate::posix_display(p)).collect())
+                    .collect(),
+            )
+        };
+        assert_eq!(ways("tasks/deep/b.yml", "tasks"), Some(vec![vec!["deep".into(), "sub/deep".into()]]));
+        assert_eq!(ways("tasks/main.yml", "tasks"), Some(vec![vec![]]), "an entry, once");
+        let main = idx.chains(&r.join("tasks/main.yml"), &r.join("tasks")).unwrap();
+        assert_eq!(main[0].via.as_ref().map(|v| v.1), Some(1), "named by the `roles:` line, not as an unnamed entry");
+        assert_eq!(ways("handlers/h.yml", "handlers"), Some(vec![vec![String::new()]]));
+        assert_eq!(idx.inbound(&r.join("tasks/loose.yml")).len(), 1, "the templated include reaches it");
+        assert_eq!(ways("tasks/loose.yml", "tasks"), None, "through a templated include");
+        assert_eq!(ways("tasks/c.yml", "tasks"), None, "on a cycle");
+        assert_eq!(ways("handlers/h.yml", "tasks"), None, "not under the anchor");
     }
 
     #[test]
