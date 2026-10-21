@@ -296,7 +296,7 @@ fn expand_magic(value: &str, ctx: &FileContext, in_playbook: bool) -> (Vec<Strin
     // Borrowing the playbook guesses for it was wrong on both value and definedness; T-070
     // derives it from real inventory sources. Left templated, it globs and never warns.
 
-    let still_templated = out.iter().any(|v| v.contains("{{"));
+    let still_templated = out.iter().any(|v| crate::jinja::is_template(v));
     let substituted = out.len() != 1 || out[0] != value;
     (out, still_templated, substituted)
 }
@@ -356,7 +356,7 @@ impl<'a> Resolver<'a> {
         let fs = self.fs;
         // A group's value is the joined alternatives list, not a path — substitution would
         // build nonsense candidates from it. The group resolver handles templating itself.
-        if r.value.contains("{{") && r.vars_files_group.is_none() {
+        if crate::jinja::is_template(&r.value) && r.vars_files_group.is_none() {
             if let Some(bases) = path_bases(r.kind, ctx) {
                 let subs = substitute_literals(&r.value, literals);
                 if !subs.is_empty() {
@@ -975,7 +975,7 @@ fn legacy_module_candidates(name: &str, ctx: &FileContext, fs: &dyn Fs) -> Vec<P
 /// One `collections:` entry split into its namespace and collection, or `None` if it can
 /// never name one: a template (unknowable statically) or anything but two parts.
 fn collection_entry(entry: &str) -> Option<(&str, &str)> {
-    if entry.contains("{{") {
+    if crate::jinja::is_template(entry) {
         return None;
     }
     match entry.split('.').collect::<Vec<_>>()[..] {
@@ -1159,7 +1159,7 @@ fn role_dir(
     ctx: &FileContext,
     fs: &dyn Fs,
 ) -> Option<PathBuf> {
-    if name.contains("{{") {
+    if crate::jinja::is_template(name) {
         return None;
     }
     let in_collection = |ns: &str, coll: &str, role: &str| {
@@ -1208,7 +1208,7 @@ fn resolve_vars_files_group(alts: &[String], ctx: &FileContext, fs: &dyn Fs) -> 
     let mut tried = Vec::new();
     let mut templated = false;
     for alt in alts {
-        if alt.contains("{{") {
+        if crate::jinja::is_template(alt) {
             templated = true;
             continue;
         }
@@ -3376,6 +3376,34 @@ mod tests {
                 "{from} -> {target}; tried {:#?}",
                 res.candidates
             );
+        }
+    }
+
+    /// T-252: Ansible calls a value a template when it holds any of `{{`, `{%` or `{#`, and
+    /// renders it. Measured on 2.21.3 (`scratchpad/t252/shapes`): every row below loads its
+    /// file, where we used to warn that `{% if true %}a{% endif %}.yml` was missing.
+    #[test]
+    fn every_jinja_start_string_makes_a_path_templated() {
+        let root = crate::testing::project(
+            "t252-paths",
+            "[defaults]\n",
+            &[("a.yml", "- debug: {msg: a}\n"), ("v.yml", "v: 1\n"), ("roles/r/tasks/main.yml", "- debug: {msg: r}\n")],
+        );
+        let file = root.join("site.yml");
+        for src in [
+            "- include_tasks: \"{% if true %}a{% endif %}.yml\"\n",
+            "- include_tasks: \"a{# c #}.yml\"\n",
+            "- import_tasks: \"{% if true %}a{% endif %}.yml\"\n",
+            "- include_vars: \"{% if true %}v{% endif %}.yml\"\n",
+            "- include_role: {name: \"{% if true %}r{% endif %}\"}\n",
+            "- hosts: all\n  vars_files: [\"{% if true %}v{% endif %}.yml\"]\n  tasks: []\n",
+        ] {
+            let out = resolve_src(&file, src);
+            assert!(!out.is_empty(), "{src}");
+            for (r, res) in out {
+                assert!(r.templated, "{src}");
+                assert_ne!(res.status, Status::Missing, "{src}: {:?}", res.candidates);
+            }
         }
     }
 

@@ -4264,7 +4264,7 @@ fn not_followed_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Md 
     if r.kind == ReferenceKind::TasksFrom {
         let unchecked = ", so its `tasks_from` file cannot be checked";
         return skipped(match r.role.as_deref() {
-            Some(role) if !role.contains("{{") => {
+            Some(role) if !ansible_core::jinja::is_template(role) => {
                 "role ".md() + md::code(role) + " was not found" + unchecked
             }
             _ => "the role name is only known at runtime".md() + unchecked,

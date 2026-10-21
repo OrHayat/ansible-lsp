@@ -892,7 +892,7 @@ fn task(t: &Task, idx: &mut VarIndex) {
                     // since braces are not variable-name characters. Which name it really
                     // creates needs the template evaluated, which is T-034's; a miss beats
                     // a definition nothing can reach.
-                    if name != "cacheable" && !name.contains("{{") {
+                    if name != "cacheable" && !crate::jinja::is_template(name) {
                         idx.push_cond(name, VarSource::SetFact, fact.span(), cond.clone());
                     }
                 }
@@ -911,7 +911,7 @@ fn task(t: &Task, idx: &mut VarIndex) {
                 if let Some(name) = key.as_str() {
                     // Templated keys define nothing reachable, for the reason set_fact's do
                     // not: measured, the host variable is really named `{{ k }}` (T-170).
-                    if !ADD_HOST_PARAMS.contains(&name) && !name.contains("{{") {
+                    if !ADD_HOST_PARAMS.contains(&name) && !crate::jinja::is_template(name) {
                         // The *value* span, with play vars and against `set_fact`, which is
                         // the closer-looking shape. Both are one line apart so the jump is
                         // the same either way, and only this side lets hover read the value
@@ -1105,7 +1105,7 @@ pub fn known_literals_in(
                 None => String::new(),
             }
         };
-        if value.is_empty() || value.contains("{{") {
+        if value.is_empty() || crate::jinja::is_template(&value) {
             continue;
         }
         let vals = out.entry(d.name.clone()).or_default();
@@ -1579,7 +1579,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             if let PlayItem::Play(p) = it {
                 for entry in &p.vars_files {
                     for (alt, _) in &entry.alternatives {
-                        if alt.contains("{{") {
+                        if crate::jinja::is_template(alt) {
                             break;
                         }
                         let hit = crate::resolve::vars_files_candidates(alt, &ctx.file_dir)
@@ -1640,13 +1640,13 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             // — and falls through to unknowable. That guard is what lets the unhandled
             // iteration forms (`with_*`, a templated `loop:`) stay correct without being
             // enumerated here: they yield no items, nothing substitutes, the `{{` survives.
-            Some(n) if n.contains("{{") && !t.loop_items.is_empty() => {
+            Some(n) if crate::jinja::is_template(n) && !t.loop_items.is_empty() => {
                 let expanded: Vec<String> = t
                     .loop_items
                     .iter()
                     .map(|i| n.replace("{{ item }}", i).replace("{{item}}", i))
                     .collect();
-                if expanded.iter().any(|e| e.contains("{{")) {
+                if expanded.iter().any(|e| crate::jinja::is_template(e)) {
                     out.hosts_unknowable = true;
                 } else {
                     out.created_hosts.extend(expanded);
@@ -1654,7 +1654,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             }
             // `name: "{{ item }}"` over something unreadable — the case T-177 came from,
             // where the loop is a `k8s_info` result. The host is real and its name is not.
-            Some(n) if n.contains("{{") => out.hosts_unknowable = true,
+            Some(n) if crate::jinja::is_template(n) => out.hosts_unknowable = true,
             // Taken whole. A comma looks like a host list and is not one — measured,
             // `name: "alpha,beta"` creates a single host *named* `alpha,beta`, so splitting
             // would register two hosts that do not exist and silence a real typo on either.
@@ -1689,7 +1689,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             })
         });
         if let Some(dir) = dir {
-            if !dir.contains("{{") {
+            if !crate::jinja::is_template(&dir) {
                 let ictx = include_vars::Ctx {
                     role_path: ctx.role_dir.as_deref(),
                     task_dir: &ctx.file_dir,
@@ -1711,7 +1711,7 @@ fn collect(path: &Path, nodes: &[Node], out: &mut Contribution, walk: &mut Walk)
             _ => None,
         };
         if let Some(f) = file {
-            if !f.contains("{{") {
+            if !crate::jinja::is_template(f) {
                 if let Some(path) = resolve_var_path(f, &ctx, walk.cache) {
                     read_var_file(&path, VarSource::IncludeVars, cond, out, walk);
                 }

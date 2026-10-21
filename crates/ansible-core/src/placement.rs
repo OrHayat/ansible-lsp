@@ -963,10 +963,10 @@ fn comma_notify(node: &Node, live: &HashSet<String>, error_on_missing_handler: b
         Some(v) => vec![v],
         None => Vec::new(),
     };
-    let templated = live.iter().any(|n| n.contains("{{") || n.contains("{%"));
+    let templated = live.iter().any(|n| crate::jinja::is_template(n));
     for v in values {
         let Some(name) = v.as_str() else { continue };
-        if templated || !name.contains(',') || name.contains("{{") || live.contains(name) {
+        if templated || !name.contains(',') || crate::jinja::is_template(name) || live.contains(name) {
             continue;
         }
         let parts: Vec<&str> = name.split(',').map(str::trim).collect();

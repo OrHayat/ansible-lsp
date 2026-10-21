@@ -181,7 +181,7 @@ impl Reference {
         Self {
             kind,
             value: value.to_string(),
-            templated: value.contains("{{"),
+            templated: crate::jinja::is_template(value),
             span,
             template_delimiters: None,
             role: None,
@@ -442,7 +442,7 @@ fn task(t: &Task, out: &mut Vec<Reference>, collections: &[String]) {
 /// (see `jinja::template`).
 fn template_delimiters(args: &Node) -> Option<crate::jinja::Delimiters> {
     let get = |k: &str| match args.get(k) {
-        Some(Node::Scalar { value, .. }) if !value.contains("{{") => Some(value.clone()),
+        Some(Node::Scalar { value, .. }) if !crate::jinja::is_template(value) => Some(value.clone()),
         _ => None,
     };
     let fields = [

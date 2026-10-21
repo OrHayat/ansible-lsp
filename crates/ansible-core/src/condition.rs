@@ -1218,7 +1218,7 @@ pub fn classify_all(conditions: &[String]) -> Verdict {
 pub fn classify(cond: &str) -> Verdict {
     // Double-templated. `problems()` reports it, and Ansible evaluates the result of the
     // inner render, so the shape here says nothing about the condition that actually runs.
-    if cond.contains("{{") {
+    if crate::jinja::is_template(cond) {
         return Verdict::Unknown;
     }
     match jinja::parse(cond) {

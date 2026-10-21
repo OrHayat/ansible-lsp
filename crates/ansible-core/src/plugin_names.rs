@@ -156,7 +156,7 @@ pub fn problems(
 
 /// The message for a value no plugin answers to, or `None` when it is fine or not judged.
 fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str, bool) -> Option<Found>) -> Option<(Tier, String)> {
-    if value.is_empty() || value.contains("{{") || value.contains("{%") {
+    if value.is_empty() || crate::jinja::is_template(value) {
         return None;
     }
     let (name, builtin_only) = if let Some(n) = value.strip_prefix("ansible.builtin.") {
@@ -206,7 +206,7 @@ fn judge(kind: PluginKind, value: &str, lookup: &dyn Fn(PluginKind, &str, bool) 
 /// (installed or not — measured, it prints before the missing plugin fails). Skipped when the
 /// name is found nowhere, which `unknown-plugin` already reports.
 fn third_party_strategy(value: &str, lookup: &dyn Fn(PluginKind, &str, bool) -> Option<Found>) -> Option<String> {
-    if value.is_empty() || value.contains("{{") || value.contains("{%") || value.starts_with("ansible.builtin.") {
+    if value.is_empty() || crate::jinja::is_template(value) || value.starts_with("ansible.builtin.") {
         return None;
     }
     let from = match value.strip_prefix("ansible.legacy.") {

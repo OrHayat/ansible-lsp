@@ -389,7 +389,7 @@ fn handler_refs(node: &Node, key: &str) -> Vec<HandlerRef> {
         n.as_str().map(|s| HandlerRef {
             name: s.to_string(),
             span: n.span(),
-            templated: s.contains("{{"),
+            templated: crate::jinja::is_template(s),
         })
     };
     match v {
@@ -416,7 +416,7 @@ fn loop_items_of(node: &Node) -> Vec<String> {
     let mut out = Vec::with_capacity(items.len());
     for i in items {
         match i.as_str() {
-            Some(s) if !s.contains("{{") => out.push(s.to_string()),
+            Some(s) if !crate::jinja::is_template(s) => out.push(s.to_string()),
             // One unreadable item makes the whole iteration unreadable: the caller cannot
             // tell a partial list from a complete one, and a partial one is what turns a
             // real value into "not in the set".

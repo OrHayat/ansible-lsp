@@ -106,7 +106,7 @@ fn task(t: &Task, out: &mut Vec<Problem>) {
     }
     for (k, _) in action.args.entries() {
         let Some(key) = k.as_str() else { continue };
-        if !key.contains("{{") {
+        if !crate::jinja::is_template(key) {
             continue;
         }
         let (tier, message) = if name == ADD_HOST {
@@ -152,6 +152,17 @@ mod tests {
 
     fn one_task(action_block: &str) -> String {
         format!("- hosts: localhost\n  tasks:\n    - {action_block}\n")
+    }
+
+    /// T-252: a key holding `{%` or `{#` is as unrendered as one holding `{{`. Measured on
+    /// 2.21.3: both fail with `Unsupported parameters for (debug) module` naming the key.
+    #[test]
+    fn every_jinja_start_string_in_an_arg_key_is_left_unrendered() {
+        for key in ["{% if true %}msg{% endif %}", "msg{# c #}"] {
+            let p = problems_of(&one_task(&format!("ansible.builtin.debug:\n        \"{key}\": x")));
+            assert_eq!(p.len(), 1, "{key}: {p:?}");
+            assert!(p[0].message.starts_with(&format!("Unsupported parameters for (ansible.builtin.debug) module: {key}")), "{}", p[0].message);
+        }
     }
 
     /// The two fatal rows, each naming the error ansible-core actually reports — measured

@@ -225,7 +225,7 @@ fn keys_of(key: &str, value: &Node, message: &str, out: &mut Vec<Problem>) {
 
 fn map_keys(value: &Node, message: &str, out: &mut Vec<Problem>) {
     for (k, _) in value.entries() {
-        if k.as_str().is_some_and(|s| s.contains("{{")) {
+        if k.as_str().is_some_and(|s| crate::jinja::is_template(s)) {
             out.push(Problem {
                 span: k.span(),
                 tier: Tier::Error,
@@ -242,7 +242,7 @@ fn map_keys(value: &Node, message: &str, out: &mut Vec<Problem>) {
 /// its own, and a claim about it is not measured.
 fn values_of(key: &str, value: &Node, out: &mut Vec<Problem>) {
     let mut flag = |n: &Node| {
-        if n.as_str().is_some_and(|s| s.contains("{{")) {
+        if n.as_str().is_some_and(|s| crate::jinja::is_template(s)) {
             let (tier, message) = verdict(key);
             out.push(Problem { span: n.span(), tier, message, rule: RULE_ID });
         }
@@ -283,6 +283,26 @@ mod tests {
     fn check(src: &str) -> Vec<(Tier, String)> {
         let nodes = Document::new(src.to_string()).parse().expect("valid yaml");
         problems(&nodes).into_iter().map(|p| (p.tier, p.message)).collect()
+    }
+
+    /// T-252: `{%` and `{#` are as literal as `{{` in every static field. Measured on 2.21.3
+    /// with both: `register:` and a `vars:` key fail with `Invalid variable name`, a
+    /// `module_defaults:` key with `Could not resolve action`, a `collections` entry draws
+    /// "not templatable", and a `listen:` topic keeps the braces, so its `notify:` fails.
+    #[test]
+    fn every_jinja_start_string_is_literal_in_a_static_field() {
+        for v in ["{% if true %}x{% endif %}", "x{# c #}"] {
+            let rows = [
+                format!("- hosts: all\n  tasks:\n    - command: whoami\n      register: \"{v}\"\n"),
+                format!("- hosts: all\n  vars:\n    \"{v}\": 1\n  tasks: []\n"),
+                format!("- hosts: all\n  module_defaults:\n    \"{v}\": {{msg: x}}\n  tasks: []\n"),
+                format!("- hosts: all\n  collections: [\"{v}\"]\n  tasks: []\n"),
+                format!("- hosts: all\n  handlers:\n    - debug: {{msg: h}}\n      listen: \"{v}\"\n"),
+            ];
+            for src in rows {
+                assert_eq!(check(&src).len(), 1, "{src}");
+            }
+        }
     }
 
     fn spans(src: &str) -> Vec<String> {

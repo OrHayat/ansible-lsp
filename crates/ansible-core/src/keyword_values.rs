@@ -373,7 +373,7 @@ fn serial_item(item: &Node, in_list: bool, out: &mut Vec<Problem>) {
 /// A scalar's text, unless it is templated — both keys render before they are checked.
 fn literal(n: &Node) -> Option<&str> {
     let v = n.as_str()?.trim();
-    (!v.contains("{{") && !v.contains("{%")).then_some(v)
+    (!crate::jinja::is_template(v)).then_some(v)
 }
 
 #[cfg(test)]

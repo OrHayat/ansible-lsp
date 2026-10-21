@@ -359,6 +359,7 @@ T-021 is now unblocked on that side.
 | T-248 | **bug** · [A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry](closed/T-248-a-role-include-written-x-yml-loads-x-yml-beside-the-file-thr.md) | done     |
 | T-250 | **bug** · [The workspace walk follows symlinks back into the tree, so one file is analysed and reported under several paths](closed/T-250-the-workspace-walk-follows-symlinks-back-into-the-tree-so-on.md) | done     |
 | T-251 | [The editor's scan computes literal variable values for every file, though only a templated path reads them](closed/T-251-the-editor-s-scan-computes-literal-variable-values-for-every.md) | done     |
+| T-252 | **bug** · [A value holding only {% or {# is read as plain text, though Ansible renders it as a template](closed/T-252-a-value-holding-only-or-is-read-as-plain-text-though-ansible.md) | done     |
 
 ## Settled — don't re-derive these
 

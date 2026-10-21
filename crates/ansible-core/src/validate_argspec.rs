@@ -48,7 +48,7 @@ pub fn sites(nodes: &[Node], text: &str, playbook: &Path, cache: &ScanCache) -> 
 fn site(play: &Node, text: &str, playbook: &Path, cache: &ScanCache) -> Option<Site> {
     let value = play.get("validate_argspec")?;
     let Node::Scalar { value: raw, span, .. } = value else { return None };
-    if raw.contains("{{") || raw.contains("{%") {
+    if crate::jinja::is_template(raw) {
         return None;
     }
     // A plain `true`/`yes` is a boolean and a quoted one is a spec *named* `true` — measured:
@@ -58,7 +58,7 @@ fn site(play: &Node, text: &str, playbook: &Path, cache: &ScanCache) -> Option<S
     let name = match (quoted, yaml11_bool(raw)) {
         (false, Some(false)) => return None,
         (false, Some(true)) => match play.get("name").and_then(Node::as_str) {
-            Some(n) if n.contains("{{") || n.contains("{%") => return None,
+            Some(n) if crate::jinja::is_template(n) => return None,
             Some(n) if !n.is_empty() => Some(n.to_string()),
             _ => None,
         },

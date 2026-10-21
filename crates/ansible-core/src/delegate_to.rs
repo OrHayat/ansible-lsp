@@ -24,7 +24,7 @@ pub fn literal_hosts(ast: &Ast, nodes: &[Node]) -> Vec<(String, Span)> {
         // The last occurrence is the one Ansible keeps.
         let Some(d) = ds.iter().rev().find(|d| d.key == "delegate_to") else { return };
         let Some(v) = node_with_span(nodes, d.value).and_then(Node::as_str).map(str::trim) else { return };
-        if !v.is_empty() && !v.contains("{{") && !v.contains("{%") {
+        if !v.is_empty() && !crate::jinja::is_template(v) {
             out.push((v.to_string(), d.value));
         }
     }

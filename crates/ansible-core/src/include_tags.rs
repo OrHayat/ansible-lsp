@@ -172,7 +172,7 @@ fn tag_set(n: &Node) -> Option<Vec<String>> {
         Node::Sequence { items, .. } => items.iter().map(|i| i.as_str()).collect::<Option<_>>()?,
         _ => return None,
     };
-    if scalars.iter().any(|s| s.contains("{{") || s.contains("{%")) {
+    if scalars.iter().any(|s| crate::jinja::is_template(s)) {
         return None;
     }
     Some(
