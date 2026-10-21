@@ -81,9 +81,7 @@ pub fn absent_keys(path: &Path, nodes: &[Node], text: &str, cache: &ScanCache) -
         }
         let mut defs = all.iter().filter(|d| d.name == u.name && d.reaches(&u, path));
         let (Some(def), None) = (defs.next(), defs.next()) else { continue };
-        // A task's or block's `vars:` reaches reads outside it in the index (T-249), so a read
-        // elsewhere would be told "no key" when the name is undefined there.
-        if def.condition.is_some() || matches!(def.source, vars::VarSource::TaskVars | vars::VarSource::BlockVars) {
+        if def.condition.is_some() {
             continue;
         }
         let source = (def.file != path).then(|| cache.source(&def.file)).flatten();
@@ -216,7 +214,8 @@ mod tests {
              - debug: {{msg: \"{{{{ db.prot }}}}\"}}\n      when: db.prot is defined\n    \
              - debug: {{msg: hi}}\n      when: db.prot\n    \
              - debug: {{msg: hi}}\n      vars: {{tv: {{a: 1}}}}\n    \
-             - include_vars: {{file: iv.yml}}\n      when: y\n"
+             - include_vars: {{file: iv.yml}}\n      when: y\n    \
+             - debug: {{msg: \"{{{{ tv2.x }}}}\"}}\n      vars: {{tv2: {{a: 1}}}}\n"
         );
         let path = root.join("site.yml");
         let nodes = crate::parse::Document::new(text.clone()).parse().unwrap();
@@ -224,6 +223,7 @@ mod tests {
         let got: Vec<String> = absent_keys(&path, &nodes, &text, &cache).into_iter().map(|a| a.dotted).collect();
         let mut want: Vec<String> = reads.iter().filter(|(_, f)| *f).map(|(e, _)| e.to_string()).collect();
         want.push("db.prot".into()); // the bare `when: db.prot`
+        want.push("tv2.x".into()); // inside the task whose `vars:` define it
         assert_eq!(got, want);
 
         // The role's own default reaches its tasks, and its caller may still pass another `rdb`.

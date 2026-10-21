@@ -2285,15 +2285,28 @@ impl Backend {
                         u.name,
                         source_label(source)
                     )
-                } else if u.defined_out_of_scope.is_some() {
+                } else if let Some(source) = u.defined_out_of_scope {
                     // It IS defined in this file — pointing at "never defined" sends the
                     // reader off to add a definition that already exists a few lines up.
-                    format!(
-                        "`{}` is defined on a `roles:` entry in this play, which reaches that \
-                         role and the rest of its own entry — not the play's tasks. Move the \
-                         value to the play's `vars:` to use it here.",
-                        u.name
-                    )
+                    match source {
+                        // T-249, measured on 2.21.3: the next task reads it as undefined.
+                        vars::VarSource::TaskVars => format!(
+                            "`{}` is set in another task's `vars:`, which reaches only that task. \
+                             Move the value to the play's or an enclosing block's `vars:` to use it here.",
+                            u.name
+                        ),
+                        vars::VarSource::BlockVars => format!(
+                            "`{}` is set in a block's `vars:`, which reaches only that block's tasks, \
+                             its `rescue:` and its `always:`. Move the value to the play's `vars:` to use it here.",
+                            u.name
+                        ),
+                        _ => format!(
+                            "`{}` is defined on a `roles:` entry in this play, which reaches that \
+                             role and the rest of its own entry — not the play's tasks. Move the \
+                             value to the play's `vars:` to use it here.",
+                            u.name
+                        ),
+                    }
                 } else {
                     format!(
                         "`{}` is never defined in any file reachable from this playbook — it may \
@@ -9798,6 +9811,44 @@ mod tests {
         let sub = text.find("db['port']").unwrap() + 4;
         let h = super::hover_at(&doc, &nodes, &path, sub, Default::default(), &no_buffers(), &[], &no_cache(), None, None);
         assert!(h.as_ref().is_none_or(|(h, _)| !h.contains("db.port")), "{h:?}");
+    }
+
+    /// T-249, every consumer: a read after the task (or block) whose `vars:` set the name is
+    /// `var-undefined` with a message naming that `vars:`, and neither hover nor Cmd+click
+    /// points at it; inside, both still answer.
+    #[test]
+    fn a_task_or_block_vars_name_is_out_of_scope_after_it_in_every_consumer() {
+        let d = std::env::temp_dir().join("ansible-lsp-t249");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("play.yml");
+        let text = "- hosts: all\n  tasks:\n    - debug: {msg: \"{{ tv }}\"}\n      vars: {tv: 1}\n    \
+                    - debug: {msg: \"{{ tv }}\"}\n    - block:\n        - debug: {msg: \"{{ bv }}\"}\n      \
+                    vars: {bv: 2}\n    - debug: {msg: \"{{ bv }}\"}\n";
+        std::fs::write(&path, text).unwrap();
+        let a = super::Backend::analyze_text(text.to_string(), &path).unwrap();
+        let msgs: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(tower_lsp::lsp_types::NumberOrString::String(s)) if s == "var-undefined"))
+            .map(|d| d.message)
+            .collect();
+        assert_eq!(msgs.len(), 2, "{msgs:?}");
+        assert!(msgs[0].contains("`tv` is set in another task's `vars:`"), "{}", msgs[0]);
+        assert!(msgs[1].contains("`bv` is set in a block's `vars:`"), "{}", msgs[1]);
+
+        let doc = ansible_core::parse::Document::new(text.to_string());
+        let nodes = doc.parse().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
+        let reads = |name: &str| -> Vec<usize> { text.match_indices(&format!("{{{{ {name} }}}}")).map(|(i, _)| i + 3).collect() };
+        for (name, inside, outside) in [("tv", reads("tv")[0], reads("tv")[1]), ("bv", reads("bv")[0], reads("bv")[1])] {
+            let hover = |b: usize| super::Backend::variable_hover_at(&doc, &nodes, b, &path, &no_buffers(), &[], &no_cache(), None, None);
+            let jump = |b: usize| {
+                let (l, c) = doc.byte_to_lsp(b);
+                super::Backend::variable_defs_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &no_buffers(), &[], &no_cache(), None, None)
+            };
+            assert!(hover(inside).is_some() && jump(inside).is_some(), "{name} inside its own vars");
+            assert!(hover(outside).is_none() && jump(outside).is_none(), "{name} after them");
+        }
     }
 
     /// T-206, the `missing-file` consumer. `<project>/vars/` was absent from our candidate

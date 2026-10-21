@@ -296,7 +296,7 @@ pub struct VarDef {
     pub scope: Option<EntryScope>,
 }
 
-/// A role entry, less its role name.
+/// A role entry, less its role name; or a task or block, whose `name` span is empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntryScope {
     pub entry: Span,
@@ -352,6 +352,15 @@ impl VarIndex {
             condition: None,
             scope: Some(scope),
         });
+    }
+
+    /// A task's or block's `vars:`, in effect only inside that task or block (T-249).
+    /// Measured on 2.21.3: the next task reads the name as undefined, while a block's
+    /// `rescue:` and `always:` and an `include_tasks`'s included file still see it. The
+    /// included file is another file, which a same-file scope does not touch.
+    fn push_within(&mut self, name: impl Into<String>, source: VarSource, span: Span, condition: Option<String>, within: Span) {
+        let scope = EntryScope { entry: within, name: Span { start: 0, end: 0 } };
+        self.defs.push(VarDef { name: name.into(), source, span, condition, scope: Some(scope) });
     }
 }
 
@@ -846,7 +855,7 @@ fn stmt(s: &Stmt, idx: &mut VarIndex) {
 
 fn block(b: &Block, idx: &mut VarIndex) {
     for v in &b.vars {
-        idx.push(v.name.clone(), VarSource::BlockVars, v.span);
+        idx.push_within(v.name.clone(), VarSource::BlockVars, v.span, None, b.span);
     }
     for s in b.block.iter().chain(&b.rescue).chain(&b.always) {
         stmt(s, idx);
@@ -871,7 +880,7 @@ fn task(t: &Task, idx: &mut VarIndex) {
     // hosts/runs where the condition holds.
     let cond = (!t.when.is_empty()).then(|| t.when.join(" and "));
     for v in &t.vars {
-        idx.push_cond(v.name.clone(), VarSource::TaskVars, v.span, cond.clone());
+        idx.push_within(v.name.clone(), VarSource::TaskVars, v.span, cond.clone(), t.span);
     }
     if let Some(a) = &t.action {
         if crate::keywords::core_action(&a.name) == "set_fact" {
@@ -2433,6 +2442,31 @@ mod tests {
 
         let alone = crate::inventory::ini_vars(host_file);
         assert!(alone.iter().any(|v| v.name == "ansible_group_priority" && v.host), "the control");
+    }
+
+    /// T-249, every row measured on 2.21.3: a task's `vars:` reach only that task, and a
+    /// block's reach its `block:`, `rescue:` and `always:`, and a handler's its own handler.
+    #[test]
+    fn task_and_block_vars_reach_only_their_own_task_or_block() {
+        let src = "- hosts: all\n  tasks:\n    \
+                   - debug: {msg: \"{{ tv }}\"}\n      vars: {tv: 1}\n    \
+                   - debug: {msg: \"{{ tv }}\"}\n    \
+                   - block:\n        - fail: {msg: x}\n      \
+                   rescue:\n        - debug: {msg: \"{{ bv }}\"}\n      \
+                   always:\n        - debug: {msg: \"{{ bv }}\"}\n      vars: {bv: 2}\n    \
+                   - debug: {msg: \"{{ bv }}\"}\n  \
+                   handlers:\n    - name: h\n      debug: {msg: \"{{ hv }}\"}\n      vars: {hv: 3}\n";
+        let nodes = Document::new(src.to_string()).parse().unwrap();
+        let path = Path::new("/nonexistent-t249/play.yml");
+        let got: Vec<(String, Option<VarSource>)> = undefined_uses(path, &nodes, src)
+            .into_iter()
+            .map(|u| (u.name, u.defined_out_of_scope))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("tv".into(), Some(VarSource::TaskVars)), ("bv".into(), Some(VarSource::BlockVars))],
+            "only the read after the task and the read after the block"
+        );
     }
 
     /// [`undef`] with the scope each flag lacks, for the T-224 scope rows.

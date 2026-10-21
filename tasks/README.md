@@ -96,7 +96,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
 | T-248 | **bug** · [A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry](open/T-248-a-role-include-written-x-yml-loads-x-yml-beside-the-file-thr.md) | M    | —          |
-| T-249 | **bug** · [A task's or block's vars: reach reads outside that task or block](open/T-249-a-task-s-or-block-s-vars-reach-reads-outside-that-task-or-bl.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -357,6 +356,7 @@ T-021 is now unblocked on that side.
 | T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](closed/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | done     |
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](closed/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | done     |
 | T-221 | [Resolve a dotted access into a literal mapping variable](closed/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | done     |
+| T-249 | **bug** · [A task's or block's vars: reach reads outside that task or block](closed/T-249-a-task-s-or-block-s-vars-reach-reads-outside-that-task-or-bl.md) | done     |
 
 ## Settled — don't re-derive these
 

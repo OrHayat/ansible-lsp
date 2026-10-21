@@ -68,7 +68,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-239 — Role defaults and vars outside main.yml never reach the variable index
 - [ ] T-241 — Differential precedence test against ansible-core's VariableManager as an oracle
 - [x] T-246 — An undefined variable passed to default() ahead of another default() is reported undefined, and the chain runs fine
-- [ ] T-249 — A task's or block's vars: reach reads outside that task or block
+- [x] T-249 — A task's or block's vars: reach reads outside that task or block
 
 ## Done when
 
