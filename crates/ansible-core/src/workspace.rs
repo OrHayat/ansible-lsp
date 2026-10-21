@@ -313,6 +313,9 @@ pub fn yaml_files(root: &Path) -> Vec<PathBuf> {
     yaml_files_in(root, &StdFs)
 }
 
+/// Folders the workspace walk never enters, and whose changes therefore never matter to it.
+pub const SKIPPED_DIRS: &[&str] = &[".git", "__pycache__", ".pytest_cache", "node_modules", "target"];
+
 /// [`yaml_files`] against a caller-supplied filesystem (T-085).
 ///
 /// Each real file once, at its real path (T-250). A symlink is set aside and followed only
@@ -329,10 +332,7 @@ pub fn yaml_files_in(root: &Path, fs: &dyn Fs) -> Vec<PathBuf> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             let wanted = match kind {
-                Kind::Dir => !matches!(
-                    name.as_str(),
-                    ".git" | "__pycache__" | ".pytest_cache" | "node_modules" | "target"
-                ),
+                Kind::Dir => !SKIPPED_DIRS.contains(&name.as_str()),
                 Kind::File => matches!(
                     p.extension().and_then(|s| s.to_str()),
                     Some("yml") | Some("yaml")

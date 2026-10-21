@@ -79,7 +79,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 
 | ID    | Title                                                       | Size | Blocked by |
 | ----- | ----------------------------------------------------------- | ---- | ---------- |
-| T-012 | [File watcher + precise invalidation](open/T-012-file-watcher.md) | L | ~~T-020~~   |
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
 | T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
@@ -361,6 +360,7 @@ T-021 is now unblocked on that side.
 | T-250 | **bug** · [The workspace walk follows symlinks back into the tree, so one file is analysed and reported under several paths](closed/T-250-the-workspace-walk-follows-symlinks-back-into-the-tree-so-on.md) | done     |
 | T-251 | [The editor's scan computes literal variable values for every file, though only a templated path reads them](closed/T-251-the-editor-s-scan-computes-literal-variable-values-for-every.md) | done     |
 | T-252 | **bug** · [A value holding only {% or {# is read as plain text, though Ansible renders it as a template](closed/T-252-a-value-holding-only-or-is-read-as-plain-text-though-ansible.md) | done     |
+| T-012 | [File watcher + precise invalidation](closed/T-012-file-watcher.md) | done     |
 
 ## Settled — don't re-derive these
 

@@ -2,7 +2,7 @@
 
 | Status | Priority | Size | Epic  | Depends on |
 | ------ | -------- | ---- | ----- | ---------- |
-| open   | P1       | L    | T-113 | T-020      |
+| done   | P1       | L    | T-113 | T-020      |
 
 ## Problem
 
@@ -127,33 +127,44 @@ back. That covers the routing table and the races without depending on FSEvents 
 
 ## Done when
 
-- [ ] renaming a role makes dependents light up without a restart, and **without flicker**
-- [ ] creating a previously-missing file clears its warning — the candidate-keyed case
-- [ ] deleting a role directory invalidates every reference under it
-- [ ] editing `ansible.cfg` re-resolves against the new roots
-- [ ] a `Changed` event for a file with an open buffer is ignored
-- [ ] a burst of 200 events produces one republish, not 200
-- [ ] two overlapping full rescans cannot leave a stale diagnostic behind
-- [ ] `~/ansible/roles` is either watched deliberately or excluded deliberately, and this ticket
+- [x] renaming a role makes dependents light up without a restart, and **without flicker**
+- [x] creating a previously-missing file clears its warning
+- [x] deleting a role directory invalidates every reference under it
+- [x] editing `ansible.cfg` re-resolves against the new roots
+- [x] an open buffer is analysed from its own text, never the disk copy, when a rescan
+      republishes it — rewritten from "a `Changed` event for a file with an open buffer is
+      ignored", which a full rescan must not do: saving a file is what changes its dependents
+- [x] a burst of 200 events produces one pass, not 200
+- [x] two overlapping full rescans cannot leave a stale diagnostic behind
+- [x] `~/ansible/roles` is either watched deliberately or excluded deliberately, and this ticket
       records which
-- [ ] smoke test drives all four event types over the wire
+- [x] smoke test drives all four event types over the wire
 
-## needs decision: debounced full rescan first, or index-driven from the start?
+## Decision (2026-10-21): debounced full rescan
 
-Re-measured 2026-10-21 with `target/release/scan`, which is single-threaded and runs every
-report, so it overstates the server's parallel `scan_workspace`: kubespray 1.5 s (1,258 files),
-the private corpus 2.8 s, community.general 2.9 s, debops 4.5 s, kolla-ansible 4.9 s. The
-server has no watcher at all today, and `did_change` republishes only the edited file, never its
-dependents.
+The scan was made cheap first: T-250, T-251. The editor's full scan now takes 0.09-0.6 s on
+every corpus, the private one included, so the index-driven design above is not needed for
+cost, and a full rescan also refreshes what no event-routing table reaches — a file whose
+variables, chains (T-248) or imported mutations come from the file that changed.
 
-1. **Debounced full rescan.** Register the watcher; after ~300 ms of quiet, invalidate the caches
-   for the touched paths and rerun `scan_workspace`, guarded by a generation counter. That covers
-   every Done-when box except the 200-events-one-republish cost bound, in a round. It costs a
-   background scan of a few seconds per burst of saves, and it also fixes dependents of an edited
-   file, which no event-routing table above does.
-2. **Index-driven, as Approach describes.** Changed re-analyses one file; Created/Deleted look up
-   referrers in a candidate-keyed index. Cheaper per event, but every rule that reads another
-   file (variables, handlers, roles) has to be routed through the index, or its diagnostics go
-   stale exactly as they do today.
+What shipped:
 
-Recommended: 1 now, then 2 if the rescan cost shows up in use.
+- `initialized` registers one watcher, `**/*`, when the client supports dynamic
+  registration: a module, a template, an inventory and `ansible.cfg` can each change an answer.
+  Workspace-relative, so a role on `roles_path` outside the workspace is **excluded
+  deliberately** — the scan does not read it as a file of its own either.
+- An event batch only under `workspace::SKIPPED_DIRS` (`.git`, `node_modules`, …) is ignored.
+  Any other starts a 300 ms quiet period (`WATCH_QUIET`); a newer batch restarts it.
+- `scan_workspace` runs one pass at a time, and a request during a pass gets exactly one more
+  pass after it. The old guard dropped such a request.
+- Each pass first drops the caches built from files on disk — variables, render sites,
+  template grammars, imported mutations — and ends by republishing every open buffer, which
+  the pass itself skips.
+
+Found on the way: the `mutations` cache was never cleared, though its comment said the scan
+did it, so a `when:` + import warning outlived any edit to the imported file until restart.
+
+Tests: `a_file_changed_on_disk_updates_every_answer_it_touches`,
+`a_rescan_drops_caches_built_from_files_that_changed`, `a_scan_requested_during_a_scan_runs_once_after_it`,
+each seen failing with its piece broken; `scripts/watch-smoke.js` over stdio against the release
+binary, as a client that supports dynamic registration. Not driven in VS Code itself.

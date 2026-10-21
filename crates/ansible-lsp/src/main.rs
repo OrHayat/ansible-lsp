@@ -481,7 +481,7 @@ struct State {
     flagged: Mutex<HashSet<Url>>,
     /// Variables each imported playbook mutates while running. Computing this walks the
     /// playbook, its roles and its includes, so it must not happen per keystroke.
-    /// Invalidated wholesale by the workspace scan; T-012 will do it precisely.
+    /// Cleared by every workspace scan pass, which is when the files it read may have changed.
     mutations: Mutex<HashMap<PathBuf, std::sync::Arc<HashSet<String>>>>,
     settings: Mutex<Settings>,
     /// The inventory the user says they run with — `ansibleLsp.inventory`, standing in for
@@ -550,12 +550,27 @@ struct State {
     /// so an open buffer's own analysis wins over the scan's: the scan skips a file that is
     /// open at read time and again at insert time, the same rule its diagnostics follow.
     reverse: Mutex<ansible_core::reverse::ReverseIndex>,
+    /// Set by every request for a workspace scan (T-012). The scan that is running reruns while
+    /// it is set, so a change that lands mid-scan is never dropped and two scans never overlap.
+    rescan_wanted: AtomicBool,
+    /// Bumped by every watched-file batch; a debounced rescan runs only if no newer batch
+    /// arrived while it waited.
+    watch_gen: std::sync::atomic::AtomicU64,
+    /// The client registers `workspace/didChangeWatchedFiles` watchers for us (VS Code does).
+    watch_dynamic: AtomicBool,
+    /// Workspace scan passes completed, for the scan log and for asserting how many a burst of
+    /// events cost.
+    scan_passes: std::sync::atomic::AtomicU64,
 }
 
 struct Backend {
     client: Client,
     state: Arc<State>,
 }
+
+/// How long the watched files must be quiet before a rescan starts (T-012): a `git checkout`
+/// or a rename arrives as a burst, and one pass after it is the answer to all of it.
+const WATCH_QUIET: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// T-071's rule id, matched exactly by `# noqa`.
 const UNCONSTRAINED_PATH_VAR: &str = "unconstrained-path-var";
@@ -2743,8 +2758,40 @@ impl Backend {
     /// with the scan, an open buffer wins everywhere: skip at read time, re-check at
     /// publish time, and never clear or overwrite a flag the didChange path owns.
     async fn scan_workspace(state: Arc<State>, client: Client) {
-        if state.scanning.swap(true, Ordering::SeqCst) {
-            return;
+        // T-012: one pass at a time, and a request that lands during a pass gets one more pass
+        // after it — never dropped, never run alongside. The re-check after clearing
+        // `scanning` closes the window where a request sees a scan that is just finishing.
+        state.rescan_wanted.store(true, Ordering::SeqCst);
+        loop {
+            if state.scanning.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            while state.rescan_wanted.swap(false, Ordering::SeqCst) {
+                Self::scan_pass(state.clone(), client.clone()).await;
+            }
+            state.scanning.store(false, Ordering::SeqCst);
+            if !state.rescan_wanted.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+    }
+
+    /// One pass of [`scan_workspace`](Self::scan_workspace).
+    async fn scan_pass(state: Arc<State>, client: Client) {
+        // The disk may have changed since any of these were computed (T-012), and the pass
+        // below refills the variable cache for every file it reads.
+        if let Ok(mut c) = state.var_cache.lock() {
+            let epoch = c.epoch.wrapping_add(1);
+            *c = VarCache { epoch, ..Default::default() };
+        }
+        if let Ok(mut c) = state.render_sites.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = state.template_grammars.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = state.mutations.lock() {
+            c.clear();
         }
         let scan_start = std::time::Instant::now();
         let roots = state.roots.lock().map(|r| r.clone()).unwrap_or_default();
@@ -2945,7 +2992,15 @@ impl Backend {
                 ),
             )
             .await;
-        state.scanning.store(false, Ordering::SeqCst);
+
+        // The pass skipped every open buffer, whose own analysis read files that may just
+        // have changed — and whose role chains (T-248) are only known now.
+        state.scan_passes.fetch_add(1, Ordering::SeqCst);
+        let backend = Backend { client, state: state.clone() };
+        let open: Vec<Url> = state.docs.lock().map(|d| d.keys().cloned().collect()).unwrap_or_default();
+        for uri in open {
+            backend.publish_diagnostics(&uri).await;
+        }
     }
 
     /// Every resolvable reference and how many files it reaches.
@@ -4579,6 +4634,14 @@ fn hover_at(
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, p: InitializeParams) -> Result<InitializeResult> {
+        let dynamic_watch = p
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.did_change_watched_files.as_ref())
+            .and_then(|d| d.dynamic_registration)
+            .unwrap_or(false);
+        self.state.watch_dynamic.store(dynamic_watch, Ordering::SeqCst);
         if let Ok(mut roots) = self.state.roots.lock() {
             if let Some(folders) = p.workspace_folders {
                 roots.extend(folders.iter().filter_map(|f| f.uri.to_file_path().ok()));
@@ -4678,6 +4741,53 @@ impl LanguageServer for Backend {
         if let Ok(mut slot) = self.state.scan_task.lock() {
             *slot = Some(task);
         }
+        // T-012. Every file, not only YAML: a module in `library/`, a template, an inventory
+        // or an `ansible.cfg` can each change an answer. Workspace-relative, so a role on
+        // `roles_path` outside the workspace is not watched — the scan does not read it as a
+        // file of its own either. Spawned: the reply comes from the client, and nothing here
+        // should wait on it.
+        if self.state.watch_dynamic.load(Ordering::SeqCst) {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let options = DidChangeWatchedFilesRegistrationOptions {
+                    watchers: vec![FileSystemWatcher { glob_pattern: GlobPattern::String("**/*".into()), kind: None }],
+                };
+                let registration = Registration {
+                    id: "ansible-lsp-files".into(),
+                    method: "workspace/didChangeWatchedFiles".into(),
+                    register_options: serde_json::to_value(options).ok(),
+                };
+                if let Err(e) = client.register_capability(vec![registration]).await {
+                    client.log_message(MessageType::WARNING, format!("ansible-lsp: no file watcher: {e}")).await;
+                }
+            });
+        }
+    }
+
+    /// T-012: files changed on disk under the server — a rename, a delete, a branch switch, a
+    /// save. Any of them can change an answer in a file that did not change, so the answer is
+    /// a whole workspace scan, once the burst is over.
+    async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
+        let relevant = p.changes.iter().any(|c| {
+            c.uri.to_file_path().is_ok_and(|f| {
+                !f.components().any(|part| {
+                    ansible_core::workspace::SKIPPED_DIRS.contains(&part.as_os_str().to_string_lossy().as_ref())
+                })
+            })
+        });
+        if !relevant {
+            return;
+        }
+        let batch = self.state.watch_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let (state, client) = (self.state.clone(), self.client.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(WATCH_QUIET).await;
+            if state.watch_gen.load(Ordering::SeqCst) != batch {
+                return;
+            }
+            Self::publish_inventory(&state, &client).await;
+            Self::scan_workspace(state, client).await;
+        });
     }
 
     async fn did_change_configuration(&self, p: DidChangeConfigurationParams) {
@@ -5357,6 +5467,10 @@ async fn main() {
             scanning: AtomicBool::new(false),
             var_cache: Mutex::new(VarCache::default()),
             scan_task: Mutex::new(None),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Mutex::new(None),
             install: Mutex::new(None),
@@ -11029,6 +11143,10 @@ mod tests {
             inventory: std::sync::Mutex::new(Vec::new()),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -12089,6 +12207,141 @@ mod tests {
 
     /// T-175: hover names which copy a definition is, and picks the playbook's over the
     /// inventory's — measured on 2.21.2, playbook `group_vars/all` (5) beats the inventory's
+    /// `workspace/didChangeWatchedFiles` for `rels`, through the handler (T-012).
+    async fn t012_event(s: &T199Server, rels: &[&str], typ: tower_lsp::lsp_types::FileChangeType) {
+        use tower_lsp::LanguageServer;
+        let changes = rels.iter().map(|r| tower_lsp::lsp_types::FileEvent { uri: s.uri(r), typ }).collect();
+        s.backend().did_change_watched_files(tower_lsp::lsp_types::DidChangeWatchedFilesParams { changes }).await;
+    }
+
+    /// Waits for the debounced rescan, which runs detached: until `done` holds, or five
+    /// seconds, whichever is first. Returns whether it held.
+    async fn t012_until(s: &T199Server, done: impl Fn(&T199Server) -> bool) -> bool {
+        for _ in 0..100 {
+            if done(s) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        done(s)
+    }
+
+    fn t012_passes(s: &T199Server) -> u64 {
+        s.state().scan_passes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// T-012: a file created, deleted or renamed on disk reaches every file it changes the
+    /// answer for, including one with an open buffer, with one scan per burst.
+    #[tokio::test]
+    async fn a_file_changed_on_disk_updates_every_answer_it_touches() {
+        use tower_lsp::lsp_types::FileChangeType;
+        let root = ansible_core::testing::project(
+            "t012-watch",
+            "[defaults]\n",
+            &[
+                ("site.yml", "- hosts: all\n  tasks:\n    - include_tasks: missing.yml\n"),
+                // On disk it includes a file that is not there; the open buffer below does not.
+                ("open.yml", "- hosts: all\n  tasks:\n    - include_tasks: ghost.yml\n"),
+                ("present.yml", "- debug: {msg: here}\n"),
+            ],
+        );
+        let s = T199Server::over(root.clone());
+        let flagged = |s: &T199Server, rel: &str| s.state().flagged.lock().unwrap().contains(&s.uri(rel));
+        s.scan().await;
+        s.open("open.yml", "- hosts: all\n  tasks:\n    - include_tasks: present.yml\n").await;
+        assert!(flagged(&s, "site.yml") && !flagged(&s, "open.yml"), "control: the starting state");
+
+        // Created: the warning on the file that wanted it clears. The open file is analysed
+        // from its buffer, never from the disk copy that includes ghost.yml.
+        std::fs::write(root.join("missing.yml"), "- debug: {msg: now}\n").unwrap();
+        t012_event(&s, &["missing.yml"], FileChangeType::CREATED).await;
+        assert!(t012_until(&s, |s| !flagged(s, "site.yml")).await, "creating missing.yml clears site.yml");
+        assert!(!flagged(&s, "open.yml"), "the open buffer, not the disk copy, is what was analysed");
+
+        // Deleted: an open buffer, which the scan itself skips, gets the warning too.
+        std::fs::remove_file(root.join("present.yml")).unwrap();
+        t012_event(&s, &["present.yml"], FileChangeType::DELETED).await;
+        assert!(t012_until(&s, |s| flagged(s, "open.yml")).await, "deleting present.yml reaches the open open.yml");
+
+        // A burst is one pass, once it is quiet.
+        let before = t012_passes(&s);
+        let many: Vec<String> = (0..200).map(|i| format!("gen/{i}.yml")).collect();
+        for chunk in many.chunks(20) {
+            let rels: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            t012_event(&s, &rels, FileChangeType::CREATED).await;
+        }
+        assert!(t012_until(&s, |s| t012_passes(s) > before).await, "the burst is scanned");
+        tokio::time::sleep(super::WATCH_QUIET * 2).await;
+        assert_eq!(t012_passes(&s), before + 1, "200 events in ten batches, one pass");
+
+        // Only folders the scan never reads: no pass at all.
+        t012_event(&s, &[".git/index", "node_modules/x/a.yml"], FileChangeType::CHANGED).await;
+        tokio::time::sleep(super::WATCH_QUIET * 3).await;
+        assert_eq!(t012_passes(&s), before + 1, "a change under .git or node_modules is not a reason to scan");
+    }
+
+    /// T-012: the server's caches were built from files that may just have changed, so a rescan
+    /// drops them. The variable cache, read by an open file's undefined-variable check, and the
+    /// imported-file mutations, read by the `when:` + import check on a closed file.
+    #[tokio::test]
+    async fn a_rescan_drops_caches_built_from_files_that_changed() {
+        use tower_lsp::lsp_types::FileChangeType;
+        let root = ansible_core::testing::project(
+            "t012-caches",
+            "[defaults]\n",
+            &[
+                ("vars/x.yml", "shared: 1\n"),
+                ("play.yml", "- hosts: all\n  vars_files: [vars/x.yml]\n  tasks:\n    - debug: {msg: \"{{ shared }}\"}\n"),
+                (
+                    "gated.yml",
+                    "- hosts: all\n  tasks:\n    - import_tasks: sets.yml\n      when: not (done | default(false) | bool)\n",
+                ),
+                ("sets.yml", "- set_fact: {done: true}\n- debug: {msg: after}\n"),
+            ],
+        );
+        let s = T199Server::over(root.clone());
+        let flagged = |s: &T199Server, rel: &str| s.state().flagged.lock().unwrap().contains(&s.uri(rel));
+        s.scan().await;
+        s.open_disk("play.yml").await;
+        assert!(!flagged(&s, "play.yml") && flagged(&s, "gated.yml"), "control: the starting state");
+        let hover = s.hover_in("play.yml", "shared }}", 1).await.unwrap_or_default();
+        assert!(hover.contains("vars/x.yml"), "control: the hover names the definition: {hover}");
+
+        std::fs::write(root.join("vars/x.yml"), "other: 1\n").unwrap();
+        std::fs::write(root.join("sets.yml"), "- debug: {msg: after}\n").unwrap();
+        t012_event(&s, &["vars/x.yml", "sets.yml"], FileChangeType::CHANGED).await;
+        assert!(t012_until(&s, |s| !flagged(s, "gated.yml")).await, "sets.yml no longer sets `done`");
+        assert!(t012_until(&s, |s| flagged(s, "play.yml")).await, "vars/x.yml no longer defines `shared`");
+        let hover = s.hover_in("play.yml", "shared }}", 1).await.unwrap_or_default();
+        assert!(!hover.contains("vars/x.yml"), "the hover no longer names the old definition: {hover}");
+    }
+
+    /// T-012: a scan requested while one runs is answered by exactly one more pass after it —
+    /// not dropped, which is what the old guard did, and not run alongside.
+    #[tokio::test]
+    async fn a_scan_requested_during_a_scan_runs_once_after_it() {
+        let files: Vec<(String, String)> =
+            (0..400).map(|i| (format!("t/{i}.yml"), format!("- hosts: all\n  tasks:\n    - include_tasks: m{i}.yml\n"))).collect();
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let s = T199Server::over(ansible_core::testing::project("t012-overlap", "[defaults]\n", &files));
+        let state = s.state();
+        let client = s.backend().client.clone();
+        let running = || state.scanning.load(std::sync::atomic::Ordering::SeqCst);
+
+        let first = tokio::spawn(super::Backend::scan_workspace(state.clone(), client.clone()));
+        let mut waited = 0;
+        while !running() && waited < 1000 {
+            tokio::task::yield_now().await;
+            waited += 1;
+        }
+        assert!(running(), "control: the first pass is under way");
+        super::Backend::scan_workspace(state.clone(), client.clone()).await;
+        assert_eq!(t012_passes(&s), 0, "the second request returned at once, leaving the pass to the running scan");
+        first.await.unwrap();
+        assert_eq!(t012_passes(&s), 2, "one pass, then exactly one more for the request made during it");
+        assert!(!running() && !state.rescan_wanted.load(std::sync::atomic::Ordering::SeqCst), "nothing left running or owed");
+    }
+
     /// T-248, one assertion per consumer of the ways into a role file. `r` is reached through
     /// `main.yml`'s import of `sub/a.yml`, so its `../x.yml` loads `tasks/sub/x.yml`; `q` is
     /// entered only by `tasks_from`, where the same line fails; `p` is reached both ways and
@@ -13334,6 +13587,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -13945,6 +14202,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -14018,6 +14279,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -14199,6 +14464,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -14306,6 +14575,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),
@@ -14870,6 +15143,10 @@ mod tests {
             scanning: std::sync::atomic::AtomicBool::new(false),
             var_cache: no_cache(),
             scan_task: Default::default(),
+            rescan_wanted: Default::default(),
+            watch_gen: Default::default(),
+            watch_dynamic: Default::default(),
+            scan_passes: Default::default(),
             reverse: Default::default(),
             ansible_path: Default::default(),
             install: Default::default(),

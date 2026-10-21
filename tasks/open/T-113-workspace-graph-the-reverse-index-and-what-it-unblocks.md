@@ -38,7 +38,7 @@ the one child here that is finished by being abandoned.
 ## Children
 
 - [x] T-011 — Execution tree via LSP call hierarchy (**rejected** — see above)
-- [ ] T-012 — File watcher and precise invalidation
+- [x] T-012 — File watcher and precise invalidation
 - [x] T-020 — Reverse index
 - [ ] T-021 — `unused-file` / `unused-role` as faded hints
 - [ ] T-022 — `circular-include` warning
@@ -53,5 +53,5 @@ the one child here that is finished by being abandoned.
 
 - [ ] every child is closed or rejected
 - [ ] the graph is built once and shared, not rebuilt per consumer
-- [ ] T-012 and T-068 — the two P1s — are among the first children closed, since they are why
+- [x] T-012 and T-068 — the two P1s — are among the first children closed, since they are why
       this is worth doing before the P3s that also want it
