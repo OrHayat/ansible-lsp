@@ -78,6 +78,32 @@ A file loaded by several parents with different paths has several `<cum>`s. Answ
 way T-096's open decision answers several invoking playbooks; until that is decided, add the
 candidate only when every parent agrees.
 
+## needs decision: how does the resolver learn how a file was reached?
+
+Measured 2026-10-21 on 2.21.3: the same `a.yml` with `include_tasks: ../x.yml` and
+`tasks/x.yml` present **fails** when `a.yml` is entered as `include_role: {name: r,
+tasks_from: a}`, and likewise with `import_role`. An `IncludeRole` parent contributes the role
+path itself as `cumulative_path` (`included_file.py:145-146`), so its retry repeats the first
+lookup. Whether `../x.yml` loads therefore depends on **how** the file was reached, not on
+where it sits.
+
+The resolver works one file at a time and never reads the reverse index; only the LSP's
+consumers do (`main.rs:250`, `:715`). The options:
+
+1. **Feed inbound edges to the resolver.** Exact: an include/import edge gives the parent's
+   written path and so `<cum>`, while a `tasks_from` edge rules the retry out. But a file's
+   resolution then depends on other files, so the scan must resolve includers first, and the
+   LSP must re-resolve a file when an includer changes, which is T-012's invalidation.
+2. **File-local guess.** Apply the retry to any role task or handler file except `main.yml`,
+   with `<cum>` taken from the file's own subdirectory. Cheap, and right for every corpus case,
+   but it says `Resolved` for a `tasks_from` entry, which is measured wrong.
+3. **Hedge, no verdict change.** Keep `Missing`, but when the retry candidate exists, lower the
+   diagnostic to a hint naming it ("loads `tasks/x.yml` if this file is reached through an
+   include"). No index needed, and never `Resolved` for a run that fails. Go-to-definition
+   still has no target.
+
+Recommended: 3 now, then 1 when T-012 lands.
+
 ## Done when
 
 - [ ] cases 1, 2, 3 and 6 resolve to the file Ansible loads, each pinned by a test
