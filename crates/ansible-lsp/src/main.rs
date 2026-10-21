@@ -2180,6 +2180,37 @@ impl Backend {
             });
         }
 
+        // T-221: a `.key` the root's only, literal mapping does not have.
+        for k in ansible_core::dotted::absent_keys(path, nodes, &a.doc.text, &scan) {
+            if a.doc.is_suppressed(k.span.start, ansible_core::dotted::RULE_ID) {
+                continue;
+            }
+            let (sl, sc) = a.doc.byte_to_lsp(k.span.start);
+            let (el, ec) = a.doc.byte_to_lsp(k.span.end);
+            let line = match k.def.file == path {
+                true => a.doc.line_of(k.def.span.start),
+                false => std::fs::read_to_string(&k.def.file).map_or(1, |t| Document::new(t).line_of(k.def.span.start)),
+            };
+            let key = k.dotted.rsplit('.').next().unwrap_or_default();
+            out.push(Diagnostic {
+                range: Range::new(Position::new(sl, sc), Position::new(el, ec)),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("ansible-lsp".into()),
+                code: Some(NumberOrString::String(ansible_core::dotted::RULE_ID.into())),
+                message: format!(
+                    "`{}` has no key `{key}`, so `{}` fails whenever it is rendered. `{}` is defined once, \
+                     in {} ({}:{}), as a mapping without it.",
+                    k.mapping,
+                    k.dotted,
+                    k.dotted.split('.').next().unwrap_or_default(),
+                    source_label(k.def.source),
+                    k.def.file.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+                    line,
+                ),
+                ..Default::default()
+            });
+        }
+
         // T-051 base case: no reachable definition at all. The message concedes the
         // sources we cannot see. Suppressible with `# noqa: var-undefined`.
         for u in vars::undefined_uses_in(path, nodes, &a.doc.text, &scan) {
@@ -8192,15 +8223,24 @@ mod tests {
     /// that line, and nothing else in the file fires either rule. GOOD and SILENCED rows are
     /// pinned by staying out of both sets.
     /// T-221's fixture: on each GOOD row the last key after the dot hovers and jumps to the
-    /// `group_vars/all.yml` line its comment names; on each SILENCED row both are silent.
+    /// `group_vars/all.yml` line its comment names; each BAD row carries exactly one
+    /// `undefined-key` warning; on each SILENCED row all three are silent.
     #[test]
     fn the_dotted_access_demo_matches_its_annotations() {
+        use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
         let path = std::path::Path::new("../../demo/dotted_access.yml").canonicalize().unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let doc = ansible_core::parse::Document::new(text.clone());
         let nodes = doc.parse().unwrap();
         let uri = tower_lsp::lsp_types::Url::from_file_path(&path).unwrap();
         let vars = std::fs::read_to_string(path.with_file_name("group_vars/all.yml")).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let warned: Vec<u32> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+            .into_iter()
+            .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == ansible_core::dotted::RULE_ID))
+            .inspect(|d| assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING)))
+            .map(|d| d.range.start.line)
+            .collect();
         let mut rows = 0;
         for (i, line) in text.lines().enumerate().filter(|(_, l)| l.contains("{{ demo_db.") && !l.trim_start().starts_with('#')) {
             let expr = &line[line.find("{{ ").unwrap() + 3..line.find(" }}").unwrap()];
@@ -8211,7 +8251,10 @@ mod tests {
             let hover = super::hover_at(&doc, &nodes, &path, byte, Default::default(), &no_buffers(), &[], &no_cache(), None, None);
             let (l, c) = doc.byte_to_lsp(byte);
             let jump = super::Backend::definition_at(&doc, &nodes, tower_lsp::lsp_types::Position::new(l, c), &uri, &path, &no_buffers(), &[], &no_cache(), None, None);
-            if let Some(key) = line.split("# GOOD: ").nth(1) {
+            assert_eq!(warned.contains(&(i as u32)), line.contains("# BAD"), "{line}");
+            if line.contains("# BAD") {
+                assert!(hover.is_none() && jump.is_none(), "{line}");
+            } else if let Some(key) = line.split("# GOOD: ").nth(1) {
                 let h = plain(&hover.expect(line).0);
                 assert!(h.contains(expr) && h.contains("group_vars/all.yml"), "{line}: {h}");
                 let at = jump.expect(line)[0].range.start.line as usize;
@@ -8222,7 +8265,27 @@ mod tests {
             }
             rows += 1;
         }
-        assert_eq!(rows, 3, "the fixture lost rows");
+        assert_eq!(rows, 6, "the fixture lost rows");
+        assert_eq!(warned.len(), 1, "only the BAD row warns: {warned:?}");
+    }
+
+    /// T-221: the rule fires in its own fixture and nowhere else in the demo.
+    #[test]
+    fn every_other_demo_file_is_free_of_undefined_key() {
+        use tower_lsp::lsp_types::NumberOrString;
+        let demo = std::path::Path::new("../../demo").canonicalize().unwrap();
+        let files = ansible_core::workspace::yaml_files(&demo);
+        assert!(files.len() > 10, "the demo walk found the demo");
+        for path in files.into_iter().filter(|p| !p.ends_with("dotted_access.yml")) {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Some(a) = super::Backend::analyze_text(text, &path) else { continue };
+            let bad: Vec<String> = super::Backend::variable_coverage_diagnostics(&a, &path, &a.nodes, &[], &no_cache(), None)
+                .into_iter()
+                .filter(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == ansible_core::dotted::RULE_ID))
+                .map(|d| d.message)
+                .collect();
+            assert!(bad.is_empty(), "{}: {bad:?}", path.display());
+        }
     }
 
     /// T-238's fixture: each GOOD row's module resolves to the nested file its comment names,

@@ -8,3 +8,6 @@
     - debug: msg="{{ demo_db.port }}" # GOOD: port
     - debug: msg="{{ demo_db.nested.deep }}" # GOOD: deep
     - debug: msg="{{ demo_db.items }}" # SILENCED: the dict's method, not the key
+    - debug: msg="{{ demo_db.prot }}" # BAD: the mapping has no key prot, so this task fails
+    - debug: msg="{{ demo_db.prot | default(5432) }}" # SILENCED: defaulted, so it runs
+    - debug: msg="{{ demo_db.prot }}" # noqa: undefined-key # SILENCED: suppressed

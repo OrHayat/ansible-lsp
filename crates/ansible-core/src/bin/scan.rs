@@ -39,6 +39,7 @@ fn main() {
     let mut mutated: Vec<String> = Vec::new();
     let mut empty_glob: Vec<String> = Vec::new();
     let mut undefined_vars: Vec<String> = Vec::new();
+    let mut undefined_keys: Vec<String> = Vec::new();
     let mut tmpl_vars: BTreeMap<String, usize> = BTreeMap::new();
     let mut broken_when: Vec<String> = Vec::new();
     let mut mut_cache: BTreeMap<PathBuf, std::collections::HashSet<String>> = BTreeMap::new();
@@ -238,6 +239,14 @@ fn main() {
                 u.name
             ));
         }
+        // T-221: a `.key` the root's only, literal mapping does not have.
+        for k in ansible_core::dotted::absent_keys(path, &nodes, &doc.text, &cache) {
+            if doc.is_suppressed(k.span.start, ansible_core::dotted::RULE_ID) {
+                continue;
+            }
+            let (l, _) = doc.byte_to_lsp(k.span.start);
+            undefined_keys.push(format!("  {}:{}  {}", path.strip_prefix(&root).unwrap_or(path).display(), l + 1, k.dotted));
+        }
     }
 
     let c = cache.stats();
@@ -317,6 +326,13 @@ fn main() {
         println!("\nUNDEFINED VARIABLES ({}):", undefined_vars.len());
         for u in &undefined_vars {
             println!("{u}");
+        }
+    }
+
+    if !undefined_keys.is_empty() {
+        println!("\nUNDEFINED KEYS ({}):", undefined_keys.len());
+        for k in &undefined_keys {
+            println!("{k}");
         }
     }
 

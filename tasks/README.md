@@ -96,6 +96,7 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-212 | **bug** · [A `{% for %}`-bound name in a scalar is reported as an undefined variable](open/T-212-a-for-bound-name-in-a-scalar-is-reported-as-an-undefined-var.md) | M    | T-040      |
 | T-228 | **bug** · [A variable from an active vars plugin is reported undefined](open/T-228-a-variable-from-an-active-vars-plugin-is-reported-undefined.md) | M    | ~~T-227~~      |
 | T-248 | **bug** · [A role include written ../x.yml loads x.yml beside the file, through Ansible's parent-include retry](open/T-248-a-role-include-written-x-yml-loads-x-yml-beside-the-file-thr.md) | M    | —          |
+| T-249 | **bug** · [A task's or block's vars: reach reads outside that task or block](open/T-249-a-task-s-or-block-s-vars-reach-reads-outside-that-task-or-bl.md) | M    | —          |
 
 ### P2 — coverage and usability
 
@@ -147,7 +148,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-125 | **bug** · [Inlay hints: the setting is parsed but gates nothing](open/T-125-inlay-hints-the-setting-is-parsed-but-gates-nothing.md) | M    | —    |
 | T-040 | [Jinja `include`/`extends` in templates](open/T-040-jinja-template-includes.md) | L    | ~~T-188~~ |
 | T-063 | [Full `include_role`/`import_role` parameter surface](open/T-063-include-role-params.md) | M    | —    |
-| T-221 | [Resolve a dotted access into a literal mapping variable](open/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | M    | —    |
 | T-115 | [Filter, test and lookup name index](open/T-115-filter-test-and-lookup-name-index.md) | M    | ~~T-227~~ |
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
@@ -356,6 +356,7 @@ T-021 is now unblocked on that side.
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](closed/T-060-suspicious-var-near-miss.md) | **rejected** |
 | T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](closed/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | done     |
 | T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](closed/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | done     |
+| T-221 | [Resolve a dotted access into a literal mapping variable](closed/T-221-resolve-a-dotted-access-into-a-literal-mapping-variable.md) | done     |
 
 ## Settled — don't re-derive these
 

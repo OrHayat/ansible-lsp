@@ -56,7 +56,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-066 — Hover provenance breadcrumb for non-obvious definition routes
 - [ ] T-071 — `unconstrained-path-var`: surface the value set a templated path implies
 - [x] T-182 — Derive a variable's value domain from the assert that constrains it
-- [ ] T-221 — Resolve a dotted access into a literal mapping variable
+- [x] T-221 — Resolve a dotted access into a literal mapping variable
 - [x] T-222 — Four names ansible always provides are flagged as never defined: role_names, inventory_file, role_uuid, environment
 - [x] T-223 — Undefined softening is a substring match, so a name containing 'defined' or a lookalike guard silences a real undefined read
 - [x] T-224 — Injected names are a prefix guess: a user's own ansible_ var loses its hover, a typo is never flagged, and a scoped magic name is always believed
@@ -68,6 +68,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-239 — Role defaults and vars outside main.yml never reach the variable index
 - [ ] T-241 — Differential precedence test against ansible-core's VariableManager as an oracle
 - [x] T-246 — An undefined variable passed to default() ahead of another default() is reported undefined, and the chain runs fine
+- [ ] T-249 — A task's or block's vars: reach reads outside that task or block
 
 ## Done when
 
