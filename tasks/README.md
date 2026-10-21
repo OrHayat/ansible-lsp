@@ -152,7 +152,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-229 | **bug** · [vars_plugins_enabled without host_group_vars makes every group_vars and host_vars file dead, and we index them anyway](open/T-229-vars-plugins-enabled-without-host-group-vars-makes-every-gro.md) | S    | T-228 |
 | T-231 | [A short module name in an included task file cannot see the caller's collections: list](open/T-231-a-short-module-name-in-an-included-task-file-cannot-see-the.md) | M    | —    |
 | T-233 | [Capture each ansible-core release's builtin modules and enforced argument specs into a bundled table](open/T-233-capture-each-ansible-core-release-s-builtin-modules-and-enfo.md) | L    | —    |
-| T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](open/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | M    | —    |
 | T-240 | [Read play argument specs (validate_argspec + <playbook>.meta.yml) as the play's declared inputs](open/T-240-read-play-argument-specs-validate-argspec-playbook-meta-yml.md) | L    | —    |
 | T-241 | [Differential precedence test against ansible-core's VariableManager as an oracle](open/T-241-differential-precedence-test-against-ansible-core-s-variable.md) | M    | —    |
 | T-244 | [Tags from ansible.cfg: tags_run and tags_skip silently decide which tasks run](open/T-244-tags-from-ansible-cfg-tags-run-and-tags-skip-silently-decide.md) | S    | —    |
@@ -356,6 +355,7 @@ T-021 is now unblocked on that side.
 | T-108 | [Keyword value types: isa coercion and listof](closed/T-108-keyword-value-types-isa-coercion-and-listof.md) | done     |
 | T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](closed/T-060-suspicious-var-near-miss.md) | **rejected** |
 | T-247 | [A literal invalid vars: key is fatal at parse and no rule reports it](closed/T-247-a-literal-invalid-vars-key-is-fatal-at-parse-and-no-rule-rep.md) | done     |
+| T-238 | [A module in a collection subdirectory is never extracted, so its FQCN gets no hover, jump or diagnostic](closed/T-238-a-module-in-a-collection-subdirectory-is-never-extracted-so.md) | done     |
 
 ## Settled — don't re-derive these
 

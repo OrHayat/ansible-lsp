@@ -1,0 +1,11 @@
+# T-238 — a module in a collection SUBDIRECTORY. Ansible addresses it only by its full dotted
+# path, at any depth; the short name and the `collections:` list do not reach it (measured on
+# core 2.21.3). Hover the module name to see its collection; Cmd+click opens the file.
+- name: nested collection modules
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - demo.charlie.net.port_probe: # GOOD: plugins/modules/net/port_probe.py
+        port: 22
+    - demo.charlie.net.no_such_probe: # SILENCED: a module the collection lacks is skipped
+        port: 22

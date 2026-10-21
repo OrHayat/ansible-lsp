@@ -571,9 +571,9 @@ fn module_refs(a: &Action, out: &mut Vec<Reference>) {
             // collection FQCN; a bare name is implicitly `ansible.legacy.<name>` — valid
             // Ansible, resolved through the legacy search order. A 2-part name is neither
             // and can never resolve ([`crate::resolve::impossible_module_name`]); it is
-            // extracted so the rule can say so, and the resolver gives it `Missing`.
-            let dots = a.name.split('.').count();
-            if dots <= 3 && !a.name.contains(' ') && !a.name.contains('{') {
+            // extracted so the rule can say so, and the resolver gives it `Missing`. Four or
+            // more parts is a module nested in a collection's `plugins/modules/` (T-238).
+            if !a.name.contains(' ') && !a.name.contains('{') {
                 let mut r = Reference::new(ReferenceKind::Module, &a.name, a.key_span);
                 r.action_keyword = a.from_action_keyword;
                 out.push(r);

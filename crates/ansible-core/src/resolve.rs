@@ -832,18 +832,26 @@ fn fqcn_module_candidates(
     if (ns, coll) == ("ansible", "builtin") {
         return builtin_package_candidates(module, ctx);
     }
+    // A nested name, `sub.deeper.leaf`, lives in `plugins/{modules,action}/sub/deeper/` (T-238).
+    let mut dirs: Vec<&str> = module.split('.').collect();
+    let leaf = dirs.pop().unwrap_or(module);
     let mut candidates: Vec<PathBuf> = Vec::new();
     for root in ctx.collection_roots() {
         let base = root.join(ns).join(coll).join("plugins");
-        let found = module_files_named(&base.join(MODULES), module, fs);
+        let (mut modules, mut action) = (base.join(MODULES), base.join(ACTION));
+        for d in &dirs {
+            modules.push(d);
+            action.push(d);
+        }
+        let found = module_files_named(&modules, leaf, fs);
         if found.is_empty() {
-            candidates.push(base.join(MODULES).join(format!("{module}.py")));
+            candidates.push(modules.join(format!("{leaf}.py")));
         } else {
             candidates.extend(found);
         }
         // Action plugins are controller-side Python classes, so their loader
         // hard-requires `.py` (`loader.py:782-784`) — no glob here.
-        candidates.push(base.join(ACTION).join(format!("{module}.py")));
+        candidates.push(action.join(format!("{leaf}.py")));
     }
     candidates
 }
@@ -972,6 +980,20 @@ fn resolve_module(
                         }
                         _ => collection_module_redirect(ns, coll, module, ctx, fs),
                     })
+                    .flatten();
+                (res, redirect)
+            }
+            // T-238: a module nested under `plugins/modules/` (or `plugins/action/`) is named by
+            // its full dotted path, at any depth, and a collection's routing keys it the same
+            // way. Measured on 2.21.3: `ns.coll.sub.deep` ran `sub/deep.py`, a `sub.alias`
+            // routing key redirected, and `ns.coll.deep` did not resolve. `ansible.*` is left
+            // to the skip below, unmodelled: `ansible.builtin.ping.ping` ran `ping` while
+            // `ansible.builtin.wait_for.nothere` and `ansible.legacy.ping.ping` did not resolve.
+            [ns, coll, ref rest @ ..] if rest.len() >= 2 && ns != "ansible" => {
+                let module = rest.join(".");
+                let res = Resolution::from_candidates(fqcn_module_candidates(ns, coll, &module, ctx, fs), fs);
+                let redirect = (res.status != Status::Resolved)
+                    .then(|| collection_module_redirect(ns, coll, &module, ctx, fs))
                     .flatten();
                 (res, redirect)
             }
@@ -4379,6 +4401,44 @@ mod tests {
         let res = first(&out, ReferenceKind::Module);
         assert_eq!(res.status, Status::Resolved, "tried {:#?}", res.candidates);
         assert!(res.targets[0].ends_with("community/lvm/plugins/modules/pool_create.py"));
+    }
+
+    /// T-238, measured on 2.21.3: a module nested under `plugins/modules/` is reached only by
+    /// its full dotted path, at any depth; an action plugin nests the same way; a routing key
+    /// is the dotted name. Neither the flattened name nor the `collections:` list reaches it.
+    #[test]
+    fn a_module_in_a_collection_subdirectory_resolves_by_its_full_dotted_path() {
+        let c = "/p/collections/ansible_collections/demo/probe";
+        let fs = crate::testing::MemFs::new(&[
+            ("/p/ansible.cfg", ""),
+            ("/p/site.yml", ""),
+            (&format!("{c}/plugins/modules/sub/deep.py"), ""),
+            (&format!("{c}/plugins/modules/sub/deeper/deepest.py"), ""),
+            (&format!("{c}/plugins/action/sub/act.py"), ""),
+            (
+                &format!("{c}/meta/runtime.yml"),
+                "plugin_routing:\n  modules:\n    sub.alias:\n      redirect: demo.probe.sub.deep\n",
+            ),
+        ]);
+        let module = |src: &str| {
+            let out = mem_src("/p/site.yml", src, &fs);
+            let res = first(&out, ReferenceKind::Module);
+            (res.status, res.targets.first().map(|t| t.strip_prefix(c).unwrap().to_path_buf()))
+        };
+        let at = |p: &str| (Status::Resolved, Some(PathBuf::from(p.trim_start_matches('/'))));
+        assert_eq!(module("- demo.probe.sub.deep: {}\n"), at("/plugins/modules/sub/deep.py"));
+        assert_eq!(module("- demo.probe.sub.deeper.deepest: {}\n"), at("/plugins/modules/sub/deeper/deepest.py"));
+        assert_eq!(module("- demo.probe.sub.act: {}\n"), at("/plugins/action/sub/act.py"));
+        assert_eq!(module("- demo.probe.sub.alias: {}\n"), at("/plugins/modules/sub/deep.py"));
+
+        let skipped = (Status::Skipped, None);
+        assert_eq!(module("- demo.probe.deep: {}\n"), skipped, "no flattening");
+        assert_eq!(module("- demo.probe.sub.nothere: {}\n"), skipped, "a collection gap, not a warning");
+        assert_eq!(module("- ansible.legacy.sub.deep: {}\n"), skipped);
+        assert_eq!(module("- ansible.builtin.ping.ping: {}\n"), skipped, "runs in core, by a route not modelled");
+        let listed = "- hosts: all\n  collections: [demo.probe]\n  tasks:\n    - deep: {}\n";
+        assert_ne!(mem_src("/p/site.yml", listed, &fs)[0].1.status, Status::Resolved, "the list does not reach it");
+        assert_eq!(module("- sub.deep: {}\n").0, Status::Missing, "two parts: invalid-module-name");
     }
 
     /// Like pyright into site-packages: jump into the installed ansible itself.

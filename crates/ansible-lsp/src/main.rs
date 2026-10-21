@@ -4029,7 +4029,11 @@ fn not_followed_hover(r: &Reference, res: &Resolution, ctx: &FileContext) -> Md 
         false => md::code(&r.value) + " is renamed to " + md::code(last) + ", and ",
     };
     let why = match last.split('.').collect::<Vec<_>>()[..] {
-        [ns, coll, module] if ns != "ansible" || !matches!(coll, "builtin" | "legacy") => {
+        // Three parts or more: a nested module is still the collection's (T-238).
+        [ns, coll, ref rest @ ..]
+            if !rest.is_empty() && (ns != "ansible" || !matches!(coll, "builtin" | "legacy")) =>
+        {
+            let module = &rest.join(".");
             let name = format!("{ns}.{coll}");
             let dir = ctx
                 .collection_roots()
@@ -8091,6 +8095,32 @@ mod tests {
     /// `invalid-keyword-value` error and every HINT row one `serial-batch-size` hint, on
     /// that line, and nothing else in the file fires either rule. GOOD and SILENCED rows are
     /// pinned by staying out of both sets.
+    /// T-238's fixture: each GOOD row's module resolves to the nested file its comment names,
+    /// and each SILENCED row is skipped with no diagnostic on its line.
+    #[test]
+    fn the_nested_modules_demo_matches_its_annotations() {
+        use ansible_core::{references::ReferenceKind, resolve::Status};
+        let path = std::path::Path::new("../../demo/nested_modules.yml").canonicalize().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let a = super::Backend::analyze_text(text.clone(), &path).unwrap();
+        let diag_lines: Vec<u32> = super::Backend::diagnostics_of(&a).iter().map(|d| d.range.start.line).collect();
+        let mut rows = 0;
+        for (r, res) in a.refs.iter().filter(|(r, _)| r.kind == ReferenceKind::Module) {
+            let line = a.doc.byte_to_lsp(r.span.start).0;
+            let src = text.lines().nth(line as usize).unwrap();
+            if let Some(want) = src.split("# GOOD: ").nth(1) {
+                assert_eq!(res.status, Status::Resolved, "{src}");
+                assert!(res.targets[0].ends_with(want.trim()), "{src}: {:?}", res.targets);
+            } else {
+                assert!(src.contains("# SILENCED"), "unlabelled row: {src}");
+                assert_eq!(res.status, Status::Skipped, "{src}");
+                assert!(!diag_lines.contains(&line), "{src}");
+            }
+            rows += 1;
+        }
+        assert_eq!(rows, 2, "the fixture lost rows");
+    }
+
     #[test]
     fn the_keyword_values_demo_matches_its_annotations_exactly() {
         use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
@@ -13909,7 +13939,7 @@ mod tests {
             &[
                 (
                     "play.yml",
-                    "- hosts: all\n  tasks:\n    - community.general.nonsense_xyz:\n    - demo.probe.nothere:\n    - ansible.builtin.ufw:\n    - nonsense_bare:\n    - include_role:\n        name: no_such_role\n        tasks_from: setup\n",
+                    "- hosts: all\n  tasks:\n    - community.general.nonsense_xyz:\n    - demo.probe.nothere:\n    - demo.probe.sub.nothere:\n    - ansible.builtin.ufw:\n    - nonsense_bare:\n    - include_role:\n        name: no_such_role\n        tasks_from: setup\n",
                 ),
                 ("collections/ansible_collections/demo/probe/plugins/modules/other.py", ""),
                 ("venv/ansible/modules/ping.py", ""),
@@ -13959,6 +13989,9 @@ mod tests {
             md.contains("demo.probe is installed at collections/ansible_collections/demo/probe but has no module nothere"),
             "{md}"
         );
+        // T-238: a nested name is the collection's too, never "not in ansible-core".
+        let md = hover("demo.probe.sub.nothere", module, Some(&core));
+        assert!(md.contains("demo.probe is installed at") && md.contains("has no module sub.nothere"), "{md}");
 
         let md = hover("ansible.builtin.ufw", module, Some(&core));
         assert!(
@@ -13980,6 +14013,37 @@ mod tests {
         assert!(md.contains("no Ansible install was found"), "{md}");
         let md = hover("community.general.nonsense_xyz", module, None);
         assert!(md.contains("no Ansible install was found to check the collections it bundles"), "{md}");
+    }
+
+    /// T-238: a module nested in a collection subdirectory hovers its collection, and its
+    /// definition is the nested file.
+    #[test]
+    fn a_nested_collection_module_hovers_and_jumps_to_its_file() {
+        use ansible_core::references::ReferenceKind;
+        let root = ansible_core::testing::project(
+            "t238-nested-module",
+            "[defaults]\n",
+            &[
+                ("play.yml", "- hosts: all\n  tasks:\n    - demo.probe.sub.deep:\n"),
+                ("collections/ansible_collections/demo/probe/plugins/modules/sub/deep.py", ""),
+            ],
+        );
+        let path = root.join("play.yml");
+        let nodes = ansible_core::parse::Document::new(std::fs::read_to_string(&path).unwrap())
+            .parse()
+            .unwrap();
+        let refs = ansible_core::references::extract(&nodes).refs;
+        let fs = ansible_core::fs::StdFs;
+        let ctx = ansible_core::workspace::FileContext::discover_with(&path, &fs, |root| {
+            ansible_core::config::AnsibleConfig::builder(root)
+                .env(&ansible_core::config::EnvMap::empty())
+                .load()
+        });
+        let r = refs.iter().find(|r| r.kind == ReferenceKind::Module).expect("extracted");
+        let res = ansible_core::resolve::Resolver::default().resolve(r, &ctx);
+        assert_eq!(res.targets, vec![root.join("collections/ansible_collections/demo/probe/plugins/modules/sub/deep.py")]);
+        let md = plain(&super::reference_hover(r, &res, &ctx, false).expect("hover").render());
+        assert!(md.contains("demo.probe"), "{md}");
     }
 
     /// A fake core with just what `demo/module_prefixes.yml` names, shaped like 2.21.3: `debug`
