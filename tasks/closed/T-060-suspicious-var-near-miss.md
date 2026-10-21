@@ -1,8 +1,8 @@
 # T-060 — `suspicious-var`: guarded, undefined, and one edit from a real name
 
-| Status | Priority | Size | Epic  | Depends on |
-| ------ | -------- | ---- | ----- | ---------- |
-| open   | P1       | M    | T-112 | T-062      |
+| Status       | Priority | Size | Epic  | Depends on |
+| ------------ | -------- | ---- | ----- | ---------- |
+| **rejected** | P1       | M    | T-112 | T-062      |
 
 Split out of T-033 (its SILENT class) — the corpus research lives there.
 
@@ -37,7 +37,26 @@ reporting it is a false-positive machine; **the near-miss filter is the feature*
 - Extraction reuses `condition::variables()` — its literals/filters/tests/magic handling
   is pinned by `ignores_literals_filters_tests_and_magic_vars`; extend that test first.
 
-## needs decision: the premise did not hold — reject, or rescope?
+## Rejected 2026-10-21
+
+The near-miss filter selects the input-normalisation idiom, not typos, so the rule's only
+real-world output is false positives. Parking it was ruled out too: the first box under Done
+when asks for those false positives by name.
+
+Two other framings of "a guard whose branch can never run" were probed over the seven public
+trees with a grep-level script, which fired on a planted case first. Neither found a bug:
+
+| Shape                                                              | Hits | Bugs |
+| ------------------------------------------------------------------ | ---- | ---- |
+| `x is not defined` in a role whose own `defaults/` define `x`      | 51   | 0    |
+| `x is defined` whose only definition is a later `register`/`set_fact` in the same file | 0 | 0 |
+
+All 51 are rescued by a disjunct: `x is not defined or not x`, or the same thing spelled
+`x is undefined or (x is defined and not x)`. A future attempt should start the same way: a
+cheap probe, a planted control, every hit read by hand, and one genuine bug found before any
+Rust is written.
+
+## The measurement behind the rejection
 
 Measured 2026-10-20. The rule was built as specified (guarded, reached by no definition, within
 two edits of a name that does reach the use, underscore pairs ranked first) and run over the

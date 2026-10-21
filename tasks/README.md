@@ -83,7 +83,6 @@ skipped roles are all `cib-batch`, which legitimately has no `tasks/main.yml`. T
 | T-037 | [Vault awareness](open/T-037-vault-awareness.md)             | M    | —          |
 | T-051 | [Variable definedness diagnostic](open/T-051-variable-definedness.md) | M | T-048, T-049 |
 | T-059 | [Call sites must satisfy the callee's required vars](open/T-059-caller-unpassed-vars.md) | L | T-051 |
-| T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](open/T-060-suspicious-var-near-miss.md) | M | ~~T-062~~ |
 | T-065 | [`var-undefined`: raise the bar to workspace-wide absence](open/T-065-var-undefined-workspace-bar.md) | M | T-051 |
 | T-068 | [`role_path` from invocation chains](open/T-068-chain-derived-role-path.md) | L | ~~T-020~~ |
 | T-090 | **epic** · [Resolver diverges from real Ansible](open/T-090-resolver-diverges-from-real-ansible.md) | L    | —          |
@@ -356,6 +355,7 @@ T-021 is now unblocked on that side.
 | T-200 | **bug** · [A host sharing a name with a group has its vars applied to the group, and we report them as the host's](closed/T-200-a-host-sharing-a-name-with-a-group-has-its-vars-applied-to-t.md) | done     |
 | T-153 | [Playbook .meta files: the playbook-level argument_specs](closed/T-153-playbook-meta-files-the-playbook-level-argument-specs.md) | done     |
 | T-108 | [Keyword value types: isa coercion and listof](closed/T-108-keyword-value-types-isa-coercion-and-listof.md) | done     |
+| T-060 | [`suspicious-var`: guarded, undefined, one edit from a real name](closed/T-060-suspicious-var-near-miss.md) | **rejected** |
 
 ## Settled — don't re-derive these
 

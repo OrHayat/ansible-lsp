@@ -49,7 +49,7 @@ then `:423`). Two gaps found in the 2.22 audit belong to children here, not to a
 - [x] T-055 — Performance: cache the cross-file variable index; fix per-call line scans
 - [x] T-056 — Expand known-value variables in templated paths (navigation only)
 - [ ] T-059 — Call sites must satisfy the callee's required vars (`var-unpassed`)
-- [ ] T-060 — `suspicious-var`: guarded, undefined, and one edit from a real name
+- [x] T-060 — `suspicious-var`: guarded, undefined, and one edit from a real name
 - [ ] T-061 — `undeclared-var`: surface the playbook's required `-e` inputs
 - [x] T-062 — Index ini inventories and extension-less group_vars/host_vars
 - [ ] T-065 — `var-undefined`: raise the bar to workspace-wide absence (the 656 fix)
